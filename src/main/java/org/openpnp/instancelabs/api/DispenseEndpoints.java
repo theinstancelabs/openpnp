@@ -40,6 +40,9 @@ import com.google.gson.JsonObject;
 final class DispenseEndpoints {
     /** Named location the test dot is dispensed at: waste + the configured test-dot offset. */
     static final String TEST_DOT_LOCATION = "waste-test-dot";
+    /** Settings that only the needle endpoints may change (they record a needle_touchoff row). */
+    static final java.util.Set<String> PROTECTED_SETTINGS = new java.util.HashSet<>(java.util.Arrays.asList(
+            "needleZOffsetMm", "needleZOffsetSetAtMs", "needleChangedAtMs", "schemaVersion"));
     /** Pad type whose single-dot rotation is the default test-dot size (plan §5.6 first target). */
     static final String TEST_DOT_PAD_TYPE = "chip-0603";
 
@@ -310,6 +313,13 @@ final class DispenseEndpoints {
         for (Map.Entry<String, JsonElement> e : patch.entrySet()) {
             if (!cur.has(e.getKey())) {
                 throw ApiException.badRequest("unknown setting '" + e.getKey() + "'");
+            }
+            if (PROTECTED_SETTINGS.contains(e.getKey())) {
+                if (!cur.get(e.getKey()).equals(e.getValue())) {
+                    throw ApiException.badRequest("'" + e.getKey() + "' is the needle touch-off state (I4): change it "
+                            + "with the Needle card or a touch-off, which also record it");
+                }
+                continue; // unchanged round-trip from the full settings editor
             }
             cur.add(e.getKey(), e.getValue());
         }

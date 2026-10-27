@@ -44,7 +44,7 @@ import com.sun.net.httpserver.HttpServer;
 public final class ApiServer {
     public static final String RESOURCE_ROOT = "/org/openpnp/instancelabs/web/";
     private static final int MAX_BODY = 2 * 1024 * 1024;
-    private static final Pattern STATIC_NAME = Pattern.compile("[A-Za-z0-9._-]+");
+    private static final Pattern STATIC_NAME = Pattern.compile("[A-Za-z0-9_-]+\\.(html|js|css|svg|png)");
 
     private static volatile ApiServer instance;
 
