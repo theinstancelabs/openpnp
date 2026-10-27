@@ -4,6 +4,9 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.concurrent.TimeoutException;
 
+import org.openpnp.instancelabs.serial.SerialPortMatch;
+import org.openpnp.instancelabs.serial.SerialPortMatcher;
+import org.pmw.tinylog.Logger;
 import org.simpleframework.xml.Attribute;
 
 import com.fazecast.jSerialComm.SerialPort;
@@ -91,15 +94,33 @@ public class SerialPortCommunications extends ReferenceDriverCommunications {
     @Attribute(required = false)
     protected String name = "SerialPortCommunications";
 
+    /**
+     * Instance Labs serial auto-detect: optional USB identity, tried before portName. Null when
+     * unused so that existing machine.xml files are read and written unchanged.
+     * See org.openpnp.instancelabs.serial.SerialPortMatcher.
+     */
+    @Attribute(required = false)
+    protected String usbSerialNumber;
+
+    @Attribute(required = false)
+    protected String usbDescription;
+
+    private SerialPortMatcher portMatcher = SerialPortMatcher.createDefault();
+
+    private volatile SerialPortMatch lastMatch;
 
     private SerialPort serialPort;
 
     @Override
     public synchronized void connect() throws Exception {
         disconnect();
-        serialPort = SerialPort.getCommPort(portName);
+        SerialPortMatch match = resolvePort();
+        serialPort = SerialPort.getCommPort(match.getPortDescriptor());
         serialPort.flushIOBuffers();
-        serialPort.openPort(0);
+        if (!serialPort.openPort(0)) {
+            throw new IOException("Could not open serial port " + match.getSummary()
+                    + " (error code " + serialPort.getLastErrorCode() + ").");
+        }
         serialPort.setComPortParameters(baud, dataBits.mask, stopBits.mask, parity.mask);
         serialPort.setFlowControl(flowControl.mask);
         if (setDtr) {
@@ -120,6 +141,55 @@ public class SerialPortCommunications extends ReferenceDriverCommunications {
         }
     }
 
+
+    /**
+     * Resolve the port to open from the USB identity / port name, and log the result. Does not
+     * open the port.
+     */
+    public SerialPortMatch resolvePort() throws IOException {
+        SerialPortMatch match = portMatcher.resolve(usbSerialNumber, usbDescription, portName);
+        for (String warning : match.getWarnings()) {
+            Logger.warn("Serial port: " + warning);
+        }
+        Logger.info("Serial port: connecting to " + match.getSummary());
+        lastMatch = match;
+        return match;
+    }
+
+    /**
+     * @return the result of the last connect(), or null if not connected since startup.
+     */
+    public SerialPortMatch getLastMatch() {
+        return lastMatch;
+    }
+
+    public SerialPortMatcher getPortMatcher() {
+        return portMatcher;
+    }
+
+    public void setPortMatcher(SerialPortMatcher portMatcher) {
+        this.portMatcher = portMatcher;
+    }
+
+    public String getUsbSerialNumber() {
+        return usbSerialNumber;
+    }
+
+    public void setUsbSerialNumber(String usbSerialNumber) {
+        this.usbSerialNumber = blankToNull(usbSerialNumber);
+    }
+
+    public String getUsbDescription() {
+        return usbDescription;
+    }
+
+    public void setUsbDescription(String usbDescription) {
+        this.usbDescription = blankToNull(usbDescription);
+    }
+
+    private static String blankToNull(String s) {
+        return (s == null || s.trim().isEmpty()) ? null : s.trim();
+    }
 
     /**
      * Returns an array of Strings containing the names of serial ports
