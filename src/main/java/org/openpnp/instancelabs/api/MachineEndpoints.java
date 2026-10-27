@@ -34,7 +34,10 @@ import org.pmw.tinylog.Logger;
 
 /** STOP, start, home, machine state and the top-camera snapshot. */
 final class MachineEndpoints {
-    /** How long STOP lets the engine send its own I1 lines before OpenPnP disables the driver. */
+    /**
+     * How long STOP lets the engine send its own I1 lines before OpenPnP disables the driver, when
+     * the driver's DISABLE_COMMAND does not vent by itself.
+     */
     static final long ENGINE_STOP_GRACE_MS = 1000;
 
     private final ApiContext ctx;
@@ -81,13 +84,21 @@ final class MachineEndpoints {
             return Views.map("stopped", true, "actions", actions);
         }
         if (engineWasBusy) {
-            // Let the engine's own shutdown lines go out over the live link first (bounded).
-            long until = System.currentTimeMillis() + ENGINE_STOP_GRACE_MS;
-            while (svc.isBusy() && System.currentTimeMillis() < until) {
-                sleep(20);
+            Map<String, Object> check = stopCommandCheck(svc.getConfig());
+            if (check != null && Boolean.TRUE.equals(check.get("ok"))) {
+                // OpenPnP's Stop vents too (DISABLE_COMMAND): do not delay it.
+                actions.add("not waiting for the engine: the driver's DISABLE_COMMAND also quick-stops and vents");
             }
-            actions.add(svc.isBusy() ? "engine still finishing its abort after " + ENGINE_STOP_GRACE_MS
-                    + " ms; stopping OpenPnP anyway" : "engine stopped");
+            else {
+                // OpenPnP's Stop would not vent and may close the link: let the engine's own
+                // shutdown lines go out first (bounded).
+                long until = System.currentTimeMillis() + ENGINE_STOP_GRACE_MS;
+                while (svc.isBusy() && System.currentTimeMillis() < until) {
+                    sleep(20);
+                }
+                actions.add(svc.isBusy() ? "engine still finishing its abort after " + ENGINE_STOP_GRACE_MS
+                        + " ms; stopping OpenPnP anyway" : "engine stopped");
+            }
         }
         if (m.isEnabled()) {
             Runnable task = () -> {
