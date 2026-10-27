@@ -186,6 +186,8 @@ public class Main {
         final Configuration configuration = Configuration.get();
         // Instance Labs: start the dispense engine once the configuration has loaded.
         org.openpnp.instancelabs.dispense.DispenseService.install(configuration);
+        // Instance Labs: local HTTP API + web UI (127.0.0.1:8765) once the configuration has loaded.
+        org.openpnp.instancelabs.api.ApiServer.install(configuration);
         Locale.setDefault(Configuration.get().getLocale());
 
         ThemeInfo theme = configuration.getThemeInfo();
