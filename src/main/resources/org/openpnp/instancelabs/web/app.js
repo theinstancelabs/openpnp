@@ -268,7 +268,7 @@ function renderRun(run, last) {
     const pct = run.dotsPlanned ? Math.min(100, 100 * run.dotsDone / run.dotsPlanned) : 0;
     $('run-bar').style.width = pct + '%';
     fillKv(live, [
-      ['Task', run.label + (run.boardName ? ' (' + run.boardName + ')' : '')],
+      ['Task', run.label + (run.boardName && run.label === 'board' ? ' ' + run.boardName : '')],
       ['State', run.running ? 'running' : run.status],
       ['Step', run.phase],
       ['Dots', run.dotsDone + ' of ' + run.dotsPlanned],
@@ -280,7 +280,7 @@ function renderRun(run, last) {
     if (!run.running && run.runId !== S.lastRunId) {
       S.lastRunId = run.runId;
       if (run.status !== 'OK') banner(run.label + ' ended: ' + run.status + (run.message ? ' — ' + run.message : ''));
-      else toast(run.label + ' finished: ' + run.dotsDone + ' dots');
+      else toast(run.label + (run.label === 'board' && run.boardName ? ' ' + run.boardName : '') + ' finished: ' + run.dotsDone + ' dot(s)');
       loadCalibrations();
     }
   } else {
@@ -542,9 +542,13 @@ async function snapshot() {
     if (img.dataset.url) URL.revokeObjectURL(img.dataset.url);
     img.dataset.url = URL.createObjectURL(blob);
     img.src = img.dataset.url;
+    img.classList.remove('hidden');
+    $('cam-empty').classList.add('hidden');
   } catch (e) {
     img.removeAttribute('src');
-    img.alt = 'No picture: ' + e.message;
+    img.classList.add('hidden');
+    $('cam-empty').textContent = 'No picture: ' + e.message;
+    $('cam-empty').classList.remove('hidden');
     if ($('cam-auto').checked) { $('cam-auto').checked = false; toggleCam(); }
     toast('Camera: ' + e.message, true);
   }
@@ -585,22 +589,23 @@ function placeRow(name, loc, d) {
   const derived = name === 'waste-test-dot';
   const hint = name === d.wasteLocationName ? 'Waste pad: prime and test dots'
     : name === d.blankLocationName ? 'Blank: calibration dots' : derived ? 'Test dot spot (follows the waste pad)' : '';
-  const inp = (v) => el('input', { type: 'number', step: '0.01', value: v === undefined ? '' : v, disabled: derived });
-  const x = inp(loc && loc.x), y = inp(loc && loc.y), z = inp(loc && loc.z);
+  const inp = (v, axis) => el('input', { type: 'number', step: '0.01', value: v === undefined ? '' : v, disabled: derived,
+    'data-axis': axis, 'aria-label': name + ' ' + axis.toUpperCase() });
+  const x = inp(loc && loc.x, 'x'), y = inp(loc && loc.y, 'y'), z = inp(loc && loc.z, 'z');
   const useXY = el('button', { type: 'button', class: 'small', text: 'Use N2 X/Y', disabled: derived,
     title: 'Copy the dispenser needle\'s current X and Y',
     onclick: () => { const n = nozzlePos(); if (n) { x.value = n.x.toFixed(3); y.value = n.y.toFixed(3); } } });
-  const useZ = el('button', { type: 'button', class: 'small', text: 'Needle touching: use N2 Z', disabled: derived,
+  const useZ = el('button', { type: 'button', class: 'small', text: 'Use N2 Z (tip touching)', disabled: derived,
     title: 'If the needle tip is resting on the surface now: surface Z = N2 Z − needle offset',
     onclick: () => { const n = nozzlePos(); if (n) z.value = (n.z - S.status.dispense.needle.zOffsetMm).toFixed(3); } });
-  const save = el('button', { type: 'button', class: 'small primary', text: 'Save', disabled: derived,
+  const save = el('button', { type: 'button', class: 'small primary', text: 'Save', disabled: derived, 'data-action': 'save',
     onclick: (ev) => act(ev.target, async () => {
       if (x.value === '' || y.value === '' || z.value === '') throw new Error('Enter X, Y and Z for ' + name);
       await api('PUT', '/api/locations/' + encodeURIComponent(name), { x: Number(x.value), y: Number(y.value), z: Number(z.value) });
       S.placesKey = null;
       toast('Saved place ' + name);
     }) });
-  return el('tr', {}, el('td', { title: hint }, el('b', { text: name }), hint ? el('div', { class: 'hint', text: hint }) : null),
+  return el('tr', { 'data-place': name }, el('td', { title: hint }, el('b', { text: name }), hint ? el('div', { class: 'hint', text: hint }) : null),
     el('td', {}, x), el('td', {}, y), el('td', {}, z), el('td', {}, el('div', { class: 'btns' }, useXY, useZ, save)));
 }
 
