@@ -274,6 +274,37 @@ public class ApiServerSimTest {
     }
 
     @Test
+    public void openPnpsOwnStopVentsTheHold() throws Exception {
+        setPlaces();
+        ok(post("/api/pressure/start", null));
+        sim.server.mark();
+        sim.machine.setEnabled(false); // what OpenPnP's Stop button does (no web STOP involved)
+        List<String> l = commands(sim.server.sinceMark());
+        int vOff = l.indexOf("M107 P3"), pOff = l.indexOf("M107 P2");
+        assertTrue(vOff >= 0 && pOff > vOff, l.toString());
+        assertEquals("off", ok(get("/api/status")).getAsJsonObject("pressure").get("state").getAsString());
+    }
+
+    @Test
+    public void holdSwitchesOffAtTheOnTimeLimit() throws Exception {
+        setPlaces();
+        ok(call("PUT", "/api/config", "{\"maxContinuousOnTimeS\":1}"));
+        JsonObject on = ok(post("/api/pressure/start", null));
+        assertEquals("on", on.get("state").getAsString());
+        sim.server.mark();
+        long t0 = System.currentTimeMillis();
+        while (ok(get("/api/status")).getAsJsonObject("pressure").get("state").getAsString().equals("on")
+                && System.currentTimeMillis() - t0 < 5000) {
+            Thread.sleep(50);
+        }
+        JsonObject p = ok(get("/api/status")).getAsJsonObject("pressure");
+        assertEquals("off", p.get("state").getAsString());
+        assertTrue(p.get("lastEvent").getAsString().contains("I7"), p.toString());
+        List<String> l = commands(sim.server.sinceMark());
+        assertTrue(l.indexOf("M107 P3") >= 0 && l.indexOf("M107 P2") > l.indexOf("M107 P3"), l.toString());
+    }
+
+    @Test
     public void stopVentsTheHoldAndStopsTheMachine() throws Exception {
         setPlaces();
         ok(post("/api/pressure/start", null));
@@ -336,6 +367,10 @@ public class ApiServerSimTest {
     }
 
     File writeBoard() throws Exception {
+        return writeBoard(new double[][] {{2, 2, 0}, {8, 2, 90}, {14, 6, 0}});
+    }
+
+    File writeBoard(double[][] pos) throws Exception {
         Package pkg = new Package("R_0603_1608Metric");
         Configuration.get().addPackage(pkg);
         Part part = new Part("R0603-API-TEST");
@@ -343,7 +378,6 @@ public class ApiServerSimTest {
         Configuration.get().addPart(part);
         StringBuilder sb = new StringBuilder("<openpnp-board version=\"1.1\" name=\"api-test.board.xml\">\n"
                 + "<dimensions units=\"Millimeters\" x=\"20.0\" y=\"10.0\" z=\"0.0\" rotation=\"0.0\"/>\n<placements>\n");
-        double[][] pos = {{2, 2, 0}, {8, 2, 90}, {14, 6, 0}};
         for (int i = 0; i < pos.length; i++) {
             sb.append("<placement version=\"1.4\" side=\"Top\" id=\"R").append(i + 1)
                     .append("\" part-id=\"R0603-API-TEST\" type=\"Placement\" enabled=\"true\" rank=\"0\">\n")
@@ -420,6 +454,115 @@ public class ApiServerSimTest {
         assertEquals(409, stale.status);
         assertTrue(stale.body.contains("plan the board again"), stale.toString());
         assertEquals(404, post("/api/run", "{\"planId\":\"nope\"}").status);
+    }
+
+    /** TCP proxy that delays every "ok" from the controller, so a run takes long enough to STOP it. */
+    static final class SlowProxy implements AutoCloseable {
+        final java.net.ServerSocket ss;
+        final List<Socket> sockets = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+        SlowProxy(int targetPort, long okDelayMs) throws Exception {
+            ss = new java.net.ServerSocket(0, 5, InetAddress.getLoopbackAddress());
+            Thread t = new Thread(() -> {
+                while (!ss.isClosed()) {
+                    try {
+                        Socket client = ss.accept();
+                        Socket up = new Socket(InetAddress.getLoopbackAddress(), targetPort);
+                        sockets.add(client);
+                        sockets.add(up);
+                        pump(client, up, 0);
+                        pump(up, client, okDelayMs);
+                    }
+                    catch (Exception e) {
+                        // closed
+                    }
+                }
+            }, "SlowProxy");
+            t.setDaemon(true);
+            t.start();
+        }
+
+        static void pump(Socket from, Socket to, long okDelayMs) {
+            Thread t = new Thread(() -> {
+                try (BufferedReader in = new BufferedReader(new InputStreamReader(from.getInputStream(),
+                        StandardCharsets.UTF_8))) {
+                    OutputStream out = to.getOutputStream();
+                    String line;
+                    while ((line = in.readLine()) != null) {
+                        if (okDelayMs > 0 && line.startsWith("ok")) {
+                            Thread.sleep(okDelayMs);
+                        }
+                        out.write((line + "\n").getBytes(StandardCharsets.UTF_8));
+                        out.flush();
+                    }
+                }
+                catch (Exception e) {
+                    // closed
+                }
+            }, "SlowProxy-pump");
+            t.setDaemon(true);
+            t.start();
+        }
+
+        int port() {
+            return ss.getLocalPort();
+        }
+
+        @Override
+        public void close() throws Exception {
+            ss.close();
+            for (Socket s : sockets) {
+                s.close();
+            }
+        }
+    }
+
+    @Test
+    public void stopDuringARunAbortsTheEngineAndVentsBeforeOpenPnpStops() throws Exception {
+        setPlaces();
+        double[][] pos = new double[30][];
+        for (int i = 0; i < pos.length; i++) {
+            pos[i] = new double[] {2 + 2.5 * (i % 10), 2 + 3 * (i / 10), 0};
+        }
+        File board = writeBoard(pos);
+        ok(call("PUT", "/api/pad-types/chip-0603", "{\"status\":\"characterized\"}"));
+        ok(call("PUT", "/api/config", "{\"testDotOpticalCheck\":false}"));
+        // reconnect OpenPnP through the slow proxy (still only localhost sockets)
+        try (SlowProxy proxy = new SlowProxy(sim.server.getPort(), 10)) {
+            sim.machine.setEnabled(false);
+            sim.driver.disconnect(); // connection-keep-alive would otherwise keep the direct link
+            ((org.openpnp.machine.reference.driver.TcpCommunications) sim.driver.getCommunications())
+                    .setPort(proxy.port());
+            sim.machine.setEnabled(true);
+            sim.machine.home();
+            JsonObject plan = ok(post("/api/plan", planBody(board)));
+            assertEquals(60, plan.getAsJsonObject("summary").get("dots").getAsInt(), plan.toString());
+            assertTrue(plan.getAsJsonObject("interlocks").get("ok").getAsBoolean(), plan.toString());
+            assertEquals(202, post("/api/run", "{\"planId\":\"" + plan.get("planId").getAsString() + "\"}").status);
+            long t0 = System.currentTimeMillis();
+            JsonObject s;
+            do {
+                Thread.sleep(20);
+                s = ok(get("/api/status"));
+            } while ((s.get("run").isJsonNull() || s.getAsJsonObject("run").get("dotsDone").getAsInt() < 2)
+                    && System.currentTimeMillis() - t0 < 30000);
+            sim.server.mark();
+            JsonObject stop = ok(post("/api/stop", null));
+            t0 = System.currentTimeMillis();
+            do {
+                Thread.sleep(20);
+                s = ok(get("/api/status"));
+            } while (s.getAsJsonObject("run").get("running").getAsBoolean() && System.currentTimeMillis() - t0 < 30000);
+            JsonObject run = s.getAsJsonObject("run");
+            assertEquals("ABORTED", run.get("status").getAsString(), run.toString());
+            assertTrue(run.get("dotsDone").getAsInt() < 60, run.toString());
+            assertFalse(s.getAsJsonObject("machine").get("enabled").getAsBoolean(), stop.toString());
+            List<String> l = commands(sim.server.sinceMark());
+            int q = l.indexOf("M410"), v = l.indexOf("M107 P3"), p = l.indexOf("M107 P2"), b = l.indexOf("M18 B");
+            assertTrue(q >= 0 && v > q && p > v && b > p, "engine I1 after STOP: " + l);
+            // this config has no DISABLE_COMMAND: STOP waited for the engine before OpenPnP's Stop
+            assertTrue(stop.toString().contains("engine"), stop.toString());
+        }
     }
 
     @Test
