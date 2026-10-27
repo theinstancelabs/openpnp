@@ -591,6 +591,12 @@ public class ApiServerSimTest {
         assertEquals(400, pwm.status);
         assertTrue(pwm.body.contains("S255"), pwm.toString());
         assertEquals(400, call("PUT", "/api/config", "{\"noSuchSetting\":1}").status);
+        // I4 state cannot be forged through the settings; an unchanged round-trip is accepted
+        Res forge = call("PUT", "/api/config", "{\"needleZOffsetSetAtMs\":" + System.currentTimeMillis() + "}");
+        assertEquals(400, forge.status, forge.toString());
+        JsonObject all = ok(get("/api/config"));
+        assertEquals(200, call("PUT", "/api/config", all.toString()).status);
+        assertEquals(404, get("/static/..").status);
         JsonObject c = ok(call("PUT", "/api/config", "{\"needleGapMm\":0.2}"));
         assertEquals(0.2, c.get("needleGapMm").getAsDouble(), 1e-9);
         assertEquals("M106 P2 S255", c.get("pumpOnGcode").getAsString());
