@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paste dispenser</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">Paste dispenser</div>
+  <div class="pills" data-testid="connection">
+    <span class="pill" id="pill-conn" title="Whether OpenPnP is connected to the controller board">Connecting…</span>
+    <span class="pill" id="pill-homed" title="Homed: every axis has been to its home switch, so positions are known">…</span>
+    <span class="pill" id="pill-pressure" title="Barrel pressure: the pump and valve that push paste into the auger">…</span>
+    <span class="pill" id="pill-engine" title="The dispense engine inside OpenPnP">…</span>
+  </div>
+  <div class="machine-actions">
+    <button id="btn-start" type="button" title="Connect to the controller board and switch the motors on (OpenPnP's Start button)">Start</button>
+    <button id="btn-home" type="button" title="Move every axis to its home switch so positions are known">Home</button>
+  </div>
+  <button id="btn-stop" class="stop" type="button" data-testid="stop"
+          title="Stops everything now: the auger stops, the valve vents the barrel, the pump stops, and OpenPnP stops the machine (it must be homed again).">STOP</button>
+</header>
+
+<div id="banner" class="banner hidden" role="alert"><span id="banner-text"></span><button type="button" id="banner-close" class="link" aria-label="Close">×</button></div>
+
+<nav class="tabs" role="tablist">
+  <button type="button" role="tab" id="tabbtn-run" data-tab="run" aria-selected="true">Run</button>
+  <button type="button" role="tab" id="tabbtn-dispense" data-tab="dispense" aria-selected="false">Dispense</button>
+  <button type="button" role="tab" id="tabbtn-calibrate" data-tab="calibrate" aria-selected="false">Calibrate</button>
+  <button type="button" role="tab" id="tabbtn-profiles" data-tab="profiles" aria-selected="false">Profiles</button>
+</nav>
+
+<main>
+<!-- ============================== RUN ============================== -->
+<section id="tab-run" class="tab active" role="tabpanel" aria-labelledby="tabbtn-run">
+  <div class="grid">
+    <div class="card">
+      <h2>1. Board</h2>
+      <label>Board
+        <select id="board-select" title="A board from the job open in OpenPnP (its position and fiducial check come from the job), or a board file placed by hand"></select>
+      </label>
+      <div id="board-file-row" class="hidden">
+        <label>Board file (.board.xml)
+          <input id="board-file" type="text" placeholder="/home/…/my.board.xml">
+        </label>
+      </div>
+      <fieldset id="board-loc" class="row4">
+        <legend title="Where the board's origin (its 0,0 corner) sits on the machine, in mm. Z is the board's top surface.">Board position on the machine (mm)</legend>
+        <label>X <input id="board-x" type="number" step="0.01"></label>
+        <label>Y <input id="board-y" type="number" step="0.01"></label>
+        <label title="Height of the board's top surface">Z <input id="board-z" type="number" step="0.01" value="0"></label>
+        <label title="Board rotation in degrees, counter-clockwise">Rot. <input id="board-rot" type="number" step="0.1" value="0"></label>
+      </fieldset>
+      <p class="hint" id="board-hint"></p>
+      <button id="btn-plan" type="button" class="primary"
+              title="Work out where every dot goes and how much paste each gets. Nothing moves.">Plan</button>
+    </div>
+
+    <div class="card wide">
+      <h2>2. Preview</h2>
+      <div class="plan-layout">
+        <div class="svg-wrap"><svg id="plan-svg" data-testid="plan-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 60" preserveAspectRatio="xMidYMid meet"></svg></div>
+        <div class="plan-side">
+          <ul class="legend">
+            <li><span class="sw pad-ok"></span>pad ready</li>
+            <li><span class="sw pad-warn"></span>pad with a warning</li>
+            <li><span class="sw pad-blocked"></span>pad that cannot be dispensed</li>
+            <li><span class="sw dot-planned"></span>planned dot</li>
+            <li><span class="sw dot-done"></span>dot done</li>
+          </ul>
+          <dl id="plan-summary" class="kv"></dl>
+        </div>
+      </div>
+      <div id="plan-interlocks"></div>
+      <details id="plan-flags-wrap" class="hidden"><summary id="plan-flags-title">Pads that need attention</summary><div id="plan-flags"></div></details>
+    </div>
+
+    <div class="card">
+      <h2>3. Run</h2>
+      <label title="Leave empty to dispense every dot. A number dispenses only the first dots in path order (the exact count is logged).">Only the first N dots (optional)
+        <input id="run-maxdots" type="number" min="1" step="1" placeholder="all">
+      </label>
+      <button id="btn-run" type="button" class="primary" disabled
+              title="Dispense the planned board: pressure on, prime and test dot on the waste pad, every dot, pressure off">Run board</button>
+      <div class="progress" title="Dots done out of dots planned"><div id="run-bar" class="bar"></div></div>
+      <dl id="run-live" class="kv"></dl>
+      <h3><abbr title="Dots per hour: how many paste dots the machine lays down per hour">DPH</abbr> of the last run</h3>
+      <dl id="run-last" class="kv"></dl>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== DISPENSE ============================== -->
+<section id="tab-dispense" class="tab" role="tabpanel" aria-labelledby="tabbtn-dispense">
+  <div class="grid">
+    <div class="card">
+      <h2>Pressure</h2>
+      <p class="hint">Holds the barrel under pressure, e.g. to read the regulator gauge. Order: pump, then valve. Off: valve (the barrel vents), then pump. Prime, test dot and runs switch the pressure on and off by themselves, so switch it off before using them.</p>
+      <p class="big" id="pressure-state" data-testid="pressure-state">…</p>
+      <div class="btns">
+        <button id="btn-pressure-on" type="button" title="Pump on, wait, valve on">Pressure on</button>
+        <button id="btn-pressure-off" type="button" title="Valve off (vents the barrel), then pump off">Pressure off</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Prime and test dot</h2>
+      <p class="hint"><abbr title="Turning the auger over the waste pad so paste flows evenly before real dots">Prime</abbr> and the
+        <abbr title="One dot next to the prime spot, to check that paste comes out before a board">test dot</abbr> go on the
+        <abbr title="A spot off the board where priming and test dots go (Places, below)">waste pad</abbr>.</p>
+      <div class="row2">
+        <label title="Auger rotation for the prime, in degrees (360 = one turn)">Prime rotation (°)
+          <input id="prime-rot" type="number" min="1" step="1"></label>
+        <button id="btn-prime" type="button">Prime</button>
+      </div>
+      <div class="row2">
+        <label title="Auger rotation for the test dot, in degrees; the default is one 0603 pad from the current calibration">Test dot rotation (°)
+          <input id="testdot-rot" type="number" min="1" step="0.1"></label>
+        <button id="btn-testdot" type="button">Test dot</button>
+      </div>
+      <p id="dispense-result" class="result"></p>
+    </div>
+
+    <div class="card">
+      <h2>Top camera</h2>
+      <img id="cam-img" alt="Top camera snapshot" class="cam">
+      <div class="btns">
+        <button id="btn-cam" type="button" title="Take a picture with the top camera (nothing moves)">Snapshot</button>
+        <label class="inline"><input id="cam-auto" type="checkbox"> refresh every 2 s</label>
+      </div>
+    </div>
+
+    <div class="card wide">
+      <h2>Places</h2>
+      <p class="hint">Positions of the dispenser needle (N2) in machine mm. Z is the height of the surface at that place. Jog N2 there in OpenPnP, then use its position.</p>
+      <table class="tbl" id="places-table">
+        <thead><tr><th>Name</th><th>X</th><th>Y</th><th title="Surface height at this place">Z (surface)</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="row2">
+        <label>New place name <input id="place-new" type="text" placeholder="e.g. cup" pattern="[A-Za-z0-9_-]+"></label>
+        <button id="btn-place-add" type="button">Add place</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Needle</h2>
+      <p id="needle-state" class="big"></p>
+      <button id="btn-needle-changed" type="button" title="Tell the machine the needle was changed: dispensing is blocked until it is touched off again">I changed the needle</button>
+      <div class="row2">
+        <label title="How far below/above the nominal needle position the real tip is (mm), if you measured it yourself">Needle Z offset (mm)
+          <input id="needle-offset" type="number" step="0.005"></label>
+        <button id="btn-needle-offset" type="button">Save offset</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><abbr title="Safety checks that must pass before the machine may dispense">Interlocks</abbr></h2>
+      <ul id="interlock-list" class="checks"></ul>
+    </div>
+
+    <div class="card">
+      <h2>Settings</h2>
+      <label title="Height of the needle tip above the surface while dispensing">Needle gap (mm) <input id="set-gap" type="number" step="0.005"></label>
+      <label title="Longest time the pressure may stay on without a break (I7)">Maximum pressure time (s) <input id="set-maxon" type="number" step="1"></label>
+      <label title="A board refuses pads whose profile status is below this">Lowest profile status allowed on a board
+        <select id="set-minstatus"></select></label>
+      <label class="inline"><input id="set-prime" type="checkbox"> Prime and test dot before each board (I9)</label>
+      <label class="inline"><input id="set-optical" type="checkbox"> Check the test dot with the camera</label>
+      <button id="btn-settings" type="button">Save settings</button>
+      <details>
+        <summary>All settings (advanced)</summary>
+        <textarea id="set-json" rows="14" spellcheck="false"></textarea>
+        <button id="btn-settings-json" type="button">Save all settings</button>
+      </details>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== CALIBRATE ============================== -->
+<section id="tab-calibrate" class="tab" role="tabpanel" aria-labelledby="tabbtn-calibrate">
+  <div id="setup-guide" class="banner info hidden"></div>
+  <div class="grid">
+    <div class="card">
+      <h2>Scale: shots</h2>
+      <p class="hint">Measures <abbr title="Paste pushed out per full auger turn, mm³ per turn">q</abbr>: dispense big shots into a cup on the scale, then type what the scale reads.</p>
+      <div class="row3">
+        <label>Place <select id="shots-place"></select></label>
+        <label>Rotation per shot (°) <input id="shots-rot" type="number" value="360" step="1"></label>
+        <label>Shots <input id="shots-count" type="number" value="30" step="1" min="1"></label>
+      </div>
+      <button id="btn-shots-run" type="button">Dispense shots</button>
+      <hr>
+      <div class="row3">
+        <label>Rotation per shot (°) <input id="ss-rot" type="number" value="360" step="1"></label>
+        <label>Number of shots <input id="ss-count" type="number" value="30" step="1"></label>
+        <label>Total mass (mg) <input id="ss-total" type="number" step="0.1"></label>
+      </div>
+      <label title="Optional: one mass per shot (mg), separated by commas; gives the spread (CV)">Mass of each shot (mg)
+        <input id="ss-each" type="text" placeholder="e.g. 1.81, 1.79, 1.84"></label>
+      <div class="row3">
+        <label>Tip <input id="ss-tip" type="text" value="22G 0.41 mm"></label>
+        <label>Paste lot <input id="ss-lot" type="text"></label>
+        <label>Set pressure (psi) <input id="ss-psi" type="number" step="0.1"></label>
+      </div>
+      <div class="row3">
+        <label>Barrel temperature (°C) <input id="ss-temp" type="number" step="0.1"></label>
+        <label>Cartridge <input id="ss-cart" type="text"></label>
+        <label>Operator <input id="ss-op" type="text"></label>
+      </div>
+      <label class="inline"><input id="ss-char" type="checkbox"> The spread meets my pass criteria: mark it "characterized"</label>
+      <button id="btn-ss-save" type="button" class="primary">Save scale reading</button>
+    </div>
+
+    <div class="card">
+      <h2><abbr title="A grid of dots made with different auger rotations and measured by the camera, so the planner knows which dot size each rotation makes">Dot ladder</abbr> (camera)</h2>
+      <p class="hint">Dots on the blank, imaged before and after. Needs the needle touched off.</p>
+      <label>Rotations (°) <input id="dl-rots" type="text" value="30, 45, 58, 75, 90"></label>
+      <div class="row3">
+        <label>Repeats <input id="dl-rep" type="number" value="5" min="1"></label>
+        <label title="Distance between dots on the blank">Pitch (mm) <input id="dl-pitch" type="number" value="1.5" step="0.1"></label>
+        <label>Place <select id="dl-place"></select></label>
+      </div>
+      <label class="inline"><input id="dl-prime" type="checkbox" checked> Prime on the waste pad first</label>
+      <button id="btn-dl-run" type="button">Run dot ladder</button>
+    </div>
+
+    <div class="card">
+      <h2>Scale: dot batch</h2>
+      <p class="hint">Weigh a batch of equal dots on a slide (gross minus tare) to get mg per dot for one rotation.</p>
+      <div class="row3">
+        <label>Calibration # <input id="sd-cal" type="number" step="1"></label>
+        <label>Rotation per dot (°) <input id="sd-rot" type="number" step="0.1"></label>
+        <label>Number of dots <input id="sd-count" type="number" step="1"></label>
+      </div>
+      <div class="row3">
+        <label>Net mass (mg) <input id="sd-mass" type="number" step="0.1"></label>
+        <label title="Scale repeatability (one standard deviation), for the error bar">Scale SD (mg) <input id="sd-sd" type="number" step="0.1"></label>
+        <label title="Mean dot diameter measured by the camera, if you have it">Mean diameter (mm) <input id="sd-dia" type="number" step="0.01"></label>
+      </div>
+      <button id="btn-sd-save" type="button" class="primary">Save dot batch</button>
+    </div>
+
+    <div class="card">
+      <h2>Needle <abbr title="Finding exactly where the needle tip touches the surface: dots are made at falling heights; when the tip reaches the surface the dot squashes or stops forming">touch-off</abbr></h2>
+      <div class="row3">
+        <label title="First (largest) gap above the surface, mm">Start gap (mm) <input id="to-start" type="number" value="0.125" step="0.005"></label>
+        <label>Step (mm) <input id="to-step" type="number" value="0.025" step="0.005"></label>
+        <label>Steps <input id="to-steps" type="number" value="6" step="1"></label>
+      </div>
+      <div class="row3">
+        <label>Rotation per dot (°) <input id="to-rot" type="number" value="58" step="0.1"></label>
+        <label>Place <select id="to-place"></select></label>
+        <label class="inline"><input id="to-apply" type="checkbox"> Use the result</label>
+      </div>
+      <button id="btn-to-run" type="button">Run touch-off</button>
+    </div>
+
+    <div class="card wide">
+      <h2>Records</h2>
+      <p id="cal-current" class="big"></p>
+      <h3>Calibrations</h3>
+      <table class="tbl" id="cal-table"><thead><tr><th>#</th><th>Method</th><th>Status</th><th title="mm³ per auger turn">q</th><th title="Spread: standard deviation / mean">CV</th><th>n</th><th>Date</th><th>Notes</th></tr></thead><tbody></tbody></table>
+      <h3>Dot ladder of the current calibration</h3>
+      <table class="tbl" id="ladder-table"><thead><tr><th>Rotation (°)</th><th>n</th><th>Diameter (mm)</th><th>CV</th><th>mg/dot</th><th>Height (mm)</th><th>Method</th></tr></thead><tbody></tbody></table>
+      <p id="cal-result" class="result"></p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== PROFILES ============================== -->
+<section id="tab-profiles" class="tab" role="tabpanel" aria-labelledby="tabbtn-profiles">
+  <div class="toolbar">
+    <button id="btn-padtype-new" type="button" class="primary" data-testid="new-pad-type">New pad type</button>
+    <label class="inline"><input id="show-retired" type="checkbox"> show retired</label>
+    <span class="hint" id="profiles-hint"></span>
+  </div>
+  <div id="profiles"></div>
+</section>
+</main>
+
+<dialog id="dlg-padtype" aria-labelledby="dlg-padtype-title">
+  <form method="dialog" id="padtype-form">
+    <h2 id="dlg-padtype-title">New pad type</h2>
+    <div class="row2">
+      <label>Family <select id="pt-family"></select></label>
+      <label id="pt-family-other-wrap" class="hidden">Other family <input id="pt-family-other" type="text"></label>
+    </div>
+    <div class="row2">
+      <label>Name <input id="pt-name" type="text" required placeholder="e.g. 0201"></label>
+      <label title="Stable identity across versions">Key <input id="pt-key" type="text" placeholder="made from the name" pattern="[a-z0-9][a-z0-9-]*"></label>
+    </div>
+    <label title="Copy the pad size from a package footprint in OpenPnP">Pick the size from a footprint <select id="pt-footprint"><option value="">—</option></select></label>
+    <div class="row3">
+      <label>Pad width (mm) <input id="pt-w" type="number" step="0.005" required></label>
+      <label>Pad height (mm) <input id="pt-h" type="number" step="0.005" required></label>
+      <label title="Corner rounding, 0 = square corners, 100 = fully round">Roundness (%) <input id="pt-round" type="number" step="1" value="0"></label>
+    </div>
+    <div class="row3">
+      <label title="Used only when the package has no footprint pads in OpenPnP">Pad layout <select id="pt-layout"></select></label>
+      <label title="Centre-to-centre distance of the pads (two-terminal and SOT-23 layouts)">Pitch (mm) <input id="pt-pitch" type="number" step="0.005"></label>
+      <label>Status <select id="pt-status"></select></label>
+    </div>
+    <div class="row3">
+      <label title="Paste thickness the pad should get, like a stencil's thickness">t (mm) <input id="pt-t" type="number" step="0.005" value="0.10"></label>
+      <label title="Fraction of the pad area to cover (1.0 = all; less for e.g. QFN centre pads)">k <input id="pt-k" type="number" step="0.05" value="1.0"></label>
+      <label title="Regular expression matched against OpenPnP package names, e.g. 0603|1608Metric">Package names <input id="pt-pattern" type="text"></label>
+    </div>
+    <label>Notes <textarea id="pt-notes" rows="2"></textarea></label>
+    <p id="pt-error" class="error"></p>
+    <div class="btns end">
+      <button type="button" id="pt-cancel">Cancel</button>
+      <button type="submit" id="pt-save" class="primary" value="save">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-history" aria-labelledby="dlg-history-title">
+  <h2 id="dlg-history-title">History</h2>
+  <div id="history-body"></div>
+  <div class="btns end"><button type="button" id="history-close">Close</button></div>
+</dialog>
+
+<div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+</body>
+</html>
