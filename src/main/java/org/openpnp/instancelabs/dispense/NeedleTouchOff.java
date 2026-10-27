@@ -1,0 +1,114 @@
+package org.openpnp.instancelabs.dispense;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Needle touch-off by dot ladder at stepped Z gaps (plan §6.1, option 1): dispense equal dots at
+ * commanded gaps g_0 > g_1 > ... (relative to the current needle Z offset) and measure their
+ * diameters. Far from the surface the diameter is stable; at the gap where the tip reaches the
+ * surface the dot squashes (diameter jumps) or stops forming. The contact gap is estimated as the
+ * midpoint between the last normal gap and the first squashed/missing one; the new offset is
+ * old offset + contact gap. Resolution is one step (default 0.025 mm = one Z microstep today).
+ */
+public final class NeedleTouchOff {
+    private NeedleTouchOff() {
+    }
+
+    public static class Request {
+        /** Largest commanded gap (mm, relative to the current offset). */
+        public double startGapMm = 0.125;
+        public double stepMm = 0.025;
+        public int steps = 6;
+        /** Rotation per dot (deg), default the provisional 0603 dot (plan §5.6: ~58 deg). */
+        public double rotationDeg = 58;
+        public double pitchMm = 1.5;
+        public String locationName;
+        public boolean primeAtWaste = true;
+        /** Relative diameter increase that counts as squashing. */
+        public double jumpRatio = 0.25;
+    }
+
+    public static class Analysis {
+        public final double[] gapsMm;
+        public final Double[] diametersMm;
+        public Double contactGapMm;
+        public Double bracketHighMm;
+        public Double bracketLowMm;
+        public Double referenceDiameterMm;
+        public String reason;
+
+        Analysis(double[] g, Double[] d) {
+            gapsMm = g;
+            diametersMm = d;
+        }
+
+        public boolean found() {
+            return contactGapMm != null;
+        }
+    }
+
+    public static double[] gaps(Request req) {
+        double[] g = new double[req.steps];
+        for (int i = 0; i < req.steps; i++) {
+            g[i] = req.startGapMm - i * req.stepMm;
+        }
+        return g;
+    }
+
+    public static List<GcodeStreamBuilder.DotSpec> layout(Request req, DispenseConfig.NamedLocation blank,
+            DispenseConfig cfg) {
+        List<GcodeStreamBuilder.DotSpec> l = new ArrayList<>();
+        double[] g = gaps(req);
+        for (int i = 0; i < g.length; i++) {
+            double z = blank.z + cfg.needleZOffsetMm + g[i];
+            double hop = blank.z + cfg.needleZOffsetMm + Math.max(g[0], cfg.needleGapMm) + cfg.hopHeightMm;
+            l.add(new GcodeStreamBuilder.DotSpec(blank.x + i * req.pitchMm, blank.y, z, hop, req.rotationDeg, i,
+                    String.format(java.util.Locale.ROOT, "touch-off gap %.3f", g[i])));
+        }
+        return l;
+    }
+
+    /**
+     * @param gapsMm commanded gaps in any order
+     * @param diametersMm measured diameter per gap, null = no dot formed
+     */
+    public static Analysis analyze(double[] gapsMm, Double[] diametersMm, double jumpRatio) {
+        Analysis a = new Analysis(gapsMm.clone(), diametersMm.clone());
+        Integer[] idx = new Integer[gapsMm.length];
+        for (int i = 0; i < idx.length; i++) {
+            idx[i] = i;
+        }
+        java.util.Arrays.sort(idx, (p, q) -> Double.compare(gapsMm[q], gapsMm[p])); // far -> near
+        List<Double> ref = new ArrayList<>();
+        for (int k = 0; k < idx.length && ref.size() < 2; k++) {
+            Double d = diametersMm[idx[k]];
+            if (d == null) {
+                break;
+            }
+            ref.add(d);
+        }
+        if (ref.isEmpty()) {
+            a.reason = "no dot at the largest gap: the needle is at or below the surface for every step, or "
+                    + "nothing dispensed; raise startGapMm";
+            return a;
+        }
+        double refD = ref.size() == 1 ? ref.get(0) : (ref.get(0) + ref.get(1)) / 2;
+        a.referenceDiameterMm = refD;
+        for (int k = 1; k < idx.length; k++) {
+            Double d = diametersMm[idx[k]];
+            boolean contact = d == null || d > refD * (1 + jumpRatio);
+            if (contact) {
+                a.bracketHighMm = gapsMm[idx[k - 1]];
+                a.bracketLowMm = gapsMm[idx[k]];
+                a.contactGapMm = (a.bracketHighMm + a.bracketLowMm) / 2;
+                a.reason = (d == null ? "dot stopped forming" : "dot squashed") + String.format(java.util.Locale.ROOT,
+                        " between %.3f and %.3f mm", a.bracketHighMm, a.bracketLowMm);
+                return a;
+            }
+        }
+        a.reason = "no squash or missing dot down to the smallest gap; contact is below "
+                + gapsMm[idx[idx.length - 1]] + " mm: lower the gaps";
+        return a;
+    }
+}
