@@ -494,7 +494,7 @@ final class DispenseEndpoints {
         }
         InterlockReport pre = ctx.preflightPlan(svc, p, nz(runEntry.estimatedPressurisedSeconds));
         ApiContext.refuseUnlessOk(pre, "Run");
-        ctx.tracker.expect("board " + p.boardName);
+        ctx.tracker.expect("board");
         Future<RunResult> f = svc.runPlan(p);
         return ApiContext.awaitIf(Json.bool(b, "wait", false), f, rr -> Views.run(rr, false),
                 Views.map("kind", "board", "planId", p.planId, "parentPlanId", p == full ? null : full.planId, "dots",
