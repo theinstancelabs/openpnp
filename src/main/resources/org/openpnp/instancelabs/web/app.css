@@ -44,7 +44,7 @@ button.stop {
   background: var(--stop); color: #fff; border: 3px solid #ffcdd2; border-radius: 10px;
   box-shadow: 0 0 0 2px #7f0000 inset;
 }
-button.stop:hover { background: #a31515; }
+button.stop:hover:not(:disabled), button.stop:focus-visible { background: #a31515; color: #fff; }
 button.stop:active { transform: translateY(1px); }
 
 /* ---------- tabs ---------- */

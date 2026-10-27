@@ -579,7 +579,9 @@ function renderPlaces(d) {
   for (const id of ['shots-place', 'dl-place', 'to-place']) {
     const sel = $(id);
     const keep = sel.value;
-    sel.replaceChildren(...Object.keys(locs).map((n) => el('option', { value: n, text: n })));
+    const opts = Object.keys(locs).filter((n) => n !== 'waste-test-dot');
+    sel.replaceChildren(...(opts.length ? opts.map((n) => el('option', { value: n, text: n }))
+      : [el('option', { value: '', text: 'no places yet: add them on the Dispense tab' })]));
     if (keep && locs[keep]) sel.value = keep;
     else if (id !== 'shots-place' && locs[d.blankLocationName]) sel.value = d.blankLocationName;
   }
@@ -662,7 +664,7 @@ async function loadCalibrations() {
   try { c = await api('GET', '/api/calibrations'); } catch (e) { return; }
   const cur = c.current;
   $('cal-current').textContent = cur ? 'Current: #' + cur.id + ' — q = ' + fmt(cur.qMm3PerRev, 4) + ' mm³ per auger turn ('
-    + cur.status + ', ' + cur.method + ')' : 'No calibration';
+    + cur.status + (cur.method !== cur.status ? ', ' + cur.method : '') + ')' : 'No calibration';
   if (cur && !$('sd-cal').value) $('sd-cal').value = cur.id;
   $('cal-table').tBodies[0].replaceChildren(...c.calibrations.slice().reverse().map((k) => el('tr', {},
     el('td', { text: k.id }), el('td', { text: k.method }), el('td', {}, el('span', { class: 'badge ' + (k.status === 'characterized' ? 'characterized' : 'provisional'), text: k.status })),
