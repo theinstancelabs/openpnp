@@ -19,6 +19,7 @@ import org.openpnp.Translations;
 import org.openpnp.gui.components.ComponentDecorators;
 import org.openpnp.gui.support.AbstractConfigurationWizard;
 import org.openpnp.gui.support.IntegerConverter;
+import org.openpnp.instancelabs.serial.gui.SerialAutoDetectPanel;
 import org.openpnp.machine.reference.driver.AbstractReferenceDriver;
 import org.openpnp.machine.reference.driver.AbstractReferenceDriver.CommunicationsType;
 import org.openpnp.machine.reference.driver.ReferenceDriverCommunications.LineEndingType;
@@ -46,6 +47,7 @@ public class AbstractReferenceDriverConfigurationWizard extends AbstractConfigur
     private JTextField ipAddressTextField;
     private ButtonGroup commsMethodButtonGroup;
     private JPanel panelSerial;
+    private SerialAutoDetectPanel panelSerialAutoDetect;
     private JPanel panelTcp;
     private JCheckBox connectionKeepAlive;
     private JPanel panelController;
@@ -191,6 +193,7 @@ public class AbstractReferenceDriverConfigurationWizard extends AbstractConfigur
         panelSerial.add(lblPortName, "2, 2, right, default");
 
         comboBoxPort = new JComboBox();
+        comboBoxPort.setEditable(true); // allow typing e.g. a /dev/serial/by-id/... path
         panelSerial.add(comboBoxPort, "4, 2, fill, default");
 
         JLabel lblBaudRate = new JLabel(Translations.getString(
@@ -297,6 +300,13 @@ public class AbstractReferenceDriverConfigurationWizard extends AbstractConfigur
 
         refreshPortList();
 
+        panelSerialAutoDetect = new SerialAutoDetectPanel(
+                driver != null ? driver.getSerial() : null, () -> {
+                    Object item = comboBoxPort.getEditor().getItem();
+                    return item == null ? null : item.toString();
+                });
+        contentPanel.add(panelSerialAutoDetect);
+
         // TCP config code
         panelTcp = new JPanel();
         panelTcp.setBorder(new TitledBorder(null, Translations.getString(
@@ -343,6 +353,7 @@ public class AbstractReferenceDriverConfigurationWizard extends AbstractConfigur
 
     private void refreshPortList() {
         if (driver != null) {
+            Object selected = comboBoxPort.getSelectedItem();
             comboBoxPort.removeAllItems();
             boolean exists = false;
             String[] portNames = SerialPortCommunications.getPortNames();
@@ -354,6 +365,9 @@ public class AbstractReferenceDriverConfigurationWizard extends AbstractConfigur
             }
             if (!exists && driver.getPortName() != null) {
                 comboBoxPort.addItem(driver.getPortName());
+            }
+            if (selected != null) {
+                comboBoxPort.setSelectedItem(selected); // keep a typed/unapplied entry
             }
         }
     }
@@ -380,6 +394,10 @@ public class AbstractReferenceDriverConfigurationWizard extends AbstractConfigur
         addWrappedBinding(driver, "flowControl", flowControlComboBox, "selectedItem");
         addWrappedBinding(driver, "setDtr", setDtrCheckbox, "selected");
         addWrappedBinding(driver, "setRts", setRtsCheckbox, "selected");        
+        addWrappedBinding(driver.getSerial(), "usbSerialNumber",
+                panelSerialAutoDetect.getUsbSerialNumberField(), "text");
+        addWrappedBinding(driver.getSerial(), "usbDescription",
+                panelSerialAutoDetect.getUsbDescriptionField(), "text");
         
         addWrappedBinding(driver, "ipAddress", ipAddressTextField, "text");
         addWrappedBinding(driver, "port", portTextField, "text", integerConverter);
@@ -408,9 +426,11 @@ public class AbstractReferenceDriverConfigurationWizard extends AbstractConfigur
     protected void communicationsTypeChanged() {
         if (communicationsType.getSelectedItem() == CommunicationsType.serial) {
             setPanelEnabled(panelSerial, true);
+            setPanelEnabled(panelSerialAutoDetect, true);
             setPanelEnabled(panelTcp, false);
         } else {
             setPanelEnabled(panelSerial, false);
+            setPanelEnabled(panelSerialAutoDetect, false);
             setPanelEnabled(panelTcp, true);
         }
     }
