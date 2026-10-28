@@ -40,6 +40,12 @@ final class MachineEndpoints {
      * the driver's DISABLE_COMMAND does not vent by itself.
      */
     static final long ENGINE_STOP_GRACE_MS = 1000;
+    /**
+     * STOP answers within this time, waits included: the page shows "STOP NOT CONFIRMED: ... switch the machine off"
+     * when no answer comes in 2 s. A disable queued behind a dwell (valve settle, up to 3 s) goes on after the answer
+     * ({@code machineEnabled} true then); the status shows when the machine is off.
+     */
+    static final long STOP_ANSWER_MS = 1500;
 
     private final ApiContext ctx;
     private final ExecutorService cameraExecutor = Executors.newSingleThreadExecutor(r -> {
@@ -65,6 +71,7 @@ final class MachineEndpoints {
     // ------------------------------------------------------------------------------------------
 
     Object stop() {
+        long answerBy = System.currentTimeMillis() + STOP_ANSWER_MS;
         List<String> actions = new ArrayList<>();
         String reason = "STOP pressed in the web UI";
         DispenseService svc = ctx.svcOrNull();
@@ -94,7 +101,7 @@ final class MachineEndpoints {
             else {
                 // OpenPnP's Stop would not vent and may close the link: let the engine's own
                 // shutdown lines go out first (bounded).
-                long until = System.currentTimeMillis() + ENGINE_STOP_GRACE_MS;
+                long until = Math.min(System.currentTimeMillis() + ENGINE_STOP_GRACE_MS, answerBy);
                 while (svc.isBusy() && System.currentTimeMillis() < until) {
                     sleep(20);
                 }
@@ -125,9 +132,11 @@ final class MachineEndpoints {
                 }, null, true);
                 actions.add("OpenPnP Stop; sends the driver's DISABLE_COMMAND");
             }
-            long until = System.currentTimeMillis() + 3000;
-            while (m.isEnabled() && System.currentTimeMillis() < until) {
+            while (m.isEnabled() && System.currentTimeMillis() < answerBy) {
                 sleep(20);
+            }
+            if (m.isEnabled()) {
+                actions.add("OpenPnP is still switching the machine off (a dwell or move must end first)");
             }
         }
         else {

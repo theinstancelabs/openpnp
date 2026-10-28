@@ -29,6 +29,11 @@ public final class Interlocks {
          * status changed, retired) after planning is stale.
          */
         public java.util.Map<String, PadType> padTypesNow;
+        /**
+         * {@link PadTypeResolver#fingerprint} of the pad types and package mappings now, or null if unknown: a new type,
+         * or a pattern or mapping change, can resolve the plan's packages to another type.
+         */
+        public String padTypesFingerprintNow;
         /** Program estimate of pressurised time (I7 pre-check). */
         public double estimatedPressurisedSeconds;
         /** Top camera + dot vision present (I10 clean-pad check). */
@@ -70,7 +75,8 @@ public final class Interlocks {
      * The pad-type gate and the pad types are read when a plan is made (§5.7). Review finding: raising the gate or
      * editing / retiring a pad type after planning left the plan "current", and a run then dispensed pads below the new
      * gate. Both now make the plan stale ("... after planning ...; plan again"), so the run is refused until it is
-     * planned again.
+     * planned again. Final review: a new pad type (or a pattern or package mapping change) that takes over the plan's
+     * packages left the plan current too; any change of the resolver's inputs now makes it stale.
      */
     static void checkPadTypesSincePlanning(Inputs in, InterlockReport r) {
         PadTypeStatus gate;
@@ -114,6 +120,11 @@ public final class Interlocks {
         }
         if (!changed.isEmpty()) {
             r.add("PLAN", "pad types changed after planning: " + String.join(", ", changed) + "; plan again");
+        }
+        else if (in.padTypesFingerprintNow != null && in.plan.padTypesFingerprint != null
+                && !in.padTypesFingerprintNow.equals(in.plan.padTypesFingerprint)) {
+            r.add("PLAN", "pad types or package mappings changed after planning (a pad may resolve to another pad type "
+                    + "now); plan again");
         }
     }
 

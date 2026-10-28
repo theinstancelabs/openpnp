@@ -81,6 +81,8 @@ public class DispensePlan {
     public String boardFingerprint;
     /** Identity of the board registration only (X/Y/rotation, side, fiducial transform): I4 surface tie. */
     public String boardRegistration;
+    /** Identity of the pad types and package mappings the pads were resolved with ({@link PadTypeResolver#fingerprint}). */
+    public String padTypesFingerprint;
     public final List<PlannedPad> pads = new ArrayList<>();
     public final List<PlannedDot> dots = new ArrayList<>();
     public final List<String> warnings = new ArrayList<>();

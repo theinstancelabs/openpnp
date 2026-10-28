@@ -60,6 +60,7 @@ public class DispensePlanner {
         plan.needleZOffsetMm = cfg.needleZOffsetMm;
         plan.hopHeightMm = cfg.hopHeightMm;
         plan.surfaceFingerprint = surface == null ? null : surface.fingerprint();
+        plan.padTypesFingerprint = resolver == null ? null : resolver.fingerprint();
         double worstBoardZDiff = 0;
         double netDeg = cfg.profile.netDeg(cfg);
         PadTypeStatus minStatus = cfg.minPadTypeStatus();

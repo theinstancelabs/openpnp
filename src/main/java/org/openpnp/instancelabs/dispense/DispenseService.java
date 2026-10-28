@@ -693,13 +693,16 @@ public final class DispenseService {
         in.plan = plan;
         if (plan != null) {
             try {
+                List<PadType> types = db.currentPadTypes();
                 in.padTypesNow = new java.util.HashMap<>();
-                for (PadType t : db.currentPadTypes()) {
+                for (PadType t : types) {
                     in.padTypesNow.put(t.typeKey, t);
                 }
+                in.padTypesFingerprintNow = new PadTypeResolver(types, db.packageMappings()).fingerprint();
             }
             catch (Exception e) {
-                in.padTypesNow = null; // unknown: the version check is skipped, the gate check still runs
+                in.padTypesNow = null; // unknown: the version checks are skipped, the gate check still runs
+                in.padTypesFingerprintNow = null;
             }
         }
         in.estimatedPressurisedSeconds = est;

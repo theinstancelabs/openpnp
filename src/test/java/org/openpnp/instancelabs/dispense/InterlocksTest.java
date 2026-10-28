@@ -1,5 +1,6 @@
 package org.openpnp.instancelabs.dispense;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -200,6 +201,37 @@ public class InterlocksTest {
         // the same versions: still current
         now.version = in.plan.pads.get(0).typeVersion;
         assertFalse(Interlocks.check(in).has("PLAN"), Interlocks.check(in).toString());
+    }
+
+    /**
+     * Final review: a pad type created (or a pattern or package mapping changed) after planning can take the plan's
+     * packages over while the plan's own types keep their versions; the plan read as current and a run went on.
+     */
+    @Test
+    public void padTypeResolutionChangedAfterPlanningMakesThePlanStale() {
+        Interlocks.Inputs in = ok();
+        PadType chip = DispenseDb.seedPadTypes().get(1); // chip-0603, as the toy plan was resolved with
+        chip.version = 1;
+        assertEquals(new PadTypeResolver(Collections.singletonList(chip), null).fingerprint(), in.plan.padTypesFingerprint);
+        in.padTypesFingerprintNow = in.plan.padTypesFingerprint;
+        assertFalse(Interlocks.check(in).has("PLAN"), Interlocks.check(in).toString());
+        // a newer type with a matching pattern now wins the plan's 0603 packages
+        PadType hd = new PadType("custom-0603-hd", "Custom", "0603 HD", 0.8, 0.95, PadType.Layout.SINGLE, null, 1.0,
+                "0603", null);
+        hd.version = 1;
+        PadTypeResolver now = new PadTypeResolver(Arrays.asList(chip, hd), null);
+        assertEquals("custom-0603-hd", now.resolve("R_0603_1608Metric", Double.NaN, Double.NaN, Double.NaN).typeKey);
+        in.padTypesFingerprintNow = now.fingerprint();
+        InterlockReport r = Interlocks.check(in);
+        assertTrue(r.has("PLAN"), r.toString());
+        assertTrue(r.toString().contains("pad types or package mappings changed after planning"), r.toString());
+        // a package mapping added after planning
+        in.padTypesFingerprintNow = new PadTypeResolver(Collections.singletonList(chip),
+                Collections.singletonMap("R_0603_1608Metric", "chip-0402")).fingerprint();
+        assertTrue(Interlocks.check(in).has("PLAN"));
+        // the resolver inputs now unknown (database not readable): not refused on this ground
+        in.padTypesFingerprintNow = null;
+        assertFalse(Interlocks.check(in).has("PLAN"));
     }
 
     @Test
