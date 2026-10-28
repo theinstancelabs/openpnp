@@ -592,8 +592,9 @@ function renderPlan(p) {
     ['Path', fmt(s.pathLengthMm, 1) + ' mm'],
     ['Time (estimate)', s.estimatedSeconds ? fmtDuration(s.estimatedSeconds) : (s.estimateError || '—'),
       'The whole program as it will be streamed: settle, purge row, crossing, every dot and vent, with acceleration and dwells (no host delays)'],
-    ['DPH (estimate)', s.estimatedDph ? fmtInt(s.estimatedDph) : '—',
-      'Board dots per hour of the estimated program. Includes acceleration; the bench counts from the crossing to the last dot, so it reads a little higher'],
+    ['DPH (estimate)', s.estimatedWorkDph ? fmtInt(s.estimatedWorkDph) + ' dots only, ' + fmtInt(s.estimatedDph) + ' overall' : '—',
+      'Dots only: from the crossing after the purge to the last dot, as the bench counts it (18 psi recipe: 5,490 measured). '
+      + 'Overall: the whole program with settle, purge and vent. Both include acceleration and dwells, no host delays (about 3 % slow against the bench)'],
     ['Profile', p.profile ? profileText(p.profile) : '—', 'The dispense profile this plan was made with (Profiles tab); '
       + s.purgeDots + ' purge dots go on the purge row first'],
   ]);

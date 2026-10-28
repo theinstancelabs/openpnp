@@ -232,6 +232,10 @@ public final class Interlocks {
         // I6: the regulator is set by hand; the profile says what it must read.
         r.notes.add(String.format(Locale.ROOT, "I6: set the regulator to %.1f psi (profile '%s'); the window is "
                 + "narrow: 16 psi starved the screw, 20 psi drooled", prof.pressurePsi, prof.name));
+        if (prof.screwRpm > 180) {
+            r.notes.add(String.format(Locale.ROOT, "I6: the screw runs at %.0f rpm, faster than the bench-proven 180: a "
+                    + "screw faster than the paste feeds it pulls in air (30-50 turns to recover)", prof.screwRpm));
+        }
         if (in.boardRun) {
             // I9: purge row (same recipe as the work, then cross without stopping).
             DispenseConfig.PurgeRow row = cfg.purgeRow;

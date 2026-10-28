@@ -571,6 +571,7 @@ public class ApiServerSimTest {
         String planId = plan.get("planId").getAsString();
         assertEquals(planId, ok(get("/api/plan/" + planId)).get("planId").getAsString());
 
+        sim.server.setBStepCount(4321); // the screw's history since the controller's power-up
         sim.server.mark();
         JsonObject run = ok(post("/api/run", "{\"planId\":\"" + planId + "\",\"wait\":true}"));
         JsonObject res = run.getAsJsonObject("result");
@@ -579,9 +580,9 @@ public class ApiServerSimTest {
         assertTrue(res.get("dphMotion").getAsDouble() > 0);
         assertTrue(res.get("dphOverall").getAsDouble() > 0);
         assertEquals(8, res.get("purgeDots").getAsInt());
-        // the simulated controller reports no M114 Count: the engine takes 0 and says so
-        assertEquals(0, res.get("bCountAtStart").getAsLong());
-        assertTrue(res.get("warnings").toString().contains("B step count taken as 0"), res.toString());
+        // the start angle comes from the controller's M114 Count (no simulator fallback)
+        assertEquals(4321, res.get("bCountAtStart").getAsLong());
+        assertFalse(res.get("warnings").toString().contains("B step count taken as 0"), res.toString());
         assertEquals(297.9, res.get("workStartAngleDeg").getAsDouble(), 1e-9, "start angle 298 at 1600 steps/rev");
         assertEquals("18 psi half turn", res.getAsJsonObject("profile").get("name").getAsString());
         List<String> l = commands(sim.server.sinceMark());
