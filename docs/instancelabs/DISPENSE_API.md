@@ -21,29 +21,40 @@ task runs at a time (`IllegalStateException("a dispense task is already running"
 | Signature | Notes |
 |---|---|
 | `public DispenseConfig getConfig()` | A copy (Gson-serialisable POJO, public fields). |
-| `public synchronized void updateConfig(DispenseConfig newCfg) throws IOException` | Validates (`DispenseConfig.validate()`: pump/valve ON must be `M106 P<n> S255`, no PWM), writes atomically, applies. `IllegalArgumentException` on invalid input. |
-| `public synchronized void setLocation(String name, double x, double y, double z) throws IOException` | Named N2 locations (`waste`, `blank`, calibration cup, …). `z` = surface Z of the item at that place. |
-| `public synchronized void markNeedleChanged() throws IOException` | I4: invalidates the needle Z offset until the next touch-off. |
-| `public synchronized void setNeedleZOffset(double offsetMm, String method, String details) throws IOException, SQLException` | Manual offset entry or touch-off result; appends a `needle_touchoff` row. |
+| `public synchronized void updateConfig(DispenseConfig newCfg) throws IOException` | Validates (`DispenseConfig.validate()`: timing, Z geometry bounds, keepalive window, …), writes atomically, applies. `IllegalArgumentException` on invalid input. |
+| `public synchronized void setLocation(String name, double x, double y, double z) throws IOException` | Named places (`waste`, `blank`, calibration cup, …): x/y in N2 machine coordinates, `z` = surface Z in OpenPnP's frame (the N1 nozzle Z touching that surface). |
+| `public synchronized void markNeedleChanged() throws IOException` | I4: invalidates the needle Z frame and the offset until a new frame and a touch-off. |
+| `public synchronized NeedleAnchor setNeedleAnchor(double surfaceZMm, double needleContactZMm, Double x, Double y)` | I4 needle Z frame: the same surface touched by N1 (`surfaceZMm`) and by the needle tip (`needleContactZMm`, N2 Z); offset := difference. Not a touch-off. |
+| `public synchronized void setNeedleZOffset(double offsetMm, String method, String details) throws IOException, SQLException` | Manual offset entry or touch-off result; appends a `needle_touchoff` row. Must stay within `needleOffsetMaxDriftMm` of the frame's offset (I4). |
+| `public synchronized SurfacePlane setSurface(String name, List<SurfacePoint> points, String note)` / `clearSurface(name)` / `surfacePlane(name)` | Probed surfaces (N1 contact heights, >= 3 points spanning an area; least-squares plane + convex hull). `board`: per-dot Z of board runs. The blank place's name (`blank`): dot ladder and touch-off. |
 | `public boolean isBZeroed()` | I2 state: `G92 B0` sent since the last home / enable / disable. |
 
-`DispenseConfig` fields (defaults): `nozzle "N2"`, `bAxisName "b"`, `pumpOnGcode "M106 P2 S255"`, `pumpOffGcode "M107 P2"`,
-`valveOnGcode "M106 P3 S255"`, `valveOffGcode "M107 P3"`, `pumpToValveSettleMs 500`, `valveSettleMs 300`,
-`locations {}`, `wasteLocationName "waste"`, `blankLocationName "blank"`, `needleGapMm 0.15`, `hopHeightMm 1.0`,
-`travelSafeZMm 31.5`, `needleZOffsetMm 0`, `needleZOffsetSetAtMs null`, `needleChangedAtMs null`,
+`DispenseConfig` fields (defaults, schema 2): `nozzle "N2"`, `bAxisName "b"`, `pumpToValveSettleMs 500`, `valveSettleMs 300`,
+`locations {}`, `wasteLocationName "waste"`, `blankLocationName "blank"`, `needleGapMm 0.15` (0 < gap <= 1),
+`hopHeightMm 1.0` (0 < hop <= 10), `travelSafeZMm 31.5` (must map into the Z axis safe zone),
+`needleZOffsetMm 0`, `needleZOffsetSetAtMs null`, `needleChangedAtMs null`, `needleAnchor null`, `surfaces {}`,
+`boardSurfaceName "board"`, `zFrameToleranceMm 1.0`, `surfaceMaxResidualMm 0.075`, `surfaceMarginMm 2.0`,
+`needleOffsetMaxDriftMm 1.0`, `touchOffPrimeExtraClearanceMm 0.5`,
 `travelFeedMmS 200`, `travelAccelMmS2 1000`, `zDownFeedMmS 50`, `zLiftFeedMmS 25`, `zLiftAccelMmS2 200`,
 `bFeedDegS 360`, `bAccelDegS2 2000`, `bMaxFeedDegS 720`, `retractDeg 5`, `retractFeedDegS 360`, `dwellMs 50`,
 `bExtrudeSign +1`, `honorBacklash true`, `abortDisablesB true`, `commandTimeoutMs 10000`,
 `primeAndTestDot true` (I9), `primeRotationDeg 360`, `rePrimeRotationDeg 90`, `testDotOffsetXMm 2`, `testDotOffsetYMm 0`,
-`testDotOpticalCheck true`, `testDotMinDiameterRatio 0.6`, `keepaliveEnabled true`, `capabilityQueryGcode "M115"`,
-`keepaliveCapabilityToken "Cap:HOST_WATCHDOG:1"`, `keepaliveArmGcode "M990 S3000"`, `keepalivePingGcode "M990"`,
-`keepaliveDisarmGcode "M990 S0"`, `keepaliveIntervalMs 1000`, `maxContinuousOnTimeS 600` (I7),
+`testDotOpticalCheck true`, `testDotMinDiameterRatio 0.6`, `keepaliveEnabled true`, `keepaliveWindowMs 3000`
+(>= 2 x interval), `keepaliveIntervalMs 1000`, `maxContinuousOnTimeS 600` (I7),
 `pressureInterlockEnabled false`, `pressureMinPsi 1`, `pressureMaxPsi 18` (I5), `minPadTypeStatus "characterized"`,
 `refuseFlaggedPads true`, `pasteThicknessMm 0.10`, `pasteDensityMgMm3 3.7`, `provisionalQMm3PerRev 0.47`,
 `maxDotsPerPad 6`, `dotFitFactor 1.0`, `includeDisabledPlacements true`, `twoOptMaxPasses 50`.
 
-Coordinates: all X/Y/Z are OpenPnP machine coordinates of the N2 needle tip (what `N2.moveTo()` takes). Dispense Z =
-surface Z + `needleZOffsetMm` + `needleGapMm`; hop Z = dispense Z + `hopHeightMm`. B is degrees of the auger.
+**Fixed controller commands** (`ControllerCommands`; not settings, schema 1 keys are ignored on load and refused by
+`PUT /api/config`): pump `M106 P2 S255` / `M107 P2`, valve `M106 P3 S255` / `M107 P3`, capability query `M115`
+(`Cap:HOST_WATCHDOG:1`), watchdog `M990 S<keepaliveWindowMs>` / `M990` / `M990 S0`. Every line the engine, its pings,
+its abort and the pressure hold send passes `ControllerCommands.check()`: an allow-list of command words, M106/M107 only
+as these four lines, no M42/M43 or other output command. `GcodeStreamValidator` applies the same check.
+
+Coordinates: X/Y are OpenPnP machine coordinates of the N2 needle tip (what `N2.moveTo()` takes). Surface Z (places,
+board, surfaces) is in OpenPnP's frame: the N1 nozzle Z touching the surface. Dispense Z (N2) = surface Z +
+`needleZOffsetMm` + `needleGapMm`; on a board the surface Z of each dot is the probed `board` plane at the dot; hop Z =
+dispense Z + `hopHeightMm`. B is degrees of the auger.
 
 ## 3. Data (`<configDir>/instancelabs/dispense.db`, SQLite, every table append-only via triggers)
 
@@ -84,7 +95,7 @@ Blocking flags: `NO_PAD_TYPE`, `STATUS_BELOW_MIN` (§5.7 rule), `DOT_BELOW_LADDE
 |---|---|
 | `public Future<RunResult> runBoard(BoardLocation bl) throws Exception` | `planBoard` + `runPlan`. |
 | `public Future<RunResult> runPlan(DispensePlan plan) throws Exception` | Never completes exceptionally for dispense failures: inspect `RunResult.status` (`OK`, `ABORTED`, `ERROR`, `REFUSED`), `message`, `interlocks`. |
-| `public Future<RunResult> runShots(String locationName, double rotationDeg, int count) throws Exception` | Scale workflow helper (shots into a cup). |
+| `public Future<RunResult> runShots(String locationName, double rotationDeg, int count, boolean referenceSurface) throws Exception` | Prime / test dot (`referenceSurface` true: the place is checked against the needle frame) and the scale workflow (shots into a cup: only the floor). Full I4. |
 | `public void abort(String reason)` | Thread-safe. The stream stops before its next line and sends the I1 sequence. Also triggered by OpenPnP Stop/disable. |
 | `public boolean isBusy()`, `public RunResult getActiveRun()`, `public RunResult getLastRun()` | |
 | `public void addListener(DispenseListener l)` / `removeListener` | `onPhase(RunResult, String)`, `onDot(RunResult, RunResult.DotTiming, int done, int total)`, `onFinished(RunResult)`; called on the machine thread. |
@@ -112,12 +123,22 @@ G0 X.. Y..             ; travel at travelSafeZ (+ backlash approach moves as Ope
 M106 P2 S255 / G4 P<pumpToValveSettleMs> / M106 P3 S255 / G4 P<valveSettleMs>
 per dot: G0 X Y (hop Z) / G1 Z<gap> / G1 B<feed end> / G4 P<dwell> / G1 B<feed end - retract> /
          M204 S<zLiftAccel> / G1 Z<hop> / M204 S<travelAccel>
-M400 / M410 / M107 P3 / M107 P2 / M990 S0 / G92 B0 / G1 Z<travelSafeZ> / M400
+M400 / M107 P3 / M107 P2 / M990 S0 / G92 B0 / G1 Z<travelSafeZ> / M400
+```
+No `M410` at the session end: after `M400` nothing is left to stop, and Marlin holds `M410`'s `ok` for about 1 s
+(planner clean-up), which kept the valve open 1 s after the last dot.
+```
 ```
 B is absolute from the session's `G92 B0`; each feed ends exactly `rotationDeg` past the previous feed end, so the
 suck-back is taken up by the next feed and the net extrusion per dot equals the planned rotation.
-Abort / error / Stop (I1): `M410`, `M107 P3`, `M107 P2`, `M18 B`, (`M990 S0`); then `M400` + `M114` read-back, OpenPnP
-re-synced to the reported position, machine marked un-homed (M410 may lose steps), B marked not zeroed.
+Abort / error / Stop (I1): `M410`, `M107 P3`, `M107 P2`, `M18 B`, (`M990 S0`), each through
+`GcodeChannel.sendCritical` (a controller error that is still pending makes GcodeDriver refuse a line without sending
+it; critical lines are sent again); then `M400` + `M114` read-back, OpenPnP re-synced to the reported position, machine
+marked un-homed (M410 may lose steps), B marked not zeroed. The abort flag is checked again right before every line
+(also after a keepalive ping), and OpenPnP's Stop waits up to 50 ms for a line that already passed its check to be
+written, so no engine motion line follows the driver's `DISABLE_COMMAND`. `M115` at the start of a run: only a timeout
+means "no watchdog"; a pending controller error refuses the run (REFUSED), un-zeroes B and un-homes the machine.
+Every G0/G1 Z word is checked against the raw window between the I4 needle floor and the travel Z.
 
 `RunResult`: `runId`, `kind` (`board`/`shots`/`dot-ladder`/`touch-off`), `status`, `message`, `startedAtMs`, `endedAtMs`,
 `dotsPlanned`, `dotsDone`, `firstDotStartMs`, `lastDotEndMs`, `dotTimings` (`dotIndex`, `padId`, `rotationDeg`, `startMs`,
@@ -130,8 +151,8 @@ Timestamps are host-side: a dot's `endMs` is when its last line was acknowledged
 
 | Signature | Notes |
 |---|---|
-| `public Future<DotLadderCalibration.Result> runDotLadder(DotLadderCalibration.Request req) throws Exception` | Request: `rotationsDeg` (default 30/45/58/75/90), `repeats` 5, `pitchMm` 1.5, `locationName` (default blank), `primeAtWaste`. Before images of every spot (pressure off) → one pressure session → after images → `DotInspector` → one `dot_ladder` row per rotation (n, mean diameter/area, CV) on the current calibration. Requires I4. |
-| `public Future<DispenseService.TouchOffResult> runNeedleTouchOff(NeedleTouchOff.Request req, boolean apply) throws Exception` | §6.1 option 1. Gaps `startGapMm` 0.125 down by `stepMm` 0.025, `steps` 6, relative to the current offset; contact = midpoint between the last normal dot and the first squashed (`> (1+jumpRatio)·reference`) or missing one; new offset = old + contact. `apply` writes it (sets `needleZOffsetSetAtMs`, clears I4). |
+| `public Future<DotLadderCalibration.Result> runDotLadder(DotLadderCalibration.Request req) throws Exception` | Request: `rotationsDeg` (default 30/45/58/75/90), `repeats` 5, `pitchMm` 1.5, `locationName` (default blank), `primeAtWaste`. Every dot at the probed blank plane under it + offset + gap. Before images of every spot (pressure off) → one pressure session → after images → `DotInspector` → one `dot_ladder` row per rotation (n, mean diameter/area, CV) on the current calibration. Requires I4 (incl. the blank surface). |
+| `public Future<DispenseService.TouchOffResult> runNeedleTouchOff(NeedleTouchOff.Request req, boolean apply) throws Exception` | §6.1 option 1. Gaps `startGapMm` 0.125 down by `stepMm` 0.025, `steps` 6, relative to the current offset, each above the probed blank plane at that dot; contact = midpoint between the last normal dot and the first squashed (`> (1+jumpRatio)·reference`) or missing one; new offset = old + contact. `apply` writes it (sets `needleZOffsetSetAtMs`, clears I4). The only I4 waiver (named): it needs the needle frame and the blank surface; while not touched off its prime is `touchOffPrimeExtraClearanceMm` higher. The blank plane is recorded with the result. |
 | `recordScaleShots` / `recordScaleDots` | See §3. |
 
 Pure helpers usable without a machine: `NeedleTouchOff.analyze(double[] gapsMm, Double[] diametersMm, double jumpRatio)`,
@@ -142,10 +163,10 @@ Pure helpers usable without a machine: `NeedleTouchOff.analyze(double[] gapsMm, 
 
 | Id | Where | Behaviour |
 |---|---|---|
-| I1 | `DispenseExecutor.shutdown` | Outputs off on any error, abort, I7 trip, OpenPnP Stop/disable (machine listener). Best effort: each line attempted. |
+| I1 | `DispenseExecutor.shutdown` | Outputs off on any error, abort, I7 trip, OpenPnP Stop/disable (machine listener). Each line attempted, through `sendCritical`. |
 | I2 | `GcodeStreamBuilder` + `GcodeStreamValidator` | No B move before `G92 B0`; flag cleared on home, enable, disable, abort. |
 | I3 | `Interlocks` | Refuses if N2 has compatible nozzle tips or a loaded tip (names reported). |
-| I4 | `Interlocks` | Refuses unless `needleZOffsetSetAtMs >= needleChangedAtMs`. Board Z-map containment not implemented (no Z-map yet). |
+| I4 | `Interlocks` (+ builder floor, validator Z window) | Refuses without a needle Z frame recorded since the last needle change; unless touched off since the change and the frame (named waiver: the touch-off run); if the offset is more than `needleOffsetMaxDriftMm` from the frame's; if a waste/blank place Z or any surface point is more than `zFrameToleranceMm` from the frame surface; board / ladder runs: without the probed surface, with a plane residual above `surfaceMaxResidualMm`, with a dot more than `surfaceMarginMm` outside the probed hull, or (board) a plan made on another surface map. Hard floor: no dot below frame surface − tolerance + offset − 0.1. |
 | I5 | `Interlocks` | Pressure window via `BarrelPressureSensor`; disabled by default. |
 | I7 | `Interlocks` (estimate) + `DispenseExecutor` (runtime) | Max continuous pump+valve on-time. |
 | I9 | `runPlan` | Prime + test dot on the waste location each board; optical check with `testDotOpticalCheck`. |
