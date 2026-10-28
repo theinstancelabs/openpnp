@@ -10,7 +10,8 @@ import java.util.Locale;
  * is already zeroed since home/reconnect, M201/M203 for B, optional host-watchdog arm), pump ON ->
  * wait -> valve ON -> settle, prime/test dot on the waste location, then per dot: XY at the
  * current (hop) height, Z down to the gap, B feed, dwell, B suck-back, Z up with the dispense-lift
- * acceleration. Session end: M400, M410, valve OFF, pump OFF, re-zero B.
+ * acceleration. Session end: M400, valve OFF, pump OFF, re-zero B (aborts: M410 first, see
+ * {@link #abortLines}).
  *
  * <p>All XYZ coordinates go through {@link RawMapper} (OpenPnP's transform chain) and
  * {@link BacklashEmulator}. B is absolute from the session's G92 B0; the B coordinate at the end
@@ -271,9 +272,11 @@ public class GcodeStreamBuilder {
     }
 
     public void endSession() throws Exception {
-        comment("; session end: wait, quick-stop, valve OFF (vent), pump OFF");
+        // No M410 here: after M400 nothing is left to stop, and Marlin's quick-stop holds its "ok"
+        // for about 1 s (planner cleaning_buffer_counter), which kept the valve open 1 s after the
+        // last dot (review finding). The valve vents right after the last dot's lift has finished.
+        comment("; session end: wait, valve OFF (vent), pump OFF");
         add("M400", GcodeProgram.Marker.SYNC);
-        add("M410", GcodeProgram.Marker.NONE);
         add(ControllerCommands.VALVE_OFF, GcodeProgram.Marker.VALVE_OFF);
         valveOn = false;
         add(ControllerCommands.PUMP_OFF, GcodeProgram.Marker.PUMP_OFF);

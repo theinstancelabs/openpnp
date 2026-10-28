@@ -54,9 +54,8 @@ G1 B587.8511 F21600
 M204 S200
 G1 Z60.2000 F1500
 M204 S1000
-; session end: wait, quick-stop, valve OFF (vent), pump OFF
+; session end: wait, valve OFF (vent), pump OFF
 M400
-M410
 M107 P3
 M107 P2
 G92 B0
