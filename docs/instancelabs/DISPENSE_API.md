@@ -157,6 +157,7 @@ Pure helpers usable without a machine: `NeedleTouchOff.analyze(double[] gapsMm, 
 - `M201`/`M203` for B persist in Marlin RAM until reset (not saved without `M500`).
 - `M990` semantics are the shared contract; the firmware side is not on `il/lumen-rev05`. Pings are sent between lines, so a
   single command that blocks longer than the watchdog window (planner full, long move) delays the next ping.
-- `org.openpnp.instancelabs.vision` in this branch is a contract stub (separate commit "vision contract stubs"): optical
-  I9, dot ladder and touch-off throw until the real vision classes are merged.
+- On `il/integration` the contract stubs are gone: `org.openpnp.instancelabs.vision` is the real OpenCV inspector from
+  `feat/dot-vision` (same `Dot` / `DotInspector` / `DotInspectorSettings` / `CameraCapture` signatures). In the OpenPnP
+  simulator the top camera is a static image, so the optical I9 check cannot pass there (no dot ever appears).
 - No HTTP endpoints here; this is the Java service the web layer calls.

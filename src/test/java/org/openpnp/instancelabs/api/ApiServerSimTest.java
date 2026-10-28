@@ -409,7 +409,7 @@ public class ApiServerSimTest {
         assertTrue(runRefused.body.contains("PLAN"), runRefused.toString());
 
         ok(call("PUT", "/api/pad-types/chip-0603", "{\"status\":\"characterized\"}"));
-        // no dot vision on this branch (contract stub): no optical test-dot check
+        // simulated camera: a static image, so no optical test-dot check
         ok(call("PUT", "/api/config", "{\"testDotOpticalCheck\":false}"));
         JsonObject plan = ok(post("/api/plan", planBody(board)));
         JsonObject sum = plan.getAsJsonObject("summary");

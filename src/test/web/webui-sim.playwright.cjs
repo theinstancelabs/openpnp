@@ -134,7 +134,7 @@ async function waitText(page, id, re, timeout) {
     await page.click('#btn-needle-offset');
     await waitText(page, 'needle-state', /^Touched off/, 10000);
     check('manual needle offset clears I4', true);
-    await page.uncheck('#set-optical'); // no dot vision on this branch (contract stub)
+    await page.uncheck('#set-optical'); // simulated camera: a static image, no dot can appear
     await page.click('#btn-settings');
     await waitText(page, 'toast', /Settings saved/, 10000);
     await page.click('.tabs [role=tab][data-tab=profiles]');

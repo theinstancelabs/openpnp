@@ -118,8 +118,8 @@ Jargon is explained in tooltips (`title`/`abbr`).
 
 ## 7. Known limits
 
-- Dot vision is a contract stub on `feat/dispense`: the optical I9 check, the dot ladder and the touch-off throw until
-  the vision branch is merged. Untick "Check the test dot with the camera" to run boards before that.
+- On `il/integration` dot vision is the real inspector from `feat/dot-vision`. In the OpenPnP simulator the top camera
+  is a static image, so untick "Check the test dot with the camera" there (no dot can appear in a static image).
 - A board placed by hand (file + position) gets no fiducial correction; use a job board in OpenPnP for that.
   `planBoardFile` adds the file to OpenPnP's board list, which OpenPnP writes to `boards.xml` when it saves.
 - Job boards are listed only while OpenPnP's window runs (the job lives in the Swing job panel).
