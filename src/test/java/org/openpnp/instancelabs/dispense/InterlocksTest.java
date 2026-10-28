@@ -100,7 +100,7 @@ public class InterlocksTest {
         in.machineHomed = false;
         assertTrue(Interlocks.check(in).has("MACHINE"));
         in = ok();
-        in.cfg.valveOnGcode = "M106 P3 S180";
+        in.cfg.keepaliveWindowMs = 50;
         assertTrue(Interlocks.check(in).has("CONFIG"));
     }
 }

@@ -1,6 +1,7 @@
 package org.openpnp.instancelabs.dispense;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -179,7 +180,7 @@ public class DispenseDbTest {
         DispenseConfig back = DispenseConfig.load(dir);
         assertEquals(0.12, back.needleGapMm, 0);
         assertEquals(3, back.location("waste").z, 0);
-        assertEquals("M106 P3 S255", back.valveOnGcode);
+        assertFalse(back.toJson().contains("Gcode"), "pump/valve/watchdog G-code are constants, not settings");
         assertEquals(new DispenseConfig().toJson().length() > 100, true);
         assertEquals(0.15, DispenseConfig.load(java.nio.file.Files.createTempDirectory("x").toFile()).needleGapMm, 0);
     }

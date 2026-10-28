@@ -253,7 +253,12 @@ public class ApiServerSimTest {
         List<String> l = commands(sim.server.sinceMark());
         int pump = l.indexOf("M106 P2 S255"), valve = l.indexOf("M106 P3 S255");
         assertTrue(pump >= 0 && valve > pump, l.toString());
-        assertEquals("G4 P500", l.get(pump + 1), "pump -> wait -> valve (plan §4.5)");
+        // pump -> wait -> valve (plan §4.5); the wait is host-side so a Stop can cancel the valve ON
+        assertFalse(l.subList(pump, valve).stream().anyMatch(x -> x.startsWith("G4")), l.toString());
+        List<String> raw = sim.server.sinceMark();
+        long waitedMs = (sim.server.timeSinceMark(raw.indexOf("M106 P3 S255"))
+                - sim.server.timeSinceMark(raw.indexOf("M106 P2 S255"))) / 1_000_000L;
+        assertTrue(waitedMs >= 490, "pump-to-valve wait " + waitedMs + " ms");
         assertTrue(l.contains("M990 S3000"), "host watchdog armed (server reports the capability)");
 
         // engine runs are refused while the hold is on, with the reason
@@ -587,9 +592,14 @@ public class ApiServerSimTest {
 
     @Test
     public void settingsAreValidatedAndNeverPwm() throws Exception {
-        Res pwm = call("PUT", "/api/config", "{\"pumpOnGcode\":\"M106 P2 S180\"}");
-        assertEquals(400, pwm.status);
-        assertTrue(pwm.body.contains("S255"), pwm.toString());
+        // review finding: no G-code string is a setting (PWM pump/valve, swapped ports, a valve OFF
+        // that never vents, an M106 as capability query or keepalive ping)
+        for (String k : new String[] {"pumpOnGcode", "pumpOffGcode", "valveOnGcode", "valveOffGcode",
+                "capabilityQueryGcode", "keepaliveArmGcode", "keepalivePingGcode", "keepaliveDisarmGcode"}) {
+            Res pwm = call("PUT", "/api/config", "{\"" + k + "\":\"M106 P2 S128\"}");
+            assertEquals(400, pwm.status, k + ": " + pwm);
+            assertTrue(pwm.body.contains("unknown setting"), pwm.toString());
+        }
         assertEquals(400, call("PUT", "/api/config", "{\"noSuchSetting\":1}").status);
         // I4 state cannot be forged through the settings; an unchanged round-trip is accepted
         Res forge = call("PUT", "/api/config", "{\"needleZOffsetSetAtMs\":" + System.currentTimeMillis() + "}");
@@ -599,7 +609,7 @@ public class ApiServerSimTest {
         assertEquals(404, get("/static/..").status);
         JsonObject c = ok(call("PUT", "/api/config", "{\"needleGapMm\":0.2}"));
         assertEquals(0.2, c.get("needleGapMm").getAsDouble(), 1e-9);
-        assertEquals("M106 P2 S255", c.get("pumpOnGcode").getAsString());
+        assertFalse(c.toString().contains("Gcode"), c.toString());
     }
 
     @Test

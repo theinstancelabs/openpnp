@@ -25,6 +25,10 @@ public class DispenseExecutor {
     private final LongSupplier clock;
     private final String letterB;
     private volatile String abortReason;
+    /** Guards the step "abort checked -> line handed to the channel" (see {@link #awaitLineWritten}). */
+    private final Object gate = new Object();
+    private boolean inFlight;
+    private long inFlightSinceNanos;
     private boolean armed;
     private long lastPingMs;
     private long pressureOnMs = -1;
@@ -43,6 +47,61 @@ public class DispenseExecutor {
 
     public boolean isAbortRequested() {
         return abortReason != null;
+    }
+
+    /**
+     * For the Stop path, after {@link #requestAbort}: waits until a line that passed its abort check
+     * just before the abort has been handed to the channel, so that OpenPnP's DISABLE_COMMAND (M410,
+     * valve, pump, ...) cannot be overtaken by an engine motion line. The wait ends as soon as the
+     * line is acknowledged, or {@code graceMs} after the line was started: by then it has been
+     * written (the write follows the check within microseconds), and a line still waiting for its
+     * "ok" (G4, M400, a full planner) is already on the wire, before the Stop lines.
+     *
+     * @return true if no engine line was between its abort check and its acknowledgement at return
+     */
+    public boolean awaitLineWritten(long graceMs) {
+        synchronized (gate) {
+            long deadline = (inFlight ? inFlightSinceNanos : System.nanoTime()) + graceMs * 1_000_000L;
+            while (inFlight) {
+                long left = deadline - System.nanoTime();
+                if (left <= 0) {
+                    return false;
+                }
+                try {
+                    gate.wait(Math.max(1, left / 1_000_000L));
+                }
+                catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
+    /**
+     * Sends one program or keepalive line: command guard, then the abort flag is checked again
+     * immediately before the line is handed to the channel (a Stop that arrived during the previous
+     * line's or a ping's round trip must not let another motion line out).
+     */
+    private void sendLine(String text, long timeoutMs) throws Exception {
+        ControllerCommands.requireAllowed(text);
+        synchronized (gate) {
+            if (abortReason != null) {
+                throw new AbortedException(abortReason);
+            }
+            inFlight = true;
+            inFlightSinceNanos = System.nanoTime();
+        }
+        try {
+            channel.send(text, timeoutMs);
+        }
+        finally {
+            synchronized (gate) {
+                inFlight = false;
+                gate.notifyAll();
+            }
+        }
     }
 
     /**
@@ -68,7 +127,7 @@ public class DispenseExecutor {
                             cfg.maxContinuousOnTimeS));
                 }
                 if (armed && now - lastPingMs >= cfg.keepaliveIntervalMs) {
-                    channel.send(cfg.keepalivePingGcode, cfg.commandTimeoutMs);
+                    sendLine(ControllerCommands.KEEPALIVE_PING, cfg.commandTimeoutMs);
                     result.keepalivePings++;
                     result.linesSent++;
                     lastPingMs = clock.getAsLong();
@@ -80,7 +139,7 @@ public class DispenseExecutor {
                     }
                 }
                 long timeout = line.has(GcodeProgram.Marker.SYNC) ? -1 : cfg.commandTimeoutMs;
-                channel.send(line.text, timeout);
+                sendLine(line.text, timeout);
                 result.linesSent++;
                 result.streamedLines.add(line.text);
                 now = clock.getAsLong();
@@ -128,13 +187,17 @@ public class DispenseExecutor {
 
     /**
      * I1: quick-stop and pneumatics off, in the plan §4.4 order. Every line is attempted even if
-     * an earlier one fails.
+     * an earlier one fails, and each goes through {@link GcodeChannel#sendCritical}, so a stale
+     * controller error cannot swallow M410 or the valve OFF.
      */
     public void shutdown(RunResult result) {
         List<String> lines = GcodeStreamBuilder.abortLines(cfg, armed, letterB);
         for (String l : lines) {
             try {
-                channel.send(l, cfg.commandTimeoutMs);
+                String note = channel.sendCritical(l, cfg.commandTimeoutMs);
+                if (note != null) {
+                    result.warnings.add(note);
+                }
                 result.linesSent++;
                 result.streamedLines.add(l);
             }

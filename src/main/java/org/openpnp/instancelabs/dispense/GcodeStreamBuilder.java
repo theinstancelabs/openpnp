@@ -181,12 +181,13 @@ public class GcodeStreamBuilder {
 
     /** The fixed abort / error sequence (plan §4.4 order): quick-stop, valve OFF, pump OFF. */
     public static List<String> abortLines(DispenseConfig cfg, boolean keepaliveArmed, String letterB) {
-        List<String> l = new ArrayList<>(Arrays.asList("M410", cfg.valveOffGcode, cfg.pumpOffGcode));
+        List<String> l = new ArrayList<>(Arrays.asList("M410", ControllerCommands.VALVE_OFF,
+                ControllerCommands.PUMP_OFF));
         if (cfg.abortDisablesB) {
             l.add("M18 " + letterB);
         }
         if (keepaliveArmed) {
-            l.add(cfg.keepaliveDisarmGcode);
+            l.add(ControllerCommands.KEEPALIVE_DISARM);
         }
         return l;
     }
@@ -218,18 +219,18 @@ public class GcodeStreamBuilder {
         add("M203 " + lb + f0(cfg.bMaxFeedDegS), GcodeProgram.Marker.NONE);
         setAccel(cfg.travelAccelMmS2);
         if (keepalive) {
-            add(cfg.keepaliveArmGcode, GcodeProgram.Marker.KEEPALIVE_ARM);
+            add(ControllerCommands.keepaliveArm(cfg.keepaliveWindowMs), GcodeProgram.Marker.KEEPALIVE_ARM);
             armed = true;
         }
     }
 
     public void pressurize() {
         comment("; pressurize: pump ON -> wait -> valve ON -> settle");
-        add(cfg.pumpOnGcode, GcodeProgram.Marker.PUMP_ON);
+        add(ControllerCommands.PUMP_ON, GcodeProgram.Marker.PUMP_ON);
         pumpOn = true;
         pumpOnT = t;
         dwell(cfg.pumpToValveSettleMs);
-        add(cfg.valveOnGcode, GcodeProgram.Marker.VALVE_ON);
+        add(ControllerCommands.VALVE_ON, GcodeProgram.Marker.VALVE_ON);
         valveOn = true;
         dwell(cfg.valveSettleMs);
     }
@@ -273,16 +274,16 @@ public class GcodeStreamBuilder {
         comment("; session end: wait, quick-stop, valve OFF (vent), pump OFF");
         add("M400", GcodeProgram.Marker.SYNC);
         add("M410", GcodeProgram.Marker.NONE);
-        add(cfg.valveOffGcode, GcodeProgram.Marker.VALVE_OFF);
+        add(ControllerCommands.VALVE_OFF, GcodeProgram.Marker.VALVE_OFF);
         valveOn = false;
-        add(cfg.pumpOffGcode, GcodeProgram.Marker.PUMP_OFF);
+        add(ControllerCommands.PUMP_OFF, GcodeProgram.Marker.PUMP_OFF);
         pumpOn = false;
         if (pumpOnT >= 0) {
             prog.estimatedPressurisedSeconds += t - pumpOnT;
             pumpOnT = -1;
         }
         if (armed) {
-            add(cfg.keepaliveDisarmGcode, GcodeProgram.Marker.KEEPALIVE_DISARM);
+            add(ControllerCommands.KEEPALIVE_DISARM, GcodeProgram.Marker.KEEPALIVE_DISARM);
             armed = false;
         }
         add("G92 " + lb + "0", GcodeProgram.Marker.B_ZERO);

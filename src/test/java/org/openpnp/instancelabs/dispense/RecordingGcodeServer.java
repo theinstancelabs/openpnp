@@ -23,6 +23,11 @@ import java.util.regex.Pattern;
 public class RecordingGcodeServer implements AutoCloseable {
     private final ServerSocket server;
     private final List<String> lines = new ArrayList<>();
+    private final List<Long> times = new ArrayList<>();
+    /** Lines (exact text) that get no reply at all, e.g. to make a send time out. */
+    public final java.util.Set<String> mute = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** If true, "G4 P<ms>" waits <ms> before its "ok", as Marlin does. */
+    public volatile boolean realDwell = false;
     private final Map<Character, Double> pos = new LinkedHashMap<>();
     public volatile boolean hostWatchdogCapability = true;
     /** If >= 0, reply "Error: simulated" to the n-th received line (0-based) after mark(). */
@@ -59,6 +64,7 @@ public class RecordingGcodeServer implements AutoCloseable {
                     int idx;
                     synchronized (this) {
                         lines.add(line);
+                        times.add(System.nanoTime());
                         idx = lines.size() - 1 - markIndex;
                         track(line);
                     }
@@ -77,6 +83,12 @@ public class RecordingGcodeServer implements AutoCloseable {
                             reply.append(String.format(Locale.ROOT, "X:%.4f Y:%.4f Z:%.4f A:%.4f B:%.4f Count X:0 Y:0 Z:0\n",
                                     pos.get('X'), pos.get('Y'), pos.get('Z'), pos.get('A'), pos.get('B')));
                         }
+                    }
+                    if (mute.contains(line)) {
+                        continue;
+                    }
+                    if (realDwell && line.startsWith("G4 P")) {
+                        Thread.sleep(Long.parseLong(line.substring(4).trim()));
                     }
                     reply.append("ok\n");
                     out.write(reply.toString().getBytes(StandardCharsets.UTF_8));
@@ -113,6 +125,11 @@ public class RecordingGcodeServer implements AutoCloseable {
     /** Lines received since the last mark(). */
     public synchronized List<String> sinceMark() {
         return new ArrayList<>(lines.subList(markIndex, lines.size()));
+    }
+
+    /** Receive time (System.nanoTime()) of the i-th line since the last mark(). */
+    public synchronized long timeSinceMark(int i) {
+        return times.get(markIndex + i);
     }
 
     public synchronized List<String> all() {

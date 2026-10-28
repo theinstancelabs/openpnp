@@ -40,6 +40,17 @@ import org.pmw.tinylog.Logger;
  */
 public final class DispenseService {
     private static volatile DispenseService instance;
+    /** Longest the Stop path waits for an engine line that passed its abort check to be written. */
+    static final long STOP_WRITE_GRACE_MS = 50;
+
+    /** A run refused before any G-code that moves or switches anything was sent. */
+    public static class RunRefusedException extends Exception {
+        private static final long serialVersionUID = 1L;
+
+        public RunRefusedException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
 
     private final Configuration configuration;
     private final File configDir;
@@ -116,7 +127,14 @@ public final class DispenseService {
 
                 @Override
                 public void machineAboutToBeDisabled(Machine m, String reason) {
+                    // Runs on the Stop thread right before the driver's DISABLE_COMMAND (M410, valve,
+                    // pump, ...): stop the stream, then let a line that already passed its abort check
+                    // reach the wire first, so no engine motion line can follow the M410.
                     abort("machine disabled: " + reason);
+                    DispenseExecutor e = activeExecutor;
+                    if (e != null) {
+                        e.awaitLineWritten(STOP_WRITE_GRACE_MS);
+                    }
                 }
 
                 @Override
@@ -590,7 +608,7 @@ public final class DispenseService {
                 }
                 catch (Exception e) {
                     if (r.status == RunResult.Status.RUNNING) {
-                        r.status = RunResult.Status.ERROR;
+                        r.status = e instanceof RunRefusedException ? RunResult.Status.REFUSED : RunResult.Status.ERROR;
                         r.message = String.valueOf(e.getMessage());
                     }
                     Logger.error(e, "dispense {} failed", r.kind);
@@ -623,7 +641,7 @@ public final class DispenseService {
                 }
                 catch (Exception e) {
                     if (r.status == RunResult.Status.RUNNING) {
-                        r.status = RunResult.Status.ERROR;
+                        r.status = e instanceof RunRefusedException ? RunResult.Status.REFUSED : RunResult.Status.ERROR;
                         r.message = String.valueOf(e.getMessage());
                     }
                     Logger.error(e, "dispense {} failed", r.kind);
@@ -717,18 +735,35 @@ public final class DispenseService {
             r.keepaliveActive = keepalive;
         }
 
-        private boolean probeKeepalive() {
+        /**
+         * M115: does the firmware have the host watchdog? Only a timeout means "no capability". Any
+         * other failure, in particular a controller error that arrived before the run (a 'start'
+         * after a reset, an Error: line), refuses the run: B must be re-zeroed and the position
+         * frame may be gone, so B is marked un-zeroed and the machine un-homed.
+         */
+        private boolean probeKeepalive() throws RunRefusedException {
             try {
-                for (String line : channel.sendAndCollect(c.capabilityQueryGcode, c.commandTimeoutMs)) {
-                    if (line.contains(c.keepaliveCapabilityToken)) {
+                for (String line : channel.sendAndCollect(ControllerCommands.CAPABILITY_QUERY, c.commandTimeoutMs)) {
+                    if (line.contains(ControllerCommands.WATCHDOG_CAPABILITY)) {
                         return true;
                     }
                 }
+                return false;
             }
             catch (Exception e) {
-                r.warnings.add("capability query failed: " + e.getMessage());
+                String msg = String.valueOf(e.getMessage());
+                if (msg.contains("timeout waiting for response")) {
+                    r.warnings.add("capability query timed out (no host watchdog assumed): " + msg);
+                    return false;
+                }
+                bZeroed.set(false);
+                Machine m = configuration.getMachine();
+                if (m instanceof ReferenceMachine) {
+                    ((ReferenceMachine) m).setHomed(false);
+                }
+                throw new RunRefusedException("the controller reported an error before the run (" + msg
+                        + "). Nothing was sent; B will be re-zeroed and the machine must be homed again.", e);
             }
-            return false;
         }
 
         /** Interlocks for calibration/shots runs (no plan rules, no I9; I4 optional). */

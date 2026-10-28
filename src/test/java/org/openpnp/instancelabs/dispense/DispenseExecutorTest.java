@@ -175,4 +175,156 @@ public class DispenseExecutorTest {
         }
         assertTrue(maxGap <= c.keepaliveIntervalMs * 2 + 50, "max gap " + maxGap);
     }
+
+    static boolean isMotion(String l) {
+        return l.startsWith("G0") || l.startsWith("G1");
+    }
+
+    /**
+     * Review finding: a Stop that lands while a keepalive ping's "ok" is outstanding let the next
+     * program line (G1 B / Z / G0 X) out after OpenPnP's DISABLE_COMMAND.
+     */
+    @Test
+    public void stopDuringAPingLetsNoMotionLineOut() throws Exception {
+        for (int k = 1; k <= 12; k++) {
+            DispenseConfig c = GcodeStreamTest.toyConfig();
+            GcodeProgram p = program(c, true);
+            final int K = k;
+            final DispenseExecutor[] ex = new DispenseExecutor[1];
+            FakeChannel ch = new FakeChannel() {
+                int pings;
+
+                @Override
+                public void send(String line, long timeoutMs) throws Exception {
+                    super.send(line, timeoutMs);
+                    now += 400;
+                    if (line.equals("M990") && ++pings == K) {
+                        // the Stop thread: abort, handshake, then the driver's DISABLE_COMMAND
+                        ex[0].requestAbort("Stop pressed");
+                        ex[0].awaitLineWritten(50);
+                        sent.add("<<DISABLE_COMMAND>>");
+                    }
+                }
+            };
+            ex[0] = new DispenseExecutor(c, ch, "B", () -> ch.now);
+            try {
+                ex[0].stream(p, run(3), null);
+            }
+            catch (DispenseExecutor.AbortedException e) {
+                // expected once the ping count is reached
+            }
+            int mark = ch.sent.indexOf("<<DISABLE_COMMAND>>");
+            if (mark < 0) {
+                continue; // fewer pings than k in this program
+            }
+            for (String l : ch.sent.subList(mark, ch.sent.size())) {
+                assertFalse(isMotion(l), "k=" + k + ": motion after DISABLE_COMMAND: " + l + " in " + ch.sent);
+            }
+        }
+    }
+
+    /**
+     * Review finding (same race, between the abort check and the write): the Stop path waits until a
+     * line that passed its check has been handed to the channel, so it precedes the DISABLE_COMMAND.
+     */
+    @Test
+    public void stopHandshakeWaitsForALineAlreadyPastItsCheck() throws Exception {
+        DispenseConfig c = GcodeStreamTest.toyConfig();
+        GcodeProgram p = program(c, false);
+        java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        List<String> wire = java.util.Collections.synchronizedList(new ArrayList<>());
+        GcodeChannel ch = new GcodeChannel() {
+            int n;
+
+            @Override
+            public void send(String line, long timeoutMs) throws Exception {
+                if (++n == 15) { // a line inside the session: block before it reaches the wire
+                    entered.countDown();
+                    release.await();
+                }
+                wire.add(line);
+            }
+
+            @Override
+            public List<String> sendAndCollect(String line, long timeoutMs) throws Exception {
+                send(line, timeoutMs);
+                return Arrays.asList("ok");
+            }
+        };
+        DispenseExecutor ex = new DispenseExecutor(c, ch, "B", System::currentTimeMillis);
+        Thread t = new Thread(() -> {
+            try {
+                ex.stream(p, run(3), null);
+            }
+            catch (Exception e) {
+                // aborted
+            }
+        });
+        t.start();
+        entered.await();
+        ex.requestAbort("Stop pressed");
+        new Thread(() -> {
+            try {
+                Thread.sleep(10);
+            }
+            catch (InterruptedException e) {
+                // ignore
+            }
+            release.countDown();
+        }).start();
+        assertTrue(ex.awaitLineWritten(2000), "handshake returns once the line in flight was written");
+        int written = wire.size();
+        wire.add("<<DISABLE_COMMAND>>");
+        t.join(5000);
+        assertTrue(written >= 15, "the line already past its check went out before the Stop lines: " + wire);
+        // after that line only the engine's own stop lines follow (in any interleaving with OpenPnP's)
+        List<String> after = new ArrayList<>(wire.subList(15, wire.size()));
+        after.remove("<<DISABLE_COMMAND>>");
+        assertEquals(Arrays.asList("M410", "M107 P3", "M107 P2", "M18 B"), after, wire.toString());
+    }
+
+    /** Review finding: every line passes the controller-command guard before it reaches the channel. */
+    @Test
+    public void aLineOutsideTheCommandGuardIsNeverSent() throws Exception {
+        DispenseConfig c = GcodeStreamTest.toyConfig();
+        GcodeProgram p = program(c, false);
+        int i = 0;
+        while (!p.lines.get(i).text.equals("M106 P3 S255")) {
+            i++;
+        }
+        GcodeProgram.Line valve = p.lines.get(i);
+        p.lines.set(i, new GcodeProgram.Line("M106 P3 S180", valve.marker, valve.dotIndex, valve.padId,
+                valve.rotationDeg, valve.extra));
+        FakeChannel ch = new FakeChannel();
+        DispenseExecutor ex = new DispenseExecutor(c, ch, "B", () -> ch.now);
+        RunResult r = run(3);
+        Exception e = assertThrows(IllegalStateException.class, () -> ex.stream(p, r, null));
+        assertTrue(e.getMessage().contains("M106 P3 S180"), e.getMessage());
+        assertFalse(ch.sent.contains("M106 P3 S180"));
+        assertEquals(Arrays.asList("M410", "M107 P3", "M107 P2", "M18 B"), ch.sent.subList(ch.sent.size() - 4,
+                ch.sent.size()));
+    }
+
+    /** Review finding: the abort sequence goes through sendCritical (stale controller errors). */
+    @Test
+    public void shutdownUsesCriticalSends() throws Exception {
+        DispenseConfig c = GcodeStreamTest.toyConfig();
+        GcodeProgram p = program(c, false);
+        List<String> critical = new ArrayList<>();
+        FakeChannel ch = new FakeChannel() {
+            @Override
+            public String sendCritical(String line, long timeoutMs) throws Exception {
+                critical.add(line);
+                send(line, timeoutMs);
+                return line.equals("M107 P3") ? "cleared a pending error" : null;
+            }
+        };
+        ch.failAt = 20;
+        DispenseExecutor ex = new DispenseExecutor(c, ch, "B", () -> ch.now);
+        RunResult r = run(3);
+        assertThrows(Exception.class, () -> ex.stream(p, r, null));
+        assertEquals(Arrays.asList("M410", "M107 P3", "M107 P2", "M18 B"), critical);
+        assertTrue(r.warnings.contains("cleared a pending error"), r.warnings.toString());
+    }
 }

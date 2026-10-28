@@ -1,7 +1,6 @@
 package org.openpnp.instancelabs.api;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -14,6 +13,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import org.openpnp.instancelabs.dispense.ControllerCommands;
 import org.openpnp.instancelabs.dispense.DispenseConfig;
 import org.openpnp.instancelabs.dispense.DispenseListener;
 import org.openpnp.instancelabs.dispense.DispenseService;
@@ -30,8 +30,9 @@ import org.pmw.tinylog.Logger;
 /**
  * Manual pressure hold for the Dispense tab: switch the barrel pressure on and leave it on (e.g. to
  * read the regulator gauge), then off. Order per plan §4.5: on = pump, wait, valve, settle; off =
- * valve (barrel vents), then pump. The G-code is the engine's configured pump/valve commands
- * ({@link DispenseConfig}; full-on {@code S255} only, enforced by the engine's CONFIG interlock).
+ * valve (barrel vents), then pump. The G-code is fixed ({@link ControllerCommands}: full-on
+ * {@code S255} only, never a setting). The switch-on is cancellable between lines: a Stop or Pressure
+ * off is seen before the valve is switched on, and no lock is held across the waits.
  *
  * <ul>
  * <li>I7: switched off automatically after {@code maxContinuousOnTimeS}.</li>
@@ -46,8 +47,13 @@ import org.pmw.tinylog.Logger;
  */
 final class PressureHold implements DispenseListener {
     enum State {
-        OFF, STARTING, ON, STOPPING
+        OFF, STARTING, ON, STOPPING,
+        /** The valve OFF could not be sent: the hold is NOT off. Pressure off / STOP try again. */
+        VENT_FAILED
     }
+
+    /** Host-side wait step while switching on (the switch-on is cancellable between steps). */
+    private static final long WAIT_STEP_MS = 20;
 
     private final ApiContext ctx;
     private final ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -55,7 +61,10 @@ final class PressureHold implements DispenseListener {
         t.setDaemon(true);
         return t;
     });
-    /** Serialises G-code I/O of this class (never held while waiting for the machine thread). */
+    /**
+     * Serialises the G-code lines of this class, one line at a time: it is never held across a
+     * wait, so a Stop that needs it waits for at most one line's round trip.
+     */
     private final Object io = new Object();
     private final AtomicBoolean pingQueued = new AtomicBoolean();
 
@@ -77,8 +86,10 @@ final class PressureHold implements DispenseListener {
     private final MachineListener machineListener = new MachineListener.Adapter() {
         @Override
         public void machineAboutToBeDisabled(Machine machine, String reason) {
-            // Still connected here: vent from this (stopping) thread, like OpenPnP's DISABLE_COMMAND.
+            // Still connected here: cancel a switch-on in progress and vent from this (stopping)
+            // thread, like OpenPnP's DISABLE_COMMAND. Waits for at most one line in flight.
             if (state != State.OFF) {
+                requestStop();
                 ventNow("OpenPnP stop/disable: " + reason);
             }
         }
@@ -146,76 +157,143 @@ final class PressureHold implements DispenseListener {
         return snapshot();
     }
 
-    /** Machine thread. */
+    /**
+     * Machine thread. One line at a time, and every line only while the state is still STARTING:
+     * a Stop or Pressure off during the switch-on is seen before the next line (in particular
+     * before valve ON), and the waits are host-side, so no lock is held across them.
+     */
     private void doStart(Machine m, DispenseService svc, DispenseConfig c) throws Exception {
         if (state != State.STARTING) {
             String why = lastEvent;
             markOff("pressure start cancelled before any G-code was sent (" + why + ")");
             throw new Exception("cancelled before it started (" + why + ")");
         }
+        boolean completed;
         try {
             m.getMotionPlanner().waitForCompletion(null, CompletionType.WaitForStillstand);
             OpenPnpRawMapper mapper = new OpenPnpRawMapper((ReferenceMachine) m, svc.getDispenserNozzle(),
                     c.bAxisName);
             GcodeChannel ch = new DriverGcodeChannel(mapper.getDriver());
-            boolean ka = c.keepaliveEnabled && hasWatchdog(ch, c);
-            synchronized (io) {
-                synchronized (this) {
-                    cfg = c;
-                    channel = ch;
-                }
-                if (ka) {
-                    ch.send(c.keepaliveArmGcode, c.commandTimeoutMs);
-                    keepaliveArmed = true;
-                    lastPingMs = System.currentTimeMillis();
-                }
-                ch.send(c.pumpOnGcode, c.commandTimeoutMs);
-                onSinceMs = System.currentTimeMillis(); // I7 counts from the pump
-                ch.send("G4 P" + c.pumpToValveSettleMs, c.commandTimeoutMs + c.pumpToValveSettleMs);
-                ch.send(c.valveOnGcode, c.commandTimeoutMs);
-                ch.send("G4 P" + c.valveSettleMs, c.commandTimeoutMs + c.valveSettleMs);
+            synchronized (this) {
+                cfg = c;
+                channel = ch; // from here on a Stop vents through this channel
             }
+            completed = switchOn(ch, c);
         }
         catch (Exception e) {
             lastError = e.getMessage();
             ventNow("pressure start failed: " + e.getMessage());
             throw e;
         }
-        boolean cancelled;
-        synchronized (this) {
-            cancelled = state != State.STARTING;
-            if (!cancelled) {
-                state = State.ON;
-                long limitMs = Math.round(c.maxContinuousOnTimeS * 1000);
-                autoOffAtMs = onSinceMs + limitMs;
-                autoOff = timer.schedule(() -> stopQuietly("I7: on-time limit of " + c.maxContinuousOnTimeS
-                        + " s reached"), Math.max(0, autoOffAtMs - System.currentTimeMillis()), TimeUnit.MILLISECONDS);
-                if (keepaliveArmed) {
-                    pinger = timer.scheduleAtFixedRate(this::ping, c.keepaliveIntervalMs, c.keepaliveIntervalMs,
-                            TimeUnit.MILLISECONDS);
+        if (completed) {
+            synchronized (this) {
+                completed = state == State.STARTING;
+                if (completed) {
+                    state = State.ON;
+                    long limitMs = Math.round(c.maxContinuousOnTimeS * 1000);
+                    autoOffAtMs = onSinceMs + limitMs;
+                    autoOff = timer.schedule(() -> stopQuietly("I7: on-time limit of " + c.maxContinuousOnTimeS
+                            + " s reached"), Math.max(0, autoOffAtMs - System.currentTimeMillis()), TimeUnit.MILLISECONDS);
+                    if (keepaliveArmed) {
+                        pinger = timer.scheduleAtFixedRate(this::ping, c.keepaliveIntervalMs, c.keepaliveIntervalMs,
+                                TimeUnit.MILLISECONDS);
+                    }
                 }
             }
         }
-        if (cancelled) {
-            ventNow("stop requested while the pressure was switching on");
+        if (!completed) {
+            if (state != State.OFF) {
+                ventNow("stop requested while the pressure was switching on");
+            }
             throw new Exception("stopped while switching on");
         }
-        event("pressure on: " + c.pumpOnGcode + ", wait " + c.pumpToValveSettleMs + " ms, " + c.valveOnGcode
-                + ", settle " + c.valveSettleMs + " ms" + (keepaliveArmed ? "; host watchdog armed" : ""));
+        event("pressure on: " + ControllerCommands.PUMP_ON + ", wait " + c.pumpToValveSettleMs + " ms, "
+                + ControllerCommands.VALVE_ON + ", settle " + c.valveSettleMs + " ms"
+                + (keepaliveArmed ? "; host watchdog armed" : ""));
     }
 
-    private static boolean hasWatchdog(GcodeChannel ch, DispenseConfig c) {
+    /** The switch-on lines and waits; false as soon as a stop was requested. */
+    private boolean switchOn(GcodeChannel ch, DispenseConfig c) throws Exception {
+        boolean ka;
+        synchronized (io) {
+            if (state != State.STARTING) {
+                return false;
+            }
+            ka = c.keepaliveEnabled && hasWatchdog(ch, c);
+        }
+        if (ka) {
+            if (!sendWhileStarting(ch, ControllerCommands.keepaliveArm(c.keepaliveWindowMs), c)) {
+                return false;
+            }
+            keepaliveArmed = true;
+            lastPingMs = System.currentTimeMillis();
+        }
+        if (!sendWhileStarting(ch, ControllerCommands.PUMP_ON, c)) {
+            return false;
+        }
+        onSinceMs = System.currentTimeMillis(); // I7 counts from the pump
+        if (!waitWhileStarting(ch, c, c.pumpToValveSettleMs)) {
+            return false;
+        }
+        if (!sendWhileStarting(ch, ControllerCommands.VALVE_ON, c)) {
+            return false;
+        }
+        return waitWhileStarting(ch, c, c.valveSettleMs);
+    }
+
+    /** Sends one line under {@code io} if the switch-on has not been cancelled. */
+    private boolean sendWhileStarting(GcodeChannel ch, String line, DispenseConfig c) throws Exception {
+        synchronized (io) {
+            if (state != State.STARTING) {
+                return false;
+            }
+            ch.send(line, c.commandTimeoutMs);
+            return true;
+        }
+    }
+
+    /** Host-side wait (no lock held), keepalive pings when armed; false when cancelled. */
+    private boolean waitWhileStarting(GcodeChannel ch, DispenseConfig c, long ms) throws Exception {
+        long end = System.currentTimeMillis() + ms;
+        while (state == State.STARTING) {
+            long now = System.currentTimeMillis();
+            if (now >= end) {
+                return true;
+            }
+            if (keepaliveArmed && now - lastPingMs >= c.keepaliveIntervalMs) {
+                if (!sendWhileStarting(ch, ControllerCommands.KEEPALIVE_PING, c)) {
+                    return false;
+                }
+                lastPingMs = System.currentTimeMillis();
+                pings++;
+                continue;
+            }
+            Thread.sleep(Math.min(WAIT_STEP_MS, end - now));
+        }
+        return false;
+    }
+
+    /**
+     * M115: does the firmware have the host watchdog? Only a timeout means "no". A controller error
+     * (e.g. 'start' after a reset) refuses the hold instead of being swallowed.
+     */
+    private static boolean hasWatchdog(GcodeChannel ch, DispenseConfig c) throws Exception {
         try {
-            for (String line : ch.sendAndCollect(c.capabilityQueryGcode, c.commandTimeoutMs)) {
-                if (line.contains(c.keepaliveCapabilityToken)) {
+            for (String line : ch.sendAndCollect(ControllerCommands.CAPABILITY_QUERY, c.commandTimeoutMs)) {
+                if (line.contains(ControllerCommands.WATCHDOG_CAPABILITY)) {
                     return true;
                 }
             }
+            return false;
         }
         catch (Exception e) {
-            Logger.warn(e, "pressure hold: capability query failed");
+            if (String.valueOf(e.getMessage()).contains("timeout waiting for response")) {
+                Logger.warn(e, "pressure hold: capability query timed out (no host watchdog assumed)");
+                return false;
+            }
+            throw new Exception("the controller reported an error before the pressure was switched on ("
+                    + e.getMessage() + "); nothing was switched on", e);
         }
-        return false;
     }
 
     /** Keepalive ping on the machine thread (never two queued at once). */
@@ -235,7 +313,7 @@ final class PressureHold implements DispenseListener {
                             c = cfg;
                         }
                         if (state == State.ON && keepaliveArmed && ch != null) {
-                            ch.send(c.keepalivePingGcode, c.commandTimeoutMs);
+                            ch.send(ControllerCommands.KEEPALIVE_PING, c.commandTimeoutMs);
                             lastPingMs = System.currentTimeMillis();
                             pings++;
                         }
@@ -252,6 +330,14 @@ final class PressureHold implements DispenseListener {
         }
     }
 
+    /** Marks a stop as requested (a switch-on in progress sees it before its next line). */
+    private synchronized void requestStop() {
+        if (state != State.OFF && state != State.VENT_FAILED) {
+            state = State.STOPPING;
+        }
+        cancelTimers();
+    }
+
     /** Switches the pressure off (valve, then pump). Safe to call when already off. */
     Map<String, Object> stop(String reason) {
         synchronized (this) {
@@ -261,14 +347,10 @@ final class PressureHold implements DispenseListener {
                 return s;
             }
             if (state == State.STARTING) {
-                // doStart() sees this and vents as soon as its sequence is through.
-                state = State.STOPPING;
                 event("stop requested while switching on: " + reason);
-                return snapshot();
             }
-            state = State.STOPPING;
-            cancelTimers();
         }
+        requestStop();
         vent(reason);
         return snapshot();
     }
@@ -283,23 +365,17 @@ final class PressureHold implements DispenseListener {
     }
 
     /**
-     * Emergency path for the web STOP: vents now from the calling thread when the machine thread
-     * is busy, otherwise through it.
+     * Emergency path for the web STOP: cancels a switch-on in progress and vents now (from the
+     * calling thread when the machine thread is busy, otherwise through it).
      */
     void emergencyStop(String reason) {
-        State s = state;
-        if (s == State.OFF) {
+        if (state == State.OFF) {
             return;
         }
-        if (s == State.STARTING) {
-            state = State.STOPPING;
+        if (state == State.STARTING) {
             event("STOP while switching on: " + reason);
-            return;
         }
-        synchronized (this) {
-            state = State.STOPPING;
-            cancelTimers();
-        }
+        requestStop();
         vent(reason);
     }
 
@@ -321,39 +397,69 @@ final class PressureHold implements DispenseListener {
         ventNow(reason);
     }
 
-    /** Valve OFF, pump OFF, watchdog disarm; every line attempted. Any thread. */
-    private void ventNow(String reason) {
+    /**
+     * Valve OFF, pump OFF, then the watchdog disarm; any thread. Each line goes through
+     * {@link GcodeChannel#sendCritical}, so a controller error that is still pending cannot
+     * swallow it. The hold is marked OFF only once the valve OFF has been sent; otherwise it stays
+     * VENT_FAILED, the watchdog stays armed and its pings stop (an armed firmware watchdog then
+     * vents by itself).
+     *
+     * @return true if the valve OFF was sent (or nothing had been switched on)
+     */
+    private boolean ventNow(String reason) {
         List<String> errors = new ArrayList<>();
+        List<String> notes = new ArrayList<>();
+        boolean valveOff;
+        boolean ka;
         synchronized (io) {
             GcodeChannel ch;
             DispenseConfig c;
-            boolean ka;
             synchronized (this) {
                 ch = channel;
                 c = cfg;
                 ka = keepaliveArmed;
             }
-            if (ch != null && c != null) {
-                List<String> lines = new ArrayList<>(Arrays.asList(c.valveOffGcode, c.pumpOffGcode));
-                if (ka) {
-                    lines.add(c.keepaliveDisarmGcode);
-                }
-                for (String line : lines) {
-                    try {
-                        ch.send(line, c.commandTimeoutMs);
-                    }
-                    catch (Exception e) {
-                        errors.add(line + ": " + e.getMessage());
-                        Logger.error(e, "pressure hold: '{}' failed", line);
-                    }
+            valveOff = ch == null || c == null; // nothing was sent yet: nothing to vent
+            if (!valveOff) {
+                valveOff = sendCritical(ch, ControllerCommands.VALVE_OFF, c, errors, notes);
+                sendCritical(ch, ControllerCommands.PUMP_OFF, c, errors, notes);
+                if (ka && valveOff) {
+                    sendCritical(ch, ControllerCommands.KEEPALIVE_DISARM, c, errors, notes);
                 }
             }
         }
         if (!errors.isEmpty()) {
             lastError = String.join("; ", errors);
         }
-        markOff("pressure off (valve, then pump): " + reason
+        if (!valveOff) {
+            synchronized (this) {
+                state = State.VENT_FAILED;
+                cancelTimers();
+            }
+            event("VALVE OFF FAILED (" + reason + "): " + errors + ". The barrel may still be pressurised: press "
+                    + "Pressure off or STOP again" + (ka ? "; the firmware host watchdog vents on its own when its "
+                            + "window ends (pings stopped)" : "; if that fails, switch the machine off"));
+            return false;
+        }
+        markOff("pressure off (valve, then pump): " + reason + (notes.isEmpty() ? "" : " - " + notes)
                 + (errors.isEmpty() ? "" : " - FAILED lines: " + errors));
+        return true;
+    }
+
+    private static boolean sendCritical(GcodeChannel ch, String line, DispenseConfig c, List<String> errors,
+            List<String> notes) {
+        try {
+            String note = ch.sendCritical(line, c.commandTimeoutMs);
+            if (note != null) {
+                notes.add(note);
+            }
+            return true;
+        }
+        catch (Exception e) {
+            errors.add(line + ": " + e.getMessage());
+            Logger.error(e, "pressure hold: '{}' failed", line);
+            return false;
+        }
     }
 
     private void markOff(String why) {

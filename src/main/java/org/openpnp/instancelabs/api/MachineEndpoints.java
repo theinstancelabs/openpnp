@@ -17,6 +17,7 @@ import java.util.concurrent.TimeoutException;
 
 import javax.imageio.ImageIO;
 
+import org.openpnp.instancelabs.dispense.ControllerCommands;
 import org.openpnp.instancelabs.dispense.DispenseConfig;
 import org.openpnp.instancelabs.dispense.DispenseService;
 import org.openpnp.machine.reference.driver.GcodeDriver;
@@ -307,8 +308,8 @@ final class MachineEndpoints {
                     }
                 }
             }
-            boolean valve = lines.contains(cfg.valveOffGcode.trim());
-            boolean pump = lines.contains(cfg.pumpOffGcode.trim());
+            boolean valve = lines.contains(ControllerCommands.VALVE_OFF);
+            boolean pump = lines.contains(ControllerCommands.PUMP_OFF);
             boolean quick = lines.contains("M410");
             return Views.map("driver", d.getName(), "disableCommand", lines, "valveOff", valve, "pumpOff", pump,
                     "quickStop", quick, "ok", valve && pump && quick);

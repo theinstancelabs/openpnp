@@ -209,11 +209,31 @@ public class GcodeStreamTest {
     }
 
     @Test
-    public void configRejectsPwm() {
-        DispenseConfig c = new DispenseConfig();
-        c.valveOnGcode = "M106 P3 S180";
-        c.pumpOnGcode = "M106 P2 S128";
-        assertEquals(2, c.validate().size());
+    public void pneumaticAndWatchdogCommandsAreFixed() {
+        // review finding: PWM on the pump (buck) or valve (S180), swapped ports, other outputs
+        for (String bad : new String[] {"M106 P2 S128", "M106 P3 S180", "m0106 p2 s128", "M106 P3 S255 X1",
+                "M106 S255", "M106 P1 S255", "M107 P1", "M107", "M42 P10 S255", "M43 T P10", "M3 S1000", "M990 S50",
+                "M990 S1", "M990 P1", "M115 S1", "T0", "N5 M106 P2 S255", "$X"}) {
+            assertTrue(ControllerCommands.check(bad) != null, bad);
+        }
+        for (String good : new String[] {"M106 P2 S255", "m106  p3  s255", "M107 P2", "M107 P3", "M115", "M990",
+                "M990 S0", "M990 S3000", "G1 Z31.5000 F1500", "G92 B0", "M400", "M410", "M18 B", "G4 P100",
+                "M204 S200", "; comment"}) {
+            assertTrue(ControllerCommands.check(good) == null, good);
+        }
+        DispenseConfig c = GcodeStreamTest.toyConfig();
+        List<String> p = GcodeStreamValidator.validate(raw("M106 P2 S255", "M106 P3 S180", "M42 P10 S255",
+                "M107 P1", "M107 P3", "M107 P2"), c, "B");
+        assertEquals(3, p.size(), p.toString());
+        // the settings no longer carry G-code strings: nothing to edit, old files still load
+        assertFalse(new DispenseConfig().toJson().contains("Gcode"));
+        DispenseConfig old = DispenseConfig.fromJson("{\"schemaVersion\":1,\"valveOffGcode\":\"M107 P1\","
+                + "\"keepalivePingGcode\":\"M106 P3 S180\",\"needleGapMm\":0.12}");
+        assertEquals(0.12, old.needleGapMm, 0);
+        assertTrue(old.validate().isEmpty());
         assertTrue(new DispenseConfig().validate().isEmpty());
+        DispenseConfig w = new DispenseConfig();
+        w.keepaliveWindowMs = 1500; // less than 2 x the 1000 ms ping interval
+        assertEquals(1, w.validate().size());
     }
 }

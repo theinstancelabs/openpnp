@@ -26,8 +26,11 @@ public class DispenseConfig {
     public static final String FILE_NAME = "dispense-config.json";
     public static final String SUBDIR = "instancelabs";
 
-    /** Version of this file's schema. */
-    public int schemaVersion = 1;
+    /**
+     * Version of this file's schema. 2: the pneumatic and watchdog G-code strings were removed (they
+     * are constants in ControllerCommands); older files load, the removed keys are ignored.
+     */
+    public int schemaVersion = 2;
 
     // --- identity of the dispenser in the OpenPnP machine -----------------------------------
     /** Nozzle carrying the auger. Matched against nozzle id first, then name. */
@@ -36,10 +39,8 @@ public class DispenseConfig {
     public String bAxisName = "b";
 
     // --- pneumatics (plan §4.1, §4.2a: pump ON/OFF only, never PWM; valve S255 only) ---------
-    public String pumpOnGcode = "M106 P2 S255";
-    public String pumpOffGcode = "M107 P2";
-    public String valveOnGcode = "M106 P3 S255";
-    public String valveOffGcode = "M107 P3";
+    // The pump/valve G-code is fixed in ControllerCommands (M106 P2 S255 / M107 P2, M106 P3 S255 /
+    // M107 P3): it is not a setting, so it cannot be PWM'd, swapped or left on by a settings edit.
     /** Pump ON -> wait -> valve ON (plan §4.5 recommendation 1). */
     public int pumpToValveSettleMs = 500;
     /** Valve ON -> settle before the first rotation (measured in M8). */
@@ -114,13 +115,12 @@ public class DispenseConfig {
     /** Minimum acceptable test-dot diameter as a fraction of the expected diameter. */
     public double testDotMinDiameterRatio = 0.6;
 
-    // --- host watchdog keepalive (only used if M115 reports the capability) --------------------
+    // --- host watchdog keepalive (only used if M115 reports Cap:HOST_WATCHDOG:1) ----------------
+    // Query, arm, ping and disarm commands are fixed in ControllerCommands (M115, M990 S<window>,
+    // M990, M990 S0); only the timing is a setting.
     public boolean keepaliveEnabled = true;
-    public String capabilityQueryGcode = "M115";
-    public String keepaliveCapabilityToken = "Cap:HOST_WATCHDOG:1";
-    public String keepaliveArmGcode = "M990 S3000";
-    public String keepalivePingGcode = "M990";
-    public String keepaliveDisarmGcode = "M990 S0";
+    /** Firmware watchdog window sent with M990 S (ms); at least 2 x keepaliveIntervalMs. */
+    public int keepaliveWindowMs = 3000;
     public int keepaliveIntervalMs = 1000;
 
     // --- interlocks ----------------------------------------------------------------------------
@@ -231,13 +231,7 @@ public class DispenseConfig {
     /** Basic sanity checks; returns a list of problems (empty if OK). */
     public java.util.List<String> validate() {
         java.util.List<String> p = new java.util.ArrayList<>();
-        // The pump sits behind a buck converter: ON/OFF only (plan §4.2a rule 1).
-        if (!pumpOnGcode.trim().matches("M106 P\\d+ S255")) {
-            p.add("pumpOnGcode must be a full-on M106 ... S255 (no PWM through the buck): " + pumpOnGcode);
-        }
-        if (!valveOnGcode.trim().matches("M106 P\\d+ S255")) {
-            p.add("valveOnGcode must be M106 ... S255 (EV-3-24 needs >= 90 % of 24 V): " + valveOnGcode);
-        }
+        // Pump and valve G-code: constants (ControllerCommands), nothing to validate here.
         if (needleGapMm <= 0) {
             p.add("needleGapMm must be > 0");
         }
@@ -258,6 +252,10 @@ public class DispenseConfig {
         }
         if (keepaliveIntervalMs < 100) {
             p.add("keepaliveIntervalMs must be >= 100");
+        }
+        if (keepaliveWindowMs < Math.max(ControllerCommands.KEEPALIVE_MIN_MS, 2L * keepaliveIntervalMs)
+                || keepaliveWindowMs > 60000) {
+            p.add("keepaliveWindowMs must be at least 2 x keepaliveIntervalMs and at most 60000");
         }
         if (pasteThicknessMm <= 0 || pasteDensityMgMm3 <= 0 || provisionalQMm3PerRev <= 0) {
             p.add("paste thickness, density and q must be > 0");

@@ -10,6 +10,7 @@ import java.util.concurrent.Future;
 import org.openpnp.Main;
 import org.openpnp.gui.MainFrame;
 import org.openpnp.instancelabs.dispense.Calibration;
+import org.openpnp.instancelabs.dispense.ControllerCommands;
 import org.openpnp.instancelabs.dispense.DispenseConfig;
 import org.openpnp.instancelabs.dispense.DispensePlan;
 import org.openpnp.instancelabs.dispense.DispenseService;
@@ -137,8 +138,8 @@ final class DispenseEndpoints {
         l.add(Views.map("id", "I1", "name", "Stop switches the pneumatics off", "state", stopOk ? "ok" : "warning",
                 "text", stopOk ? "dispense runs stop their own pneumatics, and OpenPnP's Stop sends M410 + valve off + pump off"
                         : "dispense runs and this page's STOP switch the pneumatics off, but OpenPnP's own Stop button does not: "
-                                + "add the plan §4.4 DISABLE_COMMAND (M410, " + cfg.valveOffGcode + ", "
-                                + cfg.pumpOffGcode + ", ..., M18 B) to the driver",
+                                + "add the plan §4.4 DISABLE_COMMAND (M410, " + ControllerCommands.VALVE_OFF + ", "
+                                + ControllerCommands.PUMP_OFF + ", ..., M18 B) to the driver",
                 "detail", stopCheck));
         l.add(Views.map("id", "I2", "name", "Auger (B) zeroed before it moves", "state", "ok", "text",
                 svc.isBZeroed() ? "B zeroed since the last home/start"
