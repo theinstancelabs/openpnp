@@ -22,7 +22,7 @@
     <button id="btn-home" type="button" title="Move every axis to its home switch so positions are known">Home</button>
   </div>
   <button id="btn-stop" class="stop" type="button" data-testid="stop"
-          title="Stops everything now: the auger stops, the valve vents the barrel, the pump stops, and OpenPnP stops the machine (it must be homed again).">STOP</button>
+          title="Stops everything now: the auger stops, the valve vents the barrel, the pump stops, and OpenPnP stops the machine (it must be homed again). G-code: M410, M107 P3, M107 P2, M107 P1, M107 P0, M18 B (quick stop, dispenser valve and pump off, pick valve and pump off, screw motor off).">STOP</button>
 </header>
 
 <div id="banner" class="banner hidden" role="alert"><span id="banner-text"></span><button type="button" id="banner-close" class="link" aria-label="Close">×</button></div>
@@ -57,7 +57,7 @@
       </fieldset>
       <p class="hint" id="board-hint"></p>
       <button id="btn-plan" type="button" class="primary"
-              title="Work out where every dot goes and how much paste each gets. Nothing moves.">Plan</button>
+              title="Work out where every dot goes (one dot of the dispense profile per pad) and the order. Nothing moves.">Plan</button>
     </div>
 
     <div class="card wide">
@@ -69,12 +69,14 @@
             <li><span class="sw pad-ok"></span>pad ready</li>
             <li><span class="sw pad-warn"></span>pad with a warning</li>
             <li><span class="sw pad-blocked"></span>pad that cannot be dispensed</li>
+            <li><span class="sw pad-dirty"></span>paste left on the pad (clean check)</li>
             <li><span class="sw dot-planned"></span>planned dot</li>
             <li><span class="sw dot-done"></span>dot done</li>
           </ul>
           <dl id="plan-summary" class="kv"></dl>
         </div>
       </div>
+      <p id="plan-stale" class="warnbox hidden"></p>
       <div id="plan-interlocks"></div>
       <details id="plan-flags-wrap" class="hidden"><summary id="plan-flags-title">Pads that need attention</summary><div id="plan-flags"></div></details>
     </div>
@@ -84,8 +86,14 @@
       <label title="Leave empty to dispense every dot. A number dispenses only the first dots in path order (the exact count is logged).">Only the first N dots (optional)
         <input id="run-maxdots" type="number" min="1" step="1" placeholder="all">
       </label>
-      <button id="btn-run" type="button" class="primary" disabled
-              title="Dispense the planned board: pressure on, prime and test dot on the waste pad, every dot, pressure off">Run board</button>
+      <p id="run-purge" class="hint"></p>
+      <div class="btns">
+        <button id="btn-clean-check" type="button" disabled
+                title="The top camera looks at every pad of the plan (nothing is dispensed, the pressure stays off). A pad that still carries paste reads dark. A run repeats this check before the pressure goes on (I10).">Check pads are clean</button>
+        <button id="btn-run" type="button" class="primary" disabled
+                title="Dispense the planned board: pressure on, the purge dots on the purge row, then every dot without stopping, pressure off">Run board</button>
+      </div>
+      <div id="clean-result" class="result"></div>
       <div class="progress" title="Dots done out of dots planned"><div id="run-bar" class="bar"></div></div>
       <dl id="run-live" class="kv"></dl>
       <h3><abbr title="Dots per hour: how many paste dots the machine lays down per hour">DPH</abbr> of the last run</h3>
@@ -109,17 +117,17 @@
 
     <div class="card">
       <h2>Prime and test dot</h2>
-      <p class="hint"><abbr title="Turning the auger over the waste pad so paste flows evenly before real dots">Prime</abbr> and the
-        <abbr title="One dot next to the prime spot, to check that paste comes out before a board">test dot</abbr> go on the
-        <abbr title="A spot off the board where priming and test dots go (Places, below)">waste pad</abbr>.</p>
+      <p class="hint">By hand, on the <abbr title="A spot off the board where priming and test dots go (Places, below)">waste pad</abbr>:
+        <abbr title="Turning the auger over the waste pad so paste flows evenly">prime</abbr> and a
+        <abbr title="One dot next to the prime spot, to check that paste comes out">test dot</abbr>. Board runs do not need them: they lay the profile's purge dots on the purge row first.</p>
       <div class="row2">
-        <label title="Auger rotation for the prime, in degrees (360 = one turn)">Prime rotation (°)
-          <input id="prime-rot" type="number" min="1" step="1"></label>
+        <label title="Auger rotation for the prime, in degrees of the B axis (one screw revolution = 1600 motor steps = 360.36°)">Prime rotation (°)
+          <input id="prime-rot" type="number" min="1" step="0.01"></label>
         <button id="btn-prime" type="button">Prime</button>
       </div>
       <div class="row2">
-        <label title="Auger rotation for the test dot, in degrees; the default is one 0603 pad from the current calibration">Test dot rotation (°)
-          <input id="testdot-rot" type="number" min="1" step="0.1"></label>
+        <label title="Auger rotation for the test dot, in degrees; the default is one dot of the dispense profile (Profiles tab)">Test dot rotation (°)
+          <input id="testdot-rot" type="number" min="1" step="0.01"></label>
         <button id="btn-testdot" type="button">Test dot</button>
       </div>
       <p id="dispense-result" class="result"></p>
@@ -166,15 +174,29 @@
       </div>
       <button id="btn-anchor" type="button" title="Record the needle Z frame: offset = needle contact Z − N1 contact Z. A touch-off is still needed before dispensing.">Record needle frame</button>
       <div class="row2">
+        <label title="Measured on the bench with the side camera (2026-10-27): the needle touches where the raw Z axis reads K − N1 contact Z, K = 65.59 mm. On this machine that puts the needle 2.59 mm below N1 in OpenPnP's N2 frame. Uses the N1 contact Z above.">Needle contact from the bench relation: raw Z = K − N1 contact Z. K (mm)
+          <input id="anchor-k" type="number" step="0.01" value="65.59"></label>
+        <button id="btn-anchor-k" type="button" title="Record the needle Z frame from the N1 contact Z above and K, instead of touching the needle">Record from K</button>
+      </div>
+      <div class="row2">
         <label title="How far below/above the nominal needle position the real tip is (mm), if you measured it yourself">Needle Z offset (mm)
           <input id="needle-offset" type="number" step="0.005"></label>
         <button id="btn-needle-offset" type="button">Save offset</button>
       </div>
+      <h3 title="Correction on top of the N2 head offset in OpenPnP: the needle lands at the camera position + head offset + trim, so every dot is moved by minus the trim. Within ±1 mm; a larger error belongs in the head offset.">Needle XY trim</h3>
+      <p id="trim-state" class="hint"></p>
+      <div class="row3">
+        <label title="Where the needle lands right of the target (mm)">dx (mm) <input id="trim-dx" type="number" step="0.005" min="-1" max="1"></label>
+        <label title="Where the needle lands above (machine +Y of) the target (mm)">dy (mm) <input id="trim-dy" type="number" step="0.005" min="-1" max="1"></label>
+        <label>Note <input id="trim-note" type="text" placeholder="e.g. from landing photos"></label>
+      </div>
+      <button id="btn-trim" type="button">Save XY trim</button>
     </div>
 
     <div class="card wide">
       <h2>Surfaces</h2>
-      <p class="hint">Probed heights for the board (every dot takes its Z from this plane) and the blank (dot ladder and touch-off). Touch at least 3 points spread around the area with <b>N1</b> (Z in OpenPnP's frame), or paste points, e.g. <code>[[x, y, z], …]</code> or the <code>points</code> of a zmap.json.</p>
+      <p class="hint">Probed heights for the board (every dot takes its Z from this plane) and the blank (purge row, dot ladder and touch-off). Touch at least 3 points spread around the area with <b>N1</b> (Z in OpenPnP's frame), or paste points, e.g. <code>[[x, y, z], …]</code> or the <code>points</code> of a zmap.json.
+        Saving the <b>board</b> surface while a board is planned ties it to that board's position: probe again after any re-seat (one seating was tilted 0.9 mm), then plan again.</p>
       <div class="row3">
         <label>Surface <select id="surf-name"><option value="board">board</option><option value="blank">blank</option></select></label>
         <button id="btn-surf-add" type="button" class="small" title="Add N1's current X, Y and Z (N1 tip resting on the surface)">Add N1 point (tip touching)</button>
@@ -186,18 +208,39 @@
     </div>
 
     <div class="card">
+      <h2><abbr title="A row of fresh spots on the blank. Before every board the profile's purge dots go there with the same recipe as the board (the first one turns the screw to the start angle), then the needle crosses to the board without stopping.">Purge row</abbr></h2>
+      <p class="hint">Each spot is used once (I9). When the row is full, wipe it and press reset. The number of purge dots per board is in the dispense profile.</p>
+      <p id="pr-state" class="big"></p>
+      <div class="row3">
+        <label title="Probed surface the spots lie on (their Z comes from its plane)">Surface <select id="pr-surface"></select></label>
+        <label title="Machine X of the first spot (N2 needle coordinates)">First spot X (mm) <input id="pr-x0" type="number" step="0.01"></label>
+        <label title="Machine Y of the first spot (N2 needle coordinates)">First spot Y (mm) <input id="pr-y0" type="number" step="0.01"></label>
+      </div>
+      <div class="row3">
+        <label title="Step from one spot to the next in X; at least 1.5 mm between spots so the dots stay apart">Pitch X (mm) <input id="pr-pitchx" type="number" step="0.1"></label>
+        <label title="Step from one spot to the next in Y">Pitch Y (mm) <input id="pr-pitchy" type="number" step="0.1"></label>
+        <label title="Number of spots in the row">Spots <input id="pr-spots" type="number" step="1" min="0"></label>
+      </div>
+      <div class="btns">
+        <button id="btn-pr-usexy" type="button" class="small" title="Copy the dispenser needle's current X and Y as the first spot">Use N2 X/Y</button>
+        <button id="btn-pr-save" type="button">Save purge row</button>
+        <button id="btn-pr-reset" type="button" title="All spots are free again: press only after wiping the row">Purge row wiped: reset</button>
+      </div>
+      <dl id="pr-kv" class="kv"></dl>
+    </div>
+
+    <div class="card">
       <h2><abbr title="Safety checks that must pass before the machine may dispense">Interlocks</abbr></h2>
       <ul id="interlock-list" class="checks"></ul>
     </div>
 
     <div class="card">
       <h2>Settings</h2>
-      <label title="Height of the needle tip above the surface while dispensing">Needle gap (mm) <input id="set-gap" type="number" step="0.005"></label>
       <label title="Longest time the pressure may stay on without a break (I7)">Maximum pressure time (s) <input id="set-maxon" type="number" step="1"></label>
       <label title="A board refuses pads whose profile status is below this">Lowest profile status allowed on a board
         <select id="set-minstatus"></select></label>
-      <label class="inline"><input id="set-prime" type="checkbox"> Prime and test dot before each board (I9)</label>
-      <label class="inline"><input id="set-optical" type="checkbox"> Check the test dot with the camera</label>
+      <label class="inline" title="Before the pressure goes on, the top camera looks at every pad; a pad that still carries paste (or is not under the camera) refuses the run. Untick only where the camera cannot see the board, e.g. OpenPnP's simulator."><input id="set-clean" type="checkbox"> Check that the pads are clean before each board (I10)</label>
+      <p class="hint">The needle gap, dwell and screw turn are in the dispense profile (Profiles tab).</p>
       <button id="btn-settings" type="button">Save settings</button>
       <details>
         <summary>All settings (advanced)</summary>
@@ -210,11 +253,12 @@
 
 <!-- ============================== CALIBRATE ============================== -->
 <section id="tab-calibrate" class="tab" role="tabpanel" aria-labelledby="tabbtn-calibrate">
+  <p id="cal-history-note" class="banner info">History and experiments. Boards use the dispense profile (Profiles tab), not these records: a dot is a whole number of motor steps at a fixed start angle, because partial turns vary about ±50% with the screw angle.</p>
   <div id="setup-guide" class="banner info hidden"></div>
   <div class="grid">
     <div class="card">
-      <h2>Scale: shots</h2>
-      <p class="hint">Measures <abbr title="Paste pushed out per full auger turn, mm³ per turn">q</abbr>: dispense big shots into a cup on the scale, then type what the scale reads.</p>
+      <h2>Scale: shots <span class="tag">experiment</span></h2>
+      <p class="hint">Measures <abbr title="Paste pushed out per full auger turn, mm³ per turn">q</abbr>: dispense big shots into a cup on the scale, then type what the scale reads. A record only: boards use the dispense profile.</p>
       <div class="row3">
         <label>Place <select id="shots-place"></select></label>
         <label>Rotation per shot (°) <input id="shots-rot" type="number" value="360" step="1"></label>
@@ -244,8 +288,8 @@
     </div>
 
     <div class="card">
-      <h2><abbr title="A grid of dots made with different auger rotations and measured by the camera, so the planner knows which dot size each rotation makes">Dot ladder</abbr> (camera)</h2>
-      <p class="hint">Dots on the blank, imaged before and after. Needs the needle touched off.</p>
+      <h2><abbr title="A grid of dots made with different auger rotations and measured by the camera">Dot ladder</abbr> (camera) <span class="tag">experiment</span></h2>
+      <p class="hint">Dots on the blank, imaged before and after. Needs the needle touched off. Partial turns vary about ±50% with the screw angle, so the sizes are a history, not a dose: boards use the dispense profile.</p>
       <label>Rotations (°) <input id="dl-rots" type="text" value="30, 45, 58, 75, 90"></label>
       <div class="row3">
         <label>Repeats <input id="dl-rep" type="number" value="5" min="1"></label>
@@ -257,8 +301,8 @@
     </div>
 
     <div class="card">
-      <h2>Scale: dot batch</h2>
-      <p class="hint">Weigh a batch of equal dots on a slide (gross minus tare) to get mg per dot for one rotation.</p>
+      <h2>Scale: dot batch <span class="tag">experiment</span></h2>
+      <p class="hint">Weigh a batch of equal dots on a slide (gross minus tare) to get mg per dot for one rotation (a record; boards use the dispense profile).</p>
       <div class="row3">
         <label>Calibration # <input id="sd-cal" type="number" step="1"></label>
         <label>Rotation per dot (°) <input id="sd-rot" type="number" step="0.1"></label>
@@ -280,7 +324,7 @@
         <label>Steps <input id="to-steps" type="number" value="6" step="1"></label>
       </div>
       <div class="row3">
-        <label>Rotation per dot (°) <input id="to-rot" type="number" value="58" step="0.1"></label>
+        <label title="Leave empty for one dot of the dispense profile (recommended: other partial turns vary with the screw angle and hide the squash)">Rotation per dot (°) <input id="to-rot" type="number" step="0.01" placeholder="one profile dot"></label>
         <label>Place <select id="to-place"></select></label>
         <label class="inline"><input id="to-apply" type="checkbox"> Use the result</label>
       </div>
@@ -288,7 +332,7 @@
     </div>
 
     <div class="card wide">
-      <h2>Records</h2>
+      <h2>Records (history)</h2>
       <p id="cal-current" class="big"></p>
       <h3>Calibrations</h3>
       <table class="tbl" id="cal-table"><thead><tr><th>#</th><th>Method</th><th>Status</th><th title="mm³ per auger turn">q</th><th title="Spread: standard deviation / mean">CV</th><th>n</th><th>Date</th><th>Notes</th></tr></thead><tbody></tbody></table>
@@ -301,6 +345,56 @@
 
 <!-- ============================== PROFILES ============================== -->
 <section id="tab-profiles" class="tab" role="tabpanel" aria-labelledby="tabbtn-profiles">
+  <div class="card profile-card" id="pf-card">
+    <h2>Dispense profile <span class="hint" id="pf-title-name"></span></h2>
+    <p class="hint">The recipe of every dot on a board and on the purge row (bench recipe 2026-10-28: 18 psi, half a screw turn, 250 ms dwell). Changing it makes existing plans stale: plan the board again.</p>
+    <div class="pf-cols">
+      <div>
+        <div class="row3">
+          <label>Name <input id="pf-name" type="text"></label>
+          <label title="The pressure the regulator must read. There is no sensor: the run's confirm reminds you of it.">Regulator pressure (psi)
+            <input id="pf-psi" type="number" step="0.1" min="0.1" max="21.7"></label>
+          <label title="Wait after the forward turn, before the suck-back. At a fixed pressure this sets the dot size.">Dwell (ms)
+            <input id="pf-dwell" type="number" step="10" min="0" max="5000"></label>
+        </div>
+        <p class="note" id="pf-psi-note">Pressure: set by hand on the regulator; narrow window: 16 psi starved the screw, 20 psi drooled. Dwell: the dot-size knob.</p>
+        <div class="row3">
+          <label title="Net screw turn per dot. Only whole fractions of a revolution (1 revolution = 1600 motor steps), so every dot starts at the same screw angle again.">Screw turn per dot
+            <select id="pf-turn"></select></label>
+          <label title="After the dwell the screw turns back this far, so the paste stops at the needle. The forward turn is the net turn plus this.">Suck-back (°)
+            <input id="pf-suck" type="number" step="0.5" min="0" max="30"></label>
+          <label title="Gap between the needle tip and the pad while dispensing. 0.05 to 0.15 mm behave the same; 0.20 mm and more miss dots.">Gap (mm)
+            <input id="pf-gap" type="number" step="0.01" min="0.05" max="0.15"></label>
+        </div>
+        <p class="hint" id="pf-turn-info"></p>
+        <div class="row3">
+          <label title="Screw speed of the forward and back turns (the Vieweg allows 400 rpm; the bench runs 180 rpm = G1 B F64800)">Screw speed (rpm)
+            <input id="pf-rpm" type="number" step="10" min="1" max="400"></label>
+          <label title="Acceleration of the screw turns (degrees per second²). XY and Z keep their own acceleration.">Screw acceleration (°/s²)
+            <input id="pf-accel" type="number" step="1000" min="1000" max="30000"></label>
+          <label title="Dots laid on the purge row before every board, with this recipe; the first one turns the screw to the start angle">Purge dots per board
+            <input id="pf-purge" type="number" step="1" min="0" max="60"></label>
+        </div>
+        <p class="warnbox hidden" id="pf-rpm-warn">Faster than the bench's 180 rpm: never run the screw faster than the paste feeds it (it pulls in air and needs 30 to 50 turns to recover).</p>
+        <label>Notes <textarea id="pf-notes" rows="2"></textarea></label>
+        <ul id="pf-problems" class="problems"></ul>
+        <button id="btn-pf-save" type="button" class="primary">Save profile</button>
+      </div>
+      <div>
+        <h3 title="I11: partial turns depend on where the screw starts, so the first purge dot turns the screw to this angle before the board">Screw start angle</h3>
+        <dl id="pf-angle-kv" class="kv"></dl>
+        <p id="pf-angle-warn" class="warnbox hidden"></p>
+        <div class="row2">
+          <label title="Screw angle (0 to 360°) at which the first board dot starts: a calibration value">Start angle (°)
+            <input id="pf-angle" type="number" step="0.1" min="0" max="359.9"></label>
+          <button id="btn-pf-angle-set" type="button">Set angle</button>
+        </div>
+        <button id="btn-pf-angle-confirm" type="button" title="The angle measured earlier still holds because the controller has not been switched off since">Still valid (controller not power-cycled)</button>
+        <p class="hint">The screw angle is counted from the B motor steps since the controller board was powered on. Switching the controller off restarts that count, so the angle must be measured again; after a reconnect without a power cycle press "Still valid".</p>
+      </div>
+    </div>
+  </div>
+  <h2 class="section-title">Pad types</h2>
   <div class="toolbar">
     <button id="btn-padtype-new" type="button" class="primary" data-testid="new-pad-type">New pad type</button>
     <label class="inline"><input id="show-retired" type="checkbox"> show retired</label>

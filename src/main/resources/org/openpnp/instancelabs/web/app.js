@@ -15,6 +15,13 @@ const S = {
   camTimer: null,
   lastRunId: null,
   online: false,
+  pfKey: null,
+  pfDirty: false,
+  prKey: null,
+  prDirty: false,
+  trimKey: null,
+  cleanCheck: null,
+  cleanPolling: false,
 };
 const FAMILIES = ['Chip (2-terminal SMD)', 'Small-outline discretes', 'Leaded ICs', 'No-lead ICs', 'Custom'];
 const LAYOUT_LABELS = {
@@ -223,6 +230,9 @@ function renderStatus(s) {
   renderInterlocks(s.interlocks || []);
   renderNeedle(d);
   renderPlaces(d);
+  renderProfile(d);
+  renderPurgeRow(d);
+  renderPlanStale(d);
   if (!S.defaultsFilled && d.running) {
     if (!$('prime-rot').value) $('prime-rot').value = d.primeRotationDeg;
     if (!$('testdot-rot').value && d.testDot && d.testDot.defaultRotationDeg) $('testdot-rot').value = d.testDot.defaultRotationDeg;
@@ -246,8 +256,20 @@ function refreshButtons() {
     $(id).disabled = d.busy || holding || !d.available;
     $(id).title = holding ? 'Switch the held pressure off first: this switches the pressure on and off by itself' : '';
   }
-  $('btn-run').disabled = !S.plan || !S.plan.dots.length || d.busy || holding
+  $('btn-clean-check').disabled = !S.plan || !S.plan.dots.length || d.busy || holding || !d.available || S.cleanPolling;
+  $('btn-run').disabled = !S.plan || !S.plan.dots.length || d.busy || holding || planIsStale(d)
     || !(S.plan.interlocks && S.plan.interlocks.ok);
+}
+
+/** The dispense profile changed since the shown plan was made (a run would be refused). */
+function planIsStale(d) {
+  return !!(S.plan && d.profile && S.plan.profileFingerprint !== d.profile.fingerprint);
+}
+
+function renderPlanStale(d) {
+  const stale = planIsStale(d);
+  $('plan-stale').classList.toggle('hidden', !stale);
+  $('plan-stale').textContent = stale ? 'The dispense profile changed after this plan was made: plan the board again.' : '';
 }
 
 function renderPressure(pr) {
@@ -280,6 +302,7 @@ function renderRun(run, last) {
     if (!run.running && run.runId !== S.lastRunId) {
       S.lastRunId = run.runId;
       if (run.status !== 'OK') banner(run.label + ' ended: ' + run.status + (run.message ? ' — ' + run.message : ''));
+      else if (run.label === 'clean-pad check') toast(run.message || 'clean-pad check finished');
       else toast(run.label + (run.label === 'board' && run.boardName ? ' ' + run.boardName : '') + ' finished: ' + run.dotsDone + ' dot(s)');
       loadCalibrations();
     }
@@ -287,14 +310,21 @@ function renderRun(run, last) {
     fillKv(live, [['Task', 'none yet']]);
   }
   if (last) {
-    fillKv($('run-last'), [
+    const rows = [
       ['Task', last.kind + (last.boardName ? ' (' + last.boardName + ')' : '')],
       ['Result', last.status + (last.message ? ': ' + last.message : '')],
-      ['Dots', last.dotsDone + ' of ' + last.dotsPlanned],
+      ['Dots', last.dotsDone + ' of ' + last.dotsPlanned + (last.purgeDots ? ' (+ ' + last.purgeDots + ' purge dots)' : '')],
       ['DPH (dots only)', fmtInt(last.dphMotion), 'Dots divided by the time from the first dot to the last dot'],
-      ['DPH (everything)', fmtInt(last.dphOverall), 'Dots divided by the whole task time: pressure, prime, test dot and travel included'],
+      ['DPH (everything)', fmtInt(last.dphOverall), 'Dots divided by the whole task time: pressure, purge row and travel included'],
       ['Total time', fmtDuration(last.totalSeconds)],
-    ]);
+    ];
+    if (last.profile) rows.push(['Profile', profileText(last.profile)]);
+    const cc = last.cleanCheck;
+    if (cc && !cc.ok) {
+      rows.push(['Pads with paste left', dirtyText(cc), 'Clean-pad check (I10) of this run: wipe these pads (or re-register the board) and check again']);
+      adoptCleanCheck(cc, last.planId);
+    }
+    fillKv($('run-last'), rows);
   } else {
     fillKv($('run-last'), [['Task', 'none since OpenPnP started']]);
   }
@@ -310,15 +340,30 @@ function renderNeedle(d) {
   const n = d.needle;
   if (!n) return;
   $('needle-state').textContent = (n.touchedOff ? 'Touched off ' + fmtTime(n.setAtMs) : 'NOT touched off since the last needle change / frame')
-    + ' · offset ' + fmt(n.zOffsetMm, 3) + ' mm · gap ' + fmt(n.gapMm, 3) + ' mm';
+    + ' · offset ' + fmt(n.zOffsetMm, 3) + ' mm · gap ' + fmt(n.gapMm, 3) + ' mm (profile)';
   const a = n.anchor;
   $('anchor-state').textContent = !a ? 'Not set: nothing can be dispensed until N1 and the needle have touched the same surface.'
     : (n.anchored ? 'Set ' : 'OUT OF DATE (needle changed) · set ') + fmtTime(a.setAtMs) + ': N1 ' + fmt(a.surfaceZMm, 3)
-      + ', needle ' + fmt(a.needleContactZMm, 3) + ' → frame offset ' + fmt(n.anchorOffsetMm, 3) + ' mm';
+      + ', needle ' + fmt(a.needleContactZMm, 3) + (a.rawSumMm !== null && a.rawSumMm !== undefined ? ' (from K = ' + fmt(a.rawSumMm, 2) + ')' : '')
+      + ' → frame offset ' + fmt(n.anchorOffsetMm, 3) + ' mm';
   renderSurfaces(d);
   if (document.activeElement !== $('needle-offset') && $('needle-offset').value === '') {
     $('needle-offset').value = n.zOffsetMm;
   }
+  renderTrim(n.xyTrim);
+}
+
+function renderTrim(t) {
+  if (!t) return;
+  $('trim-state').textContent = t.setAtMs ? 'Set ' + fmtTime(t.setAtMs) + ': dx ' + fmt(t.dxMm, 3) + ' mm, dy ' + fmt(t.dyMm, 3) + ' mm'
+    + (t.note ? ' · ' + t.note : '') : 'Not set (0, 0): the needle lands at the N2 head offset.';
+  const key = JSON.stringify(t);
+  const ids = ['trim-dx', 'trim-dy', 'trim-note'];
+  if (key === S.trimKey || ids.includes(document.activeElement && document.activeElement.id)) return;
+  S.trimKey = key;
+  $('trim-dx').value = t.dxMm;
+  $('trim-dy').value = t.dyMm;
+  $('trim-note').value = t.note || '';
 }
 
 // ------------------------------------------------------------------------------------------
@@ -404,8 +449,93 @@ async function planBoard() {
   }
   const p = await api('POST', '/api/plan', body);
   S.plan = p;
+  S.cleanCheck = null;
   renderPlan(p);
   toast('Planned ' + p.summary.dots + ' dots on ' + p.summary.pads + ' pads');
+}
+
+/** "1/2 turn" for a number of motor steps (1 revolution = stepsPerRev steps). */
+function turnLabel(steps, stepsPerRev) {
+  const rev = stepsPerRev || 1600;
+  if (steps % rev === 0) return steps / rev === 1 ? '1 turn' : (steps / rev) + ' turns';
+  if (rev % steps === 0) return '1/' + (rev / steps) + ' turn';
+  return steps + ' steps';
+}
+
+/** One line for a dispense profile: name, pressure, turn, dwell, gap, purge. */
+function profileText(f) {
+  return (f.name || 'profile') + ' · ' + fmt(f.pressurePsi, 1) + ' psi · ' + turnLabel(f.netStepsPerDot, f.stepsPerRev)
+    + ' · dwell ' + f.dwellMs + ' ms · gap ' + fmt(f.gapMm, 2) + ' mm · purge ' + f.purgeDots;
+}
+
+/** "R3-1 (0.42), R7-2 (0.55)" for the dirty pads of a clean-pad check. */
+function dirtyText(cc) {
+  const dirty = cc.pads.filter((x) => !x.clean);
+  if (!dirty.length) return cc.targets ? 'none' : 'no pad was checked';
+  return dirty.slice(0, 12).map((x) => x.padId + ' (' + (x.brightFraction === null ? x.error : fmt(x.brightFraction, 2)) + ')').join(', ')
+    + (dirty.length > 12 ? ' and ' + (dirty.length - 12) + ' more' : '');
+}
+
+/** Shows a clean-pad check of the current plan (or one of its subsets) if it is newer than the one shown. */
+function adoptCleanCheck(cc, planId) {
+  const p = S.plan;
+  if (!p || !cc || !planId || (planId !== p.planId && !planId.startsWith(p.planId + '-subset-'))) return;
+  if (S.cleanCheck && S.cleanCheck.checkedAtMs >= cc.checkedAtMs) return;
+  S.cleanCheck = cc;
+  renderCleanCheck();
+}
+
+function renderCleanCheck() {
+  const cc = S.cleanCheck;
+  const dirtyIds = new Set(cc ? cc.dirtyPadIds : []);
+  for (const r of document.querySelectorAll('#plan-svg rect.pad')) r.classList.toggle('dirty', dirtyIds.has(r.dataset.pad));
+  const box = $('clean-result');
+  if (!cc) { box.replaceChildren(); box.className = 'result'; return; }
+  const clean = cc.pads.filter((x) => x.clean).length;
+  if (!cc.targets) {
+    box.className = 'result bad';
+    box.replaceChildren('No pad was checked (no camera picture): see the message of the clean-pad check above.');
+    return;
+  }
+  box.className = 'result ' + (cc.ok ? 'ok' : 'bad');
+  const head = (cc.ok ? 'All ' + cc.targets + ' pads are clean' : clean + ' of ' + cc.targets + ' pads clean, '
+    + (cc.targets - clean) + ' with paste left (or not under the camera)') + ' · bright share needed ≥ ' + fmt(cc.minBrightFraction, 2)
+    + ' · checked ' + fmtTime(cc.checkedAtMs);
+  const dirty = cc.pads.filter((x) => !x.clean);
+  box.replaceChildren(el('div', { text: head }),
+    cc.ok ? null : el('ul', {}, dirty.slice(0, 20).map((x) => el('li', {
+      text: x.padId + ': bright share ' + (x.brightFraction === null ? '— (' + x.error + ')' : fmt(x.brightFraction, 2)),
+    })), dirty.length > 20 ? el('li', { text: 'and ' + (dirty.length - 20) + ' more (red in the preview)' }) : null));
+}
+
+/** Camera-only check of every pad of the plan (pressure off), then polls the plan until the result is there. */
+async function checkClean() {
+  const p = S.plan;
+  await api('POST', '/api/plan/' + encodeURIComponent(p.planId) + '/clean-check', {});
+  S.cleanPolling = true;
+  $('clean-result').className = 'result';
+  $('clean-result').textContent = 'Checking: the top camera visits every pad…';
+  try {
+    const t0 = Date.now();
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 600));
+      const q = await api('GET', '/api/plan/' + encodeURIComponent(p.planId));
+      const cc = q.cleanCheck;
+      if (cc && !q.cleanCheckRunning) {
+        if (S.plan === p) { S.plan.cleanCheck = cc; S.cleanCheck = cc; renderCleanCheck(); }
+        toast(!cc.targets ? 'Clean-pad check: no pad was checked' : cc.ok ? 'All ' + cc.targets + ' pads are clean'
+          : 'Paste left on ' + cc.dirtyPadIds.length + ' pad(s): wipe them and check again', !cc.ok);
+        return;
+      }
+      if (!q.cleanCheckRunning || Date.now() - t0 > 15 * 60000) {
+        $('clean-result').className = 'result bad';
+        $('clean-result').textContent = 'The clean-pad check did not finish: see the message above.';
+        return;
+      }
+    }
+  } finally {
+    S.cleanPolling = false;
+  }
 }
 
 function padClass(p) {
@@ -436,7 +566,7 @@ function renderPlan(p) {
       transform: 'translate(' + q.x + ' ' + q.y + ') rotate(' + q.rotation + ')',
       'data-pad': q.padId,
     }, q.padId + ' · ' + (q.packageId || '') + ' · ' + (q.typeKey || 'no pad type') + ' (' + (q.typeStatus || '') + ')\n'
-      + fmt(q.w) + ' × ' + fmt(q.h) + ' mm · ' + fmt(q.targetMassMg, 3) + ' mg · ' + q.dotCount + ' dot(s)'
+      + fmt(q.w) + ' × ' + fmt(q.h) + ' mm · ' + q.dotCount + ' dot(s)'
       + (q.rotationPerDotDeg ? ' × ' + fmt(q.rotationPerDotDeg, 1) + '°' : '')
       + (q.flags.length ? '\n' + q.flags.join(', ') : '')));
   }
@@ -445,8 +575,7 @@ function renderPlan(p) {
   }
   S.dotEls = [];
   for (const d of p.dots) {
-    const r = Math.max(0.12, (d.expectedDiameterMm || 0.5) / 2);
-    const c = svgEl('circle', { class: 'dot', cx: d.x, cy: d.y, r, 'data-index': d.index },
+    const c = svgEl('circle', { class: 'dot', cx: d.x, cy: d.y, r: 0.25, 'data-index': d.index },
       'dot ' + (d.index + 1) + ' · ' + d.padId + ' · ' + fmt(d.rotationDeg, 1) + '° · Z ' + fmt(d.dispenseZ, 3));
     S.dotEls[d.index] = c;
     g.appendChild(c);
@@ -459,13 +588,14 @@ function renderPlan(p) {
     ['Board', p.boardName],
     ['Pads', s.pads + (s.blockedPads ? ' (' + s.blockedPads + ' blocked)' : '')],
     ['Dots', s.dots],
-    ['Paste per board', fmt(s.totalRotationDeg / 360, 2) + ' auger turns', 'Total auger rotation for all dots'],
+    ['Paste per board', fmt(s.totalRotationDeg / 360, 2) + ' auger turns', 'Total net auger rotation of the board dots (purge dots not included)'],
     ['Path', fmt(s.pathLengthMm, 1) + ' mm'],
     ['Time (estimate)', s.estimatedSeconds ? fmtDuration(s.estimatedSeconds) : (s.estimateError || '—'),
-      'Lower bound: ignores acceleration'],
-    ['DPH (estimate)', s.estimatedDphUpperBound ? '≤ ' + fmtInt(s.estimatedDphUpperBound) : '—',
-      'Upper bound from the time estimate'],
-    ['Calibration', '#' + p.calibration.id + ' q=' + fmt(p.calibration.qMm3PerRev, 3) + ' mm³/turn (' + p.calibration.status + ')'],
+      'The whole program as it will be streamed: settle, purge row, crossing, every dot and vent, with acceleration and dwells (no host delays)'],
+    ['DPH (estimate)', s.estimatedDph ? fmtInt(s.estimatedDph) : '—',
+      'Board dots per hour of the estimated program. Includes acceleration; the bench counts from the crossing to the last dot, so it reads a little higher'],
+    ['Profile', p.profile ? profileText(p.profile) : '—', 'The dispense profile this plan was made with (Profiles tab); '
+      + s.purgeDots + ' purge dots go on the purge row first'],
   ]);
   const il = p.interlocks;
   const box = $('plan-interlocks');
@@ -487,6 +617,9 @@ function renderPlan(p) {
         el('td', { text: q.padId }), el('td', { text: q.packageId || '' }), el('td', { text: q.typeKey || '—' }),
         el('td', { text: q.typeStatus || '' }), el('td', { text: q.flags.join(', ') })))))
   );
+  if (p.cleanCheck && (!S.cleanCheck || S.cleanCheck.checkedAtMs < p.cleanCheck.checkedAtMs)) S.cleanCheck = p.cleanCheck;
+  renderCleanCheck();
+  if (S.status) renderPlanStale(S.status.dispense || {});
   refreshButtons();
 }
 
@@ -504,7 +637,12 @@ async function runBoard() {
   const p = S.plan;
   const maxDots = num('run-maxdots');
   const n = maxDots ? Math.min(maxDots, p.dots.length) : p.dots.length;
-  if (!confirm('Dispense ' + n + ' dot(s) on ' + p.boardName + '?\nThe machine moves and the pressure switches on.')) return;
+  const f = p.profile || {};
+  if (!confirm('Dispense ' + n + ' dot(s) on ' + p.boardName + '?\n\nSet the regulator to ' + fmt(f.pressurePsi, 1) + ' psi (profile '
+    + f.name + ') before you continue: there is no pressure sensor.\n\nThe machine moves and the pressure switches on: '
+    + f.purgeDots + ' purge dots on the purge row, then the board without stopping.'
+    + (S.cleanCheck && !S.cleanCheck.ok ? '\n\nThe last clean-pad check found paste on ' + S.cleanCheck.dirtyPadIds.length
+      + ' pad(s): the run will be refused until they are clean.' : ''))) return;
   for (const c of S.dotEls || []) if (c) c.classList.remove('done');
   const r = await api('POST', '/api/run', { planId: p.planId, maxDots });
   toast('Run started: ' + r.dots + ' dots');
@@ -632,7 +770,7 @@ function renderPlaces(d) {
 function placeRow(name, loc, d) {
   const derived = name === 'waste-test-dot';
   const hint = name === d.wasteLocationName ? 'Waste pad: prime and test dots'
-    : name === d.blankLocationName ? 'Blank: calibration dots' : derived ? 'Test dot spot (follows the waste pad)' : '';
+    : name === d.blankLocationName ? 'Blank: purge row (Purge row card), calibration dots' : derived ? 'Test dot spot (follows the waste pad)' : '';
   const inp = (v, axis) => el('input', { type: 'number', step: '0.01', value: v === undefined ? '' : v, disabled: derived,
     'data-axis': axis, 'aria-label': name + ' ' + axis.toUpperCase() });
   const x = inp(loc && loc.x, 'x'), y = inp(loc && loc.y, 'y'), z = inp(loc && loc.z, 'z');
@@ -678,23 +816,174 @@ async function loadSettings() {
 }
 
 function fillSettings(c) {
-  $('set-gap').value = c.needleGapMm;
   $('set-maxon').value = c.maxContinuousOnTimeS;
   const sel = $('set-minstatus');
   sel.replaceChildren(...Object.keys(STATUS_LABELS).map((k) => el('option', { value: k, text: STATUS_LABELS[k] })));
   sel.value = c.minPadTypeStatus;
-  $('set-prime').checked = c.primeAndTestDot;
-  $('set-optical').checked = c.testDotOpticalCheck;
+  $('set-clean').checked = c.cleanPadCheck.enabled;
   $('set-json').value = JSON.stringify(c, null, 2);
 }
 
 async function saveSettings() {
   const c = await api('PUT', '/api/config', {
-    needleGapMm: num('set-gap'), maxContinuousOnTimeS: num('set-maxon'), minPadTypeStatus: $('set-minstatus').value,
-    primeAndTestDot: $('set-prime').checked, testDotOpticalCheck: $('set-optical').checked,
+    maxContinuousOnTimeS: num('set-maxon'), minPadTypeStatus: $('set-minstatus').value,
+    cleanPadCheck: { enabled: $('set-clean').checked },
   });
   fillSettings(c);
   toast('Settings saved');
+}
+
+// ------------------------------------------------------------------------------------------
+// Dispense profile (Profiles tab) and purge row (Dispense tab)
+// ------------------------------------------------------------------------------------------
+
+const PF_FIELDS = ['pf-name', 'pf-psi', 'pf-dwell', 'pf-turn', 'pf-suck', 'pf-gap', 'pf-rpm', 'pf-accel', 'pf-purge', 'pf-notes'];
+
+/** Whole fractions of a revolution the screw may turn per dot (1/8 .. 2 turns), plus the current value. */
+function fillTurnOptions(p) {
+  const rev = p.stepsPerRev;
+  const steps = [rev / 8, rev / 4, rev / 2, rev, 2 * rev].filter((n) => Number.isInteger(n));
+  if (!steps.includes(p.netStepsPerDot)) steps.push(p.netStepsPerDot);
+  steps.sort((a, b) => a - b);
+  $('pf-turn').replaceChildren(...steps.map((n) => el('option', { value: n, text: turnLabel(n, rev) + ' (' + n + ' steps)' })));
+}
+
+function renderProfile(d) {
+  const p = d.profile;
+  if (!p) return;
+  $('pf-title-name').textContent = '· ' + p.name;
+  const key = p.fingerprint + '|' + p.name + '|' + p.notes;
+  if (key !== S.pfKey && !S.pfDirty) {
+    S.pfKey = key;
+    fillTurnOptions(p);
+    $('pf-name').value = p.name;
+    $('pf-psi').value = p.pressurePsi;
+    $('pf-dwell').value = p.dwellMs;
+    $('pf-turn').value = p.netStepsPerDot;
+    $('pf-suck').value = p.suckBackDeg;
+    $('pf-gap').value = p.gapMm;
+    $('pf-rpm').value = p.screwRpm;
+    $('pf-accel').value = p.screwAccelDegS2;
+    $('pf-purge').value = p.purgeDots;
+    $('pf-notes').value = p.notes || '';
+    $('pf-angle').value = p.startAngleDeg;
+  }
+  renderTurnInfo(p);
+  $('pf-problems').replaceChildren(...(p.problems || []).map((x) => el('li', { text: x })));
+  fillKv($('pf-angle-kv'), [
+    ['Start angle', fmt(p.startAngleDeg, 1) + '°'],
+    ['Dots start at', p.partialTurn ? p.startAngles.map((a) => fmt(a, 1) + '°').join(' / ') : 'any angle (whole turns)',
+      'A half turn alternates between two start angles'],
+    ['Set', p.startAngleSetAtMs ? fmtTime(p.startAngleSetAtMs) : 'never'],
+    ['Controller connected', p.controllerConnectedAtMs ? fmtTime(p.controllerConnectedAtMs) : '—'],
+  ]);
+  const w = $('pf-angle-warn');
+  w.classList.toggle('hidden', !p.startAngleNeedsConfirm);
+  w.textContent = !p.startAngleNeedsConfirm ? '' : !p.startAngleSetAtMs
+    ? 'The start angle has never been set: set it (or confirm it) before a board run (I11).'
+    : 'OpenPnP connected to the controller (' + fmtTime(p.controllerConnectedAtMs) + ') after the angle was set: press "Still valid" '
+      + 'if the controller was not switched off, otherwise measure the angle again (I11).';
+}
+
+/** Forward / back / net turn of a dot: from the status, or as it will be after saving the edited values. */
+function renderTurnInfo(p) {
+  const steps = Number($('pf-turn').value) || p.netStepsPerDot;
+  const suck = $('pf-suck').value === '' ? p.suckBackDeg : Number($('pf-suck').value);
+  const rpm = $('pf-rpm').value === '' ? p.screwRpm : Number($('pf-rpm').value);
+  let net = p.netDeg, fwd = p.forwardDeg, back = p.suckBackSteps, feed = p.feedDegPerMin;
+  const edited = steps !== p.netStepsPerDot || suck !== p.suckBackDeg || rpm !== p.screwRpm;
+  if (edited) {
+    back = Math.round(suck * p.stepsPerDeg);
+    net = steps / p.stepsPerDeg;
+    fwd = (steps + back) / p.stepsPerDeg;
+    feed = rpm * 360;
+  }
+  $('pf-turn-info').textContent = (edited ? 'After saving: ' : '') + 'each dot turns the screw forward ' + fmt(fwd, 2) + '°, then back '
+    + fmt(fwd - net, 2) + '° (' + back + ' steps): net ' + fmt(net, 2) + '° per dot (' + turnLabel(steps, p.stepsPerRev) + ', '
+    + p.stepsPerDeg + ' steps/°). Screw feed ' + fmtInt(feed) + '°/min (G1 B F' + Math.round(feed) + ').';
+  $('pf-rpm-warn').classList.toggle('hidden', !(rpm > 180));
+}
+
+async function saveProfile() {
+  const body = {
+    name: str('pf-name'), pressurePsi: num('pf-psi'), dwellMs: num('pf-dwell'), netStepsPerDot: Number($('pf-turn').value),
+    suckBackDeg: num('pf-suck'), gapMm: num('pf-gap'), screwRpm: num('pf-rpm'), screwAccelDegS2: num('pf-accel'),
+    purgeDots: num('pf-purge'), notes: $('pf-notes').value,
+  };
+  if (body.screwRpm > 180 && !confirm('Run the screw at ' + body.screwRpm + ' rpm? The bench runs 180 rpm: never faster than the '
+    + 'paste feeds the screw (it pulls in air and needs 30 to 50 turns to recover).')) return;
+  await api('PUT', '/api/config', { profile: body });
+  S.pfDirty = false;
+  S.pfKey = null;
+  refreshSettingsJson();
+  toast('Profile saved. Set the regulator to ' + fmt(body.pressurePsi, 1) + ' psi; plan the board again before a run.');
+}
+
+async function startAngle(set) {
+  const body = {};
+  if (set) {
+    body.startAngleDeg = num('pf-angle');
+    if (body.startAngleDeg === undefined) throw new Error('Enter the start angle in degrees (0 to 360)');
+  }
+  const p = await api('POST', '/api/screw/start-angle', body);
+  $('pf-angle').value = p.startAngleDeg;
+  refreshSettingsJson();
+  toast(set ? 'Start angle set to ' + fmt(p.startAngleDeg, 1) + '°: plan the board again.' : 'Start angle ' + fmt(p.startAngleDeg, 1)
+    + '° confirmed for this controller power-up.');
+}
+
+const PR_FIELDS = ['pr-surface', 'pr-x0', 'pr-y0', 'pr-pitchx', 'pr-pitchy', 'pr-spots'];
+
+function renderPurgeRow(d) {
+  const r = d.purgeRow;
+  if (!r) return;
+  const per = r.perBoard;
+  $('pr-state').textContent = !r.defined ? 'Not set: board runs are refused (I9).'
+    : r.spotsLeft + ' of ' + r.spots + ' spots left' + (per ? ' · ' + r.boardsLeft + ' board(s) at ' + per + ' purge dots' : '');
+  fillKv($('pr-kv'), [
+    ['Used spots', r.usedSpots],
+    ['Surface probed', r.surfaceProbed ? 'yes (' + r.surfaceName + ')' : 'NO: probe the ' + r.surfaceName + ' surface (Surfaces card)'],
+    ['Last wiped', r.resetAtMs ? fmtTime(r.resetAtMs) : '—'],
+  ]);
+  $('run-purge').textContent = !per ? 'The profile has no purge dots.' : !r.defined ? 'Purge row not set (Dispense tab): board runs are refused.'
+    : 'Purge row: ' + r.spotsLeft + ' spots left = ' + r.boardsLeft + ' board(s); wipe it and reset it on the Dispense tab when it is full.';
+  const names = Object.keys(d.surfaces || {});
+  for (const n of [r.surfaceName, d.blankLocationName]) if (n && !names.includes(n)) names.push(n);
+  const key = JSON.stringify([r.surfaceName, r.x0Mm, r.y0Mm, r.pitchXMm, r.pitchYMm, r.spots, names]);
+  if (key === S.prKey || S.prDirty) return;
+  S.prKey = key;
+  $('pr-surface').replaceChildren(...names.map((n) => el('option', { value: n, text: n })));
+  $('pr-surface').value = r.surfaceName;
+  $('pr-x0').value = r.x0Mm === null ? '' : r.x0Mm;
+  $('pr-y0').value = r.y0Mm === null ? '' : r.y0Mm;
+  $('pr-pitchx').value = r.pitchXMm;
+  $('pr-pitchy').value = r.pitchYMm;
+  $('pr-spots').value = r.spots;
+}
+
+async function savePurgeRow() {
+  await api('PUT', '/api/config', { purgeRow: {
+    surfaceName: $('pr-surface').value, x0Mm: num('pr-x0'), y0Mm: num('pr-y0'), pitchXMm: num('pr-pitchx'),
+    pitchYMm: num('pr-pitchy'), spots: num('pr-spots'),
+  } });
+  S.prDirty = false;
+  S.prKey = null;
+  refreshSettingsJson();
+  toast('Purge row saved');
+}
+
+async function resetPurgeRow() {
+  if (!confirm('Is the purge row wiped clean? All its spots will be used again.')) return;
+  const r = await api('POST', '/api/purge-row/reset');
+  S.prKey = null;
+  refreshSettingsJson();
+  toast('Purge row reset: ' + r.spotsLeft + ' spots free');
+}
+
+/** Keeps the full-settings editor in step after a card saved part of the settings (stamped fields change). */
+async function refreshSettingsJson() {
+  if (document.activeElement === $('set-json')) return;
+  try { $('set-json').value = JSON.stringify(await api('GET', '/api/config'), null, 2); } catch (e) { /* next save shows it */ }
 }
 
 async function saveSettingsJson() {
@@ -723,7 +1012,7 @@ async function loadCalibrations() {
     el('td', { class: 'num', text: fmt(r.rotationDeg, 1) }), el('td', { class: 'num', text: r.n }),
     el('td', { class: 'num', text: fmt(r.diameterMeanMm, 3) }), el('td', { class: 'num', text: r.diameterCv === null ? '—' : fmt(100 * r.diameterCv, 1) + ' %' }),
     el('td', { class: 'num', text: fmt(r.mgPerDotMean, 3) }), el('td', { class: 'num', text: fmt(r.heightMm, 3) }), el('td', { text: r.method || '' }))));
-  if (!c.ladder.length) $('ladder-table').tBodies[0].appendChild(el('tr', {}, el('td', { colspan: 7, class: 'hint', text: 'No dot ladder yet: plans use one dot per pad from q (flag NO_LADDER).' })));
+  if (!c.ladder.length) $('ladder-table').tBodies[0].appendChild(el('tr', {}, el('td', { colspan: 7, class: 'hint', text: 'No dot ladder rows (a history only: boards use the dispense profile).' })));
 }
 
 async function shotsRun() {
@@ -788,8 +1077,9 @@ async function loadPadTypes() {
 function renderPadTypes() {
   const d = S.padTypes;
   const showRetired = $('show-retired').checked;
+  const prof = S.status && S.status.dispense && S.status.dispense.profile;
   $('profiles-hint').textContent = 'A board refuses pads whose type is below "' + (STATUS_LABELS[d.minPadTypeStatus] || d.minPadTypeStatus)
-    + '". Dot plan uses calibration #' + (d.calibration ? d.calibration.id + ' (' + d.calibration.status + ')' : '—') + '.';
+    + '". Every dot is one dot of the dispense profile' + (prof ? ' "' + prof.name + '"' : '') + ' (above).';
   const out = [];
   for (const fam of d.families) {
     if (fam.retired && !showRetired) continue;
@@ -799,8 +1089,8 @@ function renderPadTypes() {
         el('thead', {}, el('tr', {}, [
           ['Name'], ['Status', 'not started → provisional → characterized → validated on a board'],
           ['Pad (mm)'], ['t', 'Paste thickness (mm)'], ['k', 'Fraction of the pad area covered'],
-          ['Dot plan', 'One dot per pad: auger rotation from the current calibration (the dot ladder may split a pad into several dots)'],
-          ['Calibration'], ['Last validated'], ['Notes'], [''],
+          ['Dot plan', 'Dots per pad (one, or a grid if the pad rule allows more dots on a large pad), each one dot of the dispense profile'],
+          ['Profile', 'The dispense profile the dots use'], ['Last validated'], ['Notes'], [''],
         ].map(([h, t]) => el('th', { text: h, title: t })))),
         el('tbody', {}, fam.types.length ? fam.types.map(padTypeRow)
           : [el('tr', {}, el('td', { colspan: 10, class: 'hint', text: 'No types yet' }))]))));
@@ -817,9 +1107,10 @@ function padTypeRow(t) {
     el('td', { class: 'num', text: fmt(t.padWMm, 3) + ' × ' + fmt(t.padHMm, 3) }),
     el('td', { class: 'num', text: fmt(t.tMm, 3) }),
     el('td', { class: 'num', text: fmt(t.k, 2) }),
-    el('td', { title: fmt(t.targetMassMg, 3) + ' mg per pad' }, t.singleDotRotationDeg ? '1 dot × ' + fmt(t.singleDotRotationDeg, 1) + '°' : '—',
+    el('td', { title: 'A stencil of this t and k would print ' + fmt(t.targetMassMg, 3) + ' mg (for information)' },
+      t.dotsPerPad ? t.dotsPerPad + ' dot' + (t.dotsPerPad === 1 ? '' : 's') + ' × ' + fmt(t.rotationPerDotDeg, 1) + '°' : '—',
       t.rule && t.rule.maxDots ? el('div', { class: 'hint', text: 'up to ' + t.rule.maxDots + ' dots' }) : null),
-    el('td', { text: t.calibrationId ? '#' + t.calibrationId + ' (' + t.calibrationStatus + ')' : '—' }),
+    el('td', { text: t.profileName || '—' }),
     el('td', { text: t.lastValidatedAtMs ? fmtTime(t.lastValidatedAtMs) : '—' }),
     el('td', { class: 'hint', text: t.notes || '' }),
     el('td', {}, el('div', { class: 'btns' },
@@ -932,24 +1223,24 @@ async function retire(t) {
   await loadPadTypes();
 }
 
-/** Set up / Validate: open Calibrate with this type's dot size filled in, plus the steps. */
+/** Set up / Validate: open Calibrate with this type's dot (one profile dot) filled in, plus the steps. */
 function setUp(t, validate) {
-  const r = t.singleDotRotationDeg;
+  const r = t.rotationPerDotDeg;
   showTab('calibrate');
   if (r) {
     $('dl-rots').value = [0.6, 0.8, 1, 1.2, 1.4].map((f) => (r * f).toFixed(1)).join(', ');
-    $('sd-rot').value = r.toFixed(1);
-    $('to-rot').value = r.toFixed(1);
+    $('sd-rot').value = r.toFixed(2);
+    $('to-rot').value = ''; // empty = one profile dot
   }
   const g = $('setup-guide');
   g.replaceChildren(el('b', { text: (validate ? 'Validating ' : 'Setting up ') + t.name + ' (' + t.typeKey + ')' }),
     el('ol', {}, validate ? [
-      el('li', { text: 'Dispense a coupon of dots at ' + fmt(r, 1) + '° on a weighed slide (Scale: shots with the slide\'s place, or a board run).' }),
-      el('li', { text: 'Weigh it and enter the batch under "Scale: dot batch". Predicted: ' + fmt(t.targetMassMg, 3) + ' mg per pad.' }),
+      el('li', { text: 'Dispense a coupon of profile dots (' + fmt(r, 1) + '°) on a weighed slide (a board run of a coupon board, or Scale: shots with the slide\'s place).' }),
+      el('li', { text: 'Weigh it and enter the batch under "Scale: dot batch". A stencil would print ' + fmt(t.targetMassMg, 3) + ' mg per pad.' }),
       el('li', { text: 'If the result matches your tolerance, edit the type in Profiles and set its status to "validated on a board".' }),
     ] : [
       el('li', { text: 'Needle Z frame recorded, blank place and blank surface set, needle touched off (Dispense tab).' }),
-      el('li', { text: 'Run the dot ladder (rotations filled in around ' + fmt(r, 1) + '°) and/or weigh a dot batch.' }),
+      el('li', { text: 'Run the dot ladder (rotations filled in around one profile dot, ' + fmt(r, 1) + '°) and/or weigh a dot batch: a record, the dose stays the profile\'s.' }),
       el('li', { text: 'When the dots are repeatable, edit the type in Profiles and set its status to "characterized".' }),
     ]));
   g.classList.remove('hidden');
@@ -970,6 +1261,7 @@ function wire() {
   $('board-file').addEventListener('change', onBoardChange);
   $('btn-plan').addEventListener('click', (ev) => act(ev.target, planBoard));
   $('btn-run').addEventListener('click', (ev) => act(ev.target, runBoard));
+  $('btn-clean-check').addEventListener('click', (ev) => act(ev.target, checkClean));
 
   $('btn-pressure-on').addEventListener('click', (ev) => act(ev.target, () => pressure(true)));
   $('btn-pressure-off').addEventListener('click', (ev) => act(ev.target, () => pressure(false)));
@@ -997,6 +1289,22 @@ function wire() {
     const r = await api('POST', '/api/needle/anchor', { surfaceZ: n1, needleContactZ: n2 });
     toast('Needle frame recorded: offset ' + fmt(r.offsetMm, 3) + ' mm. Touch off the needle next.');
   }));
+  $('btn-anchor-k').addEventListener('click', (ev) => act(ev.target, async () => {
+    const n1 = num('anchor-n1'), k = num('anchor-k');
+    if (n1 === undefined || k === undefined) throw new Error('Enter the N1 contact Z and K');
+    const r = await api('POST', '/api/needle/anchor', { surfaceZ: n1, needleContactRawSum: k });
+    $('anchor-n2').value = r.anchor.needleContactZMm.toFixed(3);
+    toast('Needle frame recorded from K = ' + fmt(k, 2) + ': needle contact Z ' + fmt(r.anchor.needleContactZMm, 3)
+      + ', offset ' + fmt(r.offsetMm, 3) + ' mm. Touch off the needle (or confirm the offset) next.');
+  }));
+  $('btn-trim').addEventListener('click', (ev) => act(ev.target, async () => {
+    const dx = num('trim-dx'), dy = num('trim-dy');
+    if (dx === undefined || dy === undefined) throw new Error('Enter dx and dy in mm (0 for none)');
+    await api('PUT', '/api/config', { needleXyTrim: { dxMm: dx, dyMm: dy, note: str('trim-note') || null } });
+    S.trimKey = null;
+    refreshSettingsJson();
+    toast('Needle XY trim saved: plan the board again so the preview matches');
+  }));
   $('surf-name').addEventListener('change', () => { S.surfKey = null; if (S.status) renderSurfaces(S.status.dispense); });
   $('btn-surf-add').addEventListener('click', (ev) => act(ev.target, async () => {
     const n = n1Pos();
@@ -1007,9 +1315,17 @@ function wire() {
   }));
   $('btn-surf-save').addEventListener('click', (ev) => act(ev.target, async () => {
     const name = $('surf-name').value;
-    await api('PUT', '/api/surfaces/' + encodeURIComponent(name), { points: surfPoints() });
+    const body = { points: surfPoints() };
+    // a board surface probed while a board is planned belongs to that board registration (re-probe after a re-seat)
+    const tie = name === S.status.dispense.boardSurfaceName && S.plan;
+    if (tie) body.planId = S.plan.planId;
+    await api('PUT', '/api/surfaces/' + encodeURIComponent(name), body);
     S.surfKey = null;
-    toast('Saved surface ' + name);
+    toast('Saved surface ' + name + (tie ? ', tied to the planned board ' + S.plan.boardName + ': plan the board again' : ''));
+    if (tie) {
+      S.plan = await api('GET', '/api/plan/' + encodeURIComponent(S.plan.planId));
+      renderPlan(S.plan);
+    }
   }));
   $('btn-surf-clear').addEventListener('click', (ev) => act(ev.target, async () => {
     const name = $('surf-name').value;
@@ -1020,6 +1336,16 @@ function wire() {
     toast('Deleted surface ' + name);
   }));
   $('btn-settings').addEventListener('click', (ev) => act(ev.target, saveSettings));
+  $('btn-pr-save').addEventListener('click', (ev) => act(ev.target, savePurgeRow));
+  $('btn-pr-reset').addEventListener('click', (ev) => act(ev.target, resetPurgeRow));
+  $('btn-pr-usexy').addEventListener('click', () => {
+    const n = nozzlePos();
+    if (!n) return;
+    $('pr-x0').value = n.x.toFixed(3);
+    $('pr-y0').value = n.y.toFixed(3);
+    S.prDirty = true;
+  });
+  for (const id of PR_FIELDS) $(id).addEventListener('input', () => { S.prDirty = true; });
   $('btn-settings-json').addEventListener('click', (ev) => act(ev.target, saveSettingsJson));
 
   $('btn-shots-run').addEventListener('click', (ev) => act(ev.target, shotsRun));
@@ -1027,6 +1353,16 @@ function wire() {
   $('btn-sd-save').addEventListener('click', (ev) => act(ev.target, saveScaleDots));
   $('btn-dl-run').addEventListener('click', (ev) => act(ev.target, dotLadder));
   $('btn-to-run').addEventListener('click', (ev) => act(ev.target, touchOff));
+
+  $('btn-pf-save').addEventListener('click', (ev) => act(ev.target, saveProfile));
+  $('btn-pf-angle-set').addEventListener('click', (ev) => act(ev.target, () => startAngle(true)));
+  $('btn-pf-angle-confirm').addEventListener('click', (ev) => act(ev.target, () => startAngle(false)));
+  for (const id of PF_FIELDS) {
+    $(id).addEventListener('input', () => {
+      S.pfDirty = true;
+      if (S.status && S.status.dispense.profile) renderTurnInfo(S.status.dispense.profile);
+    });
+  }
 
   $('btn-padtype-new').addEventListener('click', () => openPadType(null));
   $('show-retired').addEventListener('change', renderPadTypes);
