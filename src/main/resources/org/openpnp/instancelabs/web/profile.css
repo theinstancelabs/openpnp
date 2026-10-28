@@ -287,14 +287,9 @@
 .rec-prof-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13.5px; }
 .rec-prof-row .recipe { height: 32px; font-size: 12.5px; }
 .rec-warn { margin: 0; padding-left: 18px; font-size: 13px; color: var(--need); }
-.rec-mapbox { border: 1px solid var(--line); border-radius: 12px; background: var(--pv-bg); padding: 6px; }
-.rec-map { display: block; width: 100%; height: auto; max-height: 300px; }
-.rec-map__bg { fill: var(--pv-board); stroke: var(--pv-board-edge); stroke-width: .15; }
-.rec-map__pad { fill: var(--pv-pad); stroke: var(--pv-pad-edge); stroke-width: .06; }
-.rec-map__pad--done { fill: var(--pv-pad-pasted); stroke: var(--data); stroke-width: .12; }
-.rec-map__pad--part { fill: var(--need-bg); stroke: var(--need-dot); stroke-width: .18; }
-.rec-map__dot { fill: none; stroke: var(--pv-path); stroke-width: .08; }
-.rec-map__dot.done { fill: var(--data); }
+/* done-dot map: the shared board view (boardview.js, styles .pv in run.css) in a fixed-height box */
+.rec-mapbox { position: relative; height: 260px; border: 1px solid var(--line); border-radius: 12px; background: var(--pv-bg); }
+.rec-mapbox > svg.pv { position: absolute; inset: 8px; width: calc(100% - 16px); height: calc(100% - 16px); }
 .rec-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--ink-2); }
 .rec-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .rec-lg { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }

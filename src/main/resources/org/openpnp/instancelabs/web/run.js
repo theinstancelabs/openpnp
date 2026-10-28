@@ -13,7 +13,7 @@
 'use strict';
 (function () {
   const { el, $, S } = IL;
-  const isNum = (n) => n !== null && n !== undefined && n !== '' && Number.isFinite(Number(n));
+  const { isNum } = IL;
   const BENCH_DPH = 5490;          // bench, 2026-10-28, 18 psi half-turn recipe, dots only
   const PER_PAD_S = 1.19;          // camera tour per pad when no measurement exists (bench: 160 pads ≈ 3:10)
   const VENT_S = 1;
@@ -21,8 +21,7 @@
   const STEP_T = { board: 'Board', probe: 'Probe', checks: 'Checks', run: 'Run', result: 'Result' };
   const STATUS_WORD = { OK: 'Finished', ABORTED: 'Stopped', ERROR: 'Ended by an error', REFUSED: 'Refused', RUNNING: 'Running' };
   const lsGet = IL.lsGet, lsSet = IL.lsSet, lsJson = IL.lsJson;
-  const ssGet = (k) => { try { return JSON.parse(window.sessionStorage.getItem(k) || 'null'); } catch (e) { return null; } };
-  const ssSet = (k, v) => { try { window.sessionStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* ignore */ } };
+  const ssGet = (k) => IL.ssJson(k, null), ssSet = IL.ssSet;
 
   // ================================================================================== module state
   const R = {
@@ -321,9 +320,11 @@
     IL.planRefreshSoon();
     return r;
   }
-  IL.fix('plan-again', { run: () => planAgain(), ok: (p) => (p ? 'Planned again: ' + p.summary.dots + ' dots on ' + p.summary.pads + ' pads' : 'Planned again') });
+  IL.fix('plan-again', { run: () => planAgain(), ok: (p) => (p ? 'Planned again: ' + p.summary.dots + ' dots on ' + p.summary.pads + ' pads' : 'Planned again'),
+    gate: (s) => IL.lockReason(s, { pressureOff: false, engine: true }) });
   IL.fix('clean-check', {
     press2: 'check pads',
+    gate: (s) => IL.lockReason(s, { connected: true, homed: true }) || (!plan() ? 'Plan a board first' : null),
     run: () => cleanCheck(),
     ok: (r) => 'Checking ' + IL.plural((r && r.dots) || 0, 'pad') + ': the top camera visits every pad, the pressure stays off (≈ '
       + IL.fmtClock(tourSeconds((r && r.dots) || 0)) + ').',
@@ -663,18 +664,26 @@
       all.push([5, layer('dots', 'lg-dot', 'planned dot')]);
       if (done) all.push([6, layer(null, 'lg-done', 'dispensed · ' + done)]);
       all.push([7, layer('pads', 'lg-pad', 'pad')], [8, layer('path', 'lg-path', 'path')]);
-      const keep = all.sort((a, b) => a[0] - b[0]).slice(0, 4).map((x) => x[1]);
+      // as many as fit on one line (four at most): R.lgMax drops one at a time while the legend overflows
+      const base = JSON.stringify(all);
+      if (R.lgBase !== base) { R.lgBase = base; R.lgMax = 4; }
+      const keep = all.sort((a, b) => a[0] - b[0]).slice(0, R.lgMax).map((x) => x[1]);
       const order = ['pads', 'dots'];
       keep.sort((a, b) => (order.includes(a.key) ? order.indexOf(a.key) : 9) - (order.includes(b.key) ? order.indexOf(b.key) : 9));
       items.push(...keep);
     }
     const key = JSON.stringify(items) + '|' + Array.from(R.hidden).join(',');
-    IL.keyed(n.legend, key, () => items.map((x) => (x.key
+    const rebuilt = IL.keyed(n.legend, key, () => items.map((x) => (x.key
       ? el('button', { type: 'button', 'aria-pressed': String(!R.hidden.has(x.key)), title: 'Show or hide: ' + x.text.split(' · ')[0],
         onclick: () => { if (R.hidden.has(x.key)) R.hidden.delete(x.key); else R.hidden.add(x.key); R.bv.layers(R.hidden); IL.render(); } },
       el('i', { class: 'lg ' + x.cls }), x.text)
       : el('span', {}, el('i', { class: 'lg ' + x.cls }), x.text))));
+    if (rebuilt && mode !== 'live' && mode !== 'stopped' && R.lgMax > 2 && n.legend.clientWidth && n.legend.scrollWidth > n.legend.clientWidth + 1) {
+      R.lgMax--;
+      renderLegend(s, p, mode, dirty, chk, probe);
+    }
   }
+  window.addEventListener('resize', () => { R.lgBase = null; });
   function renderTimeline(s, p, mode) {
     const n = R.n;
     const run = boardRunOfPlan(s);
@@ -1174,20 +1183,6 @@
     return { margin: st.margin, points: st.points.map((q) => ({ x: q.x, y: q.y })),
       targets: st.targets.map((t, i) => ({ x: t.x, y: t.y, done: st.doneT.has(i), next: i === st.nextT })) };
   }
-  /** Least-squares plane z = a + b·x + c·y of ≥ 3 points: {a, b, c, worst, slope} or null. */
-  function fitPlane(pts) {
-    if (pts.length < 3) return null;
-    const n = pts.length;
-    const mx = pts.reduce((a, q) => a + q.x, 0) / n, my = pts.reduce((a, q) => a + q.y, 0) / n, mz = pts.reduce((a, q) => a + q.z, 0) / n;
-    let sxx = 0, sxy = 0, syy = 0, sxz = 0, syz = 0;
-    for (const q of pts) { const dx = q.x - mx, dy = q.y - my, dz = q.z - mz; sxx += dx * dx; sxy += dx * dy; syy += dy * dy; sxz += dx * dz; syz += dy * dz; }
-    const det = sxx * syy - sxy * sxy;
-    if (Math.abs(det) < 1e-9) return null;
-    const b = (sxz * syy - syz * sxy) / det, c = (syz * sxx - sxz * sxy) / det;
-    const a = mz - b * mx - c * my;
-    const worst = Math.max(...pts.map((q) => Math.abs(q.z - (a + b * q.x + c * q.y))));
-    return { a, b, c, worst, slope: Math.hypot(b, c) };
-  }
   function saveProbe() { ssSet('il.run.probe', R.probe); }
   function buildProbe() {
     const body = el('div', { class: 'stack' },
@@ -1277,7 +1272,7 @@
           onclick: () => { R.probe.points = R.probe.points.filter((q) => q.target !== x.i); saveProbe(); IL.render(); } }, IL.icon('i-close')) : null)))),
     ]);
     // tiles: points, worst residual, tilt, Z against the needle frame
-    const fit = fitPlane(st.points);
+    const fit = IL.boardview.planeFit(st.points);
     const cfg = S.config || {};
     const lim = isNum(cfg.surfaceMaxResidualMm) ? Number(cfg.surfaceMaxResidualMm) : 0.04;
     const tol = isNum(cfg.zFrameToleranceMm) ? Number(cfg.zFrameToleranceMm) : 1.0;

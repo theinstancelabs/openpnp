@@ -226,8 +226,15 @@ public class ApiServerSimTest {
         assertEquals(200, index.status);
         assertTrue(index.contentType.startsWith("text/html"));
         assertTrue(index.body.contains("id=\"btn-stop\""));
-        for (String f : new String[] {"/static/app.js", "/static/app.css", "/static/favicon.svg"}) {
-            assertEquals(200, get(f).status, f);
+        // the web UI: core + one module per workspace (index.html loads every one of them)
+        for (String f : new String[] {"app.js", "app.css", "favicon.svg", "core.js", "boardview.js", "run.js", "run.css",
+                "setup.js", "setup.css", "profile.js", "profile.css", "calibrate.js", "records.js"}) {
+            Res r = get("/static/" + f);
+            assertEquals(200, r.status, f);
+            assertFalse(r.body.isEmpty(), f);
+            if (!f.equals("favicon.svg")) {
+                assertTrue(index.body.contains("/static/" + f), "index.html loads " + f);
+            }
         }
         assertEquals(404, get("/static/../machine.xml").status);
         assertEquals(404, get("/api/nope").status);
@@ -621,6 +628,10 @@ public class ApiServerSimTest {
         assertEquals(6, s.getAsJsonObject("lastRun").get("dotsDone").getAsInt());
         JsonObject progress = s.getAsJsonObject("run");
         assertEquals(6, progress.getAsJsonArray("doneDots").size());
+        // the pressure session started with the first pressurised phase (UI: pressure on-time of a run)
+        long onAt = progress.get("pressureOnAtMs").getAsLong();
+        assertTrue(onAt >= progress.get("startedAtMs").getAsLong()
+                && onAt <= progress.get("finishedAtMs").getAsLong(), progress.toString());
         assertTrue(get("/api/runs").array().size() >= 1);
         JsonObject last = ok(get("/api/runs/last")).getAsJsonObject("run");
         assertEquals(6, last.getAsJsonArray("dotTimings").size());
@@ -635,6 +646,19 @@ public class ApiServerSimTest {
         assertEquals(2, sub.getAsJsonObject("result").get("dotsDone").getAsInt());
         assertEquals(2, sub.getAsJsonObject("result").get("dotsPlanned").getAsInt());
         assertEquals(planId, sub.get("parentPlanId").getAsString());
+        // GET /api/plans: the plans kept, newest first, without the run subsets (a fresh browser restores the latest)
+        JsonArray kept = get("/api/plans").array();
+        List<String> keptIds = new ArrayList<>();
+        for (JsonElement e : kept) {
+            keptIds.add(e.getAsJsonObject().get("planId").getAsString());
+        }
+        assertTrue(keptIds.contains(planId), keptIds.toString());
+        assertFalse(keptIds.stream().anyMatch(x -> x.contains("-subset-")), keptIds.toString());
+        JsonObject first = kept.get(0).getAsJsonObject();
+        assertEquals(planId, first.get("planId").getAsString(), "newest first: " + keptIds);
+        assertEquals(6, first.get("dots").getAsInt());
+        assertEquals("file", first.getAsJsonObject("source").get("source").getAsString());
+        assertTrue(first.get("createdAtMs").getAsLong() > 0);
 
         // the purge row was wiped: all spots free again
         JsonObject reset = ok(post("/api/purge-row/reset", null));
@@ -652,6 +676,7 @@ public class ApiServerSimTest {
 
         // a profile changed after planning: the plan's dots would be the old recipe's
         String fresh = ok(post("/api/plan", planBody(board))).get("planId").getAsString();
+        assertEquals(fresh, get("/api/plans").array().get(0).getAsJsonObject().get("planId").getAsString());
         ok(call("PUT", "/api/config", "{\"profile\":{\"dwellMs\":300}}"));
         Res staleProfile = post("/api/run", "{\"planId\":\"" + fresh + "\"}");
         assertEquals(409, staleProfile.status, staleProfile.toString());

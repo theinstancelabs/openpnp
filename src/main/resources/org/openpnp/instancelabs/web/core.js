@@ -63,6 +63,16 @@
   IL.lsGet = lsGet;
   IL.lsSet = lsSet;
   IL.lsJson = lsJson;
+  /** sessionStorage as JSON (per tab): IL.ssJson(key, fallback), IL.ssSet(key, value | null). */
+  IL.ssJson = function (k, fallback) {
+    try { const t = window.sessionStorage.getItem(k); return t ? JSON.parse(t) : fallback; } catch (e) { return fallback; }
+  };
+  IL.ssSet = function (k, v) {
+    try {
+      if (v === null || v === undefined) window.sessionStorage.removeItem(k);
+      else window.sessionStorage.setItem(k, JSON.stringify(v));
+    } catch (e) { /* storage unavailable: keep going */ }
+  };
 
   const THEME_KEY = 'il.theme';
   const darkQuery = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
@@ -282,6 +292,10 @@
   const MINUS = '−';
   const pad2 = (n) => String(n).padStart(2, '0');
   const isNum = (n) => n !== null && n !== undefined && n !== '' && Number.isFinite(Number(n));
+  /** True for a finite number or numeric string (not null, undefined or ''). */
+  IL.isNum = isNum;
+  /** A server time stamp (…AtMs in the API) as client ms (null stays null). */
+  IL.toClient = (ms) => (ms ? ms - S.skewMs : null);
   /** Display number with d decimals and a real minus (never use for input values: IL.inputNum). */
   IL.fmt = function (n, d) {
     if (!isNum(n)) return '—';
@@ -866,7 +880,7 @@
       add({ key: 'regulator', code: 'I6', title: 'Regulator', state: 'you', value: psi + ' psi', short: 'regulator',
         you: 'you, ' + IL.fmtTime(reg.atMs), detail: 'You read ' + psi + ' psi on the gauge at ' + IL.fmtTime(reg.atMs) + ' (no sensor).' });
     } else {
-      add({ key: 'regulator', code: 'I6', title: 'Regulator', state: 'need', value: 'read gauge', short: 'regulator',
+      add({ key: 'regulator', code: 'I6', title: 'Regulator', state: 'need', value: 'read gauge', short: 'read gauge',
         detail: 'Set the regulator to ' + psi + ' psi for profile ' + (prof.name || '') + ' (no sensor).',
         fixes: [{ view: 'pressure', label: 'Pressure on to read the gauge' }, { fix: 'attest-regulator', label: 'Reads ' + psi + ' psi' }] });
     }
@@ -885,14 +899,15 @@
         const groups = new Map();
         for (const p of blocked) {
           const k = p.typeKey || p.packageId || 'no pad type';
-          groups.set(k, { key: p.typeKey, n: (groups.has(k) ? groups.get(k).n : 0) + 1 });
+          groups.set(k, { key: p.typeKey, pkg: p.packageId, n: (groups.has(k) ? groups.get(k).n : 0) + 1 });
         }
         const list = Array.from(groups.entries()).map(([k, g]) => k + ' ×' + g.n).join(', ');
         add({ key: 'padtypes', code: 'PLAN', title: 'Pad types', state: 'block', value: (pads.length - blocked.length) + '/' + pads.length,
           short: 'pad types', detail: blocked.length ? IL.plural(blocked.length, 'pad') + ' cannot be dispensed: ' + list + '.' : sentence(planViol[0].message),
+          // a pad with no type: the pad-type dialog opens prefilled with ^<package>$ and its footprint (§13 PLAN)
           fixes: Array.from(groups.values()).slice(0, 3).map((g) => (g.key
             ? { href: '#profile/pad-types/' + encodeURIComponent(g.key), label: 'Open ' + g.key }
-            : { href: '#profile', label: 'New pad type' })) });
+            : { href: '#profile/new-pad-type/' + encodeURIComponent(g.pkg || ''), label: 'New pad type' + (g.pkg ? ' for ' + g.pkg : '') })) });
       } else {
         add({ key: 'padtypes', code: 'PLAN', title: 'Pad types', state: 'ok', value: pads.length + '/' + pads.length, short: 'pad types',
           detail: pads.length + ' of ' + pads.length + ' pads have a pad type at or above ' + (d.minPadTypeStatus || 'the gate') + '.' });
@@ -959,7 +974,7 @@
       add({ key: 'purge', code: 'I9', title: 'Purge row', state: 'block', value: 'no surface', short: 'purge surface',
         detail: "The purge row's surface '" + pr.surfaceName + "' is not probed.", fixes: [{ href: '#setup/surfaces', label: 'Probe the blank' }] });
     } else if (pr.spotsLeft < pr.perBoard) {
-      add({ key: 'purge', code: 'I9', title: 'Purge row', state: 'need', value: pr.spotsLeft + '/' + pr.spots, short: 'wipe purge row',
+      add({ key: 'purge', code: 'I9', title: 'Purge row', state: 'need', value: pr.spotsLeft + '/' + pr.spots, short: 'wipe row',
         detail: 'Only ' + pr.spotsLeft + ' unused purge spots left, ' + pr.perBoard + ' needed. Wipe the row, then reset it.',
         fixes: [{ fix: 'purge-reset', label: 'Wiped: reset row' }] });
     } else {
@@ -972,7 +987,13 @@
     const i10 = ilk.I10;
     const cc = c.cleanCheck && plan && IL.basePlanId(c.cleanCheck.planId || plan.planId) === plan.planId ? c.cleanCheck : null;
     const runChecking = s.run && s.run.running && s.run.label === 'clean-pad check';
-    if (!cpc.enabled) {
+    if (!cpc.enabled && cc && !cc.ok && !runChecking) {
+      // the check is off, but a check of this plan found paste: never "ready" next to red pads (the run will not look again)
+      const n = (cc.dirtyPadIds || IL.dirtyPads(cc)).length;
+      add({ key: 'clean', code: 'I10', title: 'Pads clean', state: 'need', value: n + ' dirty', short: n ? 'wipe ' + IL.plural(n, 'pad') : 'check pads',
+        detail: IL.cleanSummary(cc) + ' The check before each board is off: the run will not look again.',
+        dirty: IL.dirtyPads(cc), fixes: [{ fix: 'clean-check', label: 'Wiped: check again' }] });
+    } else if (!cpc.enabled) {
       add({ key: 'clean', code: 'I10', title: 'Pads clean', state: 'off', value: 'off', short: 'pads clean',
         detail: sim ? 'Off (simulator): the simulated camera is a static picture.' : 'Off: not checked before a board.' });
     } else if (i10 && i10.state === 'blocked') {
@@ -1061,7 +1082,9 @@
     if (canRun) {
       const softNot = items.filter((x) => soft.has(x.key) && !x.ready && x.state !== 'block');
       runStyle = softNot.length ? 'hold' : 'go';
-      if (softNot.some((x) => x.key === 'clean')) {
+      if (softNot.some((x) => x.key === 'clean') && !cpc.enabled) {
+        runReason = softNot.length + ' needs you. Wipe the pads first: the check before each board is off, so the run dispenses on them as they are.';
+      } else if (softNot.some((x) => x.key === 'clean')) {
         runReason = softNot.length + ' needs you. Run anyway: the run checks every pad first (≈ 3 min) and refuses while paste is left.';
       } else if (softNot.length) {
         runReason = softNot.length + ' needs you. Run anyway: the run confirm asks you to read the regulator gauge.';
@@ -1155,7 +1178,7 @@
       // one event seen twice (our STOP answer, the ABORTED task, the machine going down): merge, STOP details win
       if (rec.cause === 'stop') Object.assign(prev, { cause: 'stop', atMs: rec.atMs, actions: rec.actions, source: rec.source });
       else if (rec.cause === 'error' && prev.cause !== 'stop') Object.assign(prev, { cause: 'error', message: rec.message });
-      if (rec.run) prev.run = rec.run;
+      if (rec.run) prev.run = mergeRunSnap(prev.run, rec.run);
       prev.seenDown = prev.seenDown || rec.seenDown;
       saveRecovery();
       IL.render();
@@ -1168,6 +1191,18 @@
     IL.emit('recovery', rec);
     IL.render();
     return rec;
+  }
+  /**
+   * The same run seen twice (live when STOP answered, then its ABORTED end): take the newer counts and status, but keep
+   * the phase it was interrupted in and its pressure on-time (the ended snapshot says "finished: ABORTED", no on-time).
+   */
+  function mergeRunSnap(a, b) {
+    if (!a || !b || a.runId !== b.runId) return b || a;
+    const m = Object.assign({}, a, b);
+    if (/^finished/.test(String(b.phase || '')) && a.phase) m.phase = a.phase;
+    if (b.pressureOnS === null || b.pressureOnS === undefined) m.pressureOnS = a.pressureOnS;
+    if ((b.dotsDone || 0) < (a.dotsDone || 0)) { m.dotsDone = a.dotsDone; m.doneDots = a.doneDots; }
+    return m;
   }
   function saveRecovery() {
     try { window.sessionStorage.setItem(REC_KEY, S.recovery ? JSON.stringify(S.recovery) : ''); } catch (e) { /* ignore */ }
@@ -1196,8 +1231,11 @@
     const m = s.machine || {}, d = s.dispense || {}, pr = s.pressure || {}, prof = d.profile || {}, row = d.purgeRow || {};
     const steps = [];
     const vented = !pr.state || pr.state === 'off';
+    // STOP itself closes the valve (M107 P3): the hold's last event can be older than the STOP
+    const lastEv = pr.lastEventAtMs ? pr.lastEventAtMs - S.skewMs : 0;
+    const ventAt = rec && rec.cause === 'stop' ? Math.max(lastEv, rec.atMs || 0) : lastEv;
     steps.push({ key: 'vent', title: vented ? 'Pressure vented' : 'Pressure is NOT off', state: vented ? 'ok' : 'block', done: vented,
-      detail: vented ? 'valve closed' + (pr.lastEventAtMs ? ' ' + IL.fmtTimeS(pr.lastEventAtMs - S.skewMs) : '') + ', pump off'
+      detail: vented ? 'valve closed' + (ventAt ? ' ' + IL.fmtTimeS(ventAt) : '') + ', pump off'
         : 'Press Pressure off or STOP again.' + (pr.lastError ? ' ' + pr.lastError : ''),
       fixes: vented ? [] : [{ fix: 'pressure-off', label: 'Pressure off', primary: true }] });
     steps.push({ key: 'connect', title: 'Connect', detail: 'reconnects to the controller; nothing moves', done: !!m.enabled,
@@ -1217,8 +1255,10 @@
         done: !short, fixes: short ? [{ fix: 'purge-reset', label: 'Wiped: reset row' }] : [] });
     }
     if (rec && rec.run && rec.run.label === 'board') {
-      steps.push({ key: 'decide', title: 'Decide about this board', detail: 'finish the ' + Math.max(0, rec.run.dotsPlanned - rec.run.dotsDone)
-        + ' dots left, or wipe all and run all (Run)', done: false, wait: true, fixes: [{ href: '#run', label: 'Open Run' }] });
+      const pads = padsLeftOf(rec.run);
+      steps.push({ key: 'decide', title: 'Decide about this board', done: false, wait: true, fixes: [{ href: '#run', label: 'Open Run' }],
+        detail: 'finish ' + (pads !== null ? IL.plural(pads, 'pad') : 'the ' + IL.plural(Math.max(0, rec.run.dotsPlanned - rec.run.dotsDone), 'dot') + ' left')
+          + ', or wipe all and run all' });
     }
     let nowSet = false;
     steps.forEach((x, i) => {
@@ -1228,6 +1268,15 @@
     });
     return steps;
   };
+  /** Pads with a dot not dispensed by a stopped run of the plan shown (the in-progress pad counts), or null. */
+  function padsLeftOf(run) {
+    const p = S.plan;
+    if (!p || !run || run.planId !== p.planId || !Array.isArray(run.doneDots)) return null;
+    const done = new Set(run.doneDots);
+    const left = new Set();
+    for (const d of p.dots || []) if (!done.has(d.index)) left.add(d.padId);
+    return left.size;
+  }
   /** True while a recovery is open (STOP / ABORTED / ERROR until vent, connect, angle, home and purge are done). */
   IL.recoveryActive = function () {
     const r = S.recovery;
@@ -1306,7 +1355,8 @@
     if (m.homed && !pm.homed) S.homedAt = prev ? now : null;
     if (!m.homed) S.homedAt = null;
     // pressure on-time of a running task (client stamp of the first poll in the pressure session)
-    if (run && run.running && IL.PRESSURE_PHASES.has(run.phase)) { if (!S.runPressureSince) S.runPressureSince = now; }
+    if (run && run.running && run.pressureOnAtMs) S.runPressureSince = run.pressureOnAtMs - S.skewMs;
+    else if (run && run.running && IL.PRESSURE_PHASES.has(run.phase)) { if (!S.runPressureSince) S.runPressureSince = now; }
     else if (!run || !run.running) S.runPressureSince = null;
     // first status: plan restore, recovery restore
     if (!prev) {
@@ -1362,12 +1412,27 @@
     IL.emit('taskend', run);
   }
 
-  function restorePlan(s) {
+  /**
+   * Plan restore on load (§9.2): the running task's plan, else this browser's plan (localStorage il.planId) if OpenPnP
+   * still keeps it, else the newest plan OpenPnP keeps (GET /api/plans: a fresh browser shows the latest plan), else the
+   * last task's plan. Nothing kept at all: the stored / last plan shows as "Plan forgotten (OpenPnP restarted)".
+   */
+  async function restorePlan(s) {
     const run = s.run;
+    const running = run && run.running && run.planId ? IL.basePlanId(run.planId) : null;
     const stored = lsGet('il.planId');
-    const id = run && run.running && run.planId ? IL.basePlanId(run.planId)
-      : stored || (run && run.planId ? IL.basePlanId(run.planId) : null);
-    if (id && !S.plan) IL.loadPlan(id);
+    const last = run && run.planId ? IL.basePlanId(run.planId) : null;
+    if (running) { IL.loadPlan(running); return; }
+    let kept = null;
+    try { kept = await IL.api('GET', '/api/plans'); } catch (e) { kept = null; }   // older OpenPnP: no list
+    if (S.plan || S.planId !== null) return;                                      // planned meanwhile
+    const ids = Array.isArray(kept) ? kept.map((x) => x.planId) : null;
+    let id = null;
+    if (!ids) id = stored || last;
+    else if (stored && ids.includes(stored)) id = stored;
+    else if (ids.length) id = ids[0];
+    else id = stored || last;                                                      // → "Plan forgotten"
+    if (id) IL.loadPlan(id);
   }
   function restoreRecovery(s) {
     let saved = null;
@@ -1443,6 +1508,7 @@
     const w = WS[S.route.ws];
     if (w && w.mounted && w.render && S.status) safe(() => w.render(S.status), 'workspace ' + w.name);
     safe(renderPanel, 'panel');
+    safe(gateFixButtons, 'fix gates');
   }
 
   // ================================================================================== strip (§4)
@@ -1858,6 +1924,9 @@
       P.first = true;
     }
     const w = WS[r.ws];
+    // a detail chosen in this workspace (#records/boards/<id>, #profile/pad-types/<key>) shows in its default panel: a
+    // pushed Recovery yields to it here (like its back arrow); the strip still says Stopped, other workspaces show it again
+    if (r.id && P.pushed && P.pushed.view === 'recovery' && !(w && w.ownsRecovery) && prev.ws === r.ws && prev.id !== r.id) IL.panel.close();
     if (w && w.route) safe(() => w.route(r), 'route ' + r.ws);
     IL.emit('route', r, prev);
     IL.render();
@@ -2067,8 +2136,10 @@
   const FIXES = {};
   /**
    * Registers a fix-it: spec {run(btn, arg, status) → promise, press2: verb | fn(status) → verb|null, ok: toast text |
-   * fn(result), fallbackHref}. Core registers connect, home, I11-confirm, needle-confirm, purge-reset, pressure-on,
-   * pressure-off, attest-regulator, attest-paste, same-seat; run.js registers plan-again, clean-check, probe.
+   * fn(result), gate: fn(status) → locked reason | null, href}. Every fix-it button on the page (button[data-fix]) is
+   * greyed with its gate's reason on each render, so a fix offered anywhere (readiness cards, Setup band, Recovery,
+   * refusals) says why it is locked. Core registers connect, home, I11-confirm, needle-confirm, purge-reset, pressure-on,
+   * pressure-off, attest-regulator, attest-paste, same-seat; run.js registers plan-again, clean-check, probe, run-rest.
    */
   IL.fix = function (id, spec) { FIXES[id] = spec; return spec; };
   IL.fixes = FIXES;
@@ -2087,9 +2158,25 @@
       const spec = FIXES[f.fix];
       if (spec && spec.press2) b.dataset.twoPress = typeof spec.press2 === 'function' ? 'dynamic' : spec.press2;
       b.addEventListener('click', (ev) => IL.runFix(f.fix, b, f.arg, ev));
+      if (S.status) gateFix(b, S.status);
     }
     return b;
   };
+  /** Applies the fix's gate to one button; re-enables only what this gate disabled (a module may gate it too). */
+  function gateFix(b, s) {
+    const spec = FIXES[b.dataset.fix];
+    if (!spec || !spec.gate) return;
+    const r = safe(() => spec.gate(s)) || null;
+    if (r) { IL.gate(b, r); b.dataset.fixGate = r; }
+    else if (b.dataset.fixGate !== undefined) {
+      if (b.title === b.dataset.fixGate) IL.gate(b, null);
+      delete b.dataset.fixGate;
+    }
+  }
+  function gateFixButtons() {
+    if (!S.status) return;
+    for (const b of document.querySelectorAll('button[data-fix]')) gateFix(b, S.status);
+  }
   IL.runFix = function (id, btn, arg, ev) {
     const spec = FIXES[id] || FALLBACK_FIX[id];
     if (!spec) return;
@@ -2118,13 +2205,17 @@
   };
 
   // core fix-its
-  IL.fix('connect', { run: () => IL.api('POST', '/api/machine/enable'), ok: 'Connecting to the controller…' });
-  IL.fix('home', { press2: 'home', run: () => IL.api('POST', '/api/machine/home'), ok: 'Homing…' });
+  IL.fix('connect', { run: () => IL.api('POST', '/api/machine/enable'), ok: 'Connecting to the controller…',
+    gate: (s) => (S.online === false ? IL.lockReason(s) : null) });
+  IL.fix('home', { press2: 'home', run: () => IL.api('POST', '/api/machine/home'), ok: 'Homing…',
+    gate: (s) => IL.lockReason(s, { connected: true }) });
   IL.fix('I11-confirm', {
+    gate: (s) => IL.lockReason(s, { connected: true, pressureOff: false }),
     run: async () => { const p = await IL.api('POST', '/api/screw/start-angle', {}); IL.planRefreshSoon(); return p; },
     ok: (p) => 'Start angle ' + IL.fmtDeg(p && p.startAngleDeg, 1) + ' confirmed for this controller power-up.',
   });
   IL.fix('needle-confirm', {
+    gate: (s) => IL.lockReason(s, { pressureOff: false, engine: true }),
     run: async () => {
       const n = S.status && S.status.dispense && S.status.dispense.needle;
       if (!n || !isNum(n.anchorOffsetMm)) throw new Error('The needle Z frame is not set.');
@@ -2136,11 +2227,14 @@
   });
   IL.fix('purge-reset', {
     press2: 'reset row',
+    gate: (s) => IL.lockReason(s),
     run: async () => { const r = await IL.api('POST', '/api/purge-row/reset'); IL.planRefreshSoon(); return r; },
     ok: (r) => 'Purge row reset: ' + (r && isNum(r.spotsLeft) ? r.spotsLeft + ' spots free' : 'all spots free') + '.',
   });
   IL.fix('pressure-off', { run: () => IL.api('POST', '/api/pressure/stop'), ok: (r) => (r && (r.note || r.lastEvent)) || 'Pressure off' });
   IL.fix('pressure-on', {
+    gate: (s) => (s.pressure && s.pressure.state && s.pressure.state !== 'off' ? 'Pressure is already on'
+      : IL.lockReason(s, { connected: true, engine: true })),
     // two presses unless the needle is over the waste (≤ 3 mm)
     press2: (s) => { const dist = IL.wasteDistance(s); return dist !== null && dist <= L.wasteNearMm ? null : 'pressure on'; },
     run: () => IL.api('POST', '/api/pressure/start'),

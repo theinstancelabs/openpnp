@@ -18,20 +18,9 @@
    Geometry helpers: IL.boardview.hull(points), .inflate(points, r), .outside(hull, x, y). */
 'use strict';
 (function () {
-  const SVGNS = 'http://www.w3.org/2000/svg';
   const ZOOMS = [1, 1.6, 2.5, 4, 6.4];
   const f = (v) => (Math.round(v * 1000) / 1000).toString();
-
-  function svg(tag, attrs, title) {
-    const e = document.createElementNS(SVGNS, tag);
-    for (const [k, v] of Object.entries(attrs || {})) if (v !== null && v !== undefined && v !== false) e.setAttribute(k, v);
-    if (title) {
-      const t = document.createElementNS(SVGNS, 'title');
-      t.textContent = title;
-      e.appendChild(t);
-    }
-    return e;
-  }
+  const svg = IL.svgEl;   // (tag, attrs, title): falsy attrs skipped, title as <title>
   function toggle(node, cls, on) {
     if (!node) return;
     const has = node.classList.contains(cls);
@@ -97,6 +86,24 @@
     return { x0, y0, x1, y1 };
   }
   const grow = (b, m) => ({ x0: b.x0 - m, y0: b.y0 - m, x1: b.x1 + m, y1: b.y1 + m });
+  /**
+   * Least-squares plane z = a + b·x + c·y through ≥ 3 points [{x, y, z}] (centred, so machine coordinates stay well
+   * conditioned): {a, b, c, residuals, worst, slope, minZ, maxZ}, or null for < 3 points or points on a line.
+   */
+  function planeFit(pts) {
+    if (!pts || pts.length < 3) return null;
+    const n = pts.length;
+    const mx = pts.reduce((a, q) => a + q.x, 0) / n, my = pts.reduce((a, q) => a + q.y, 0) / n, mz = pts.reduce((a, q) => a + q.z, 0) / n;
+    let sxx = 0, sxy = 0, syy = 0, sxz = 0, syz = 0;
+    for (const q of pts) { const dx = q.x - mx, dy = q.y - my, dz = q.z - mz; sxx += dx * dx; sxy += dx * dy; syy += dy * dy; sxz += dx * dz; syz += dy * dz; }
+    const det = sxx * syy - sxy * sxy;
+    if (Math.abs(det) < 1e-9 * Math.max(1, sxx * syy)) return null;
+    const b = (sxz * syy - syz * sxy) / det, c = (syz * sxx - sxz * sxy) / det;
+    const a = mz - b * mx - c * my;
+    const residuals = pts.map((q) => q.z - (a + b * q.x + c * q.y));
+    const zs = pts.map((q) => q.z);
+    return { a, b, c, residuals, worst: Math.max(...residuals.map(Math.abs)), slope: Math.hypot(b, c), minZ: Math.min(...zs), maxZ: Math.max(...zs) };
+  }
 
   // ------------------------------------------------------------------------------------------ the view
   class BoardView {
@@ -474,6 +481,6 @@
 
   IL.boardview = {
     create(host, opts) { return new BoardView(host, opts); },
-    hull, inflate, outside, bbox,
+    hull, inflate, outside, bbox, planeFit,
   };
 })();

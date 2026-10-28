@@ -70,6 +70,18 @@ final class PlanStore {
         return plans.get(planId);
     }
 
+    /** The plans kept, newest first, without the run subsets ({@code <planId>-subset-...}). */
+    synchronized List<Entry> recent() {
+        List<Entry> l = new ArrayList<>();
+        for (Entry e : plans.values()) { // iterating does not change the access order
+            if (!e.plan.planId.contains("-subset-")) {
+                l.add(0, e); // most recently used first, so it wins a tie of createdAtMs below (stable sort)
+            }
+        }
+        l.sort((a, b) -> Long.compare(b.plan.createdAtMs, a.plan.createdAtMs));
+        return l;
+    }
+
     /**
      * A plan restricted to some pads and/or the first {@code maxDots} dots in path order. The path
      * order of the full plan is kept and dots are re-indexed from 0. Returns the plan itself if

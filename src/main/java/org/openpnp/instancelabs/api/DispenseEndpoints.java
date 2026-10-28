@@ -83,6 +83,7 @@ final class DispenseEndpoints {
         s.route("GET", "/api/boards", r -> boards());
         s.route("GET", "/api/packages", r -> packages());
         s.route("POST", "/api/plan", this::plan);
+        s.route("GET", "/api/plans", r -> plans());
         s.route("GET", "/api/plan/([A-Za-z0-9-]+)", this::getPlan);
         s.route("POST", "/api/plan/([A-Za-z0-9-]+)/clean-check", this::cleanCheck);
         s.route("POST", "/api/screw/start-angle", this::startAngle);
@@ -594,6 +595,21 @@ final class DispenseEndpoints {
         DispenseService svc = ctx.availableSvc();
         PlanStore.Entry e = requirePlan(r.group(1));
         return Views.plan(e, ctx.preflightPlan(svc, e.plan, nz(e.estimatedPressurisedSeconds)));
+    }
+
+    /**
+     * The plans kept in memory (last {@value PlanStore#MAX}, run subsets left out), newest first, without dots or
+     * interlocks: a browser opened later shows the latest plan (GET /api/plan/{id} for the rest).
+     */
+    Object plans() {
+        List<Map<String, Object>> l = new ArrayList<>();
+        for (PlanStore.Entry e : ctx.plans.recent()) {
+            DispensePlan p = e.plan;
+            l.add(Views.map("planId", p.planId, "boardName", p.boardName, "boardLocationId", p.boardLocationId,
+                    "createdAtMs", p.createdAtMs, "source", e.source, "pads", p.pads.size(), "dots", p.dots.size(),
+                    "blockedPads", p.blockedPads().size()));
+        }
+        return l;
     }
 
     private PlanStore.Entry requirePlan(String id) throws ApiException {

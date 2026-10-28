@@ -11,7 +11,7 @@
   const L = IL.LIMITS;
   const MINUS = '−';
   const READY = new Set(['ok', 'you', 'off']);
-  const isNum = (n) => n !== null && n !== undefined && n !== '' && Number.isFinite(Number(n));
+  const { isNum } = IL;
   const fmt = IL.fmt;
   /** Server stamp (ms) → 24 h clock on this computer. */
   const tm = (ms) => (ms ? IL.fmtTime(ms - S.skewMs) : '—');
@@ -168,45 +168,7 @@
     prime: 'pressure', places: 'places', camera: 'camera', angle: 'angle', settings: 'settings' };
 
   // ================================================================================== geometry helpers
-  /** Convex hull (monotone chain) of [[x, y], ...], counter-clockwise. */
-  function hull(pts) {
-    const p = pts.map((q) => [q[0], q[1]]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-    if (p.length < 3) return p;
-    const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
-    const lo = [], up = [];
-    for (const q of p) { while (lo.length >= 2 && cross(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop(); lo.push(q); }
-    for (let i = p.length - 1; i >= 0; i--) { const q = p[i]; while (up.length >= 2 && cross(up[up.length - 2], up[up.length - 1], q) <= 0) up.pop(); up.push(q); }
-    return lo.slice(0, -1).concat(up.slice(0, -1));
-  }
-  /** mm outside the hull (0 inside), as the engine's SurfacePlane.distanceOutside. */
-  function outside(h, x, y) {
-    if (h.length < 3) return Infinity;
-    let inside = true, best = Infinity;
-    for (let i = 0; i < h.length; i++) {
-      const p = h[i], q = h[(i + 1) % h.length];
-      const ex = q[0] - p[0], ey = q[1] - p[1];
-      if (ex * (y - p[1]) - ey * (x - p[0]) < -1e-9) inside = false;
-      const l2 = ex * ex + ey * ey;
-      const t = l2 === 0 ? 0 : Math.max(0, Math.min(1, ((x - p[0]) * ex + (y - p[1]) * ey) / l2));
-      best = Math.min(best, Math.hypot(x - (p[0] + t * ex), y - (p[1] + t * ey)));
-    }
-    return inside ? 0 : best;
-  }
-  /** Least-squares plane z = a + b x + c y through ≥ 3 points: {a, b, c, residuals, worst, slope, minZ, maxZ} or null. */
-  function planeFit(pts) {
-    if (pts.length < 3) return null;
-    let n = 0, sx = 0, sy = 0, sz = 0, sxx = 0, syy = 0, sxy = 0, sxz = 0, syz = 0;
-    for (const p of pts) { n++; sx += p.x; sy += p.y; sz += p.z; sxx += p.x * p.x; syy += p.y * p.y; sxy += p.x * p.y; sxz += p.x * p.z; syz += p.y * p.z; }
-    const M = [[n, sx, sy], [sx, sxx, sxy], [sy, sxy, syy]], v = [sz, sxz, syz];
-    const det3 = (m) => m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
-    const D = det3(M);
-    if (Math.abs(D) < 1e-9 * Math.max(1, Math.abs(sxx * syy))) return null;
-    const col = (i) => M.map((r, k) => r.map((x, j) => (j === i ? v[k] : x)));
-    const a = det3(col(0)) / D, b = det3(col(1)) / D, c = det3(col(2)) / D;
-    const residuals = pts.map((p) => p.z - (a + b * p.x + c * p.y));
-    const zs = pts.map((p) => p.z);
-    return { a, b, c, residuals, worst: Math.max(...residuals.map(Math.abs)), slope: Math.hypot(b, c), minZ: Math.min(...zs), maxZ: Math.max(...zs) };
-  }
+  const { hull, outside, planeFit } = IL.boardview;   // convex hull, mm outside it (engine rule), plane fit
   const surfPts = (sf) => ((sf && sf.points) || []).map((p) => (Array.isArray(p) ? { x: p[0], y: p[1], z: p[2] } : { x: p.x, y: p.y, z: p.z }));
   function purgeSpots(pr) {
     const out = [];
@@ -216,7 +178,7 @@
   }
   /** Which purge spots and places a surface covers (engine rule: ≤ margin outside the hull of its points). */
   function coverage(sf, pr, places) {
-    const h = hull(surfPts(sf).map((p) => [p.x, p.y]));
+    const h = hull(surfPts(sf));
     const margin = S.config && isNum(S.config.surfaceMarginMm) ? S.config.surfaceMarginMm : 3.5;
     const spots = purgeSpots(pr);
     const spotsOut = spots.filter((p) => outside(h, p.x, p.y) > margin).length;
@@ -436,24 +398,12 @@
         dd ? el('div', { class: 'band__d', text: dd }) : null),
       acts && acts.length ? el('div', { class: 'band__act' }, acts) : null);
   }
-  const BAND_GATE = {
-    connect: (s) => (S.online === false ? IL.lockReason(s) : null),
-    home: (s) => IL.lockReason(s, { connected: true }),
-    'purge-reset': (s) => IL.lockReason(s),
-    'pressure-on': (s) => (s.pressure && s.pressure.state && s.pressure.state !== 'off' ? 'Pressure is already on' : IL.lockReason(s, { connected: true, engine: true })),
-    'needle-confirm': (s) => IL.lockReason(s, { pressureOff: false, engine: true }),
-    'I11-confirm': (s) => IL.lockReason(s, { connected: true, pressureOff: false }),
-  };
   function renderBand(s, m) {
     const items = m.needs;
     IL.show(W.band, items.length > 0);
     const key = JSON.stringify(items.map((x) => [x.key, x.state, x.value, x.detail, x.fixes.map((f) => f.label)])) + '|' + (S.lastStop ? S.lastStop.atMs : '');
     IL.keyed(W.band, key, () => items.map((x) => bandItem(x, s)));
-    // machine actions in the band say why they are locked (a task runs, pressure held, offline, not connected)
-    for (const btn of W.band.querySelectorAll('button[data-fix]')) {
-      const g = BAND_GATE[btn.dataset.fix];
-      if (g) IL.gate(btn, g(s));
-    }
+    // machine actions in the band say why they are locked: core gates every fix-it button (IL.fix spec.gate)
     IL.show(W.empty, W.filter === 'needs' && !items.length);
     IL.setText(W.empty, 'Nothing needs you: all ' + m.total + ' steps are ready or off.');
   }
@@ -774,8 +724,8 @@
     const X = (x) => ox + x * k, Y = (y) => oy - y * k;
     if (o && o.board) svg.append(IL.svgEl('rect', { x: X(o.board.x0), y: Y(o.board.y1), width: (o.board.x1 - o.board.x0) * k, height: (o.board.y1 - o.board.y0) * k, rx: 2, class: 'su-mm-board' }));
     for (const p of extra) svg.append(IL.svgEl('rect', { x: X(p.x) - 1.6, y: Y(p.y) - 1.6, width: 3.2, height: 3.2, class: 'su-mm-spot' + (p.used ? ' su-mm-spot--used' : '') }));
-    const hh = hull(pts.map((p) => [p.x, p.y]));
-    if (hh.length >= 3) svg.append(IL.svgEl('polygon', { points: hh.map((p) => X(p[0]).toFixed(1) + ',' + Y(p[1]).toFixed(1)).join(' '), class: 'su-mm-hull' }));
+    const hh = hull(pts);
+    if (hh.length >= 3) svg.append(IL.svgEl('polygon', { points: hh.map((p) => X(p.x).toFixed(1) + ',' + Y(p.y).toFixed(1)).join(' '), class: 'su-mm-hull' }));
     for (const p of pts) svg.append(IL.svgEl('circle', { cx: X(p.x), cy: Y(p.y), r: 2.6, class: 'su-mm-pt' }));
     return svg;
   }
@@ -1388,7 +1338,7 @@
     if (bb) shapes.push({ kind: 'board', x0: bb.x0, y0: bb.y0, x1: bb.x1, y1: bb.y1, label: boardName });
     const sp = bsf ? surfPts(bsf) : [];
     if (sp.length) {
-      shapes.push({ kind: 'surf', hull: hull(sp.map((p) => [p.x, p.y])), x0: Math.min(...sp.map((p) => p.x)), x1: Math.max(...sp.map((p) => p.x)),
+      shapes.push({ kind: 'surf', hull: hull(sp), x0: Math.min(...sp.map((p) => p.x)), x1: Math.max(...sp.map((p) => p.x)),
         y0: Math.min(...sp.map((p) => p.y)), y1: Math.max(...sp.map((p) => p.y)), label: null });
     }
     const spots = purgeSpots(pr);
@@ -1423,7 +1373,7 @@
         svg.append(IL.svgEl('rect', { x: X(q.x0), y: Y(q.y1), width: (q.x1 - q.x0) * k, height: (q.y1 - q.y0) * k, rx: 3, class: 'su-bm-board' }));
         areas.push(q.sb);
       } else if (q.kind === 'surf') {
-        if (q.hull.length >= 3) svg.append(IL.svgEl('polygon', { points: q.hull.map((p) => X(p[0]).toFixed(1) + ',' + Y(p[1]).toFixed(1)).join(' '), class: 'su-bm-surf' }));
+        if (q.hull.length >= 3) svg.append(IL.svgEl('polygon', { points: q.hull.map((p) => X(p.x).toFixed(1) + ',' + Y(p.y).toFixed(1)).join(' '), class: 'su-bm-surf' }));
         areas.push(q.sb);
       } else if (q.kind === 'purge') {
         const pitch = Math.hypot(pr.pitchXMm || 0, pr.pitchYMm || 0) || 2.5;

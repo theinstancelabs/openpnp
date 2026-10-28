@@ -649,7 +649,9 @@ label.tick.on, label.tick:has(input:checked) { border-color: var(--accent); back
 /* ================================================================ toast */
 .toast {
   position: fixed; left: calc(var(--nav-w) + 24px); bottom: 20px; z-index: 40; max-width: min(560px, calc(100vw - var(--nav-w) - var(--panel-w) - 48px));
-  display: flex; gap: 10px; align-items: center; padding: 12px 16px; border-radius: 12px; background: var(--ink); color: var(--surface); box-shadow: var(--e2); font-size: 14.5px; line-height: 1.4;
+  pointer-events: none;   /* never blocks a press on what it covers for its 4 s (e.g. Run's board decision after STOP) */
+  /* at most 3 lines (a STOP answer is long): the whole text is in Activity */
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; padding: 12px 16px; border-radius: 12px; background: var(--ink); color: var(--surface); box-shadow: var(--e2); font-size: 14.5px; line-height: 1.4;
 }
 .toast--block { background: var(--block-dot); color: #fff; }
 .toast--need { background: var(--need-bg); color: var(--need-glyph); border: 1px solid var(--need-line); }

@@ -14,7 +14,7 @@
 'use strict';
 (function () {
   const { el, $, S } = IL;
-  const isNum = (n) => n !== null && n !== undefined && n !== '' && Number.isFinite(Number(n));
+  const { isNum } = IL;
   const MAX_PSI = 21.7;
   const BENCH_RPM = 180;
 
@@ -724,7 +724,7 @@
       ? 'Saving adds version ' + (t.version + 1) + '. Nothing is overwritten: History keeps every version (' + (t.versions || t.version) + ' so far).'
       : 'A new type starts at version 1. Its key cannot change later; edits add versions.' }));
     fillFamilySelect(t ? t.family : 'Custom');
-    $('pt-status').replaceChildren(...STATUS_ORDER.map((k) => el('option', { value: k, text: STATUS_OPTION[k] + (k === gate ? ' (lowest allowed on a board)' : '') })));
+    $('pt-status').replaceChildren(...STATUS_ORDER.map((k) => el('option', { value: k, text: STATUS_OPTION[k] + (k === gate ? ' (the gate)' : '') })));
     const set = (id, v) => { $(id).value = v === null || v === undefined ? '' : String(v); };
     set('pt-name', t ? t.name : '');
     set('pt-key', t ? t.typeKey : '');

@@ -16,7 +16,7 @@ something new from core, ask for it (or add it to your module and propose it for
 | `app.css` | core | Tokens (light + `[data-theme=dark]`), frame, strip, STOP, nav, panel, shared components (§11). |
 | `core.js` | core | The `IL` namespace (this document). Loaded **synchronously** in `<head>`: sets the theme before first paint. |
 | `app.js` | core | `IL.boot()`. Loaded last. Kept because `ApiServerSimTest` fetches `/static/app.js`. |
-| `boardview.js` | Run stage | `IL.boardview`: the to-scale board SVG (hero, probe overlay, Records done-dot map). Stub now. |
+| `boardview.js` | Run stage | `IL.boardview`: the to-scale board SVG (hero, probe overlay, Records done-dot map) and the shared geometry (`hull`, `inflate`, `outside`, `bbox`, `planeFit`). |
 | `run.js` + `run.css` | Run stage | `#ws-run`, Run panel steps (board, probe, checks, run, result, recovery override), run confirm `#dlg-run`. |
 | `setup.js` + `setup.css` | Setup stage | `#ws-setup` (cards §8.2), default panel `head`. `calibrate.js` may reuse `setup.css`. |
 | `profile.js` + `profile.css` | Profile stage | `#ws-profile` (§8.3), `#dlg-padtype`, `#dlg-history`, panel `pt`. |
@@ -105,7 +105,9 @@ Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, `
 - `IL.setPlan(plan)` (after `POST /api/plan`; remembers `il.planId`), `IL.clearPlan()`, `IL.loadPlan(id)`,
   `IL.planRefresh({quiet})`, `IL.planRefreshSoon()` (300 ms debounce; marks `planPending`). Core re-reads the plan by
   itself when any freshness input of §9.2 changes, every 10 s while visible, and after every task.
-  Plan restore on load: the running task's plan, else `localStorage['il.planId']`, else the last task's plan.
+  Plan restore on load: the running task's plan, else `localStorage['il.planId']` if OpenPnP still keeps it, else the
+  newest plan of `GET /api/plans` (a fresh browser shows the latest plan), else the last task's plan (404 → "Plan
+  forgotten").
 - `IL.basePlanId(id)` (strips `-subset-…`), `IL.planMatches(planId)`, `IL.adoptCleanCheck(cc, planId)`,
   `IL.dirtyPads(cc)` → `[{padId, share, error}]` worst first, `IL.cleanSummary(cc)` → the machine-readable first
   sentence of `#clean-result` (§8.1.4).
@@ -160,12 +162,15 @@ Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, `
   Esc, blur, a press elsewhere or 4 s cancel. `verb` may be `fn(status) → verb | null` (null = single press now).
   Use it for Home, clean check, prime, test dot, touch-off, ladder, shots, purge reset, delete surface, needle
   changed, retire, discard, pressure on away from the waste. `IL.isArmed(btn)`: do not patch an armed button's label.
-- Fix-its: `IL.fix(id, {run(btn, arg, status), press2, ok, href})` registers; `IL.fixButton(fix, {cls})` builds a
-  `<button data-fix=id>` (handler looked up at click time); `IL.fixRow(fixes, cls)`; `IL.runFix(id, btn, arg)`;
-  `IL.fixesForCode(code)` for refusals. Core registers: `connect`, `home` (two-press), `I11-confirm`, `needle-confirm`
-  (posts the frame offset), `purge-reset` (two-press), `pressure-on` (two-press unless N2 ≤ 3 mm from the waste),
-  `pressure-off`, `attest-regulator`, `attest-paste`, `same-seat`. **Run must register** `plan-again`, `clean-check`
-  (two-press), `probe`; until then they fall back to `#run/board`, `#run/checks`, `#run/probe`.
+- Fix-its: `IL.fix(id, {run(btn, arg, status), press2, ok, gate(status) → reason | null, href})` registers;
+  `IL.fixButton(fix, {cls})` builds a `<button data-fix=id>` (handler looked up at click time); `IL.fixRow(fixes, cls)`;
+  `IL.runFix(id, btn, arg)`; `IL.fixesForCode(code)` for refusals. **Gates**: after every render core greys each
+  `button[data-fix]` on the page with its spec's `gate` reason (readiness cards, the Setup band, Recovery, refusals all
+  say why a fix is locked); it only re-enables what its own gate disabled, so a module may gate the same button too.
+  Core registers (with gates): `connect`, `home` (two-press), `I11-confirm`, `needle-confirm` (posts the frame offset),
+  `purge-reset` (two-press), `pressure-on` (two-press unless N2 ≤ 3 mm from the waste), `pressure-off`,
+  `attest-regulator`, `attest-paste`, `same-seat`. Run registers `plan-again`, `clean-check` (two-press), `probe`,
+  `run-rest` (`{planId, padIds}` → the run confirm for those pads); Setup registers `su-go-<card>`, `su-probe-blank`.
 - `IL.lockReason(status, {connected, homed, idle = true, pressureOff = true, engine})` → the spec's locked-control
   text (`Locked while the board runs`, `Pressure is held: switch it off first`, `Not connected: connect first`, offline)
   or null. `IL.gate(btn, reason, reasonEl?)` disables with the reason (title + optional visible `.reason` line).
@@ -200,6 +205,8 @@ label, text)` / `IL.setGlyph(span, …)` (status glyph: shape + colour + word), 
 disabled, attrs, dataset})`, `IL.keyed(container, key, build)` (rebuild only when `key` changes; keeps focus by
 id / `data-focus-key` / `data-fix`; never while a two-press inside is pending), `IL.kv(dl, [[k, v, title]])`,
 `IL.timeEl(ms, secs)`, `IL.flash(node)` (scroll + 1.5 s outline), `IL.sectionK(text, count)`.
+Values: `IL.isNum(v)` (finite number or numeric string), `IL.toClient(serverMs)` (a server `…AtMs` stamp as client
+ms), `IL.lsJson / lsSet` (localStorage), `IL.ssJson(key, fallback) / IL.ssSet(key, value)` (sessionStorage, JSON).
 Format (display only; real minus `−`): `IL.fmt(n, d=2)`, `fmtSigned`, `fmtInt` (`5,410`), `fmtPsi` (`18`, `18.5`),
 `fmtMm`, `fmtDeg` (`298.0°`), `fmtClock` (`1:15`), `fmtDuration` (`4.0 s`, `5 min 16 s`), `fmtTime` (`13:06`),
 `fmtTimeS` (`14:19:42`), `fmtDateTime`, `fmtAgo`, `plural(n, 'dot')`, `turnLabel(800, 1600)` (`½ turn`),
@@ -275,12 +282,12 @@ python3 src/test/sim/il_ui_session.py stop --name <you>
 Console helpers: `IL.S`, `IL.ready()`, `IL.readiness(IL.S.status, IL.S.plan, IL.readyCtx())`, `IL.go('#run/checks')`.
 Never `/dev/ttyACM*`, `/dev/serial/*`, `/dev/video*` or a real-mode OpenPnP.
 
-## 10. Open items for the workspace stages
+## 10. Status (integration, 2026-10-28)
 
-- `webui-sim.playwright.cjs` still drives the old UI: update it with the changes listed in §16 when the workspaces
-  land (tabs `run|setup|profile|calibrate|records`, `press2` helper, `#pill-pressure .cell__v` `/^ON /`, `Not
-  connected`, interlocks via `?panel=interlocks`).
-- New static files (`core.js`, `boardview.js`, `run.js`, `setup.js`, `profile.js`, `calibrate.js`, `records.js`,
-  `run.css`, `setup.css`, `profile.css`) must be added to `ApiServerSimTest.servesTheUiAndStatus`.
-- Optional API additions of §17 (`GET /api/plans`, clean-check progress, `run.pressureOnAtMs`, `server.simulated`)
-  are read by core when present (`server.simulated`); the others are for Run.
+- All five workspaces are built on this contract; `webui-sim.playwright.cjs` drives the §16 ids (tabs
+  `run|setup|profile|calibrate|records`, `press2` helper, the in-page run confirm, `#pill-pressure .cell__v` `/^ON /`,
+  `Not connected`, interlocks via `?panel=interlocks`, the board surface tied to the plan then plan again).
+- Every static file is checked by `ApiServerSimTest.servesTheUiAndStatus` (200, non-empty, loaded by `index.html`).
+- Optional API additions of §17 in place: `GET /api/plans` (plan restore in a fresh browser) and `run.pressureOnAtMs`
+  (pressure on-time of a run, also after a reload). Not added (fallbacks in use): `run.checkDone/checkPlanned` (camera
+  tour progress is estimated, labelled `≈`), `server.simulated` (inferred from the driver connection).

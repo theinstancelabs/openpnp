@@ -10,7 +10,7 @@
 (function () {
   const { el, $, S } = IL;
   const pcr = IL.pcr;
-  const isNum = (n) => n !== null && n !== undefined && n !== '' && Number.isFinite(Number(n));
+  const { isNum } = IL;
   const CAL_TASKS = new Set(['needle touch-off', 'dot ladder', 'scale shots']);
   const C = { data: null, ver: 0, loading: false, again: false, error: null, ladderOf: null, ladder: null, ladderErr: null,
     guide: null, toReq: null, applyTouched: false, prefill: {}, angleShown: undefined, lastResult: null, lastEndedId: null };

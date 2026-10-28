@@ -9,11 +9,11 @@
 (function () {
   const { el, $, S } = IL;
   const pcr = IL.pcr;
-  const isNum = (n) => n !== null && n !== undefined && n !== '' && Number.isFinite(Number(n));
+  const { isNum } = IL;
   const TABS = [['boards', 'Boards'], ['activity', 'Activity'], ['calibrations', 'Calibrations'], ['touch-offs', 'Touch-offs']];
   const R = { tab: 'boards', sel: null, panelKey: undefined, kind: 'boards', evFilter: 'all', events: null, evErr: null, evTimer: null,
     last: null, lastLoading: null, plans: {}, planLoading: {}, ladders: {}, escOff: null };
-  const serverToClient = (ms) => (ms ? ms - S.skewMs : null);
+  const serverToClient = IL.toClient;
 
   // ================================================================================== run helpers
   function runTitle(r) {
@@ -212,35 +212,34 @@
   }
 
   // ================================================================================== context panel `record`
+  /**
+   * The done-dot map of a run (the shared IL.boardview, as on Run): a timing per dispensed dot gives, per pad, its first k
+   * dots in path order (subsets keep the path order); a partly dispensed pad gets the amber "check" ring as after a STOP.
+   */
   function doneMap(plan, timings) {
-    const pads = plan.pads || [], dots = plan.dots || [];
+    const pads = plan.pads || [];
     if (!pads.length) return null;
-    const doneCount = {};
-    for (const t of timings || []) doneCount[t.padId] = (doneCount[t.padId] || 0) + 1;
-    const dotsOf = {};
-    for (const d of dots) (dotsOf[d.padId] = dotsOf[d.padId] || []).push(d);
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const p of pads) {
-      const r = Math.max(p.w, p.h) / 2;
-      minX = Math.min(minX, p.x - r); maxX = Math.max(maxX, p.x + r); minY = Math.min(minY, p.y - r); maxY = Math.max(maxY, p.y + r);
-    }
-    const m = 1.5;
-    minX -= m; minY -= m; maxX += m; maxY += m;
-    const svg = IL.svgEl('svg', { viewBox: [minX, -maxY, maxX - minX, maxY - minY].map((v) => v.toFixed(3)).join(' '), class: 'rec-map', role: 'img', preserveAspectRatio: 'xMidYMid meet' });
-    svg.appendChild(IL.svgEl('rect', { x: minX, y: -maxY, width: maxX - minX, height: maxY - minY, class: 'rec-map__bg' }));
-    let done = 0, part = 0, left = 0;
+    const count = {};
+    for (const t of timings || []) count[t.padId] = (count[t.padId] || 0) + 1;
+    const byPad = {};
+    for (const d of plan.dots || []) (byPad[d.padId] = byPad[d.padId] || []).push(d.index);
+    const doneIdx = new Set();
+    let done = 0, part = 0, left = 0, check = null;
     const leftPads = [];
     for (const p of pads) {
-      const need = (dotsOf[p.padId] || []).length;
-      const k = doneCount[p.padId] || 0;
-      const st = need && k >= need ? 'done' : k > 0 ? 'part' : 'left';
-      if (st === 'done') done++; else { if (st === 'part') part++; else left++; if (!p.blocked) leftPads.push(p.padId); }
-      svg.appendChild(IL.svgEl('rect', { x: p.x - p.w / 2, y: -p.y - p.h / 2, width: p.w, height: p.h, class: 'rec-map__pad rec-map__pad--' + st,
-        transform: p.rotation ? 'rotate(' + (-p.rotation).toFixed(2) + ' ' + p.x.toFixed(3) + ' ' + (-p.y).toFixed(3) + ')' : null }, p.padId + (st === 'part' ? ' · partly dispensed' : st === 'done' ? ' · done' : ' · not dispensed')));
-      (dotsOf[p.padId] || []).forEach((d, i) => svg.appendChild(IL.svgEl('circle', { cx: d.x, cy: -d.y, r: 0.3, class: 'rec-map__dot' + (i < k ? ' done' : '') })));
+      const idx = byPad[p.padId] || [];
+      const k = Math.min(count[p.padId] || 0, idx.length);
+      for (const i of idx.slice(0, k)) doneIdx.add(i);
+      if (idx.length && k >= idx.length) { done++; continue; }
+      if (k > 0) { part++; if (!check) check = { index: idx[k], label: p.padId + ' · check' }; } else left++;
+      if (!p.blocked) leftPads.push(p.padId);
     }
-    svg.setAttribute('aria-label', 'Done-dot map: ' + done + ' pads done, ' + part + ' partly, ' + left + ' not dispensed');
-    return { svg, done, part, left, leftPads };
+    const host = el('div', { class: 'rec-mapbox' });
+    const src = plan.source || {};
+    const bv = IL.boardview.create(host, { aria: 'Done-dot map: ' + done + ' pads done, ' + part + ' partly, ' + left + ' not dispensed' });
+    bv.setPlan(plan, { origin: src.source === 'file' ? { x: Number(src.x), y: Number(src.y) } : null });
+    if (timings) bv.update({ done: doneIdx, check });
+    return { host, done, part, left, leftPads };
   }
   function runDetail(p, s, r) {
     const lr = (R.last && R.last.runId === r.run_uuid) ? R.last : null;
@@ -295,7 +294,7 @@
         else {
           const mp = doneMap(plan, lr ? lr.dotTimings : null);
           if (mp) {
-            out.push(el('div', { class: 'rec-mapbox' }, mp.svg),
+            out.push(mp.host,
               el('div', { class: 'rec-legend' }, el('span', {}, el('i', { class: 'rec-lg rec-lg--done' }), lr ? mp.done + ' done' : 'dots'),
                 lr ? el('span', {}, el('i', { class: 'rec-lg rec-lg--part' }), mp.part + ' partly') : null,
                 lr ? el('span', {}, el('i', { class: 'rec-lg rec-lg--left' }), mp.left + ' not dispensed') : null));
