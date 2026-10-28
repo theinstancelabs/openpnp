@@ -95,6 +95,11 @@ hr { border: none; border-top: 1px solid var(--line); margin: 12px 0; }
 .result { min-height: 1.2em; font-size: 13px; white-space: pre-wrap; }
 .result.bad, .error { color: var(--bad); }
 .result.ok { color: var(--ok); }
+.note { font-size: 13px; color: var(--warn); margin: 2px 0 8px; }
+.warnbox { margin: 8px 0; padding: 8px 10px; border-radius: 8px; background: var(--warn-bg); color: var(--warn); font-size: 13px; white-space: pre-wrap; }
+ul.problems { margin: 6px 0; padding-left: 18px; color: var(--bad); font-size: 13px; }
+ul.problems:empty { display: none; }
+.tag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; background: #eceff3; color: var(--muted); vertical-align: middle; }
 
 /* ---------- key/value lists, tables ---------- */
 dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; margin: 8px 0; font-size: 14px; }
@@ -112,6 +117,10 @@ dl.kv dd { margin: 0; font-variant-numeric: tabular-nums; }
 .badge.characterized { background: var(--info-bg); color: #0b3d91; }
 .badge.validated { background: var(--ok-bg); color: var(--ok); }
 .family { margin-bottom: 18px; }
+.profile-card { margin-bottom: 18px; }
+.pf-cols { display: grid; grid-template-columns: 2fr 1fr; gap: 18px; }
+@media (max-width: 900px) { .pf-cols { grid-template-columns: 1fr; } }
+.section-title { font-size: 17px; margin: 4px 0 10px; }
 .family h2 { font-size: 16px; margin: 0 0 6px; }
 
 /* ---------- interlocks ---------- */
@@ -135,12 +144,14 @@ ul.checks b { display: block; color: var(--ink); }
 .sw.pad-ok { background: #c8e6c9; border-color: #2e7d32; }
 .sw.pad-warn { background: #ffe9a8; border-color: #b7791f; }
 .sw.pad-blocked { background: #ffcdd2; border-color: #c62828; }
+.sw.pad-dirty { background: #e57373; border-color: #7f0000; }
 .sw.dot-planned { background: #fff; border: 2px solid #1f6feb; border-radius: 50%; }
 .sw.dot-done { background: #1f6feb; border-color: #1f6feb; border-radius: 50%; }
 svg .pad { stroke-width: 0.04; }
 svg .pad.ok { fill: #c8e6c9; stroke: #2e7d32; }
 svg .pad.warn { fill: #ffe9a8; stroke: #b7791f; }
 svg .pad.blocked { fill: #ffcdd2; stroke: #c62828; }
+svg .pad.dirty { fill: #e57373; stroke: #7f0000; stroke-width: 0.08; }
 svg .dot { fill: #ffffff; stroke: #1f6feb; stroke-width: 0.06; }
 svg .dot.done { fill: #1f6feb; }
 svg .path { fill: none; stroke: #9aa5b1; stroke-width: 0.05; stroke-dasharray: 0.3 0.2; }
