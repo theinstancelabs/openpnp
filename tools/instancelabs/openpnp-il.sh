@@ -33,9 +33,11 @@ if [ -z "$JV" ] || [ "$JV" -lt 17 ]; then echo "Java 17 or newer required (found
 [ -f "$JAR" ] || { echo "missing $JAR" >&2; exit 2; }
 
 if [ "$FORCE" != 1 ]; then
-  # Another OpenPnP (stock /opt/openpnp or this build) would fight over the serial port.
-  if pgrep -u "$(id -u)" -f '[o]rg\.openpnp\.Main|[o]penpnp-gui-.*\.jar|[o]penpnp-il\.jar' >/dev/null; then
-    echo "Another OpenPnP is running (pgrep: $(pgrep -u "$(id -u)" -f '[o]rg\.openpnp\.Main|[o]penpnp-gui-.*\.jar|[o]penpnp-il\.jar' | tr '\n' ' '))." >&2
+  # Another OpenPnP (stock /opt/openpnp or this build) would fight over the serial port. Match
+  # only Java / install4j launcher processes, not e.g. an editor that has the jar name in its args.
+  PAT='^([^ ]*/)?java( .*)? (org\.openpnp\.Main|-jar [^ ]*(openpnp-gui-[^ ]*|openpnp-il)\.jar)|^([^ ]*/)?OpenPnP( |$)'
+  if PIDS="$(pgrep -u "$(id -u)" -f "$PAT")"; then
+    echo "Another OpenPnP is running (pid $(echo $PIDS))." >&2
     echo "Close it first (only one program may own the serial port), or pass --force." >&2
     exit 3
   fi
