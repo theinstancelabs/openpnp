@@ -5,6 +5,22 @@ dots, F9 Stop), and the simulator acceptance passes on it
 (`/home/lumen/instancelabs/sim-acceptance/bench-sync-20261028-003315/results.json`). The simulator cannot show the
 items below. Each one says why, and how to check it on the machine. Do them roughly in this order.
 
+## First real-machine session (2026-10-28 02:20–03:05, copper blank only)
+
+The fork ran in real mode on a **copy** of the config (`~/instancelabs/realcfg-sw-20261028`, with the patched
+`machine.xml`); the live `~/.openpnp2` is untouched, so items 1 and 2 still apply. Photos and data:
+`~/instancelabs/runs/sw_engine_blank/` (`engine_blank_runs.jpg`, `run.json`, `run2.json`, `sw_probe_blank*.txt`).
+
+| item | result |
+|---|---|
+| 1 (patched `machine.xml`) | Works on the copy: visual homing on the fiducial at 217.081, 200.223. Not installed live yet. |
+| 3 (real mode) | Started and homed; web UI and interlocks worked. |
+| 4 (Stop) | 1 of 4 cases done: web STOP during a pressure hold vented the valve, switched the pump off and disabled the machine (F9). Still to do: OpenPnP's Stop button, and both during a board run; vent time not measured. |
+| 6 (B step count) | **Confirmed.** `Count B` was 1154124 before and after OpenPnP's home (`G92 A0 B0`), so `G92` leaves it alone. Run 2 started at 1177324 = run 1's start + 23200 steps (first purge dot 1600 + 7 × 800 + 20 × 800). Work dots started at 297.9° (298° rounded to a whole step). |
+| 7, 8 (frame, probes) | Done on the blank. N1 contacts 5.75–5.80 over X 288–305, Y 242.5–249.5. The blank is **bowed**: 5.75 at Y 254 down to 5.50 at Y 270, so a plane over that span fails the 0.04 mm residual (I4 refused it, correctly). Probe close to where the dots go. |
+| 11 (XY trim) | Not settled. Without trim the dots landed (+0.15, −0.04) mm off target; with the bench trim (+0.086, −0.010) still (+0.087, −0.017), scatter 0.084 mm. OpenPnP lands about +0.09 mm further in X than the bench script, likely its one-sided backlash approach. Next: check the backlash settings, or set the trim to about +0.17 X and check again. |
+| 13 (engine run) | Two runs on the blank, not a board: 8 purge + 20 dots (status OK, 5,041 DPH dots only) and 8 purge + 16 dots (OK, 4,925 DPH). Dots on bare copper: 1.02–1.28 mm² (mean 1.15, CV 8 %) and 0.95 mm² (CV 12 %). Bare copper wets differently from pads, so compare areas only on a board. The first work dot came out larger (the cross from the purge row at travel Z); watch for it on a board. |
+
 1. **Install the regenerated `machine.xml` patch, with OpenPnP closed.**
    - Why: OpenPnP rewrites `machine.xml` when it exits, so an edit made while it runs is lost. The patch now sets the N2
      head offset to (25.291, −75.926) (was 23.615, −63.947), the homing fiducial to (217.081, 200.223), `M906 B580` on
