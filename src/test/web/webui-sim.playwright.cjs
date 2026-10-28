@@ -10,9 +10,10 @@
  * (advanced editor; the board surface tied to the plan, then plan again), the purge row card (save,
  * two-press reset), the clean-pad check of a plan (two-press), a 20-dot board run through the
  * in-page run confirm (regulator line, three ticks; purge row + work in one pressure session),
- * prime and test dot (two-press), STOP mid-run (bench F9 sequence, Recovery), pressure on (G-code
- * order), STOP (G-code order, machine stopped, pressure off), the top-camera snapshot, no native
- * dialogs, no JS errors.
+ * prime and test dot (two-press), STOP mid-run of the pads left (bench F9 sequence, Recovery, Records ›
+ * Finish offers only that run's pads), pressure on (G-code order), STOP (G-code order, machine stopped,
+ * pressure off), the top-camera snapshot, the regulator tick expiring on a psi change and back, the
+ * board-surface editor after "new seat" (also seen by a second tab), no native dialogs, no JS errors.
  *
  * Env: IL_API_URL (http://127.0.0.1:PORT/), PLAYWRIGHT_DIR (dir with node_modules/playwright),
  *      UINAV (uinav CLI), UINAV_SESSION, OUT_DIR (screenshots + results.json).
@@ -144,7 +145,9 @@ async function runFirstDots(page, n) {
     // the page never asks for media; make sure a real camera could not be opened anyway
     args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
   });
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  // a context of its own: a second tab of this browser (shared localStorage) is opened in it below
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  const page = await context.newPage();
   const jsErrors = [];
   page.on('pageerror', (e) => jsErrors.push(String(e)));
   page.on('console', (m) => { if (m.type() === 'error') jsErrors.push(m.text()); });
@@ -312,6 +315,21 @@ async function runFirstDots(page, n) {
       await page.waitForSelector('#pf-angle-warn', { state: 'hidden', timeout: 5000 }).then(() => true, () => false));
     await page.screenshot({ path: path.join(OUT, 'profiles-dispense-profile.png'), fullPage: true });
 
+    // ---- regulator attestation (§9.4): a psi change expires it for good, also when the psi is set back --------
+    {
+      const regState = () => page.evaluate(() => IL.ready().items.find((x) => x.key === 'regulator').state);
+      const psi0 = await page.evaluate(() => IL.S.status.dispense.profile.pressurePsi);
+      await page.evaluate(() => IL.attest.set('regulator', IL.S.status.dispense.profile.pressurePsi));
+      check('regulator: the gauge tick counts (you)', (await regState()) === 'you', await regState());
+      for (const v of [psi0 - 1, psi0]) {
+        const r = await page.request.put(BASE + 'api/config', { data: { profile: { pressurePsi: v } } });
+        check('regulator: profile saved at ' + v + ' psi', r.ok(), r.status());
+        await page.waitForFunction((x) => IL.S.status.dispense.profile.pressurePsi === x, v, { timeout: 10000 });
+      }
+      check('regulator: a psi change and back expires the gauge tick (read the gauge again)', (await regState()) === 'need'
+        && !(await page.evaluate(() => IL.attest.get('regulator'))), await regState());
+    }
+
     // ---- set up a board run: waste place, needle frame, blank surface, purge row, settings, 0603 --
     await nav(page, 'setup');
     await page.waitForSelector('tr[data-place="waste"] input[data-axis=x]');
@@ -423,6 +441,34 @@ async function runFirstDots(page, n) {
     await waitText(page, 'plan-interlocks', /All interlocks pass|interlocks:/, 15000);
     check('plan passes the interlocks', /All interlocks pass/.test(await textOf(page, 'plan-interlocks')), await textOf(page, 'plan-interlocks'));
     check('plan again shows the Checks step', await page.evaluate(() => document.getElementById('panel').dataset.view) === 'checks');
+    // a re-seated board: Setup's advanced editor never offers the old seat's board points for a one-press re-tie, and
+    // the answer counts in another tab of this browser at once
+    {
+      const twin = await context.newPage();
+      twin.on('pageerror', (e) => jsErrors.push('twin: ' + e));
+      await twin.goto(BASE + '#run');
+      const twinSurface = () => twin.evaluate(() => { const it = IL.S.plan && IL.ready().items.find((x) => x.key === 'surface'); return it ? it.state + ':' + (it.seat || '') : null; });
+      await twin.waitForFunction(() => IL.S.plan && IL.ready().items.find((x) => x.key === 'surface').state === 'ok', null, { timeout: 20000 });
+      await nav(page, 'setup');
+      await openDetails(page, 'surf-advanced');
+      await page.selectOption('#surf-name', 'board');
+      const offered = await page.waitForFunction(() => document.getElementById('surf-points').value.length > 0
+        && !document.getElementById('btn-surf-save').disabled, null, { timeout: 5000 }).then(() => true, () => false);
+      check('tied board points are offered in the advanced editor', offered);
+      await page.evaluate(() => IL.setNewSeat(Date.now()));
+      const why = await page.waitForFunction(() => { const b = document.getElementById('btn-surf-save');
+        return document.getElementById('surf-points').value === '' && b.disabled ? b.title : null; }, null, { timeout: 5000 })
+        .then((h) => h.jsonValue(), () => null);
+      check("new seat: the old seat's board points are not offered, Save waits for new ones", /another seat/.test(why || ''),
+        await page.evaluate(() => ({ pts: document.getElementById('surf-points').value, title: document.getElementById('btn-surf-save').title })));
+      const twinNeeds = await twin.waitForFunction(() => { const it = IL.ready().items.find((x) => x.key === 'surface'); return it.state === 'need' && it.seat === 'new'; },
+        null, { timeout: 5000 }).then(() => true, () => false);
+      check('new seat answered in one tab: the other tab of this browser needs a probe too', twinNeeds, await twinSurface());
+      await page.evaluate(() => IL.setNewSeat(null));
+      await twin.close();
+      await nav(page, 'run');
+      await page.waitForFunction(() => IL.ready().items.find((x) => x.key === 'surface').state === 'ok', null, { timeout: 5000 });
+    }
     const summary = await page.textContent('#plan-summary');
     check('plan shows a DPH estimate (dots only)', /DPH estimate[\s\S]*?[0-9][0-9,]*[\s\S]*?dots only/.test(summary), summary);
     const recipe = await page.getAttribute('#ws-run .recipe', 'aria-label');
@@ -505,13 +551,19 @@ async function runFirstDots(page, n) {
     check('Last board tile keeps the board run after a prime and a test dot', !/prime|test dot/i.test(lastTile), lastTile);
 
     // ---- STOP while a board run is dispensing ------------------------------------------------
-    // the test board has paste on 20 pads: the whole board again ("Wipe all, run all"), stopped after a few dots
+    // the test board has paste on 20 pads: "Wipe all, run all" is offered; the run is the 140 pads left, stopped after
+    // a few dots (a run of part of the board: Records must offer only its own pads afterwards)
     await nav(page, 'run');
     await page.evaluate(() => IL.go('#run/checks'));
     await page.click('#run-all-link');
     await page.waitForSelector('#dlg-run', { timeout: 10000 });
     check('Wipe all, run all: the confirm says to wipe every pad first', /wipe every pad first/.test(await textOf(page, 'run-confirm-sum')),
       await textOf(page, 'run-confirm-sum'));
+    await page.click('#btn-run-cancel');
+    await page.waitForSelector('#dlg-run', { state: 'detached', timeout: 5000 });
+    await page.click('#btn-run');
+    await page.waitForSelector('#dlg-run', { timeout: 10000 });
+    check('Finish 140 pads left: the confirm names them', /Dispense the 140 pads left\?/.test(await textOf(page, 'dlg-run-t')), await textOf(page, 'dlg-run-t'));
     for (const t of ['#run-tick-gauge', '#run-tick-paste', '#run-tick-hands']) if (!(await page.isChecked(t))) await page.check(t);
     await page.waitForSelector('#btn-run-go:enabled', { timeout: 10000 });
     await page.click('#btn-run-go');
@@ -521,7 +573,7 @@ async function runFirstDots(page, n) {
     await page.click('[data-testid=stop]');
     // the engine ends the run (ABORTED) after its abort lines went out; a loaded simulator can take a while
     const stopped = await waitStatus(page, (x) => x.run && !x.run.running && !x.machine.enabled, 90000);
-    check('STOP mid-run: run ABORTED before its end', stopped.run.status === 'ABORTED' && stopped.run.dotsDone < 160,
+    check('STOP mid-run: run ABORTED before its end', stopped.run.status === 'ABORTED' && stopped.run.dotsDone < 140,
       { status: stopped.run.status, done: stopped.run.dotsDone, message: stopped.run.message });
     l = lines(gcode(g0));
     const iM410 = l.indexOf('M410'), iV = l.indexOf('M107 P3'), iP = l.indexOf('M107 P2'), iB = l.indexOf('M18 B');
@@ -533,7 +585,7 @@ async function runFirstDots(page, n) {
     check('STOP mid-run: machine stopped and un-homed', !stopped.machine.enabled && !stopped.machine.homed);
     check('STOP mid-run: the engine\'s own I1 went out, then OpenPnP\'s DISABLE_COMMAND (valve off sent twice)',
       l.filter((x) => x === 'M107 P3').length >= 2, l);
-    console.log('     STOP mid-run: ' + stopped.run.dotsDone + ' of 160 dots done; G-code after STOP: ' + JSON.stringify(l));
+    console.log('     STOP mid-run: ' + stopped.run.dotsDone + ' of ' + stopped.run.dotsPlanned + ' dots done; G-code after STOP: ' + JSON.stringify(l));
     // Recovery (§8.1.8): Run's panel, Not connected, the board decision locked until the steps are done
     await waitText(page, 'pill-conn', /^Not connected$/, 15000);
     await page.waitForFunction(() => document.getElementById('panel').dataset.view === 'recovery', null, { timeout: 10000 });
@@ -555,6 +607,29 @@ async function runFirstDots(page, n) {
     await waitText(page, 'pill-conn', /^Connected$/, 60000);
     await press2(page, '#btn-home');
     await waitText(page, 'pill-homed', /^Homed$/, 120000);
+
+    // ---- Records › the stopped run of the 140 pads left: finish only its own pads, never the test run's 20 ---------
+    {
+      const left = 140 - stopped.run.dotsDone;
+      // as the operator does: Records first, then the run (a run chosen there shows instead of the pushed Recovery)
+      await nav(page, 'records');
+      await page.waitForSelector('#records-runs', { state: 'visible', timeout: 15000 });
+      await page.evaluate((id) => IL.go('#records/boards/' + id), stopped.run.runId);
+      await page.waitForSelector('#rec-finish', { timeout: 20000 });
+      const fin = await textOf(page, 'rec-finish');
+      check('Records: a stopped finish run offers only its own pads left', fin === 'Finish the ' + left + ' pads left', { fin, left });
+      await page.click('#rec-finish');
+      await page.waitForSelector('#dlg-run', { timeout: 10000 });
+      const conf = await page.evaluate(() => {
+        const test = new Set(IL.S.plan.dots.slice(0, 20).map((d) => d.padId));
+        const ids = IL.run.dlg.mode.padIds;
+        return { n: ids.length, pasted: ids.filter((id) => test.has(id)).length, title: document.getElementById('dlg-run-t').textContent };
+      });
+      check('Records › Finish: the run confirm holds the pads left, none of the test run\'s', conf.n === left && conf.pasted === 0
+        && conf.title === 'Dispense the ' + left + ' pads left?', { conf, left });
+      await page.click('#btn-run-cancel');
+      await page.waitForSelector('#dlg-run', { state: 'detached', timeout: 5000 });
+    }
 
     // ---- interlocks view and pressure on from Setup ------------------------------------------
     await nav(page, 'setup');

@@ -70,18 +70,25 @@
       .then(() => { R.lastLoading = null; IL.render(); });
     return R.lastLoading;
   }
-  /** The full plan of an opened run (its done-dot map): at most a few kept (a 5,000-dot plan is large), oldest dropped. */
-  const PLANS_KEPT = 3;
+  /**
+   * The full plan of an opened run (its done-dot map) and, for a run of part of the board (a test, the pads left), that
+   * run's own plan too (which pads it covered): at most a few kept (a 5,000-dot plan is large), oldest dropped.
+   */
+  const PLANS_KEPT = 4;
   function loadPlanFor(id) {
     const base = IL.basePlanId(id);
-    if (!base || base in R.plans || R.planLoading[base]) return;
-    if (S.plan && S.plan.planId === base) { R.plans[base] = S.plan; return; }
-    R.planLoading[base] = true;
-    IL.api('GET', '/api/plan/' + encodeURIComponent(base)).then((p) => { R.plans[base] = p; }, () => { R.plans[base] = null; })
+    loadPlan(base);
+    if (id !== base) loadPlan(id);
+  }
+  function loadPlan(id) {
+    if (!id || id in R.plans || R.planLoading[id]) return;
+    if (S.plan && S.plan.planId === id) { R.plans[id] = S.plan; return; }
+    R.planLoading[id] = true;
+    IL.api('GET', '/api/plan/' + encodeURIComponent(id)).then((p) => { R.plans[id] = p; }, () => { R.plans[id] = null; })
       .then(() => {
-        delete R.planLoading[base];
+        delete R.planLoading[id];
         const keys = Object.keys(R.plans);
-        for (const k of keys.slice(0, Math.max(0, keys.length - PLANS_KEPT))) if (k !== base) delete R.plans[k];
+        for (const k of keys.slice(0, Math.max(0, keys.length - PLANS_KEPT))) if (k !== id) delete R.plans[k];
         IL.render();
       });
   }
@@ -244,8 +251,10 @@
   /**
    * The done-dot map of a run (the shared IL.boardview, as on Run): a timing per dispensed dot gives, per pad, its first k
    * dots in path order (subsets keep the path order); a partly dispensed pad gets the amber "check" ring as after a STOP.
+   * `only`: the pads a run of part of the board covered (null: the whole board). The counts and the pads left are this
+   * run's: a pad outside it may have paste from an earlier run, Records cannot tell.
    */
-  function doneMap(plan, timings) {
+  function doneMap(plan, timings, only) {
     const pads = plan.pads || [];
     if (!pads.length) return null;
     const count = {};
@@ -259,13 +268,14 @@
       const idx = byPad[p.padId] || [];
       const k = Math.min(count[p.padId] || 0, idx.length);
       for (const i of idx.slice(0, k)) doneIdx.add(i);
+      if (only && !only.has(p.padId)) continue;
       if (idx.length && k >= idx.length) { done++; continue; }
       if (k > 0) { part++; if (!check) check = { index: idx[k], label: p.padId + ' · check' }; } else left++;
       if (!p.blocked) leftPads.push(p.padId);
     }
     const host = el('div', { class: 'rec-mapbox' });
     const src = plan.source || {};
-    const bv = IL.boardview.create(host, { aria: 'Done-dot map: ' + done + ' pads done, ' + part + ' partly, ' + left + ' not dispensed' });
+    const bv = IL.boardview.create(host, { aria: 'Done-dot map' + (only ? ' of this run' : '') + ': ' + done + ' pads done, ' + part + ' partly, ' + left + ' not dispensed' });
     bv.setPlan(plan, { origin: src.source === 'file' ? { x: Number(src.x), y: Number(src.y) } : null });
     if (timings) bv.update({ done: doneIdx, check });
     return { host, done, part, left, leftPads };
@@ -276,7 +286,11 @@
     if (isLast && !lr && !R.lastLoading && (!R.last || R.last.runId !== r.run_uuid)) loadLast();
     if (r.kind === 'board' || r.kind === 'clean-check') loadPlanFor(r.plan_id);
     const plan = R.plans[IL.basePlanId(r.plan_id)] || null;
-    const key = JSON.stringify([r.id, r.status, r.dots_done, !!lr, plan ? plan.planId : null, IL.basePlanId(r.plan_id) in R.plans]);
+    // a run of part of the board: its own plan names the pads it covered (undefined while loading, null if forgotten)
+    const part = /-subset-/.test(String(r.plan_id || ''));
+    const runPlan = part ? R.plans[r.plan_id] : plan;
+    const key = JSON.stringify([r.id, r.status, r.dots_done, !!lr, plan ? plan.planId : null, IL.basePlanId(r.plan_id) in R.plans,
+      part ? (runPlan ? 1 : runPlan === null ? 0 : -1) : '']);
     IL.keyed(p.body, key, () => {
       const start = serverToClient(r.started_at), end = serverToClient(r.ended_at);
       const prof = profileOf(r);
@@ -320,15 +334,24 @@
         out.push(IL.sectionK('Done-dot map'));
         const base = IL.basePlanId(r.plan_id);
         if (!plan) out.push(el('p', { class: 'panel__lead', text: base in R.plans ? 'The plan is no longer in OpenPnP’s memory (it keeps the last 20 plans), so the map cannot be drawn.' : 'Loading the plan…' }));
+        else if (part && runPlan === undefined) out.push(el('p', { class: 'panel__lead', text: 'Loading the plan…' }));
         else {
-          const mp = doneMap(plan, lr ? lr.dotTimings : null);
+          // the pads this run covered; a forgotten subset plan leaves them unknown: no counts of pads left, no Finish
+          const only = part && runPlan ? new Set((runPlan.pads || []).map((x) => x.padId)) : null;
+          const known = !part || !!only;
+          const mp = doneMap(plan, lr ? lr.dotTimings : null, only);
           if (mp) {
             out.push(mp.host,
               el('div', { class: 'rec-legend' }, el('span', {}, el('i', { class: 'rec-lg rec-lg--done' }), lr ? mp.done + ' done' : 'dots'),
-                lr ? el('span', {}, el('i', { class: 'rec-lg rec-lg--part' }), mp.part + ' partly') : null,
-                lr ? el('span', {}, el('i', { class: 'rec-lg rec-lg--left' }), mp.left + ' not dispensed') : null));
+                lr && known ? el('span', {}, el('i', { class: 'rec-lg rec-lg--part' }), mp.part + ' partly') : null,
+                lr && known ? el('span', {}, el('i', { class: 'rec-lg rec-lg--left' }), mp.left + ' not dispensed') : null));
             if (!lr) out.push(el('p', { class: 'panel__lead', text: 'Dot timings are kept for the last run only: the map shows the plan without done dots.' }));
-            if (lr && (r.status === 'ABORTED' || r.status === 'ERROR') && mp.leftPads.length) {
+            else if (part) {
+              out.push(el('p', { class: 'panel__lead', text: only ? 'This run covered ' + IL.plural(only.size, 'pad') + ' of ' + (plan.pads || []).length
+                + ': the counts are this run’s. A pad outside it may have paste from an earlier run.'
+                : 'This run covered part of the board, and its plan is no longer in OpenPnP’s memory: finish the board from Run’s board decision.' }));
+            }
+            if (lr && known && (r.status === 'ABORTED' || r.status === 'ERROR') && mp.leftPads.length) {
               const fin = el('button', { type: 'button', class: 'btn btn--primary', id: 'rec-finish' }, 'Finish the ' + IL.plural(mp.leftPads.length, 'pad') + ' left', IL.icon('i-chev'));
               fin.addEventListener('click', (ev) => finishRest(fin, ev, base, mp.leftPads));
               out.push(el('div', { class: 'rec-finish', 'data-refusals': '' }, fin,

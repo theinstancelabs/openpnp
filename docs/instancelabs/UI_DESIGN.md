@@ -148,7 +148,8 @@ then stops OpenPnP (the machine must be connected and homed again). Key: F9.`
 
 **Behaviour.**
 1. Press (pointer `click`, `Enter` on the focused button, or `F9` anywhere): the button reads `STOPPING…` at once,
-   the strip gets a 2 px red bottom border, `POST /api/stop` goes out with a 2 s timeout (`AbortController`).
+   the strip gets a 2 px red bottom border, `POST /api/stop` goes out with a 2 s timeout (`AbortController`);
+   OpenPnP answers within 1.5 s, also while a dwell holds the controller (the machine reads off a little later).
    Repeated presses are allowed and harmless (each sends again).
 2. Answer received: the toast `STOPPED hh:mm:ss: <server actions, joined with "; ">` (kept for the Playwright
    test, also written to Activity), the button returns to `STOP`, and the **Recovery** state starts (§8.1.8).
@@ -444,7 +445,9 @@ your tick is kept in this browser.`; filter `All steps | Needs you · 2`.
    `Probe the blank…` (same probe UI in the panel for the blank: point table with per-point residual and delete,
    plane fit before saving, coverage of purge row and places). Disclosure `Advanced: paste points or a zmap.json`
    (`#surf-advanced`) holds `#surf-name`, `#surf-points`, `#btn-surf-add` (`Add live N1 point`), `#btn-surf-clear`
-   (`Clear points`), `#btn-surf-save`; `Delete surface` (two-press) lives here, away from Add.
+   (`Clear points`), `#btn-surf-save`; `Delete surface` (two-press) lives here, away from Add. When the board
+   surface belongs to another seat (`Yes: new seat`, or probed on another registration) the editor starts empty
+   and Save waits for new points: one press never ties the old seat's points to the new plan.
 3. **Purge row** (`#card-purge`, `#pr-state`): large strip (used / this board / free), `8 used · 7 free`, last
    wiped; `#pr-surface`, `#pr-x0`, `#pr-y0`, `#pr-pitchx`, `#pr-pitchy`, `#pr-spots`, `Use live N2 X/Y …`
    (`#btn-pr-usexy`), `Save purge row` (`#btn-pr-save`, disabled with `No unsaved changes`),
@@ -529,8 +532,9 @@ records `#cal-current`, `#cal-table`, `#ladder-table` (ladder of any record via 
 
 Segmented control `#records-seg`: **Boards** (`#records-runs`, `GET /api/runs?limit=50`: time, board, status,
 outcome, dots, DPH dots only / overall, profile; detail panel with dot timings, done-dot map and `Finish the
-remaining pads` for an aborted board) · **Activity** (`#records-events`, `GET /api/events?limit=100` + this
-page's log) · **Calibrations** · **Touch-offs**.
+remaining pads` for an aborted board; a run of part of the board, a test or a finish, counts and finishes only its
+own pads, and the run confirm drops any pad this tab saw pasted) · **Activity** (`#records-events`,
+`GET /api/events?limit=100` + this page's log) · **Calibrations** · **Touch-offs**.
 
 ---
 
@@ -590,9 +594,10 @@ outcome (`all 160 dots`, `61 of 160 dots`, `2 pads not clean`).
 ### 9.4 Attestations (no sensor)
 
 Stored in `localStorage['il.attest']` as `{key, value, atMs}`: `regulator` (psi), `paste-life`, `prime-seen`,
-`test-dot-seen`. Shown as `you, 13:04`. The regulator attestation expires when the profile psi changes, after
-`I changed the needle`, or after 8 h; paste life after 8 h. `hands-clear` is never stored. The Setup page head
-says these ticks live in this browser only.
+`test-dot-seen`. Shown as `you, 13:04`. The regulator attestation expires when the profile psi changes (for good:
+setting the psi back does not revive it), after `I changed the needle`, or after 8 h; paste life after 8 h.
+`hands-clear` is never stored. The Setup page head says these ticks live in this browser only (all its tabs: a
+tick or a `new seat` answer in one tab counts in the others at once).
 
 ---
 

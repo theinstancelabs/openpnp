@@ -32,9 +32,9 @@ STOP): use `IL.press2`, `IL.dialog.open` / `IL.dialog.showNative`.
 ## 2. Load order and lifecycle
 
 ```
-<head>  core.js (sync)  → IL defined, theme applied, F9 / Space / Esc key handlers installed
+<head>  core.js (sync)  → IL defined, theme applied, F9 / Space / Esc key handlers and the STOP clicks installed
         boardview.js, run.js, setup.js, profile.js, calibrate.js, records.js (defer, in this order)
-        app.js (defer)  → IL.boot()
+        app.js (defer)  → IL.boot()   (core boots by itself at DOMContentLoaded if app.js never ran)
 boot:   mount(root) of every registered workspace → route applied → show() of the active one
         → poll /api/status (0.7 s chain) → render loop
 ```
@@ -117,8 +117,9 @@ Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, `
 - `IL.cleanPositionWrong(cc)`: a finished report with no clean pad ("the board position looks wrong", §13): never
   painted as paste, never "wipe".
 - `IL.attest.{all(), get(key), set(key, value), clear(key), valid(key, status)}` keys `regulator` (psi),
-  `paste-life`, `prime-seen`, `test-dot-seen` (§9.4; regulator invalid after a psi change, a needle change or 8 h).
-  `hands-clear` is never stored. `IL.setNewSeat(atMs | null)`.
+  `paste-life`, `prime-seen`, `test-dot-seen` (§9.4; regulator cleared by any psi change a page sees, also a change
+  back, invalid after a needle change or 8 h). `hands-clear` is never stored. `IL.setNewSeat(atMs | null)`. Both live
+  in localStorage: another tab's tick or new-seat answer counts at once (`storage` event).
 - Machine helpers: `IL.positions(status)` → `{n1, n2, cam}`, `IL.wasteDistance(status)` (mm or null),
   `IL.isSim(status)`, `IL.taskRunning(status)`, `IL.energised(status)`, `IL.interlock(status, id)`,
   `IL.taskLabel(run)` (`96/160 · 0:44 left`, `Pad check · 1:52`, `Prime`).
@@ -135,7 +136,8 @@ Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, `
     canRun, runStyle: 'go' (filled teal) | 'hold' (outlined; items 4 / 9 not ready) | 'blocked', runReason (the line above the Run button),
     planLabel }
   Item = { key, n, code ('MACHINE','I11','I4','I6','PLAN','I9','I10',...), title, state, ready, value (short, right-aligned),
-           short (for the verdict / nav), detail (plain sentence with numbers), tip, fixes: [Fix], you?, stale?, dirty? }
+           short (for the verdict / nav), detail (plain sentence with numbers), tip, fixes: [Fix], you?, stale?, dirty?,
+           seat? (surface item when it needs a probe: new | none | other | untied) }
   state: ok | you (operator attestation, blue ring) | off (counted ready) | need | block | live | checking | wait (needs a plan)
   Fix = {fix: '<id>', label, arg?, primary?} | {href: '#setup/needle', label} | {view: 'pressure', label}
   ```
@@ -144,8 +146,9 @@ Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, `
 - `IL.verdict()` the strip verdict now (task / recovery / offline / engine override the readiness verdict).
 
 ### STOP and recovery (§5, §8.1.8)
-- `IL.stop(source)` = the STOP press (all `#btn-stop` / `[data-stop-copy]` clicks are wired by delegation; F9 is
-  global in the capture phase, also in fields and dialogs; Space on STOP is suppressed; Esc never stops). Shows
+- `IL.stop(source)` = the STOP press (all `#btn-stop` / `[data-stop-copy]` clicks are wired by delegation when core.js
+  loads, before boot; F9 is global in the capture phase, also in fields and dialogs; Space on STOP is suppressed; Esc
+  never stops). OpenPnP answers within 1.5 s (`machineEnabled` may still be true: Recovery follows the status). Shows
   `STOPPING…`, posts `/api/stop` (2 s), on no answer shows `#stop-unconfirmed` and re-sends every second until one
   answer; toast `STOPPED hh:mm:ss: <actions joined "; ">`; opens the recovery.
 - Second STOP: core shows the copy at the top of the panel scroll area whenever `IL.energised(status)`. Do not add
@@ -180,8 +183,8 @@ Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, `
   Core registers (with gates): `connect`, `home` (two-press), `I11-confirm`, `needle-confirm` (posts the frame offset),
   `purge-reset` (two-press), `pressure-on` (two-press unless N2 ≤ 3 mm from the waste), `pressure-off`,
   `attest-regulator`, `attest-paste`, `same-seat`. Run registers `plan-again`, `clean-check` (two-press), `probe`,
-  `run-rest` (`{planId, padIds}` → the run confirm for those pads), `run-fewer` (I7: a test run of the first N dots that
-  fits the on-time limit); Setup registers `su-go-<card>`, `su-probe-blank`. Every gated fix-it row gets a visible
+  `run-rest` (`{planId, padIds}` → the run confirm for those pads, never one this tab saw pasted), `run-fewer` (I7: a
+  test run of the first N dots that fits the on-time limit); Setup registers `su-go-<card>`, `su-probe-blank`. Every gated fix-it row gets a visible
   `.fix-why` reason line from core (rows marked `[data-own-reason]` show their own).
   `IL.fixesForCode(code, status, message)`: an I4 refusal that names a place offers `Retake Z with N1` (#setup/places/<name>).
 - `IL.lockReason(status, {connected, homed, idle = true, pressureOff = true, engine})` → the spec's locked-control
@@ -227,7 +230,8 @@ Format (display only; real minus `−`): `IL.fmt(n, d=2)`, `fmtSigned`, `fmtInt`
 `fmtMm`, `fmtDeg` (`298.0°`), `fmtClock` (`1:15`), `fmtDuration` (`4.0 s`, `5 min 16 s`), `fmtTime` (`13:06`),
 `fmtTimeS` (`14:19:42`), `fmtDateTime`, `fmtAgo`, `plural(n, 'dot')`, `turnLabel(800, 1600)` (`½ turn`),
 `recipeParts(profile)`, `recipeEl(profile, {changed, href})` (the `.recipe` token; `aria-label` = parts without the
-name joined by ` · `), `profileText`. Inputs: `IL.inputNum(n, d)` (ASCII), `IL.num(idOrEl)`, `IL.str(idOrEl)`.
+name joined by ` · `), `profileText`. Inputs: `IL.inputNum(n, d)` (ASCII; d decimals unless that would lose digits:
+never rounds a stored value), `IL.num(idOrEl)`, `IL.str(idOrEl)`.
 Constants: `IL.STOP_CODES`, `IL.STOP_TITLE`, `IL.STOP_LINE` (the exact §13 texts), `IL.STOP_DID`, `IL.LIMITS`,
 `IL.PRESSURE_PHASES`, `IL.WORD`.
 
@@ -306,8 +310,11 @@ Never `/dev/ttyACM*`, `/dev/serial/*`, `/dev/video*` or a real-mode OpenPnP.
 - Every static file is checked by `ApiServerSimTest.servesTheUiAndStatus` (200, non-empty, loaded by `index.html`).
 - The sim test also covers the STOP keys (Space / Esc send nothing, Enter stops), STOP NOT CONFIRMED (band in its own
   grid row, retries, "confirmed after n tries" stays up), the offline state (band, inert workspace and dialog), the board
-  decision after a 20-dot test run ("Finish 140 pads left") and "Wipe all, run all"; STOP answers in those checks come
-  from a stub in a second page (nothing reaches OpenPnP).
+  decision after a 20-dot test run ("Finish 140 pads left", "Wipe all, run all"); STOP answers in those checks come
+  from a stub in a second page (nothing reaches OpenPnP). Final review fixes: the regulator tick expires for good on a
+  psi change and back; "new seat" empties Setup's board-surface editor (Save waits for new points) and counts in a
+  second tab at once; the run of the 140 pads left is stopped and Records › Finish offers only its own pads (none of
+  the test run's 20).
 - Board identity: a plan made again for the same seat (no "Next board" since) is the same board (`IL.run.alias`), its
   dispensed dots carry over (`carryBoard`); a part-done board shows the board decision (`partialDecision`). Kept per tab
   (sessionStorage), like the done-dot map.

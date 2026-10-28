@@ -358,8 +358,15 @@
     return Math.round(s / 86400) + ' days ago';
   };
   IL.plural = (n, one, many) => n + ' ' + (n === 1 ? one : (many || one + 's'));
-  /** ASCII number string for an <input> value (fmt uses a real minus that Number() cannot read). */
-  IL.inputNum = (n, d) => (isNum(n) ? (d === undefined ? String(Number(n)) : Number(n).toFixed(d)) : '');
+  /**
+   * ASCII number string for an <input> value (fmt uses a real minus that Number() cannot read). d: decimals to show
+   * (0.1 → "0.10") unless that would lose digits: a stored 0.125 stays "0.125", so a save never rounds it away.
+   */
+  IL.inputNum = function (n, d) {
+    if (!isNum(n)) return '';
+    const t = d === undefined ? null : Number(n).toFixed(d);
+    return t !== null && Number(t) === Number(n) ? t : String(Number(n));
+  };
   const FRACTION = { 2: '½', 3: '⅓', 4: '¼', 8: '⅛' };
   /** Screw turn per dot: 800 of 1600 steps → "½ turn". */
   IL.turnLabel = function (steps, stepsPerRev) {
@@ -603,6 +610,14 @@
     attestVersion++;
     IL.render();
   };
+  // both live in this browser's localStorage: an answer or a tick in another tab counts here at once (without this a
+  // second tab stayed "Ready to run" on the old seat's surface)
+  window.addEventListener('storage', (e) => {
+    if (e.key !== null && e.key !== ATTEST_KEY && e.key !== 'il.newSeatAtMs') return;
+    S.newSeatAtMs = lsJson('il.newSeatAtMs', null);
+    attestVersion++;
+    IL.render();
+  });
 
   // ================================================================================== machine helpers
   /** Tool positions from status.machine.positions: {n1, n2 (the dispenser nozzle), cam}. */
@@ -995,13 +1010,15 @@
         add({ key: 'surface', code: 'I4', title: 'Surface', state: 'block', value: 'probe again', short: 'board surface',
           detail: bad.map((x) => sentence(x.v.message)).join(' '), fixes: [{ fix: 'probe', label: 'Add probe points' }] });
       } else if (seat.length || newSeat || !sf) {
-        const why = newSeat ? 'You said the board was re-seated: probe this seat.'
-          : !sf || /^no '/i.test(seat[0] ? seat[0].v.message : 'no ') ? 'No board surface yet: probe this seat.'
-            : /another registration/.test(seat[0].v.message) ? 'The board surface belongs to another seat of this board.'
-              : 'The board surface is not tied to this plan.';
+        // seat: 'new' (the operator said re-seated), 'none' (no surface), 'other' (probed on another registration),
+        // 'untied' (saved without a plan: saving the same points with this plan ties them)
+        const which = newSeat ? 'new' : !sf || /^no '/i.test(seat[0] ? seat[0].v.message : 'no ') ? 'none'
+          : /another registration/.test(seat[0].v.message) ? 'other' : 'untied';
+        const why = { new: 'You said the board was re-seated: probe this seat.', none: 'No board surface yet: probe this seat.',
+          other: 'The board surface belongs to another seat of this board.', untied: 'The board surface is not tied to this plan.' }[which];
         const fixes = [{ fix: 'probe', label: 'Probe this seat', primary: true }];
         if (newSeat) fixes.push({ fix: 'same-seat', label: 'Same board, not moved' });
-        add({ key: 'surface', code: 'I4', title: 'Surface', state: 'need', value: 'probe', short: 'probe seat', detail: why, fixes });
+        add({ key: 'surface', code: 'I4', title: 'Surface', state: 'need', value: 'probe', short: 'probe seat', detail: why, fixes, seat: which });
       } else {
         add({ key: 'surface', code: 'I4', title: 'Surface', state: 'ok', value: 'tied', short: 'board surface',
           detail: 'Board surface: ' + IL.plural((sf.points || []).length, 'point') + (sf.plane ? ', worst ' + IL.fmt(sf.plane.maxResidualMm, 3) + ' mm' : '')
@@ -1514,6 +1531,10 @@
     // when this page saw the profile change (the plan chip says "stale: profile changed 11:07")
     const fp = d.profile && d.profile.fingerprint, pfp = prev && prev.dispense && prev.dispense.profile && prev.dispense.profile.fingerprint;
     if (prev && fp && pfp && fp !== pfp) S.profileChangedAt = now;
+    // the gauge reading expires with any psi change (§9.4), for good: set back to the old psi, the regulator may still
+    // be at the other one
+    const psi = d.profile && d.profile.pressurePsi, ppsi = prev && prev.dispense && prev.dispense.profile && prev.dispense.profile.pressurePsi;
+    if (isNum(psi) && isNum(ppsi) && Number(psi) !== Number(ppsi) && IL.attest.get('regulator')) IL.attest.clear('regulator');
     // pressure on-time of a running task (client stamp of the first poll in the pressure session)
     if (run && run.running && run.pressureOnAtMs) S.runPressureSince = run.pressureOnAtMs - S.skewMs;
     else if (run && run.running && IL.PRESSURE_PHASES.has(run.phase)) { if (!S.runPressureSince) S.runPressureSince = now; }
@@ -2444,7 +2465,7 @@
   IL.fix('pressure-off', { run: () => IL.api('POST', '/api/pressure/stop'), ok: 'Pressure off · valve closed, then pump off' });
   IL.fix('pressure-on', {
     gate: (s) => (s.pressure && s.pressure.state && s.pressure.state !== 'off' ? 'Pressure is already on'
-      : IL.lockReason(s, { connected: true, engine: true })),
+      : IL.lockReason(s, { connected: true, homed: true, engine: true })),
     // two presses unless the needle is over the waste (≤ 3 mm)
     press2: (s) => { const dist = IL.wasteDistance(s); return dist !== null && dist <= L.wasteNearMm ? null : 'pressure on'; },
     run: () => IL.api('POST', '/api/pressure/start'),
@@ -2586,6 +2607,14 @@
   }, true);
   window.addEventListener('keyup', (e) => {
     if ((e.key === ' ' || e.code === 'Space') && e.target && e.target.closest && e.target.closest('.stop')) e.preventDefault();
+  }, true);
+  // STOP: every [data-stop-copy] and #btn-stop, by delegation in the capture phase (never blocked by others). Wired
+  // here, as F9 is, so STOP works even if the page never boots (app.js not loaded).
+  document.addEventListener('click', (e) => {
+    const b = e.target && e.target.closest && e.target.closest('#btn-stop, [data-stop-copy]');
+    if (!b) return;
+    e.preventDefault();
+    IL.stop(e.detail === 0 ? 'key' : 'button');
   }, true);
   window.addEventListener('keydown', (e) => {
     if (e.defaultPrevented) return;
@@ -2745,7 +2774,7 @@
       ]);
       const [bOn, bOff, bReads] = $('pv-pr-act').children;
       const holding = pr.state && pr.state !== 'off';
-      const lockOn = holding ? null : IL.lockReason(s, { connected: true, engine: true });
+      const lockOn = holding ? null : IL.lockReason(s, { connected: true, homed: true, engine: true });
       IL.gate(bOn, holding ? (pr.state === 'vent_failed' ? 'Pressure is NOT off: press Pressure off' : 'Pressure is already on') : lockOn);
       const offWhy = holding || pr.state === 'vent_failed' ? null : 'Already off · vented';
       IL.gate(bOff, offWhy);
@@ -2924,13 +2953,7 @@
 
   // ================================================================================== frame wiring + boot
   function wireFrame() {
-    // STOP: every [data-stop-copy] and #btn-stop, by delegation in the capture phase (never blocked by others)
-    document.addEventListener('click', (e) => {
-      const b = e.target && e.target.closest && e.target.closest('#btn-stop, [data-stop-copy]');
-      if (!b) return;
-      e.preventDefault();
-      IL.stop(e.detail === 0 ? 'key' : 'button');
-    }, true);
+    // (STOP clicks are wired when core.js loads, next to F9)
     // strip cells open their panel views; the verdict cell opens Run
     for (const c of document.querySelectorAll('[data-open-view]')) c.addEventListener('click', () => IL.openView(c.dataset.openView));
     $('pill-engine').addEventListener('click', () => {
@@ -2963,4 +2986,7 @@
     poll();
     IL.emit('boot');
   };
+  // app.js boots the page; deferred scripts run before DOMContentLoaded, so this only boots a page whose app.js did
+  // not load or run (the poll, the heartbeat and the offline band still start)
+  document.addEventListener('DOMContentLoaded', () => { if (!booted) IL.boot(); });
 })();

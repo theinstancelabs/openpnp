@@ -24,6 +24,16 @@
   const STAMPED_TOP = new Set(['needleZOffsetMm', 'needleZOffsetSetAtMs', 'needleChangedAtMs', 'needleAnchor', 'surfaces', 'schemaVersion']);
   const STAMPED_NESTED = new Set(['profile.startAngleSetAtMs', 'needleXyTrim.setAtMs', 'purgeRow.resetAtMs', 'purgeRow.usedSpots']);
   const NESTED = new Set(['profile', 'purgeRow', 'cleanPadCheck', 'needleXyTrim']);
+  /** Maps PUT /api/config replaces whole: the editor diffs them per entry and Save sends the server's map as it is then
+   *  with only the edited entries changed (a place saved meanwhile on the Places card is kept). */
+  const BY_ENTRY = new Set(['locations']);
+  const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+  /** `now` with the entries of a per-entry patch applied (null: the entry was removed in the editor). */
+  function applyEntries(now, ch) {
+    const out = Object.assign({}, now || {});
+    for (const [n, v] of Object.entries(ch)) { if (v === null) delete out[n]; else out[n] = v; }
+    return out;
+  }
   /** A local validation error shown like a 400 (inline "Not accepted:" box). */
   const bad = (reason) => new IL.ApiError(400, { error: 'bad-request', reason }, reason);
 
@@ -852,16 +862,25 @@
     }
     const name = sel.value;
     const sf = (d.surfaces || {})[name];
-    sync(F.surfPts, sf ? JSON.stringify(surfPts(sf).map((p) => [p.x, p.y, p.z])) : '');
     const isBoard = name === (d.boardSurfaceName || 'board');
+    // the saved board points of another seat (re-seated, moved) are not offered for this one: one press of Save would
+    // tie them to this plan and pass I4. The editor starts empty, as Run › Probe does; untied points are still offered
+    // (saving them with the plan shown is how they get tied)
+    const sfItem = isBoard && sf ? IL.ready().items.find((x) => x.key === 'surface') : null;
+    const otherSeat = !!sfItem && (sfItem.seat === 'new' || sfItem.seat === 'other');
+    sync(F.surfPts, sf && !otherSeat ? JSON.stringify(surfPts(sf).map((p) => [p.x, p.y, p.z])) : '');
     const plan = S.plan;
-    IL.keyed(c.tie, [name, isBoard, plan && plan.planId, S.planForgotten, W.boardSavedAt].join('|'), () => {
+    IL.keyed(c.tie, [name, isBoard, plan && plan.planId, S.planForgotten, W.boardSavedAt, otherSeat].join('|'), () => {
       if (!isBoard) return el('span', { class: 'su-note', text: "The " + name + " surface carries " + (name === (pr.surfaceName || 'blank') ? 'the purge row, the touch-off and the dot ladder.' : 'what refers to it by name.') });
       if (plan && !S.planForgotten) {
         const src = plan.source || {};
-        return [el('span', { class: 'su-note', text: 'Save ties these points to plan ' + String(plan.planId).slice(0, 4) + ' (' + (plan.boardName || 'board')
-          + (src.source === 'file' ? ' at ' + fmt(src.x, 2) + ', ' + fmt(src.y, 2) + ' · ' + fmt(src.rotation || 0, 1) + '°' : '') + '). Plan again after saving.' }),
-        W.boardSavedAt ? IL.fixButton({ fix: 'plan-again', label: 'Plan again' }, { cls: 'btn--sm' }) : null];
+        const at = ' (' + (plan.boardName || 'board') + (src.source === 'file' ? ' at ' + fmt(src.x, 2) + ', ' + fmt(src.y, 2) + ' · ' + fmt(src.rotation || 0, 1) + '°' : '') + ')';
+        if (otherSeat) {
+          return el('span', { class: 'su-note su-note--need', text: 'The saved board points were probed on another seat, so they are not offered here. Probe this seat'
+            + ' (Probe the board…) or paste or add its points: Save ties them to plan ' + String(plan.planId).slice(0, 4) + at + '.' });
+        }
+        return [el('span', { class: 'su-note', text: 'Save ties these points to plan ' + String(plan.planId).slice(0, 4) + at + '. Plan again after saving.' }),
+          W.boardSavedAt ? IL.fixButton({ fix: 'plan-again', label: 'Plan again' }, { cls: 'btn--sm' }) : null];
       }
       return el('span', { class: 'su-note su-note--need', text: 'No plan shown: the board surface would be saved untied and board runs refuse it (I4). Plan the board on Run first, or use Probe the board….' });
     });
@@ -869,11 +888,12 @@
     IL.setText(c.bAdd.liveEl, pos.n1 ? fmt(pos.n1.x, 2) + ', ' + fmt(pos.n1.y, 2) + ', ' + fmt(pos.n1.z, 2) : '—');
     const lock = IL.lockReason(s, { pressureOff: false, engine: true });
     IL.gate(c.bAdd, IL.lockReason(s, { connected: true, idle: false, pressureOff: false }) || (pos.n1 ? null : 'No N1 position'));
-    IL.gate(c.bSave, lock);
+    const saveWhy = lock || (otherSeat && !dirty(F.surfPts) ? 'Points of another seat: probe this seat, or paste or add its points' : null);
+    IL.gate(c.bSave, saveWhy);
     IL.gate(c.bDel, lock || (sf ? null : 'No ' + name + ' surface saved'));
     IL.gate(c.bBlank, IL.lockReason(s, { pressureOff: false }));
-    IL.setText(c.advReason, lock || '');
-    IL.show(c.advReason, !!lock);
+    IL.setText(c.advReason, saveWhy || '');
+    IL.show(c.advReason, !!saveWhy);
   }
 
   // ---------------------------------------------------------------------------------- probe the blank (panel view)
@@ -1147,7 +1167,7 @@
     c.waste.classList.toggle('su-waste--bad', hasWaste && dist !== null && !near);
     // pressure buttons
     const holding = pr.state && pr.state !== 'off';
-    const lockOn = holding ? (pr.state === 'vent_failed' ? 'Pressure is NOT off: press Pressure off' : 'Pressure is already on') : IL.lockReason(s, { connected: true, engine: true });
+    const lockOn = holding ? (pr.state === 'vent_failed' ? 'Pressure is NOT off: press Pressure off' : 'Pressure is already on') : IL.lockReason(s, { connected: true, homed: true, engine: true });
     IL.gate(c.bOn, lockOn);
     IL.setText(c.onReason, !holding && lockOn ? lockOn : '');
     IL.show(c.onReason, !holding && !!lockOn);
@@ -1686,7 +1706,8 @@
     c.adv = el('details', { class: 'disclose su-adv', id: 'set-advanced' }, el('summary', { text: 'All settings (advanced JSON)' }),
       el('div', { class: 'su-col', 'data-refusals': '' },
         el('p', { class: 'su-note', text: 'Every engine setting. Save sends only the keys you changed (one level deep for profile, purgeRow, cleanPadCheck and needleXyTrim). Keys stamped by the engine are read-only here: '
-          + 'needle state, surfaces, schemaVersion, purgeRow.usedSpots and resetAtMs, profile.startAngleSetAtMs, needleXyTrim.setAtMs.' }),
+          + 'needle state, surfaces, schemaVersion, purgeRow.usedSpots and resetAtMs, profile.startAngleSetAtMs, needleXyTrim.setAtMs. '
+          + 'Places (locations) are sent one by one: a place saved elsewhere meanwhile is kept.' }),
         F.json.el, c.jErr, c.jStale, c.jDiff,
         el('div', { class: 'btn-row' }, c.jSave, c.jReload, c.jReason)));
     c.adv.addEventListener('toggle', () => { if (c.adv.open) IL.loadConfig(); });
@@ -1695,7 +1716,8 @@
       await IL.loadConfig();
       const merged = JSON.parse(JSON.stringify(S.config || {}));
       for (const [k, v] of Object.entries(mine)) {
-        if (NESTED.has(k) && v && typeof v === 'object' && !Array.isArray(v) && merged[k] && typeof merged[k] === 'object') Object.assign(merged[k], v);
+        if (BY_ENTRY.has(k)) merged[k] = applyEntries(merged[k], v);
+        else if (NESTED.has(k) && v && typeof v === 'object' && !Array.isArray(v) && merged[k] && typeof merged[k] === 'object') Object.assign(merged[k], v);
         else merged[k] = v;
       }
       J.base = S.config;
@@ -1708,7 +1730,13 @@
       const cur = jsonParse();
       const df = jsonDiff(J.base, cur);
       if (!Object.keys(df.patch).length) throw bad(df.changes.length ? 'Only read-only keys changed: nothing to send.' : 'No changed keys.');
-      const r = await IL.api('PUT', '/api/config', df.patch);
+      const body = Object.assign({}, df.patch);
+      const whole = Object.keys(body).filter((k) => BY_ENTRY.has(k));
+      if (whole.length) {
+        const now = await IL.api('GET', '/api/config');
+        for (const k of whole) body[k] = applyEntries(now[k], body[k]);
+      }
+      const r = await IL.api('PUT', '/api/config', body);
       J.edited = false;
       await IL.loadConfig();
       IL.planRefreshSoon();
@@ -1727,6 +1755,15 @@
     for (const k of Object.keys(base)) if (!(k in cur)) out.removed.push(k);
     for (const [k, v] of Object.entries(cur)) {
       const b = base[k];
+      if (BY_ENTRY.has(k) && isObj(v) && isObj(b)) {
+        // per entry: {name: entry | null (removed)}; the Save handler turns it into the whole map
+        for (const n of new Set(Object.keys(b).concat(Object.keys(v)))) {
+          if (deq(v[n], b[n])) continue;
+          out.changes.push({ path: k + '.' + n, from: b[n], to: v[n], stamped: false });
+          (out.patch[k] = out.patch[k] || {})[n] = n in v ? v[n] : null;
+        }
+        continue;
+      }
       if (NESTED.has(k) && v && typeof v === 'object' && !Array.isArray(v) && b && typeof b === 'object') {
         for (const sk of Object.keys(b)) if (!(sk in v)) out.removed.push(k + '.' + sk);
         for (const [sk, sv] of Object.entries(v)) {
@@ -1762,7 +1799,7 @@
       if (!df.changes.length && !df.removed.length) return el('div', { class: 'su-note', text: 'No changed keys.' });
       return [el('div', { class: 'su-diff__h', text: IL.plural(df.changes.filter((x) => !x.stamped).length, 'changed key') + ' will be sent' }),
         el('ul', {}, df.changes.map((x) => el('li', { class: x.stamped ? 'su-diff--ro' : null },
-          el('code', { text: x.path }), el('span', { text: ' ' + short(x.from) + ' → ' + short(x.to) }), x.stamped ? el('span', { class: 'tag tag--off', text: 'read-only: not sent' }) : null)),
+          el('code', { text: x.path }), el('span', { text: ' ' + short(x.from) + ' → ' + (x.to === undefined ? 'removed' : short(x.to)) }), x.stamped ? el('span', { class: 'tag tag--off', text: 'read-only: not sent' }) : null)),
         df.removed.map((p) => el('li', { class: 'su-diff--ro' }, el('code', { text: p }), el('span', { text: ' removed' }), el('span', { class: 'tag tag--off', text: 'ignored' }))))];
     });
   }

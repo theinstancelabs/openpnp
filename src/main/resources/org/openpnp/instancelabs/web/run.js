@@ -1055,14 +1055,21 @@
   }
   function renderSteps(top, s, step) {
     const st = stepStates(s);
-    const key = JSON.stringify([st, step]);
+    // rebuilt only when a step's state or the current step changes; the counters under the steps ("96 of 160",
+    // "≈ 1:23") are patched in place (a rebuild on every poll of a run dropped keyboard focus and lost clicks)
+    const key = JSON.stringify([STEPS.map((k) => st[k].kind), step]);
     IL.keyed(top, key, () => el('nav', { class: 'steps', 'aria-label': 'This board' }, STEPS.map((k, i) => {
       const x = st[k];
       const glyph = x.kind === 'num' ? IL.glyph('num', null, 'Step ' + (i + 1), i + 1) : IL.glyph(x.kind);
       return el('button', { type: 'button', class: 'step step--' + x.kind + (x.kind === 'ok' ? ' step--done' : ''), 'data-step': k,
-        'aria-current': step === k ? 'step' : null, title: STEP_T[k] + ': ' + x.sub, onclick: () => goStep(k) },
-      glyph, el('span', { class: 'step__t', text: STEP_T[k] }), el('span', { class: 'step__s', text: x.sub }));
+        'data-focus-key': 'step-' + k, 'aria-current': step === k ? 'step' : null, onclick: () => goStep(k) },
+      glyph, el('span', { class: 'step__t', text: STEP_T[k] }), el('span', { class: 'step__s' }));
     })));
+    for (const b of top.querySelectorAll('.step')) {
+      const k = b.dataset.step;
+      IL.setText(b.querySelector('.step__s'), st[k].sub);
+      IL.setAttr(b, 'title', STEP_T[k] + ': ' + st[k].sub);
+    }
   }
 
   // ================================================================================== panel: Board step
@@ -1606,8 +1613,8 @@
     const checking = run && run.running && run.label === 'clean-pad check';
     let detail;
     if (checking) {
-      const tp = tourProgress(run, run.elapsedS || 0, plan().pads.length);
-      detail = ['The top camera visits every pad, the pressure stays off: ' + tp.text + ' · ' + IL.fmtClock(tp.left) + ' left.'];
+      // the counter is patched every render (renderChecks): the card itself is not rebuilt while the check runs
+      detail = ['The top camera visits every pad, the pressure stays off: ', el('span', { class: 'clean-tour', text: tourLine(run) })];
     } else if (cc && IL.cleanPositionWrong(cc)) {
       // no pad read clean: the boxes saw solder mask, the board X/Y or rotation is off (§13): check it, do not wipe
       detail = [IL.cleanSummary(cc), ' Check the board X/Y and rotation in the Board step (the camera box sits beside every pad), then check again.'];
@@ -1632,6 +1639,11 @@
       el('div', {}, el('div', { class: 'ri__t' }, it.title, first ? el('span', { class: 'tag tag--next', text: 'Next' }) : null), el('div', { class: 'ri__d' }, detail)),
       el('abbr', { class: 'icode', title: 'Interlock I10', text: 'I10' }),
       checking ? null : [pos ? el('div', { class: 'ri__act ri__act--pos' }, pos) : null, el('div', { class: 'ri__act' }, btn, cam)]);
+  }
+  /** "≈ pad 57 of 160 · 1:52 left." of a running clean-pad check. */
+  function tourLine(run) {
+    const tp = tourProgress(run, run.elapsedS || 0, plan().pads.length);
+    return tp.text + ' · ' + IL.fmtClock(tp.left) + ' left.';
   }
   function needCard(it, first, s) {
     if (it.key === 'clean') return cleanCard(it, first, s);
@@ -1679,10 +1691,12 @@
     const needs = r.needs.filter((x) => x.state !== 'wait');
     const run = s.run;
     const ccKey = S.cleanCheck ? S.cleanCheck.checkedAtMs : '';
-    const liveKey = run && run.running && run.label === 'clean-pad check' ? Math.floor((run.elapsedS || 0) / 2) : '';
-    const nk = JSON.stringify(needs.map((x) => [x.key, x.state, x.detail, (x.fixes || []).map((f) => f.label)])) + ccKey + liveKey + R.showAllDirty;
+    const checking = !!(run && run.running && run.label === 'clean-pad check');
+    const nk = JSON.stringify(needs.map((x) => [x.key, x.state, x.detail, (x.fixes || []).map((f) => f.label)])) + ccKey + checking + R.showAllDirty;
     IL.keyed($('chk-needs'), nk, () => (needs.length ? [IL.sectionK('Needs you', needs.length),
       el('div', { class: 'stack', style: 'margin-top:10px;gap:10px' }, needs.map((x, i) => needCard(x, i === 0, s)))] : null));
+    const tour = checking && plan() ? $('chk-needs').querySelector('.clean-tour') : null;
+    if (tour) IL.setText(tour, tourLine(run));
     const ready = r.items.filter((x) => x.ready);
     const rk = JSON.stringify(ready.map((x) => [x.key, x.state, x.value, x.tip])) + ccKey;
     IL.keyed($('chk-ready'), rk, () => (ready.length ? [IL.sectionK('Ready', ready.length),
@@ -1927,7 +1941,10 @@
     const N = p.dots.length;
     if (kind === 'rest') {
       const known = new Set(p.pads.map((x) => x.padId));
-      const pads = (opts && opts.padIds ? opts.padIds.filter((id) => known.has(id)) : padsLeft(p)).slice();
+      // a list from elsewhere (Records: the pads one stopped run did not reach) never brings back a pad this page saw
+      // pasted on this board (an earlier test or finish run)
+      const left = new Set(R.done.planId === p.planId ? padsLeft(p) : known);
+      const pads = (opts && opts.padIds ? opts.padIds.filter((id) => known.has(id) && left.has(id)) : padsLeft(p)).slice();
       const nd = p.dots.filter((d) => pads.includes(d.padId)).length;
       const dec = decision(S.status);
       const of = dec && dec.cause === 'partial' ? (dec.kind === 'test' ? 'after the test run' : 'on this board') : 'of the stopped run';
@@ -1958,6 +1975,7 @@
     const prof = (s.dispense && s.dispense.profile) || p.profile || {};
     const psi = IL.fmtPsi(prof.pressurePsi);
     const gauge = tick('run-tick-gauge', 'The gauge reads ' + psi + ' psi');
+    gauge.psi = prof.pressurePsi;   // the psi the label shows: a tick records this one (updateDialog keeps both current)
     const paste = tick('run-tick-paste', 'Paste is within its working life');
     const hands = tick('run-tick-hands', 'Hands and tools are clear of the head');
     const reg = IL.attest.valid('regulator', s);
@@ -1965,8 +1983,7 @@
     paste.input.checked = !!IL.attest.valid('paste-life', s);
     hands.input.checked = false;
     gauge.input.addEventListener('change', () => {
-      const ps = S.status && S.status.dispense && S.status.dispense.profile && S.status.dispense.profile.pressurePsi;
-      if (gauge.input.checked) IL.attest.set('regulator', ps); else IL.attest.clear('regulator');
+      if (gauge.input.checked) IL.attest.set('regulator', gauge.psi); else IL.attest.clear('regulator');
       updateDialog(S.status);
     });
     paste.input.addEventListener('change', () => { if (paste.input.checked) IL.attest.set('paste-life', true); else IL.attest.clear('paste-life'); updateDialog(S.status); });
@@ -2010,6 +2027,7 @@
     if (m.maxDots) body.maxDots = m.maxDots;
     if (m.padIds) body.padIds = m.padIds;
     R.restPending = m.kind === 'rest';
+    h.starting = true;   // this run's own start closes the confirm without a note
     const res = await IL.act(h.n.go, async () => {
       const r = await IL.api('POST', '/api/run', body);
       // what this run is (the Last board tile, Records and the Result step say "test", "the pads left")
@@ -2021,6 +2039,7 @@
     });
     if (!res) {
       R.restPending = false;
+      h.starting = false;
       if (!h.closed) h.n.refusals.scrollIntoView({ block: 'nearest' });
       return;
     }
@@ -2043,6 +2062,10 @@
     const prof = (s.dispense && s.dispense.profile) || {};
     const psi = IL.fmtPsi(prof.pressurePsi);
     // ticks: remembered attestations show "you, 13:04"
+    if (prof.pressurePsi !== n.gauge.psi) {
+      n.gauge.psi = prof.pressurePsi;
+      IL.setText(n.gauge.lab.querySelector('.tick__t'), 'The gauge reads ' + psi + ' psi');
+    }
     const reg = IL.attest.valid('regulator', s);
     if (n.gauge.input.checked && !reg) n.gauge.input.checked = false;  // expired or psi changed while open
     IL.setText(n.gauge.who, reg ? 'you, ' + IL.fmtTime(reg.atMs) : '');
@@ -2058,7 +2081,7 @@
       el('span', { text: pr.state === 'vent_failed' ? 'Pressure is NOT off: press Pressure off.' : 'Pressure is on: read the gauge, then switch it off before the run.' }),
       el('span', { class: 'spacer' }), fixBtn({ fix: 'pressure-off', label: 'Pressure off', primary: true }, 'btn--sm')] : null));
     IL.show(n.held, !!holding);
-    IL.gate(n.pon, holding ? 'Pressure is on' : IL.lockReason(s, { connected: true, engine: true }));
+    IL.gate(n.pon, holding ? 'Pressure is on' : IL.lockReason(s, { connected: true, homed: true, engine: true }));
     // what the machine checked
     const it = (k) => r.items.find((x) => x.key === k);
     const row = (s.dispense && s.dispense.purgeRow) || {};
@@ -2144,9 +2167,15 @@
   }
 
   // ================================================================================== events
-  IL.on('status', (s) => {
+  IL.on('status', (s, prev) => {
     IL.safe(() => trackPhases(s), 'run phases');
     IL.safe(() => trackDone(s), 'run done');
+    // a task started while the run confirm is open (another tab or client, or ours): its ticks, "hands clear" above
+    // all, and its dot count were for the board before that task, so the confirm closes
+    if (R.dlg && IL.taskRunning(s) && prev && !IL.taskRunning(prev)) {
+      if (!R.dlg.starting) IL.toast('Run confirm closed: ' + (s.run && s.run.running && s.run.label === 'board' ? 'a board run' : 'a task') + ' started meanwhile.', 'need');
+      R.dlg.close('task');
+    }
     if (R.dlg) IL.safe(() => updateDialog(s), 'run confirm');
   });
   IL.on('plan', (p, prev) => {
