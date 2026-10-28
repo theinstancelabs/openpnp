@@ -386,7 +386,9 @@ def analyze_stop(lines):
     r["outputs_on_after_first_M410"] = [l for l in after if strip(l).upper().startswith("M106")]
     offs = [strip(l) for l in lines if strip(l) in ("M107 P2", "M107 P3")]
     r["first_off_pair"] = offs[:2]
-    r["valve_off_before_pump_off"] = offs[:2] == ["M107 P3", "M107 P2"]
+    # valve vented before the pump stops: the first valve OFF precedes the first pump OFF. (During a run the
+    # engine's I1 lines and OpenPnP's DISABLE_COMMAND interleave, so the first two OFFs can both be M107 P3.)
+    r["valve_off_before_pump_off"] = bool(offs) and offs[0] == "M107 P3" and "M107 P2" in offs
     r["valve_off_present"] = any(strip(l) == "M107 P3" for l in lines)
     r["pump_off_present"] = any(strip(l) == "M107 P2" for l in lines)
     r["auger_disabled"] = any(strip(l) == "M18 B" for l in lines)
