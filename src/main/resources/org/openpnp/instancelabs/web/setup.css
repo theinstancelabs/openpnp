@@ -1,0 +1,3 @@
+/* setup.css: styles of the Setup workspace only. Tokens and shared components live in app.css (do not redefine them
+   here); the class vocabulary is in DEV_NOTES.md. Port the workspace parts of ui-revamp/final/src/final.css here
+   (band, surf, bringup, bedmap, flowrows, camera view). */
