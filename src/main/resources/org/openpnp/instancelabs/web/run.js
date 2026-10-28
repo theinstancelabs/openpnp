@@ -47,6 +47,9 @@
     lastFetched: {},
     view: 'dots', hidden: new Set(),
     showAllDirty: false,
+    kinds: ssGet('il.run.kinds') || {},        // run planId (subset ids too) → 'test' | 'rest' | 'all' | 'full' (this page started it)
+    alias: ssGet('il.run.alias') || {},        // planId → the first planId of the same seated board (plan again keeps the board)
+    boardStarts: ssGet('il.run.boardStarts') || [],   // client ms of every "Next board" (a new board starts there)
   };
   R.doneSet = new Set(R.done.idx || []);
   IL.run = R;   // console / tests: IL.run
@@ -69,7 +72,7 @@
     const o = opts || {};
     return el('div', { class: 'tile' + (o.cls ? ' ' + o.cls : ''), id: o.id || null, title: o.title || null },
       el('div', { class: 'tile__k' }, el('span', {}, k), o.aside ? el('span', { class: 'aside', text: o.aside }) : null),
-      v ? el('div', { class: 'tile__v' }, v) : null, o.extra || null, sub ? el('div', { class: 'tile__s' }, sub) : null);
+      v ? el('div', { class: 'tile__v' }, v) : null, o.extra || null, sub ? el('div', { class: 'tile__s' }, typeof sub === 'string' ? IL.nb(sub) : sub) : null);
   }
   function pair(a, al, b, bl) {
     return el('div', { class: 'pair' },
@@ -152,15 +155,50 @@
     return { x: src.x, y: src.y, z: src.z, rot: src.rotation || 0, job: false };
   }
   function remembered(file) { return file ? lsJson('il.boardloc.' + file, null) : null; }
-  /** Board number this session (distinct plans with dots dispensed today, in order; the shown plan counts next). */
+  /** The board a plan belongs to: plans made again for the same seat share the first plan's key (R.alias). */
+  const boardKey = (planId) => { const b = IL.basePlanId(planId); return (b && R.alias[b]) || b; };
+  /**
+   * Board number this session: today's board runs with dots, in order; a new board starts when the board key changes
+   * or "Next board" was pressed between two runs. The plan shown is the last board if its key matches and no
+   * "Next board" came after that run, else the next number.
+   */
   function boardNumber(planId) {
     const today0 = new Date().setHours(0, 0, 0, 0);
     const rows = (S.runs || []).filter((r) => r.kind === 'board' && r.dots_done > 0 && (r.started_at - S.skewMs) >= today0)
       .sort((a, b) => a.started_at - b.started_at);
-    const ids = [];
-    for (const r of rows) { const b = IL.basePlanId(r.plan_id); if (!ids.includes(b)) ids.push(b); }
-    const i = planId ? ids.indexOf(planId) : -1;
-    return i >= 0 ? i + 1 : ids.length + 1;
+    const starts = R.boardStarts || [];
+    let n = 0, prevKey = null, prevAt = -Infinity;
+    for (const r of rows) {
+      const key = boardKey(r.plan_id), at = r.started_at - S.skewMs;
+      if (key !== prevKey || starts.some((t) => t > prevAt && t <= at)) n++;
+      prevKey = key;
+      prevAt = at;
+    }
+    if (!planId) return n + 1;
+    const newer = starts.some((t) => t > prevAt);
+    return n && prevKey === boardKey(planId) && !newer ? n : n + 1;
+  }
+  /**
+   * Plan again for the same seated board (no "Next board" since the old plan): the new plan is the same board. Its key
+   * and the dots already dispensed carry over (matched by pad and position), so the board count and the pasted pads stay.
+   */
+  function carryBoard(prev, p) {
+    if (!prev || !p || prev.planId === p.planId || seatKey(prev.source) !== seatKey(p.source)) return;
+    // the old plan belongs to the board on the machine if this board's dots are on it (the done map is emptied by
+    // "Next board"), or it was made after the last "Next board" (a plan used for several boards keeps the newest)
+    const lastStart = (R.boardStarts || []).reduce((a, b) => Math.max(a, b), 0);
+    const hasDots = R.done.planId === prev.planId && R.doneSet.size > 0;
+    if (!hasDots && (prev.createdAtMs - S.skewMs) < lastStart) return;
+    R.alias[p.planId] = boardKey(prev.planId);
+    ssSet('il.run.alias', R.alias);
+    if (R.done.planId !== prev.planId || !R.doneSet.size) return;
+    const key = (d) => d.padId + '|' + Number(d.x).toFixed(3) + '|' + Number(d.y).toFixed(3);
+    const was = new Set((prev.dots || []).filter((d) => R.doneSet.has(d.index)).map(key));
+    const pads = new Set((prev.dots || []).filter((d) => R.doneSet.has(d.index)).map((d) => d.padId));
+    const now = (p.dots || []).filter((d) => was.has(key(d)) || (pads.has(d.padId) && !(prev.dots || []).some((o) => o.padId === d.padId && !R.doneSet.has(o.index))));
+    R.done = { planId: p.planId, idx: [], runIds: R.done.runIds.slice(), since: R.done.since || 0 };
+    R.doneSet = new Set(now.map((d) => d.index));
+    saveDone();
   }
   function runRow(r) {
     if (!r) return null;
@@ -183,6 +221,10 @@
     const row = (S.runs || []).find((r) => r.kind === 'board' && IL.planMatches(r.plan_id));
     return runRow(row);
   }
+  /**
+   * What a board run did, against the whole board: "all 160 dots", "20 of 160 dots (test)", "the 128 dots left · board
+   * complete", "61 of 160 dots". p: the plan shown (used when the run belongs to it).
+   */
   function outcomeText(r, p) {
     if (!r) return '';
     if (r.status === 'REFUSED') {
@@ -190,9 +232,18 @@
       if (/^I10/.test(r.message || '') && cc && !cc.ok) return IL.plural((cc.dirtyPadIds || []).length, 'pad') + ' not clean';
       return 'nothing dispensed';
     }
-    const sub = p && r.planId && r.planId !== p.planId;
-    if (r.dotsDone === r.dotsPlanned) return sub ? r.dotsDone + ' of ' + p.dots.length + ' dots' : 'all ' + r.dotsPlanned + ' dots';
-    return r.dotsDone + ' of ' + r.dotsPlanned + ' dots';
+    const pp = p || plan();
+    const mine = !!(pp && r.planId && boardKey(r.planId) === boardKey(pp.planId));
+    const N = mine ? pp.dots.length : null;
+    const sub = /-subset-/.test(String(r.planId || '')) || (N !== null && r.dotsPlanned < N);
+    const kind = R.kinds[r.planId] || null;
+    if (!sub) return r.dotsDone === r.dotsPlanned ? 'all ' + r.dotsPlanned + ' dots' : r.dotsDone + ' of ' + r.dotsPlanned + ' dots';
+    if (kind === 'rest' && r.dotsDone === r.dotsPlanned) {
+      const latest = !!resultRun(S.status) && resultRun(S.status).runId === r.runId;
+      return 'the ' + IL.plural(r.dotsDone, 'dot') + ' left' + (mine && latest && R.doneSet.size >= N ? ' · board complete' : '');
+    }
+    if (N === null) return r.dotsDone + ' of ' + r.dotsPlanned + ' dots (part of the board)';
+    return r.dotsDone + ' of ' + N + ' dots' + (kind === 'test' ? ' (test)' : r.dotsDone < r.dotsPlanned ? ' (stopped)' : '');
   }
 
   // ================================================================================== done dots, phases (every poll)
@@ -247,8 +298,26 @@
     const it = r.items.find((x) => x.key === 'surface');
     return !!it && (it.state === 'need' || it.state === 'block');
   }
-  /** The board decision after a STOP / abort of this plan's board run: the stopped run, or null. */
+  /**
+   * The board decision: after a STOP / abort of this plan's board run (the stopped run, cause stop|aborted|error|openpnp),
+   * or while the seated board has paste on part of its pads (a test run of the first N dots, a partial finish: cause
+   * 'partial'), or null. Finish the pads left, or wipe them all and run the whole board.
+   */
   function decision(s) {
+    return stopDecision(s) || partialDecision(s);
+  }
+  function partialDecision(s) {
+    const p = plan();
+    if (!p || runningBoard(s) || IL.recoveryActive()) return null;
+    const N = p.dots.length;
+    const done = R.done.planId === p.planId ? R.doneSet.size : 0;
+    if (!(done > 0 && done < N)) return null;
+    const rr = resultRun(s);
+    const kind = rr ? R.kinds[rr.planId] : null;
+    return { cause: 'partial', kind: kind === 'test' ? 'test' : 'partial', atMs: rr && rr.endedAtMs ? rr.endedAtMs - S.skewMs : Date.now(),
+      run: { runId: rr ? rr.runId : null, planId: p.planId, label: 'board', boardName: p.boardName, status: 'OK', dotsDone: done, dotsPlanned: N } };
+  }
+  function stopDecision(s) {
     const p = plan();
     if (!p) return null;
     let rec = S.recovery || S.lastStop;
@@ -259,10 +328,12 @@
       rec = { cause: run.status === 'ERROR' ? 'error' : 'aborted', atMs: run.finishedAtMs ? run.finishedAtMs - S.skewMs : Date.now(), run, message: run.message };
     }
     if (!rec || rec.atMs <= R.decidedAt) return null;
-    if (runningBoard(s)) return null;
+    if (runningBoard(s) && !IL.stoppedRun(s)) return null;
     if (!(rec.run.dotsDone < rec.run.dotsPlanned)) return null;
     return rec;
   }
+  /** A stop before the first board dot: nothing to keep or wipe, the one action is to run the board again. */
+  const zeroDots = (rec) => !!rec && rec.cause !== 'partial' && IL.noDotsReached(rec.run) && !R.doneSet.size;
   function autoStep(s) {
     if (runningBoard(s)) return 'run';
     if (!plan()) return 'board';
@@ -330,6 +401,27 @@
       + IL.fmtClock(tourSeconds((r && r.dots) || 0)) + ').',
   });
   IL.fix('probe', { href: '#run/probe' });
+  // I7 on-time: a test run of the first N dots that fits the limit (90 % of it, after settle and purge)
+  IL.fix('run-fewer', {
+    gate: (s) => IL.lockReason(s, { pressureOff: false }) || (!plan() ? 'Plan a board first' : null),
+    run: async (btn, arg, s) => {
+      const p = plan();
+      const est = estimate(s);
+      const lim = s && s.dispense && s.dispense.maxContinuousOnTimeS;
+      let n = null;
+      if (est && isNum(lim) && p.dots.length > 1) {
+        const per = est.work / p.dots.length;
+        n = Math.max(1, Math.min(p.dots.length - 1, Math.floor((Number(lim) * 0.9 - est.pre) / per)));
+      }
+      R.test = true;
+      R.maxDots = n ? String(n) : '';
+      goStep('checks');
+      IL.render();
+      setTimeout(() => { const i = $('run-maxdots'); if (i) { i.value = R.maxDots; i.focus({ preventScroll: false }); } }, 60);
+      return n;
+    },
+    ok: (n) => (n ? 'Test run: the first ' + n + ' dots fit the on-time limit.' : 'Enter how many dots to run.'),
+  });
   // Records › board detail "Finish the remaining pads": arg {planId, padIds} → the plan on Run and the run confirm
   IL.fix('run-rest', {
     run: async (btn, arg) => {
@@ -387,7 +479,7 @@
     n.decideQ = el('div', { class: 'run-decide__q' });
     n.decideWhy = el('div', { class: 'reason' }, IL.icon('i-lock'), el('span'));
     n.decide.append(el('div', { class: 'run-decide__t' }, el('div', { class: 'eyebrow', text: 'This board' }), n.decideQ, n.decideWhy), n.rest, n.all);
-    n.rest.addEventListener('click', () => openConfirm('rest'));
+    n.rest.addEventListener('click', () => openConfirm(zeroDots(decision(S.status)) ? 'full' : 'rest'));
     n.all.addEventListener('click', () => openConfirm('all'));
 
     n.hero = el('section', { class: 'card hero', id: 'run-hero', 'aria-label': 'Plan preview' }, n.heroHead, n.stage, n.summary, n.live, n.decide);
@@ -408,9 +500,10 @@
     const p = plan();
     if (!p) return 'empty';
     const run = boardRunOfPlan(s);
-    if (run && run.running) return 'live';
-    if (decision(s)) return 'stopped';
+    if (run && run.running && !IL.stoppedRun(s)) return 'live';
+    if (stopDecision(s)) return 'stopped';
     if (step === 'result' && resultRun(s)) return 'result';
+    if (partialDecision(s)) return 'stopped';
     return 'idle';
   }
   function renderMain(s) {
@@ -442,8 +535,13 @@
     const run = s.run;
     const seat = p ? seatOf(p) : null;
     const no = p ? boardNumber(p.planId) : null;
-    IL.show(n.actions, mode !== 'stopped');
-    IL.show(n.lock, mode === 'live');
+    const dec0 = mode === 'stopped' ? decision(s) : null;
+    const partial = !!dec0 && dec0.cause === 'partial';
+    IL.show(n.actions, mode !== 'stopped' || partial);
+    // the lock note names what is locked during any task (board run, pad check, prime ...): greyed controls say why
+    const taskLock = IL.taskRunning(s) ? IL.lockReason(s, { pressureOff: false }) : null;
+    IL.show(n.lock, !!taskLock);
+    if (taskLock) IL.setText(n.lock.lastChild, 'Change board, Plan again, the board position, setup saves and Home: ' + taskLock.charAt(0).toLowerCase() + taskLock.slice(1) + '.');
     let eb = '', ebCls = 'eyebrow', title = '', meta = [];
     if (mode === 'empty') {
       const sel = selectedBoard();
@@ -456,14 +554,20 @@
       ebCls += ' eyebrow--live';
       title = p.boardName;
     } else if (mode === 'stopped') {
-      const rec = decision(s);
-      const how = rec.cause === 'stop' ? 'ended by STOP' : rec.cause === 'error' ? 'ended by an error' : rec.cause === 'openpnp' ? 'stopped in OpenPnP' : 'stopped';
-      eb = 'Board ' + no + ' this session · ' + how + ' ' + IL.fmtTimeS(rec.atMs) + ' · ' + rec.run.dotsDone + ' of ' + rec.run.dotsPlanned + ' dots';
-      ebCls += ' eyebrow--block';
+      const rec = dec0;
       title = p.boardName;
+      if (partial) {
+        eb = 'Board ' + no + ' · ' + (rec.kind === 'test' ? 'test run finished ' : 'part done ') + IL.fmtTime(rec.atMs) + ' · ' + rec.run.dotsDone + ' of ' + rec.run.dotsPlanned + ' dots';
+        ebCls += ' eyebrow--need';
+      } else {
+        const how = rec.cause === 'stop' ? 'ended by STOP' : rec.cause === 'error' ? 'ended by an error' : rec.cause === 'openpnp' ? 'stopped in OpenPnP' : 'stopped';
+        eb = 'Board ' + no + ' this session · ' + how + ' ' + IL.fmtTimeS(rec.atMs) + ' · ' + (zeroDots(rec) ? 'no dot reached the board' : rec.run.dotsDone + ' of ' + rec.run.dotsPlanned + ' dots');
+        ebCls += ' eyebrow--block';
+      }
       if (seat && isNum(seat.x)) meta.push(el('span', {}, 'Seat ', el('b', { text: 'X ' + fmtMmV(seat.x) + ' · Y ' + fmtMmV(seat.y) + ' mm · Rot ' + IL.fmt(seat.rot, 1) + '°' })));
       meta.push(el('span', { text: 'plan ' + shortId(p) }));
-      meta.push(el('span', { text: 'Keep the board where it is: the ' + IL.plural(R.doneSet.size || rec.run.dotsDone, 'dot') + ' belong to this seat.' }));
+      meta.push(el('span', { text: zeroDots(rec) ? 'No dot reached the board: nothing to keep or wipe.'
+        : 'Keep the board where it is: the ' + IL.plural(R.doneSet.size || rec.run.dotsDone, 'dot') + ' belong to this seat.' }));
     } else {
       const src = p.source || {};
       eb = 'Board ' + no + ' this session · ' + (seat && seat.job ? 'job board' + (seat.fid ? ' · fiducials checked' : ' · no fiducial check') + (seat.side ? ' · ' + String(seat.side).toLowerCase() + ' side' : '') : 'board file');
@@ -505,10 +609,16 @@
       } else if (run.phase === 'dispensing') text = 'Pressure on · purge dots';
       else text = 'Starting · waiting for OpenPnP motion';
       title = 'Board run in progress (' + (run.phase || '') + ')';
+    } else if (mode === 'stopped' && decision(s).cause === 'partial') {
+      const rec = decision(s);
+      kind = 'need'; glyph = 'need';
+      text = 'Plan ' + shortId(p) + ' · ' + rec.run.dotsDone + '/' + rec.run.dotsPlanned + ' done';
+      title = 'Paste on ' + IL.plural(padsDone(p).length, 'pad') + ' already: finish the pads left, or wipe them and run the whole board.';
     } else if (mode === 'stopped') {
       const rec = decision(s);
       kind = 'block'; glyph = 'block';
-      text = (rec.cause === 'stop' ? 'Ended by STOP' : rec.cause === 'error' ? 'Ended by an error' : 'Stopped') + ' · ' + rec.run.dotsDone + ' of ' + rec.run.dotsPlanned + ' dots';
+      text = (rec.cause === 'stop' ? 'Ended by STOP' : rec.cause === 'error' ? 'Ended by an error' : 'Stopped') + ' · '
+        + (zeroDots(rec) ? 'no dot reached the board' : rec.run.dotsDone + ' of ' + rec.run.dotsPlanned + ' dots');
       title = IL.recoveryHeadline(rec);
     } else {
       const it = r.items.find((x) => x.key === 'plan');
@@ -516,8 +626,11 @@
       const pt = r.items.find((x) => x.key === 'padtypes');
       title = 'Made ' + IL.fmtTime(p.createdAtMs) + ' · ' + p.summary.dots + ' dots on ' + p.summary.pads + ' pads';
       if (it && it.state === 'checking') { kind = 'off'; glyph = 'checking'; text = 'Plan ' + shortId(p) + ' · checking…'; }
-      else if (it && it.stale) { kind = 'need'; glyph = 'need'; text = 'Plan ' + shortId(p) + ' · stale: ' + it.stale.join(', ').replace(/^the /, '') + ' changed'; title = it.detail + ' Plan again.'; }
-      else if (pt && pt.state === 'block') { kind = 'block'; glyph = 'block'; text = 'Plan ' + shortId(p) + ' · ' + pt.detail.replace(/\.$/, ''); title = pt.detail; }
+      else if (it && it.stale) {
+        kind = 'need'; glyph = 'need';
+        text = 'Plan ' + shortId(p) + ' · stale: ' + it.stale.map((x) => x.replace(/^the /, '')).join(', ') + ' changed' + (it.staleAt ? ' ' + IL.fmtTime(it.staleAt) : '');
+        title = it.detail + ' Plan again.';
+      } else if (pt && pt.state === 'block') { kind = 'block'; glyph = 'block'; text = 'Plan ' + shortId(p) + ' · ' + (pt.chip || pt.short); title = pt.detail; }
       else if (sf && (sf.state === 'need' || sf.state === 'block')) { kind = 'need'; glyph = 'need'; text = 'Plan ' + shortId(p) + " · needs this seat's surface"; title = sf.detail; }
       else { text = 'Plan ' + shortId(p) + ' · current'; title += ' with the current profile, surface and start angle'; }
     }
@@ -533,12 +646,12 @@
     const live = s.dispense && s.dispense.profile;
     const changed = !!(p && live && live.fingerprint && p.profileFingerprint && live.fingerprint !== p.profileFingerprint);
     IL.keyed(n.recipe, prof ? JSON.stringify(IL.recipeParts(prof)) + changed : '', () => (prof ? IL.recipeEl(prof, {
-      changed, href: '#profile', title: 'Dispense profile this plan was made with' + (changed ? ': the profile changed since, plan again' : ''),
+      changed, changedText: 'changed: plan again', href: '#profile', title: 'Dispense profile this plan was made with (' + prof.name + ')' + (changed ? ': the profile changed since, plan again' : ''),
     }) : null));
-    IL.show(n.recipe, !!prof && mode !== 'stopped');
+    IL.show(n.recipe, !!prof && (mode !== 'stopped' || decision(s).cause === 'partial'));
     // stopped: what was interrupted
     let note = null;
-    if (mode === 'stopped') {
+    if (mode === 'stopped' && decision(s).cause !== 'partial') {
       const rec = decision(s);
       const rr = rec.run;
       const ph = phaseAtStop(rr);
@@ -566,15 +679,23 @@
   function tourProgress(run, elapsedS, nPads) {
     if (isNum(run.checkDone) && isNum(run.checkPlanned) && run.checkPlanned > 0) {
       const perPad = run.checkDone > 0 ? elapsedS / run.checkDone : tourSeconds(1);
-      return { text: 'pad ' + run.checkDone + ' of ' + run.checkPlanned, left: Math.max(0, (run.checkPlanned - run.checkDone) * perPad) };
+      return { text: 'pad ' + run.checkDone + ' of ' + run.checkPlanned, left: Math.max(0, (run.checkPlanned - run.checkDone) * perPad),
+        k: run.checkDone, n: run.checkPlanned, approx: false };
     }
     const k = Math.min(nPads, Math.floor(elapsedS / tourSeconds(1)));
-    return { text: '≈ pad ' + k + ' of ' + nPads, left: Math.max(0, tourSeconds(nPads) - elapsedS) };
+    return { text: '≈ pad ' + k + ' of ' + nPads, left: Math.max(0, tourSeconds(nPads) - elapsedS), k, n: nPads, approx: true };
   }
+  // core's strip verdict and tab title show the same progress and time left as the Pads clean card
+  IL.tourProgress = tourProgress;
   /** Seconds the pressure had been on when the run stopped (core's snapshot, else this page's phase stamps). */
   function pressureAtStop(rr) {
     if (isNum(rr.pressureOnS) && rr.pressureOnS > 0) return rr.pressureOnS;
-    if (R.ph.runId === rr.runId && R.ph.at.dispensing) return ((R.ph.endAt || Date.now()) - R.ph.at.dispensing) / 1000;
+    // §17 run.pressureOnAtMs (also after a reload): from the pressure on to the end of the run
+    if (isNum(rr.pressureOnAtMs) && isNum(rr.finishedAtMs) && rr.finishedAtMs > rr.pressureOnAtMs) return (rr.finishedAtMs - rr.pressureOnAtMs) / 1000;
+    if (R.ph.runId === rr.runId && R.ph.at.dispensing) {
+      const v = ((R.ph.endAt || Date.now()) - R.ph.at.dispensing) / 1000;
+      return v > 0 ? v : null;
+    }
     return null;
   }
   /** The in-progress dot at STOP (amber ring): the stopped run's next dot in its own order. */
@@ -612,10 +733,15 @@
     if (!p) { IL.show(n.stageBar, false); IL.show(n.timeline, false); return; }
     IL.show(n.stageBar, true);
     if (bv.planId !== p.planId) bv.setPlan(p, { origin: originOf(p) });
-    // overlays
+    // overlays. Paste found by the pad check: only before a run (idle), only from a check newer than the last board run
+    // of this plan (after a run the pads have paste for real), and never for "0 of N clean" (the board position looks
+    // wrong: the boxes saw solder mask, not paste)
     const cc = S.cleanCheck && IL.planMatches(S.cleanCheck.planId || p.planId) ? S.cleanCheck : null;
+    const lastRun = resultRun(s);
+    const ccFresh = !!cc && !(lastRun && lastRun.startedAtMs && cc.checkedAtMs < lastRun.startedAtMs);
+    const posWrong = ccFresh && IL.cleanPositionWrong(cc);
     const dirty = new Map();
-    if (cc) for (const d of IL.dirtyPads(cc)) dirty.set(d.padId, d.share);
+    if (ccFresh && !posWrong && (mode === 'idle' || mode === 'empty')) for (const d of IL.dirtyPads(cc)) dirty.set(d.padId, d.share);
     const rec = mode === 'stopped' ? decision(s) : null;
     const chk = rec ? checkMark(rec) : null;
     const pos = IL.positions(s);
@@ -636,21 +762,20 @@
     IL.keyed(n.viewSeg, JSON.stringify(views) + bv.view, () => views.map(([v, t]) => el('button', { type: 'button', 'aria-pressed': String(bv.view === v),
       onclick: () => { bv.setView(v); IL.render(); } }, t)));
     IL.show(n.viewSeg, views.length > 0);
-    n.zoomIn.disabled = !bv.canZoomIn;
-    n.zoomOut.disabled = !bv.canZoomOut;
-    renderLegend(s, p, mode, dirty, chk, probe);
+    IL.patch(n.zoomIn, { disabled: !bv.canZoomIn });
+    IL.patch(n.zoomOut, { disabled: !bv.canZoomOut });
+    renderLegend(s, p, mode, dirty, chk, probe, posWrong && (mode === 'idle' || mode === 'empty'));
     renderTimeline(s, p, mode);
   }
-  function renderLegend(s, p, mode, dirty, chk, probe) {
+  function renderLegend(s, p, mode, dirty, chk, probe, posWrong) {
     const n = R.n;
     const N = p.dots.length;
     const done = R.doneSet.size;
     const items = [];
     const layer = (key, cls, text) => ({ key, cls, text });
     if (mode === 'live') {
-      const run = boardRunOfPlan(s);
-      const todo = run ? Math.max(0, run.dotsPlanned - run.dotsDone) : Math.max(0, N - done);
-      items.push(layer(null, 'lg-done', 'dispensed · ' + done), layer(null, 'lg-dot', 'to do · ' + todo), layer(null, 'lg-next', 'next dot'));
+      // the board's count (the tiles count this run): one base, named
+      items.push(layer(null, 'lg-done', 'on the board · ' + done + ' of ' + N), layer(null, 'lg-dot', 'to do · ' + Math.max(0, N - done)), layer(null, 'lg-next', 'next dot'));
     } else if (mode === 'stopped') {
       items.push(layer(null, 'lg-done', 'dispensed · ' + done), layer(null, 'lg-dot', 'not dispensed · ' + Math.max(0, N - done)));
       if (chk) items.push(layer(null, 'lg-check', 'in progress at STOP · 1'));
@@ -658,6 +783,7 @@
       // at most four, by importance: what needs the operator first, the plain layers last
       const blocked = (p.pads || []).filter((x) => x.blocked).length;
       const all = [];
+      if (posWrong && !probe) all.push([0, layer(null, 'lg-check', 'pad check: board position looks wrong')]);
       if (dirty.size && !probe) all.push([1, layer('dirty', 'lg-dirty', 'paste found · ' + dirty.size)]);
       if (blocked) all.push([2, layer(null, 'lg-dirty', 'cannot dispense · ' + blocked)]);
       if (probe) all.push([3, layer(null, 'lg-probe', 'probe target')], [4, layer(null, 'lg-area', 'probed area')]);
@@ -680,7 +806,7 @@
       : el('span', {}, el('i', { class: 'lg ' + x.cls }), x.text))));
     if (rebuilt && mode !== 'live' && mode !== 'stopped' && R.lgMax > 2 && n.legend.clientWidth && n.legend.scrollWidth > n.legend.clientWidth + 1) {
       R.lgMax--;
-      renderLegend(s, p, mode, dirty, chk, probe);
+      renderLegend(s, p, mode, dirty, chk, probe, posWrong);
     }
   }
   window.addEventListener('resize', () => { R.lgBase = null; });
@@ -694,18 +820,27 @@
     const t = phaseTimes(s, run, now);
     const segs = [];
     const inCam = /I10|clean/i.test(run.phase || '');
+    // [class, width (s), label, title, short label]
     if (inCam && t.est) {
       const tp = tourProgress(run, t.cam || 0, (p.pads || []).length);
-      segs.push(['tl-cam', Math.max(t.est.tour, t.cam || 0), 'Camera check · ' + tp.text + ' · ' + IL.fmtClock(t.cam || 0)]);
+      segs.push(['tl-cam', Math.max(t.est.tour, t.cam || 0), 'Camera check · ' + tp.text + ' · ' + IL.fmtClock(t.cam || 0), null, 'Camera ' + IL.fmtClock(t.cam || 0)]);
       t.left = t.est.pressure;
-    } else if (t.cam !== null) segs.push(['tl-cam', t.cam, 'Camera check · ' + IL.plural(run.dotsPlanned, 'pad') + ' · ' + IL.fmtClock(t.cam)]);
+    } else if (t.cam !== null) segs.push(['tl-cam', t.cam, 'Camera check · ' + IL.plural(run.dotsPlanned, 'pad') + ' · ' + IL.fmtClock(t.cam), null, 'Camera ' + IL.fmtClock(t.cam)]);
     if (t.pre !== null) segs.push(['tl-pre', Math.max(t.pre, 0.5), '', 'Pump, valve, ' + ((p.profile && p.profile.purgeDots) || 0) + ' purge dots, crossing: ' + IL.fmtClock(t.pre)]);
-    if (t.dots !== null && run.dotsDone > 0) segs.push(['tl-dots', t.dots, IL.plural(run.dotsDone, 'dot') + ' · ' + IL.fmtClock(t.dots)]);
-    if (t.left !== null) segs.push(['tl-left', Math.max(t.left, 1), '≈ ' + IL.fmtClock(t.left) + ' left']);
+    if (t.dots !== null && run.dotsDone > 0) segs.push(['tl-dots', t.dots, IL.plural(run.dotsDone, 'dot') + ' · ' + IL.fmtClock(t.dots), null, IL.plural(run.dotsDone, 'dot')]);
+    if (t.left !== null) segs.push(['tl-left', Math.max(t.left, 1), '≈ ' + IL.fmtClock(t.left) + ' left', null, '≈ ' + IL.fmtClock(t.left)]);
     const label = segs.map((x) => x[3] || x[2]).filter(Boolean).join(', ');
     IL.setAttr(n.timeline, 'aria-label', 'Session time: ' + label);
     const key = segs.map((x) => x[0] + Math.round(x[1]) + x[2]).join('|');
-    IL.keyed(n.timeline, key, () => segs.map(([cls, w, text, title]) => el('span', { class: cls, style: 'flex:' + Math.max(0.5, w).toFixed(1), title: title || text || null }, text)));
+    if (IL.keyed(n.timeline, key, () => segs.map(([cls, w, text, title, short]) => el('span', { class: cls, style: 'flex:' + Math.max(0.5, w).toFixed(1),
+      title: title || text || null, 'data-short': short || '' }, text)))) {
+      // measured once per rebuild (each dot): a label never shows clipped
+      for (const sp of n.timeline.children) {
+        if (sp.scrollWidth <= sp.clientWidth + 1) continue;
+        sp.textContent = sp.dataset.short || '';
+        if (sp.scrollWidth > sp.clientWidth + 1) sp.textContent = '';
+      }
+    }
   }
   /** Seconds of the board run's parts so far: {cam, pre, dots, left, elapsed, pressureS} (client stamps, §8.1.6). */
   function phaseTimes(s, run, now) {
@@ -720,7 +855,7 @@
     const est = estimate(s, run.dotsPlanned, run.dotsPlanned);
     let left = null;
     if (run.running) {
-      if (run.dotsDone > 0 && run.liveDph) left = (run.dotsPlanned - run.dotsDone) / run.liveDph * 3600 + VENT_S;
+      if (run.dotsDone > 0) left = IL.boardLeftS(run);
       else if (est) {
         // before the first dot: what is left of the camera tour, of the settle and purge, then every dot
         const tourLeft = disp ? 0 : camKey ? Math.max(0, est.tour - (cam || 0)) : est.tour;
@@ -780,11 +915,16 @@
     const sm = p.summary || {};
     const whole = t.left !== null && t.elapsed !== null ? t.elapsed + t.left : null;
     const camKey = Object.keys(R.ph.at || {}).some((k) => /I10|clean/i.test(k));
-    const subLeft = (t.pressureS > 0 ? 'dispensing ' + IL.fmtClock(t.pressureS) : /I10|clean/i.test(run.phase || '') ? 'checking pads, pressure off' : 'starting')
-      + (whole ? ' · whole board ≈ ' + IL.fmtClock(whole) + (camKey ? ' incl. pad check' : '') : '');
-    const key = JSON.stringify([run.runId, run.dotsDone, run.dotsPlanned, Math.round(t.left || -1), Math.round(t.pressureS), Math.round(run.liveDph || 0), Math.round(overall || 0)]);
+    // a subset run (test, the pads left) is not the whole board: say what the total is for
+    const subset = run.planId !== p.planId || run.dotsPlanned < p.dots.length;
+    const kind = R.kinds[run.planId];
+    const forWhat = !subset ? 'whole board' : kind === 'rest' ? 'these ' + IL.plural(run.dotsPlanned, 'dot') : 'this test';
+    const subLeft = [(t.pressureS > 0 ? 'dispensing ' + IL.fmtClock(t.pressureS) : /I10|clean/i.test(run.phase || '') ? 'checking pads, pressure off' : 'starting'),
+      whole ? [' · ', el('span', { class: 'nowrap', text: forWhat + ' ≈ ' + IL.fmtClock(whole) }), camKey ? ' incl. pad check' : ''] : ''];
+    const key = JSON.stringify([run.runId, run.dotsDone, run.dotsPlanned, Math.round(t.left || -1), Math.round(t.pressureS), Math.round(run.liveDph || 0), Math.round(overall || 0), R.doneSet.size]);
     IL.keyed(n.live, key, () => [
-      tile('Dots', [el('span', { class: 'n', text: String(run.dotsDone) }), el('span', { class: 'u', text: 'of ' + run.dotsPlanned })], null,
+      tile('Dots', [el('span', { class: 'n', text: String(run.dotsDone) }), el('span', { class: 'u', text: 'of ' + run.dotsPlanned })],
+        subset ? 'this run · board ' + R.doneSet.size + ' of ' + p.dots.length : null,
         { cls: 'tile--big', extra: el('div', { class: 'bar', role: 'progressbar', 'aria-valuemin': 0, 'aria-valuemax': run.dotsPlanned, 'aria-valuenow': run.dotsDone, 'aria-label': 'Dots done' },
           el('i', { id: 'run-bar', style: 'width:' + pct.toFixed(1) + '%' })) }),
       tile('Time left', el('span', { class: 'n', text: t.left !== null ? IL.fmtClock(t.left) : '—' }), subLeft, { cls: 'tile--big' }),
@@ -806,9 +946,9 @@
       tile('Dots', [el('span', { class: 'n', text: String(rr.dotsDone) }), el('span', { class: 'u', text: 'of ' + rr.dotsPlanned })],
         null, { cls: rr.status === 'OK' ? '' : 'tile--block', extra: [el('div', { class: 'bar' }, el('i', { id: 'run-bar', style: 'width:' + pct.toFixed(1) + '%' })),
           el('div', { class: 'tile__s', style: 'margin-top:6px', text: (STATUS_WORD[rr.status] || rr.status) + ' · ' + outcomeText(rr, p) })] }),
-      tile('Board time', isNum(rr.totalSeconds) ? units(IL.fmtDuration(rr.totalSeconds)) : el('span', { class: 'n', text: '—' }),
-        isNum(rr.motionSeconds) ? 'dots ' + IL.fmtClock(rr.motionSeconds) + ' · ended ' + IL.fmtTime(rr.endedAtMs - S.skewMs) : null),
-      tile(['', dphAbbr()], null, 'estimate ' + dph(sm.estimatedWorkDph) + ' · ' + dph(sm.estimatedDph), { aside: 'bench ' + IL.fmtInt(BENCH_DPH),
+      tile('Board time', el('span', { class: 'n', text: isNum(rr.totalSeconds) ? IL.fmtClock(rr.totalSeconds) : '—' }),
+        isNum(rr.motionSeconds) ? [el('span', { class: 'nowrap', text: 'dots ' + IL.fmtClock(rr.motionSeconds) }), ' · ', el('span', { class: 'nowrap', text: 'ended ' + IL.fmtTime(rr.endedAtMs - S.skewMs) })] : null),
+      tile(['', dphAbbr()], null, [el('span', { class: 'nowrap', text: 'estimate ' + dph(sm.estimatedWorkDph) }), ' · ', el('span', { class: 'nowrap', text: dph(sm.estimatedDph) })], { aside: 'bench ' + IL.fmtInt(BENCH_DPH),
         extra: pair(dph(rr.dphMotion), 'dots only', dph(rr.dphOverall), 'overall') }),
       tile('Purge row', row.defined ? [el('span', { class: 'n', text: String(row.spotsLeft) }), el('span', { class: 'u', text: 'of ' + row.spots })] : el('span', { class: 'n', text: '—' }),
         row.defined ? (row.spotsLeft < row.perBoard ? 'wipe and reset before the next board' : 'spots free · next board uses ' + row.perBoard) : 'not set',
@@ -822,6 +962,12 @@
     for (const d of p.dots) { if (!byPad.has(d.padId)) byPad.set(d.padId, []); byPad.get(d.padId).push(d.index); }
     for (const [pid, idx] of byPad) if (!idx.every((i) => R.doneSet.has(i))) left.push(pid);
     return left;
+  }
+  /** Pads with paste from this board's runs (at least one dot done). */
+  function padsDone(p) {
+    const out = new Set();
+    for (const d of p.dots) if (R.doneSet.has(d.index)) out.add(d.padId);
+    return Array.from(out);
   }
   function renderDecide(s, p) {
     const n = R.n;
@@ -846,21 +992,29 @@
     const active = IL.recoveryActive();
     const r = IL.ready();
     const cc = cleanEnabled(s);
-    IL.setText(n.decideQ, 'Finish the ' + IL.plural(left.length, 'pad') + ' left, or wipe all pads and run the whole board.');
-    setBtnLabel(n.rest, ['Finish ' + IL.plural(left.length, 'pad')]);
+    const zero = zeroDots(rec);
+    const pasted = padsDone(p).length;
+    const partial = rec.cause === 'partial';
+    IL.setText(n.decideQ, zero ? 'No dot reached the board: run it again once the recovery steps are done.'
+      : (partial ? (rec.kind === 'test' ? 'The test run put paste on ' : 'Paste is on ') + IL.plural(pasted, 'pad') + '. ' : '')
+        + 'Finish the ' + IL.plural(left.length, 'pad') + ' left, or wipe ' + (partial ? 'the ' + IL.plural(pasted, 'pasted pad') : 'all pads') + ' and run the whole board.');
+    setBtnLabel(n.rest, [zero ? 'Run the board again' : 'Finish ' + IL.plural(left.length, 'pad')]);
+    setBtnLabel(n.all, [partial ? 'Wipe the ' + IL.plural(pasted, 'pad') + ', run all' : 'Wipe all, run all']);
+    IL.show(n.all, !zero);
     let why = null;
     if (active) {
       const steps = IL.recoverySteps(s, S.recovery).filter((x) => x.key !== 'decide');
-      why = 'Both unlock after steps ' + (steps.length > 1 ? '2 to ' + steps.length : '1') + ' on the right.'
-        + (cc ? ' A whole-board run is refused while the ' + IL.plural(R.doneSet.size || rec.run.dotsDone, 'dispensed pad') + ' read dirty (I10).' : '');
+      why = (zero ? 'Unlocks' : 'Both unlock') + ' after steps ' + (steps.length > 1 ? '2 to ' + steps.length : '1') + ' on the right.'
+        + (cc && !zero ? ' A whole-board run is refused while the ' + IL.plural(R.doneSet.size || rec.run.dotsDone, 'dispensed pad') + ' read dirty (I10).' : '');
     } else if (!r.canRun) why = r.runReason;
-    else if (cc) why = 'A whole-board run checks every pad first and is refused while the ' + IL.plural(R.doneSet.size, 'dispensed pad') + ' read dirty (I10): wipe them first.';
+    else if (cc && !zero) why = 'A whole-board run checks every pad first and is refused while the ' + IL.plural(pasted, 'pasted pad') + ' read dirty (I10): wipe them first.';
+    else if (!cc && !zero) why = 'The pad check is off: a whole-board run dispenses again on the ' + IL.plural(pasted, 'pasted pad') + ' unless you wipe them first.';
     IL.setText(n.decideWhy.lastChild, why || '');
     IL.show(n.decideWhy, !!why);
     const lock = active ? 'Unlocks after the recovery steps on the right' : !r.canRun ? r.runReason : null;
-    IL.gate(n.rest, lock || (!left.length ? 'No pads left' : null));
+    IL.gate(n.rest, lock || (!zero && !left.length ? 'No pads left' : null));
     IL.gate(n.all, lock);
-    IL.setClass(n.rest, 'btn btn--lg' + (!lock && left.length ? ' btn--primary' : ''));
+    IL.setClass(n.rest, 'btn btn--lg' + (!lock && (zero || left.length) ? ' btn--primary' : ''));
   }
 
   // ================================================================================== panel: stepper
@@ -885,6 +1039,13 @@
       const est = p ? estimate(s) : null;
       st.run = { kind: 'num', sub: est ? '≈ ' + Math.max(1, Math.round(est.total / 60)) + ' min' : '—' };
       const rr = p ? resultRun(s) : null;
+      const dec = p ? decision(s) : null;
+      if (dec && dec.cause !== 'partial') st.run = { kind: 'block', sub: zeroDots(dec) ? 'no dots' : 'dot ' + dec.run.dotsDone };
+      else if (dec) st.run = { kind: 'need', sub: dec.run.dotsDone + ' of ' + dec.run.dotsPlanned };
+      else if (rr && rr.endedAtMs && rr.endedAtMs - S.skewMs > R.decidedAt) {
+        st.run = rr.status === 'OK' ? { kind: 'ok', sub: 'ran ' + (isNum(rr.totalSeconds) ? IL.fmtClock(rr.totalSeconds) : '') }
+          : rr.status === 'REFUSED' ? { kind: 'need', sub: 'refused' } : { kind: 'block', sub: 'dot ' + rr.dotsDone };
+      }
       const last = rr || lastBoardRow();
       st.result = last ? { kind: last.status === 'OK' ? 'ok' : last.status === 'REFUSED' ? 'need' : 'block',
         sub: last.status === 'OK' ? 'board ' + (last.planId ? boardNumber(IL.basePlanId(last.planId)) : '') + ' ok' : { ABORTED: 'stopped', ERROR: 'error', REFUSED: 'refused' }[last.status] || '—' } : { kind: 'num', sub: '—' };
@@ -1184,6 +1345,32 @@
       targets: st.targets.map((t, i) => ({ x: t.x, y: t.y, done: st.doneT.has(i), next: i === st.nextT })) };
   }
   function saveProbe() { ssSet('il.run.probe', R.probe); }
+  const PROBE_NEAR_MM = 2.0;   // N1 farther than this from the target: ask before taking the point
+  /** Limits for a probe point: {tol (Z vs the board top / frame, mm), top (board top Z or the frame surface), topName}. */
+  function probeLimits(s, p) {
+    const cfg = S.config || {};
+    const tol = isNum(cfg.zFrameToleranceMm) ? Number(cfg.zFrameToleranceMm) : 1.0;
+    const seat = seatOf(p) || {};
+    const anchor = s && s.dispense && s.dispense.needle && s.dispense.needle.anchor;
+    if (isNum(seat.z)) return { tol, top: Number(seat.z), topName: 'the board top' };
+    if (anchor && isNum(anchor.surfaceZMm)) return { tol, top: Number(anchor.surfaceZMm), topName: 'the needle frame surface' };
+    return { tol, top: null, topName: '' };
+  }
+  /** Why the live N1 position does not look like a touched target now (one sentence), or null. */
+  function probeWarn(s) {
+    const st = probeState(s);
+    const n1 = IL.positions(s).n1;
+    if (!st.p || !n1 || st.nextT < 0) return null;
+    const t = st.targets[st.nextT];
+    const dist = Math.hypot(n1.x - t.x, n1.y - t.y);
+    if (dist > PROBE_NEAR_MM) return 'N1 is ' + IL.fmt(dist, 1) + ' mm from target ' + (st.nextT + 1) + ': jog there first.';
+    const lim = probeLimits(s, st.p);
+    if (lim.top !== null && Math.abs(n1.z - lim.top) > lim.tol) {
+      const dz = n1.z - lim.top;
+      return 'N1 is ' + IL.fmt(Math.abs(dz), 2) + ' mm ' + (dz > 0 ? 'above' : 'below') + ' ' + lim.topName + ' (Z ' + IL.fmt(lim.top, 2) + '): is the tip touching?';
+    }
+    return null;
+  }
   function buildProbe() {
     const body = el('div', { class: 'stack' },
       el('div', { id: 'probe-banner' }),
@@ -1196,19 +1383,21 @@
   function buildProbeFoot() {
     const add = el('button', { type: 'button', class: 'btn btn--primary btn--lg btn--block', id: 'btn-probe-add', title: 'Record the live N1 X/Y/Z as a surface point (lower N1 until its tip touches the board first)' });
     const save = el('button', { type: 'button', class: 'btn btn--lg btn--block', id: 'btn-probe-save', title: "Save the points as this seat's board surface, tied to the plan, and plan the board again (nothing moves)" });
-    add.addEventListener('click', () => {
+    // a point far from its target or off the board top asks for a second press (the warning above says why)
+    IL.press2(add, (s) => (probeWarn(s) ? 'add this point anyway' : null), async () => {
       const s = S.status;
       const n1 = IL.positions(s).n1;
       const st = probeState(s);
-      if (!n1 || st.nextT < 0) return;
+      if (!n1 || st.nextT < 0) return null;
       st.points.push({ target: st.nextT, x: Math.round(n1.x * 1000) / 1000, y: Math.round(n1.y * 1000) / 1000, z: Math.round(n1.z * 1000) / 1000 });
       saveProbe();
-      IL.toast('Point ' + (st.nextT + 1) + ': X ' + fmtMmV(n1.x) + ' · Y ' + fmtMmV(n1.y) + ' · Z ' + IL.fmt(n1.z, 3) + ' mm');
       IL.render();
-    });
+      return { n: st.nextT + 1, n1 };
+    }, { ok: (r) => (r ? 'Point ' + r.n + ': X ' + fmtMmV(r.n1.x) + ' · Y ' + fmtMmV(r.n1.y) + ' · Z ' + IL.fmt(r.n1.z, 3) + ' mm' : 'No point taken') });
     save.addEventListener('click', () => saveProbeAndPlan(save));
     return el('div', { class: 'stack', style: 'gap:8px', 'data-refusals': '' },
-      el('div', { class: 'probe-live', id: 'probe-live' }), add, save, el('div', { class: 'reason', id: 'probe-why', hidden: true }));
+      el('div', { class: 'probe-live', id: 'probe-live' }), el('div', { class: 'notebox notebox--need probe-warn', id: 'probe-warn', role: 'status', hidden: true }),
+      add, save, el('div', { class: 'reason', id: 'probe-why', hidden: true }));
   }
   async function saveProbeAndPlan(btn) {
     const s = S.status;
@@ -1263,11 +1452,22 @@
       const pt = st.points.find((q) => q.target === i);
       return { i, t, pt };
     });
-    IL.keyed($('probe-targets'), JSON.stringify([rows.map((x) => [x.t, x.pt && x.pt.z]), st.nextT]), () => [
-      el('thead', {}, el('tr', {}, el('th', { text: '#' }), el('th', { text: 'X mm' }), el('th', { text: 'Y mm' }), el('th', { text: 'Z mm' }), el('th', { text: '', 'aria-label': 'Delete' }))),
-      el('tbody', {}, rows.map((x) => el('tr', { class: x.i === st.nextT ? 'next' : null, 'data-target': x.i },
-        el('td', { text: String(x.i + 1) }), el('td', { text: fmtMmV(x.t.x) }), el('td', { text: fmtMmV(x.t.y) }),
-        el('td', { class: x.pt ? '' : 'dim', text: x.pt ? IL.fmt(x.pt.z, 3) : x.i === st.nextT ? 'next' : '—' }),
+    // rows: the target until probed, then where the point was taken; a point off its target or the board top is marked
+    const plim = probeLimits(s, p);
+    const ptBad = (x) => {
+      if (!x.pt) return null;
+      const far = Math.hypot(x.pt.x - x.t.x, x.pt.y - x.t.y);
+      if (far > PROBE_NEAR_MM) return IL.fmt(far, 1) + ' mm from target ' + (x.i + 1) + ' (' + fmtMmV(x.t.x) + ', ' + fmtMmV(x.t.y) + ')';
+      if (plim.top !== null && Math.abs(x.pt.z - plim.top) > plim.tol) return IL.fmtSigned(x.pt.z - plim.top, 2) + ' mm from ' + plim.topName + ' (limit ±' + IL.fmt(plim.tol, 2) + ')';
+      return null;
+    };
+    IL.keyed($('probe-targets'), JSON.stringify([rows.map((x) => [x.t, x.pt && [x.pt.x, x.pt.y, x.pt.z]]), st.nextT, plim]), () => [
+      el('thead', {}, el('tr', {}, el('th', { text: '#' }), el('th', {}, 'X ', el('span', { class: 'unit-lc', text: 'mm' })), el('th', {}, 'Y ', el('span', { class: 'unit-lc', text: 'mm' })),
+        el('th', {}, 'Z ', el('span', { class: 'unit-lc', text: 'mm' })), el('th', { text: '', 'aria-label': 'Delete' }))),
+      el('tbody', {}, rows.map((x) => el('tr', { class: (x.i === st.nextT ? 'next' : '') + (ptBad(x) ? ' bad' : '') || null, 'data-target': x.i,
+        title: x.pt ? 'Taken at X ' + fmtMmV(x.pt.x) + ' · Y ' + fmtMmV(x.pt.y) + ' (target ' + fmtMmV(x.t.x) + ', ' + fmtMmV(x.t.y) + ')' + (ptBad(x) ? ': ' + ptBad(x) : '') : 'Target ' + (x.i + 1) },
+        el('td', { text: String(x.i + 1) }), el('td', { text: fmtMmV(x.pt ? x.pt.x : x.t.x) }), el('td', { text: fmtMmV(x.pt ? x.pt.y : x.t.y) }),
+        el('td', { class: x.pt ? (ptBad(x) ? 'bad' : '') : 'dim' }, x.pt ? [ptBad(x) ? IL.glyph('need', 'xs', ptBad(x)) : null, ' ' + IL.fmt(x.pt.z, 3)] : x.i === st.nextT ? 'next' : '—'),
         el('td', {}, x.pt ? el('button', { type: 'button', class: 'btn btn--quiet', title: 'Delete point ' + (x.i + 1), 'aria-label': 'Delete point ' + (x.i + 1), 'data-focus-key': 'del' + x.i,
           onclick: () => { R.probe.points = R.probe.points.filter((q) => q.target !== x.i); saveProbe(); IL.render(); } }, IL.icon('i-close')) : null)))),
     ]);
@@ -1277,14 +1477,15 @@
     const lim = isNum(cfg.surfaceMaxResidualMm) ? Number(cfg.surfaceMaxResidualMm) : 0.04;
     const tol = isNum(cfg.zFrameToleranceMm) ? Number(cfg.zFrameToleranceMm) : 1.0;
     const anchor = s.dispense && s.dispense.needle && s.dispense.needle.anchor;
-    const zDev = anchor && st.points.length ? Math.max(...st.points.map((q) => Math.abs(q.z - anchor.surfaceZMm))) : null;
+    // the worst Z against the frame, signed (+ above, − below)
+    const zDev = anchor && st.points.length ? st.points.map((q) => q.z - anchor.surfaceZMm).reduce((a, b) => (Math.abs(b) > Math.abs(a) ? b : a), 0) : null;
     const mini = (k, v, u, sub, bad) => el('div', { class: 'mini' + (bad ? ' notebox--block' : '') }, el('div', { class: 'mini__k', text: k }),
       el('div', { class: 'mini__v' }, v, u ? el('span', { class: 'u', text: u }) : null), el('div', { class: 'mini__s', text: sub }));
-    IL.keyed($('probe-tiles'), JSON.stringify([st.points.length, st.targets.length, fit && fit.worst.toFixed(4), fit && fit.slope.toFixed(5), zDev && zDev.toFixed(3)]), () => [
+    IL.keyed($('probe-tiles'), JSON.stringify([st.points.length, st.targets.length, fit && fit.worst.toFixed(4), fit && fit.slope.toFixed(5), zDev !== null && zDev.toFixed(3)]), () => [
       mini('Points', st.points.length + ' of ' + st.targets.length, '', st.points.length < 3 ? 'at least 3 to save' : 'enough to save'),
       mini('Worst residual', fit ? IL.fmt(fit.worst, 3) : '—', fit ? 'mm' : '', 'limit ' + IL.fmt(lim, 2) + ' mm', fit && fit.worst > lim),
       mini('Tilt so far', fit ? IL.fmt(fit.slope * 100, 2) : '—', fit ? 'mm / 100 mm' : '', fit ? 'plane through the points' : 'after 3 points'),
-      mini('Z vs the frame', zDev !== null ? IL.fmt(zDev, 2) : '—', zDev !== null ? 'mm' : '', 'limit ±' + IL.fmt(tol, 2) + ' mm' + (anchor ? ' of ' + IL.fmt(anchor.surfaceZMm, 2) : ''), zDev !== null && zDev > tol),
+      mini('Z vs the frame', zDev !== null ? IL.fmtSigned(zDev, 2) : '—', zDev !== null ? 'mm' : '', 'limit ±' + IL.fmt(tol, 2) + ' mm' + (anchor ? ' of ' + IL.fmt(anchor.surfaceZMm, 2) : ''), zDev !== null && Math.abs(zDev) > tol),
     ]);
     IL.keyed($('probe-untied'), String(R.probeUntied), () => (R.probeUntied ? el('div', { class: 'refusal', role: 'alert' },
       el('div', { class: 'refusal__t', text: 'Not tied: the board or its position changed since this plan. Plan again, then save.' }),
@@ -1294,6 +1495,12 @@
       el('div', { class: 'mini__k', text: 'N1 ' + k }), el('div', { class: 'mini__v', text: n1 ? fmtMmV(n1[k.toLowerCase()]) : '—' }))));
     const add = $('btn-probe-add'), save = $('btn-probe-save');
     const lock = IL.lockReason(s, { connected: true, homed: true, pressureOff: false });
+    // the warning sits in the pinned foot, right above the button it is about (visible without scrolling)
+    const warn = lock ? null : probeWarn(s);
+    const badPts = rows.filter((x) => ptBad(x));
+    const wtext = warn || (badPts.length ? 'Point ' + badPts.map((x) => x.i + 1).join(', ') + ': ' + ptBad(badPts[0]) + '. Delete it and probe again.' : '');
+    IL.keyed($('probe-warn'), wtext, () => (wtext ? [IL.glyph('need', 'xs'), el('span', { text: wtext })] : null));
+    IL.show($('probe-warn'), !!wtext);
     setBtnLabel(add, [IL.icon('i-capture'), st.nextT >= 0 ? 'Add point ' + (st.nextT + 1) + ' · N1 tip touching' : 'All targets probed']);
     IL.gate(add, lock || (st.nextT < 0 ? 'Every target has a point: save them' : !n1 ? 'No N1 position' : null));
     IL.show(add, st.nextT >= 0);
@@ -1322,7 +1529,7 @@
   function buildChecksFoot() {
     const reason = el('div', { class: 'run-foot__reason', id: 'run-reason', hidden: true });
     const btn = el('button', { type: 'button', class: 'btn btn--lg btn--block', id: 'btn-run' });
-    btn.addEventListener('click', () => openConfirm(decision(S.status) ? 'rest' : testLimit() ? 'test' : 'full'));
+    btn.addEventListener('click', () => { const d = footDecision(S.status); openConfirm(d ? 'rest' : testLimit() ? 'test' : 'full'); });
     const max = el('input', { class: 'input', id: 'run-maxdots', type: 'number', min: '1', step: '1', inputmode: 'numeric', placeholder: 'all', 'aria-label': 'Only the first N dots' });
     max.value = R.maxDots;
     max.addEventListener('input', () => { R.maxDots = max.value; IL.render(); });
@@ -1338,8 +1545,9 @@
       IL.render();
     });
     const allLink = el('button', { type: 'button', class: 'link', id: 'run-all-link', hidden: true, onclick: () => openConfirm('all') }, 'Wipe all, run all…');
+    const nextLink = el('button', { type: 'button', class: 'link', id: 'run-next-link', hidden: true, onclick: () => askNextBoard() }, 'Next board…');
     return el('div', { class: 'stack', style: 'gap:10px', 'data-refusals': '' }, reason, btn, testRow,
-      el('div', { class: 'run-foot__links' }, el('span', { id: 'run-scope' }), testLink, allLink));
+      el('div', { class: 'run-foot__links' }, el('span', { id: 'run-scope' }), testLink, allLink, nextLink));
   }
   /** The "first N dots" limit if set and smaller than the board: {n, total} or null; .bad for an invalid entry. */
   function testLimit() {
@@ -1356,11 +1564,21 @@
     const list = s.interlocks || [];
     const viol = new Set(((p && p.interlocks && p.interlocks.violations) || []).map((v) => v.code));
     const cc = p && S.cleanCheck && !S.cleanCheck.ok ? S.cleanCheck : null;
+    // the same severity as the cards (§9.3): an interlock the engine blocks on but the operator can clear in place
+    // (home, confirm the angle, confirm the offset, probe, wipe) counts as "needs you", not "blocked"
+    const r = IL.ready();
+    const sev = {};
+    for (const it of r.items.concat(r.extras)) {
+      if (it.ready || it.state === 'wait') continue;
+      const st = it.state === 'block' ? 'block' : 'need';
+      if (sev[it.code] !== 'block') sev[it.code] = st;
+    }
     const c = { ok: 0, need: 0, block: 0, off: 0 };
     for (const i of list) {
       let st = i.state === 'blocked' ? 'block' : i.state === 'warning' ? 'need' : i.state === 'off' ? 'off' : 'ok';
       if (st === 'ok' && viol.has(i.id)) st = 'block';
       if (i.id === 'I10' && cc && st === 'ok') st = 'need';   // §9.3 overlay: "ok" only means a camera is there
+      if (st === 'block' && sev[i.id] === 'need') st = 'need';
       c[st]++;
     }
     const parts = [];
@@ -1390,6 +1608,9 @@
     if (checking) {
       const tp = tourProgress(run, run.elapsedS || 0, plan().pads.length);
       detail = ['The top camera visits every pad, the pressure stays off: ' + tp.text + ' · ' + IL.fmtClock(tp.left) + ' left.'];
+    } else if (cc && IL.cleanPositionWrong(cc)) {
+      // no pad read clean: the boxes saw solder mask, the board X/Y or rotation is off (§13): check it, do not wipe
+      detail = [IL.cleanSummary(cc), ' Check the board X/Y and rotation in the Board step (the camera box sits beside every pad), then check again.'];
     } else if (cc) {
       const dirty = IL.dirtyPads(cc);
       const sent = IL.cleanSummary(cc);
@@ -1402,19 +1623,21 @@
         detail.push('. Wipe them in place; clean copper reads ' + IL.fmt(cc.minBrightFraction, 2) + ' or more.');
       }
     } else detail = [it.detail];
-    const btn = fixBtn({ fix: 'clean-check', label: cc && !cc.ok ? 'Wiped: check again' : 'Check pads', icon: 'i-refresh', title: 'The top camera looks at every pad (≈ ' + IL.fmtClock(tourSeconds(plan().pads.length)) + '), the pressure stays off. Press twice.' }, null, 'btn-clean-check');
+    const posWrong = !checking && IL.cleanPositionWrong(cc);
+    const btn = fixBtn({ fix: 'clean-check', label: posWrong ? 'Check again' : cc && !cc.ok ? 'Wiped: check again' : 'Check pads', icon: 'i-refresh', title: 'The top camera looks at every pad (≈ ' + IL.fmtClock(tourSeconds(plan().pads.length)) + '), the pressure stays off. Press twice.' }, null, 'btn-clean-check');
     const cam = el('button', { type: 'button', class: 'btn btn--icon', title: 'Top camera snapshot (nothing moves)', 'aria-label': 'Top camera snapshot', onclick: () => IL.openView('camera', { keep: true }) }, IL.icon('i-camera'));
+    const pos = posWrong ? fixBtn({ href: '#run/board', label: 'Check the board position', icon: 'i-swap' }, 'rt-pos') : null;
     return el('div', { class: 'ri ri--' + (it.state === 'live' ? 'live' : it.state === 'block' ? 'block' : 'need'), id: 'clean-result', 'data-key': it.key, 'data-refusals': '' },
       it.state === 'live' ? IL.glyph('live') : IL.glyph(it.state === 'block' ? 'block' : 'need'),
       el('div', {}, el('div', { class: 'ri__t' }, it.title, first ? el('span', { class: 'tag tag--next', text: 'Next' }) : null), el('div', { class: 'ri__d' }, detail)),
       el('abbr', { class: 'icode', title: 'Interlock I10', text: 'I10' }),
-      checking ? null : el('div', { class: 'ri__act' }, btn, cam));
+      checking ? null : [pos ? el('div', { class: 'ri__act ri__act--pos' }, pos) : null, el('div', { class: 'ri__act' }, btn, cam)]);
   }
   function needCard(it, first, s) {
     if (it.key === 'clean') return cleanCard(it, first, s);
     const kind = it.state === 'block' ? 'block' : it.state === 'live' ? 'live' : it.state === 'checking' ? 'checking' : 'need';
     const glyph = it.state === 'live' ? IL.glyph('live') : it.state === 'checking' ? IL.glyph('checking') : IL.glyph(kind === 'block' ? 'block' : 'need');
-    const fixes = (it.fixes || []).map((f, i) => fixBtn(Object.assign({}, f, { primary: false }), i === 0 && kind !== 'checking' ? '' : ''));
+    const fixes = (it.fixes || []).map((f) => fixBtn(Object.assign({}, f, { primary: false })));
     return el('div', { class: 'ri ri--' + kind, 'data-key': it.key, 'data-refusals': '' },
       glyph, el('div', {}, el('div', { class: 'ri__t' }, it.title, first ? el('span', { class: 'tag tag--next', text: 'Next' }) : null), el('div', { class: 'ri__d', text: it.detail })),
       el('abbr', { class: 'icode', title: 'Interlock ' + it.code, text: it.code }),
@@ -1450,7 +1673,7 @@
       const m = /^(I\d+|MACHINE|CONFIG|PLAN):\s*/.exec(ref.message || '');
       return el('div', { class: 'card__banner run-refused__b', style: 'margin:0', role: 'alert' },
         el('div', { class: 'run-refused__t', title: ref.message || '' }, el('b', { text: 'Refused ' + IL.fmtTime(ref.finishedAtMs ? ref.finishedAtMs - S.skewMs : Date.now()) + ': ' }), ref.message || 'the run was refused'),
-        m ? el('div', { class: 'btn-row', style: 'margin-top:8px' }, IL.fixesForCode(m[1], s).map((f) => fixBtn(f, 'btn--sm'))) : null);
+        m ? el('div', { class: 'btn-row', style: 'margin-top:8px' }, IL.fixesForCode(m[1], s, (ref.message || '').slice(m[0].length)).map((f) => fixBtn(f, 'btn--sm'))) : null);
     });
     // needs you (extras first, fixed order), ready tiles, items known after planning
     const needs = r.needs.filter((x) => x.state !== 'wait');
@@ -1473,37 +1696,52 @@
     if (cb) IL.gate(cb, IL.lockReason(s, { connected: true, homed: true }) || (!p ? 'Plan a board first' : null));
     renderRunFoot(s, r);
   }
+  /** The decision the Checks foot acts on (a zero-dot stop is no decision there: the board simply runs again). */
+  function footDecision(s) {
+    const d = decision(s);
+    return d && !zeroDots(d) ? d : null;
+  }
   function renderRunFoot(s, r) {
     const p = plan();
     const btn = $('btn-run');
     if (!btn) return;
-    const dec = decision(s);
+    const dec = footDecision(s);
+    const total = p ? p.dots.length : 0;
+    const complete = !!p && !dec && R.done.planId === p.planId && R.doneSet.size >= total && total > 0;
     IL.show($('btn-run-test'), !dec);
     IL.show($('run-all-link'), !!dec);
+    IL.show($('run-next-link'), complete);
     if (dec) { R.test = false; }
     const lim = dec ? null : testLimit();
-    const total = p ? p.dots.length : 0;
     const pending = S.planPending;
     let reason = pending ? 'Re-reading the plan (checking…)' : r.canRun ? null : r.runReason;
     if (lim && lim.bad) reason = reason || 'Test run: ' + lim.bad.toLowerCase();
-    const style = lim && !lim.bad ? 'btn--test' : r.runStyle === 'go' ? 'btn--primary' : 'btn--hold';
-    IL.setClass(btn, 'btn btn--lg btn--block ' + (reason ? '' : style));
     const left = dec ? padsLeft(p) : null;
-    if (dec && IL.recoveryActive()) reason = 'Unlocks after the recovery steps on the right';
+    const active = IL.recoveryActive();
+    if (dec && active) reason = 'Unlocks after the recovery steps on the right';
     if (dec && !left.length) reason = reason || 'No pads left';
+    const style = lim && !lim.bad ? 'btn--test' : r.runStyle === 'go' && !complete ? 'btn--primary' : 'btn--hold';
+    IL.setClass(btn, 'btn btn--lg btn--block ' + (reason ? '' : dec ? 'btn--primary' : style));
     setBtnLabel(btn, [IL.icon('i-play'), dec ? 'Finish ' + IL.plural(left.length, 'pad') + ' left' : lim && lim.n ? 'TEST: first ' + lim.n + ' of ' + total + ' dots' : 'Run board · ' + IL.plural(total, 'dot')]);
     IL.gate(btn, reason);
-    // reason line above the button: soft (needs you, run anyway) or blocked (finish first)
+    // reason line above the button: soft (needs you, run anyway) or blocked (finish first); a lock (a task runs, the
+    // recovery) shows the lock glyph, not the red ✕ of a blocked check
     const rl = $('run-reason');
-    const soft = !reason && (dec ? 'Board stopped at dot ' + dec.run.dotsDone + ': finish the ' + IL.plural(left.length, 'pad') + ' left, or wipe all pads and run the whole board.' : r.runReason);
+    const pasted = p ? padsDone(p).length : 0;
+    const soft = !reason && (dec
+      ? (dec.cause === 'partial' ? 'Paste on ' + IL.plural(pasted, 'pad') + ' already (' + (dec.kind === 'test' ? 'test run' : 'part done') + '): finish the '
+        : 'Board stopped at dot ' + dec.run.dotsDone + ': finish the ') + IL.plural(left.length, 'pad') + ' left, or wipe ' + (dec.cause === 'partial' ? 'them' : 'all pads') + ' and run the whole board.'
+      : complete ? 'All ' + total + ' dots are on this board already. Unload it and press Next board, or wipe it before running it again.'
+        : r.runReason);
     const text = reason || soft || '';
-    const kind = pending ? 'checking' : reason ? 'block' : 'need';
+    const locked = !!reason && (IL.taskRunning(s) || (dec && active) || S.online === false);
+    const kind = pending ? 'checking' : locked ? 'lock' : reason ? 'block' : 'need';
     IL.keyed(rl, kind + text, () => {
       if (!text) return null;
       const m = /^(\d+ needs? you\.)\s*(.*)$/.exec(text);
-      return [IL.glyph(kind, 'xs'), el('span', {}, m ? [el('b', { text: m[1] }), ' ' + m[2]] : text)];
+      return [kind === 'lock' ? IL.icon('i-lock') : IL.glyph(kind, 'xs'), el('span', {}, m ? [el('b', { text: m[1] }), ' ' + m[2]] : text)];
     });
-    IL.setClass(rl, 'run-foot__reason' + (kind === 'block' ? ' run-foot__reason--block' : ''));
+    IL.setClass(rl, 'run-foot__reason' + (kind === 'block' ? ' run-foot__reason--block' : kind === 'lock' ? ' run-foot__reason--lock' : ''));
     IL.show(rl, !!text);
     // test limit row
     const tr = $('run-test');
@@ -1511,14 +1749,15 @@
     const inp = $('run-maxdots');
     if (inp && document.activeElement !== inp && inp.value !== String(R.maxDots)) inp.value = R.maxDots;
     if (inp) {
-      inp.max = String(Math.max(1, total - 1));
+      IL.setAttr(inp, 'max', String(Math.max(1, total - 1)));
       inp.classList.toggle('input--invalid', !!(lim && lim.bad));
     }
     IL.setText($('run-test-of'), 'of ' + total + ' dots');
     const err = $('run-maxdots-err');
     IL.setText(err, lim && lim.bad ? lim.bad : R.test && String(R.maxDots).trim() !== '' && !lim ? 'That is the whole board: the full run.' : '');
     IL.show(err, !!err.textContent);
-    IL.setText($('run-scope'), dec ? 'Only the pads left · ' + IL.plural(left.length, 'pad') : lim && lim.n ? 'TEST · first ' + lim.n + ' of ' + total + ' dots' : 'Full board · all ' + total + ' dots');
+    IL.setText($('run-scope'), dec ? 'Only the pads left · ' + IL.plural(left.length, 'pad') : lim && lim.n ? 'TEST · first ' + lim.n + ' of ' + total + ' dots'
+      : complete ? 'Board complete · ' + total + ' of ' + total + ' dots' : 'Full board · all ' + total + ' dots');
     IL.setText($('btn-run-test'), R.test ? 'Run the full board instead' : 'Test run with fewer dots…');
   }
 
@@ -1615,7 +1854,10 @@
   function buildResultFoot() {
     const next = el('button', { type: 'button', class: 'btn btn--primary btn--lg btn--block', id: 'btn-next-board' }, IL.icon('i-swap'), 'Next board');
     next.addEventListener('click', () => askNextBoard());
-    return el('div', { class: 'stack', style: 'gap:8px' }, next,
+    // after a test run (paste on part of the board) the next step is to finish the pads left, not another board
+    const rest = el('button', { type: 'button', class: 'btn btn--primary btn--lg btn--block', id: 'btn-result-rest', hidden: true }, IL.icon('i-play'), 'Finish the pads left');
+    rest.addEventListener('click', () => openConfirm('rest'));
+    return el('div', { class: 'stack', style: 'gap:8px', 'data-refusals': '' }, rest, el('div', { class: 'reason', id: 'result-rest-why', hidden: true }), next,
       el('div', { class: 'run-foot__links' }, el('span', { text: 'Same board again?' }), el('button', { type: 'button', class: 'link', onclick: () => goStep('checks') }, 'Back to Checks')));
   }
   function askNextBoard() {
@@ -1634,6 +1876,9 @@
           R.doneSet = new Set();
           R.done.since = Date.now();
           saveDone();
+          // a new board starts here: the board count goes up, plans made from now on are this board's
+          R.boardStarts = (R.boardStarts || []).concat([Date.now()]).slice(-50);
+          ssSet('il.run.boardStarts', R.boardStarts);
           goStep('board');
         } }, 'Yes: new seat')],
       initialFocus: null });
@@ -1642,6 +1887,15 @@
     const p = plan();
     const rr = p ? resultRun(s) : null;
     const box = $('run-result');
+    const part = p ? partialDecision(s) : null;
+    const rb = $('btn-result-rest'), nb = $('btn-next-board');
+    if (rb && nb) {
+      IL.show(rb, !!part);
+      if (part) setBtnLabel(rb, [IL.icon('i-play'), 'Finish ' + IL.plural(padsLeft(p).length, 'pad') + ' left']);
+      const r = IL.ready();
+      IL.gate(rb, part && !r.canRun ? r.runReason : null, $('result-rest-why'));
+      IL.setClass(nb, 'btn btn--lg btn--block' + (part ? '' : ' btn--primary'));
+    }
     const row = (s.dispense && s.dispense.purgeRow) || {};
     const key = JSON.stringify([rr && rr.runId, rr && rr.status, rr && rr.dphMotion, row.spotsLeft, p && p.planId, R.doneSet.size]);
     IL.keyed(box, key, () => {
@@ -1654,8 +1908,7 @@
       const sm = (p && p.summary) || {};
       const mini = (k, v, u, sub) => el('div', { class: 'mini' }, el('div', { class: 'mini__k' }, k), el('div', { class: 'mini__v' }, v, u ? el('span', { class: 'u', text: u }) : null), sub ? el('div', { class: 'mini__s' }, sub) : null);
       return [
-        el('div', { class: 'result-head' }, IL.glyph(kind), el('div', {}, el('div', { class: 'result-head__t', text: (STATUS_WORD[rr.status] || rr.status) + ' · ' + outcomeText(rr, p)
-          + (rr.planId !== p.planId && R.doneSet.size === p.dots.length ? ' · board complete' : '') }),
+        el('div', { class: 'result-head' }, IL.glyph(kind), el('div', {}, el('div', { class: 'result-head__t', text: (STATUS_WORD[rr.status] || rr.status) + ' · ' + outcomeText(rr, p) }),
           el('div', { class: 'result-head__s', text: boardShort(rr.boardName || p.boardName) + ' · board ' + boardNumber(p.planId) + ' · ended ' + IL.fmtTime(rr.endedAtMs - S.skewMs) }))),
         rr.message ? el('div', { class: 'notebox' + (kind === 'ok' ? '' : ' notebox--' + kind), text: rr.message }) : null,
         el('div', { class: 'result-tiles' },
@@ -1674,10 +1927,12 @@
     const N = p.dots.length;
     if (kind === 'rest') {
       const known = new Set(p.pads.map((x) => x.padId));
-      const pads = (opts && opts.padIds ? opts.padIds.filter((id) => known.has(id)) : R.padsLeft || padsLeft(p)).slice();
+      const pads = (opts && opts.padIds ? opts.padIds.filter((id) => known.has(id)) : padsLeft(p)).slice();
       const nd = p.dots.filter((d) => pads.includes(d.padId)).length;
+      const dec = decision(S.status);
+      const of = dec && dec.cause === 'partial' ? (dec.kind === 'test' ? 'after the test run' : 'on this board') : 'of the stopped run';
       return { kind, padIds: pads, n: nd, pads: pads.length, title: 'Dispense the ' + IL.plural(pads.length, 'pad') + ' left?',
-        test: 'Only the ' + IL.plural(pads.length, 'pad') + ' left of the stopped run', scope: 'The ' + IL.plural(pads.length, 'pad') + ' left of the stopped run.' };
+        test: 'Only the ' + IL.plural(pads.length, 'pad') + ' left ' + of, scope: 'The ' + IL.plural(pads.length, 'pad') + ' left ' + of + '.' };
     }
     const lim = kind === 'test' ? testLimit() : null;
     if (lim && lim.n) {
@@ -1755,7 +2010,12 @@
     if (m.maxDots) body.maxDots = m.maxDots;
     if (m.padIds) body.padIds = m.padIds;
     R.restPending = m.kind === 'rest';
-    const res = await IL.act(h.n.go, () => IL.api('POST', '/api/run', body), {
+    const res = await IL.act(h.n.go, async () => {
+      const r = await IL.api('POST', '/api/run', body);
+      // what this run is (the Last board tile, Records and the Result step say "test", "the pads left")
+      if (r && r.planId) { R.kinds[r.planId] = m.kind; ssSet('il.run.kinds', R.kinds); }
+      return r;
+    }, {
       refusalIn: h.n.refusals, what: 'Run',
       ok: (r) => 'Run started: ' + IL.plural((r && r.dots) || m.n, 'dot') + (m.kind === 'test' ? ' (test)' : m.kind === 'rest' ? ' (the pads left)' : ''),
     });
@@ -1813,19 +2073,28 @@
       cards.push([row.spotsLeft >= row.perBoard ? 'ok' : 'need', 'Purge spots ' + a + ' to ' + b,
         after >= 0 ? IL.plural(after, 'spot') + ' left after' + (after < row.perBoard ? ': wipe before board ' + (boardNumber(p.planId) + 1) : '') : 'only ' + row.spotsLeft + ' left: wipe and reset first']);
     } else cards.push(['block', 'Purge row not set', 'Setup › Purge row']);
-    const tour = cleanEnabled(s) ? '≈ ' + IL.fmtClock(tourSeconds(m.pads)) : '';
+    const on = cleanEnabled(s);
+    const tour = on ? '≈ ' + IL.fmtClock(tourSeconds(m.pads)) : '';
     const cc = S.cleanCheck && IL.planMatches(S.cleanCheck.planId || p.planId) ? S.cleanCheck : null;
-    if (!cleanEnabled(s)) cards.push(['off', 'Pad check off', IL.isSim(s) ? 'simulator: the camera is a static picture' : 'not checked before the board (Settings)']);
-    else if (cc && !cc.ok) cards.push(['need', IL.plural((cc.dirtyPadIds || []).length, 'pad') + ' had paste at ' + IL.fmtTime(cc.checkedAtMs), (m.kind === 'rest' ? 'the pads left are' : 'all pads') + ' checked again first, ' + tour]);
+    // the last check of this plan comes first, also with the check off (the last gate before the run says it, §8.1.5)
+    const offNote = 'the check before each board is off: the run dispenses on them as they are';
+    if (cc && !cc.ok && IL.cleanPositionWrong(cc)) {
+      cards.push(['need', 'Pad check ' + IL.fmtTime(cc.checkedAtMs) + ': the board position looked wrong', on ? 'no pad read clean: check the position; the run checks again first, ' + tour : 'no pad read clean (solder mask under every box); ' + offNote]);
+    } else if (cc && !cc.ok) {
+      cards.push(['need', IL.plural((cc.dirtyPadIds || IL.dirtyPads(cc)).length, 'pad') + ' had paste at ' + IL.fmtTime(cc.checkedAtMs),
+        on ? (m.kind === 'rest' ? 'the pads left are' : 'all pads') + ' checked again first, ' + tour : offNote]);
+    } else if (!on) cards.push(['off', 'Pad check off', IL.isSim(s) ? 'simulator: the camera is a static picture' : 'not checked before the board (Settings)']);
     else if (cc && cc.ok) cards.push(['ok', 'All ' + cc.targets + ' pads clean at ' + IL.fmtTime(cc.checkedAtMs), 'checked again first, ' + tour]);
-    else cards.push(['info', 'Pads not checked yet', 'the run checks every pad first, ' + tour]);
+    else cards.push(['need', 'Pads not checked yet', 'the run checks every pad first, ' + tour]);
+    // offline: nothing sensed is known now (never a stale green tick, §15)
+    if (S.online === false) for (const c of cards) { c[0] = 'off'; c[2] = 'unknown since ' + IL.fmtTimeS(S.lastOkAt); }
     IL.keyed(n.sensed, JSON.stringify(cards), () => cards.map(([st, t, d]) => el('div', { class: 'tick' }, IL.glyph(st === 'checking' || st === 'wait' ? 'off' : st),
       el('div', {}, el('div', { class: 'tick__t', text: t }), el('div', { class: 'tick__d', text: d })))));
     // blocked now (another task, machine down, plan stale ...): say why, keep the dialog
     const ticksLeft = [n.gauge.input, n.paste.input, n.hands.input].filter((i) => !i.checked).length;
-    let why = S.planPending ? 'Re-reading the plan (checking…)' : !r.canRun ? r.runReason : null;
+    let why = S.online === false ? IL.lockReason(s) : S.planPending ? 'Re-reading the plan (checking…)' : !r.canRun ? r.runReason : null;
     if (!why && holding) why = 'Pressure is held: switch it off first';
-    const showWhy = why && !holding && !S.planPending;
+    const showWhy = why && (!holding || S.online === false) && !S.planPending;
     IL.keyed(n.blockBox, showWhy ? why : '', () => (showWhy ? el('div', { class: 'refusal', role: 'alert' }, el('div', { class: 'refusal__t', text: 'Cannot run now: ' + why })) : null));
     const est = estimate(s, m.n, m.pads);
     const plan_ = (cleanEnabled(s) ? 'Pad check ' + tour + ', then pressure on, ' : 'Pressure on, ') + ((p.profile && p.profile.purgeDots) || 0) + ' purge dots, the board, vent.';
@@ -1881,6 +2150,7 @@
     if (R.dlg) IL.safe(() => updateDialog(s), 'run confirm');
   });
   IL.on('plan', (p, prev) => {
+    if (p && prev && prev.planId !== p.planId) IL.safe(() => carryBoard(prev, p), 'carry board');
     if (p && (!prev || prev.planId !== p.planId)) {
       formFromPlan(p);
       R.showAllDirty = false;
@@ -1892,6 +2162,7 @@
   IL.on('cleancheck', () => { R.showAllDirty = false; });
   // STOP makes an open run confirm moot: close it (Recovery takes over)
   IL.on('stop', () => { if (R.dlg) R.dlg.close('stop'); });
+  IL.on('online', () => { if (R.dlg) IL.safe(() => updateDialog(S.status), 'run confirm'); });
   IL.on('taskend', (run) => {
     if (!run || run.label !== 'board' || !IL.planMatches(run.planId)) return;
     if (run.status === 'OK') R.resultRunId = run.runId;
@@ -1937,6 +2208,11 @@
     },
     nav(s) {
       if (!s || S.online === false || IL.taskRunning(s) || IL.recoveryActive() || !S.plan) return null;
+      const dec = partialDecision(s);
+      if (dec) {
+        const left = padsLeft(S.plan).length;
+        return { sub: 'Finish ' + IL.plural(left, 'pad'), kind: 'need', title: dec.run.dotsDone + ' of ' + dec.run.dotsPlanned + ' dots on this board: finish the ' + IL.plural(left, 'pad') + ' left' };
+      }
       const r = IL.ready();
       if (r.verdict.state === 'ok') return { sub: 'Ready: board ' + boardNumber(S.plan.planId), kind: 'ok', title: 'Ready: ' + (S.plan.boardName || 'board') };
       return null;

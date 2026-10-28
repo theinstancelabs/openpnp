@@ -178,6 +178,61 @@ async function runFirstDots(page, n) {
     const box = await page.locator('[data-testid=stop]').boundingBox();
     check('STOP stays on screen after scrolling', box && box.y >= 0 && box.y < 120 && box.height >= 79, box);
 
+    // ---- STOP keys, the offline state and STOP NOT CONFIRMED (§5, §15, §18) ------------------------
+    // a second page whose /api/stop is answered by a stub (nothing reaches OpenPnP; its recovery is this tab's only)
+    {
+      const aux = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+      aux.on('pageerror', (e) => jsErrors.push('aux: ' + e));
+      aux.on('dialog', (d) => { dialogs.push(d.message()); d.dismiss(); });
+      let stops = 0;
+      let delays = [];   // ms per request from now on (the first slower than the page's 2 s STOP timeout)
+      const answer = { stopped: true, actions: ['stub: nothing sent'] };
+      await aux.route('**/api/stop', async (route) => {
+        stops++;
+        const ms = delays.shift() || 0;
+        if (ms) await new Promise((r) => setTimeout(r, ms));
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(answer) }).catch(() => {});
+      });
+      await aux.goto(BASE + '#records');
+      await waitText(aux, 'pill-engine', /\S/, 20000);
+      await aux.focus('#btn-stop');
+      await aux.keyboard.press('Space');
+      await aux.keyboard.press('Escape');
+      await aux.waitForTimeout(600);
+      check('Space and Esc on the focused STOP send nothing', stops === 0, stops);
+      await aux.keyboard.press('Enter');
+      await aux.waitForTimeout(800);
+      check('Enter on the focused STOP stops (one request)', stops === 1, stops);
+      // STOP NOT CONFIRMED: the first answer takes longer than 2 s; the band says so, retries go out every second,
+      // and "STOP confirmed … after n tries" stays up (a late answer of an older request does not hide it)
+      delays = [2600, 1500];   // no answer in 2 s; the immediate retry answers after the next 1 s retry did
+      const before = stops;
+      await aux.click('[data-testid=stop]');
+      await waitText(aux, 'stop-unconfirmed', /STOP NOT CONFIRMED/, 5000);
+      const bandBox = await aux.locator('#stop-unconfirmed').boundingBox();
+      const mainBox = await aux.locator('#main').boundingBox();
+      check('STOP NOT CONFIRMED band under the strip pushes the page down (covers nothing)', bandBox && mainBox && mainBox.y >= bandBox.y + bandBox.height - 1,
+        { bandBox, mainBox });
+      await waitText(aux, 'stop-unconfirmed', /STOP confirmed \d\d:\d\d:\d\d after \d+ tries/, 6000);
+      await aux.waitForTimeout(1500);
+      check('"STOP confirmed after n tries" stays visible', await aux.isVisible('#stop-unconfirmed')
+        && /STOP confirmed/.test(await textOf(aux, 'stop-unconfirmed')), await textOf(aux, 'stop-unconfirmed'));
+      check('STOP re-sent until one answer arrived', stops - before >= 2, stops - before);
+      // offline: no answer to /api/status for 3 s: band, everything but STOP inert, an open dialog too
+      await aux.keyboard.press('?');
+      await aux.waitForSelector('#dlg-keys', { timeout: 5000 });
+      await aux.route('**/api/status', (route) => route.abort());
+      await aux.waitForSelector('#msg-area [data-msg=offline]', { timeout: 8000 });
+      const inert = await aux.evaluate(() => ({ ws: document.getElementById('ws-records').inert, scrim: document.getElementById('dlg-keys-scrim').inert,
+        stop: document.getElementById('btn-stop').closest('[inert]') === null, cell: document.querySelector('#pill-pressure .cell__v').textContent }));
+      check('offline: the band shows, workspace and open dialog are inert, STOP is not', inert.ws && inert.scrim && inert.stop, inert);
+      check('offline: strip values read Unknown', /Unknown/.test(inert.cell), inert.cell);
+      await aux.unroute('**/api/status');
+      await aux.waitForSelector('#msg-area [data-msg=offline]', { state: 'detached', timeout: 8000 });
+      check('back online: the band goes', true);
+      await aux.close();
+    }
+
     await nav(page, 'profile');
     await page.waitForSelector('#profiles .family', { state: 'visible', timeout: 15000 });
     const fams = await page.$$eval('#profiles .family h2', (els) => els.map((e) => e.textContent));
@@ -280,7 +335,8 @@ async function runFirstDots(page, n) {
     await openDetails(page, 'needle-other');
     await page.fill('#needle-offset', '-2.59');
     await page.click('#btn-needle-offset');
-    await waitText(page, 'needle-state', /^Touched off/, 10000);
+    // the offset typed equals the frame offset: the card says "Offset confirmed" (a measured one: "Touched off")
+    await waitText(page, 'needle-state', /^(Touched off|Offset confirmed)/, 10000);
     check('manual needle offset (after the frame) clears I4', true);
     // the blank carries the purge row (advanced editor: paste points)
     await openDetails(page, 'surf-advanced');
@@ -386,7 +442,11 @@ async function runFirstDots(page, n) {
     check('clean-pad check kept with the plan (160 targets)', planNow.cleanCheck && planNow.cleanCheck.targets === 160,
       planNow.cleanCheck && { targets: planNow.cleanCheck.targets, ok: planNow.cleanCheck.ok });
     const nDirty = await page.$$eval('#plan-svg rect.pad.dirty', (e) => e.length);
-    check('dirty pads marked in the preview', nDirty === planNow.cleanCheck.dirtyPadIds.length, nDirty);
+    // the sim camera is a static picture: no pad reads clean, which is "the board position looks wrong", not paste
+    const posWrong = planNow.cleanCheck.targets > 0 && !planNow.cleanCheck.pads.some((x) => x.clean);
+    const legend = await textOf(page, 'run-legend');
+    if (posWrong) check('0 clean pads: no pad painted as paste, the legend says the position looks wrong', nDirty === 0 && /board position looks wrong/.test(legend), { nDirty, legend });
+    else check('dirty pads marked in the preview', nDirty === planNow.cleanCheck.dirtyPadIds.length, nDirty);
     let l = lines(gcode(g0));
     check('clean-pad check: no pressure, no screw', !l.some((x) => /^M106|^G1 B/.test(x)), l.slice(0, 30));
     await page.screenshot({ path: path.join(OUT, 'run-clean-check.png') });
@@ -410,6 +470,12 @@ async function runFirstDots(page, n) {
       && st1.lastRun.dphMotion > 0 && st1.lastRun.dphOverall > 0, st1.lastRun);
     check('the test limit is cleared after the run', await page.evaluate(() => !IL.run.test && String(IL.run.maxDots) === ''),
       await page.evaluate(() => [IL.run.test, IL.run.maxDots]));
+    await page.evaluate(() => IL.go('#run/checks'));
+    await waitText(page, 'btn-run', /Finish \d+ pads? left/, 10000).catch(() => {});
+    check('after a 20-dot test: the Checks foot offers to finish the pads left', /Finish 140 pads left/.test(await textOf(page, 'btn-run')),
+      await textOf(page, 'btn-run'));
+    check('after a 20-dot test: "Wipe all, run all" offered, no second test on the pasted pads', await page.isVisible('#run-all-link')
+      && !(await page.isVisible('#btn-run-test')));
     l = lines(gcode(g0));
     const firstB = l.findIndex((x) => /^G1 B/.test(x));
     check('run: G92 B0 before the first auger move (I2)', l.indexOf('G92 B0') >= 0 && l.indexOf('G92 B0') < firstB, l.slice(0, 20));
@@ -439,13 +505,23 @@ async function runFirstDots(page, n) {
     check('Last board tile keeps the board run after a prime and a test dot', !/prime|test dot/i.test(lastTile), lastTile);
 
     // ---- STOP while a board run is dispensing ------------------------------------------------
-    await runFirstDots(page, 60);
+    // the test board has paste on 20 pads: the whole board again ("Wipe all, run all"), stopped after a few dots
+    await nav(page, 'run');
+    await page.evaluate(() => IL.go('#run/checks'));
+    await page.click('#run-all-link');
+    await page.waitForSelector('#dlg-run', { timeout: 10000 });
+    check('Wipe all, run all: the confirm says to wipe every pad first', /wipe every pad first/.test(await textOf(page, 'run-confirm-sum')),
+      await textOf(page, 'run-confirm-sum'));
+    for (const t of ['#run-tick-gauge', '#run-tick-paste', '#run-tick-hands']) if (!(await page.isChecked(t))) await page.check(t);
+    await page.waitForSelector('#btn-run-go:enabled', { timeout: 10000 });
+    await page.click('#btn-run-go');
+    await page.waitForSelector('#dlg-run', { state: 'detached', timeout: 15000 });
     await waitStatus(page, (x) => x.run && x.run.label === 'board' && x.run.running && x.run.dotsDone >= 3, 300000);
     g0 = gcode().next;
     await page.click('[data-testid=stop]');
     // the engine ends the run (ABORTED) after its abort lines went out; a loaded simulator can take a while
     const stopped = await waitStatus(page, (x) => x.run && !x.run.running && !x.machine.enabled, 90000);
-    check('STOP mid-run: run ABORTED before its end', stopped.run.status === 'ABORTED' && stopped.run.dotsDone < 60,
+    check('STOP mid-run: run ABORTED before its end', stopped.run.status === 'ABORTED' && stopped.run.dotsDone < 160,
       { status: stopped.run.status, done: stopped.run.dotsDone, message: stopped.run.message });
     l = lines(gcode(g0));
     const iM410 = l.indexOf('M410'), iV = l.indexOf('M107 P3'), iP = l.indexOf('M107 P2'), iB = l.indexOf('M18 B');
@@ -457,7 +533,7 @@ async function runFirstDots(page, n) {
     check('STOP mid-run: machine stopped and un-homed', !stopped.machine.enabled && !stopped.machine.homed);
     check('STOP mid-run: the engine\'s own I1 went out, then OpenPnP\'s DISABLE_COMMAND (valve off sent twice)',
       l.filter((x) => x === 'M107 P3').length >= 2, l);
-    console.log('     STOP mid-run: ' + stopped.run.dotsDone + ' of 60 dots done; G-code after STOP: ' + JSON.stringify(l));
+    console.log('     STOP mid-run: ' + stopped.run.dotsDone + ' of 160 dots done; G-code after STOP: ' + JSON.stringify(l));
     // Recovery (§8.1.8): Run's panel, Not connected, the board decision locked until the steps are done
     await waitText(page, 'pill-conn', /^Not connected$/, 15000);
     await page.waitForFunction(() => document.getElementById('panel').dataset.view === 'recovery', null, { timeout: 10000 });

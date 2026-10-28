@@ -84,6 +84,8 @@
       <button type="button" class="cell cell--off cell--verdict" id="pill-engine"><span class="st st--sm st--off" role="img" aria-label="Off or not fitted"><svg viewBox="0 0 24 24"><use href="#g-dash"/></svg></span><span class="cell__txt"><span class="cell__k">Board run</span><span class="cell__v">…</span></span><svg class="chev ic" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-chev"/></svg></button>
     </div>
   </header>
+  <!-- STOP NOT CONFIRMED / confirmed after n tries: its own grid row directly under the strip (pushes the page down) -->
+  <div class="stop-band" id="stop-unconfirmed" role="alert" hidden></div>
 
   <nav class="nav tabs" id="nav" role="tablist" aria-label="Workspaces">
     <a class="nav__item" href="#run" id="tab-btn-run" data-tab="run" role="tab" aria-selected="true" aria-controls="ws-run" aria-keyshortcuts="Alt+1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-run"/></svg><span class="nav__txt"><span class="nav__t">Run</span><span class="nav__s"></span></span><span class="nav__badge" hidden></span></a>
@@ -133,7 +135,6 @@
   </aside>
 </div>
 
-<div class="stop-band" id="stop-unconfirmed" role="alert" hidden></div>
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 </body>
 </html>

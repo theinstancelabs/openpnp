@@ -33,6 +33,12 @@
     if (r.kind === 'clean-check') return r.status === 'OK' ? 'checked' : 'not finished';
     if (r.kind !== 'board' && r.message) return r.message;
     if (!n) return r.status === 'OK' ? 'done' : '—';
+    // a run of part of a board (a test of the first N dots, the pads left after a STOP): against the whole board
+    const part = /-subset-/.test(String(r.plan_id || ''));
+    const kind = IL.run && IL.run.kinds ? IL.run.kinds[r.plan_id] : null;
+    const base = part ? (R.planList || []).find((x) => x.planId === IL.basePlanId(r.plan_id)) : null;
+    if (part && kind === 'rest' && done >= n) return 'the ' + IL.plural(n, 'dot') + ' left';
+    if (part) return done + ' of ' + (base ? base.dots : n) + ' dots' + (kind === 'test' ? ' (test)' : base ? '' : ' (part of the board)');
     if (r.status === 'OK' && done >= n) return 'all ' + IL.plural(n, 'dot');
     return done + ' of ' + n + ' dots';
   }
@@ -42,8 +48,17 @@
     if (R.last && R.last.runId === r.run_uuid && R.last.profile) return R.last.profile;
     const base = IL.basePlanId(r.plan_id);
     if (base && S.plan && S.plan.planId === base && S.plan.profile) return S.plan.profile;
+    const k = base && (R.planList || []).find((x) => x.planId === base);
+    if (k && k.profile) return k.profile;
     const p = base && R.plans[base];
     return (p && p.profile) || null;
+  }
+  /** GET /api/plans (small entries with their profile): names the profile of a run without fetching every full plan. */
+  function loadPlanList() {
+    if (R.planListLoading) return;
+    R.planListLoading = true;
+    IL.api('GET', '/api/plans').then((l) => { R.planList = Array.isArray(l) ? l : []; }, () => { R.planList = R.planList || []; })
+      .then(() => { R.planListLoading = false; R.planListAt = Date.now(); IL.render(); });
   }
   const statusCell = (st) => el('span', { class: 'badge badge--' + pcr.statusKind(st) }, IL.glyph(pcr.statusKind(st), 'xs'), el('span', { text: pcr.statusWord(st) }));
   const runs = () => (Array.isArray(S.runs) ? S.runs : []);
@@ -55,13 +70,20 @@
       .then(() => { R.lastLoading = null; IL.render(); });
     return R.lastLoading;
   }
+  /** The full plan of an opened run (its done-dot map): at most a few kept (a 5,000-dot plan is large), oldest dropped. */
+  const PLANS_KEPT = 3;
   function loadPlanFor(id) {
     const base = IL.basePlanId(id);
     if (!base || base in R.plans || R.planLoading[base]) return;
     if (S.plan && S.plan.planId === base) { R.plans[base] = S.plan; return; }
     R.planLoading[base] = true;
     IL.api('GET', '/api/plan/' + encodeURIComponent(base)).then((p) => { R.plans[base] = p; }, () => { R.plans[base] = null; })
-      .then(() => { delete R.planLoading[base]; IL.render(); });
+      .then(() => {
+        delete R.planLoading[base];
+        const keys = Object.keys(R.plans);
+        for (const k of keys.slice(0, Math.max(0, keys.length - PLANS_KEPT))) if (k !== base) delete R.plans[k];
+        IL.render();
+      });
   }
   async function loadEvents() {
     try { R.events = await IL.api('GET', '/api/events?limit=100'); R.evErr = null; } catch (e) { R.evErr = IL.errorText(e); }
@@ -127,16 +149,23 @@
   function renderRuns() {
     for (const b of $('rec-kind').children) IL.setAttr(b, 'aria-pressed', String(b.dataset.kind === R.kind));
     const all = runs();
-    // the profile of a run lives in its plan: look up the few most recent ones (OpenPnP keeps the last 20 in memory)
-    const recent = [...new Set(all.filter((r) => r.kind === 'board' && r.plan_id).map((r) => IL.basePlanId(r.plan_id)))].slice(0, 6);
-    for (const id of recent) loadPlanFor(id);
+    // the profile of a run lives in its plan: the light plan list names it (OpenPnP keeps the last 20 plans in memory)
+    const newest = all[0] ? all[0].id : null;
+    if (newest !== null && R.planListFor !== newest) { R.planListFor = newest; loadPlanList(); }   // again when a new run arrives
     const list = R.kind === 'boards' ? all.filter((r) => r.kind === 'board') : all;
     const today = all.filter((r) => r.kind === 'board' && isToday(serverToClient(r.started_at)));
-    IL.setText($('rec-runs-sum'), S.runs === null ? 'Loading…' : IL.plural(list.length, R.kind === 'boards' ? 'board run' : 'run') + ' · ' + today.length + ' boards today');
+    const lerr = S.runs === null ? IL.loadError('runs') : null;
+    IL.setText($('rec-runs-sum'), lerr ? 'Could not load the runs: ' + lerr.text : S.runs === null ? 'Loading…'
+      : IL.plural(list.length, R.kind === 'boards' ? 'board run' : 'run') + ' · ' + IL.plural(today.length, 'board run') + ' today');
+    IL.setClass($('rec-runs-sum'), 'rec-sum' + (lerr ? ' reason--block' : ''));
     const sel = R.tab === 'boards' ? R.sel : null;
     const lr = S.status && S.status.lastRun;
-    const key = JSON.stringify([list.map((r) => [r.id, r.status, r.dots_done]), R.kind, sel, Object.keys(R.plans).length, lr ? lr.runId : '', S.plan ? S.plan.planId : '']);
+    const key = JSON.stringify([list.map((r) => [r.id, r.status, r.dots_done]), R.kind, sel, Object.keys(R.plans).length, (R.planList || []).length, lr ? lr.runId : '', S.plan ? S.plan.planId : '', lerr ? lerr.text : '']);
     IL.keyed($('rec-runs-t').tBodies[0], key, () => {
+      if (!list.length && lerr) {
+        return el('tr', {}, el('td', { colspan: '7', class: 'rec-empty' }, el('div', { class: 'notebox notebox--block' }, 'Could not load the runs: ' + lerr.text + ' ',
+          el('button', { type: 'button', class: 'btn btn--sm', onclick: () => IL.loadRuns() }, IL.icon('i-refresh'), 'Retry'))));
+      }
       if (!list.length) return el('tr', {}, el('td', { colspan: '7', class: 'muted rec-empty', text: S.runs === null ? 'Loading the runs…' : R.kind === 'boards' ? 'No board runs yet. Board runs appear here when they end; choose All tasks for prime, test dots and calibration runs.' : 'No runs yet.' }));
       return list.map((r) => {
         const start = serverToClient(r.started_at);
@@ -151,14 +180,14 @@
             el('td', { class: 'r nowrap', title: dph ? 'dots only ' + IL.fmtInt(r.dph_motion) + ' · overall ' + IL.fmtInt(r.dph_overall) : null },
               dph ? [el('b', { text: IL.fmtInt(r.dph_motion) }), el('span', { class: 'dim', text: ' · ' + IL.fmtInt(r.dph_overall) })] : el('span', { class: 'dim', text: '—' })),
             el('td', { class: 'rec-prof', title: prof ? IL.profileText(prof) : r.kind !== 'board' ? null : 'The profile is stored with the plan; OpenPnP keeps only the last 20 plans in memory' },
-              prof ? prof.name : el('span', { class: 'dim', text: r.kind === 'board' && R.planLoading[IL.basePlanId(r.plan_id)] ? '…' : '—' }))],
+              prof ? prof.name : el('span', { class: 'dim', text: r.kind === 'board' && R.planListLoading ? '…' : '—' }))],
           r.status === 'ABORTED' || r.status === 'ERROR' ? 'is-bad' : '');
       });
     });
   }
   function renderEvents() {
     for (const b of $('rec-ev-filter').children) IL.setAttr(b, 'aria-pressed', String(b.dataset.ev === R.evFilter));
-    const ev = (R.events || []).map((x) => ({ atMs: serverToClient(x.ts), code: x.code || '', text: x.message || '', kind: x.level === 'ERROR' ? 'block' : x.level === 'WARN' ? 'need' : 'info', src: 'OpenPnP', id: 'e' + x.id }));
+    const ev = (R.events || []).map((x) => ({ atMs: serverToClient(x.ts), code: x.code || '', text: IL.eventText(x.message || ''), full: x.message || '', kind: x.level === 'ERROR' ? 'block' : x.level === 'WARN' ? 'need' : 'info', src: 'OpenPnP', id: 'e' + x.id }));
     const page = S.activity.map((x, i) => ({ atMs: x.atMs, code: '', text: x.text, kind: x.kind, src: 'this page', id: 'p' + x.atMs + i }));
     let all = R.evFilter === 'page' ? page : ev.concat(page);
     if (R.evFilter === 'warn') all = all.filter((x) => x.kind === 'block' || x.kind === 'need');
@@ -171,7 +200,7 @@
         el('td', { class: 'nowrap', title: IL.fmtDateTime(x.atMs) }, IL.fmtTimeS(x.atMs)),
         el('td', {}, IL.glyph(x.kind === 'block' ? 'block' : x.kind === 'need' ? 'need' : x.kind === 'ok' ? 'ok' : 'info', 'xs')),
         el('td', { class: 'nowrap' }, x.code ? el('span', { class: 'icode', text: x.code }) : ''),
-        el('td', { class: 'rec-msg', text: x.text }),
+        el('td', { class: 'rec-msg', text: x.text, title: x.full && x.full !== x.text ? x.full : null }),
         el('td', { class: 'nowrap dim', text: x.src })));
     });
   }
@@ -260,16 +289,16 @@
           mini('Total time', isNum(r.total_s) ? IL.fmtClock(r.total_s) : '—', isNum(r.motion_s) ? 'dots ' + IL.fmtClock(r.motion_s) : ''),
           mini('DPH dots only', isNum(r.dph_motion) ? IL.fmtInt(r.dph_motion) : '—', 'first to last dot · bench 5,490'),
           mini('DPH overall', isNum(r.dph_overall) ? IL.fmtInt(r.dph_overall) : '—', 'whole program')),
-        el('dl', { class: 'kv kv--wrap' }, [
+        el('dl', { class: 'kv kv--wrap kv--cols' }, [
           ['Started', start ? IL.fmtDateTime(start) + ':' + String(new Date(start).getSeconds()).padStart(2, '0') : '—'],
           ['Ended', end ? IL.fmtTimeS(end) : '—'],
           ['Plan', r.plan_id ? String(r.plan_id).slice(0, 8) + (/-subset-/.test(r.plan_id) ? ' (pads subset)' : '') : '—'],
           ['Calibration', r.calibration_id ? '#' + r.calibration_id : '—'],
           ['Lines sent', isNum(r.lines_sent) ? IL.fmtInt(r.lines_sent) : '—'],
           ['Firmware watchdog', r.keepalive ? 'armed' : 'not armed'],
-        ].flatMap(([k, v]) => [el('dt', { text: k }), el('dd', { text: v })])),
-        prof ? el('dl', { class: 'kv kv--wrap' }, el('dt', { text: 'Profile' }), el('dd', { text: prof.name }),
-          el('dt', { text: 'Recipe' }), el('dd', { text: IL.recipeParts(prof).slice(1).join(' · ') })) : null,
+        ].flatMap(([k, v]) => [el('dt', { text: k }), el('dd', { text: IL.nb(v) })])),
+        prof ? el('dl', { class: 'kv kv--wrap kv--cols' }, el('dt', { text: 'Profile' }), el('dd', { text: prof.name }),
+          el('dt', { text: 'Recipe' }), el('dd', { text: IL.nb(IL.recipeParts(prof).slice(1).join(' · ')) })) : null,
       ];
       if (lr) {
         const tm = lr.dotTimings || [];
@@ -277,14 +306,14 @@
         for (let i = 1; i < tm.length; i++) gaps.push(tm[i].startMs - tm[i - 1].startMs);
         const mean = gaps.length ? gaps.reduce((a, b) => a + b, 0) / gaps.length : null;
         const slow = gaps.length ? Math.max(...gaps) : null;
-        out.push(IL.sectionK('Dot timings'), el('dl', { class: 'kv kv--wrap' }, [
+        out.push(IL.sectionK('Dot timings'), el('dl', { class: 'kv kv--wrap kv--cols' }, [
           ['First dot', tm.length ? IL.fmtTimeS(serverToClient(tm[0].startMs)) : '—'],
           ['Last dot', tm.length ? IL.fmtTimeS(serverToClient(tm[tm.length - 1].endMs)) : '—'],
           ['Dot to dot', mean !== null ? IL.fmtInt(mean) + ' ms on average · slowest ' + IL.fmtInt(slow) + ' ms' : '—'],
           ['Purge dots', isNum(lr.purgeDots) ? String(lr.purgeDots) : '—'],
           ['Work starts at', isNum(lr.workStartAngleDeg) ? IL.fmtDeg(lr.workStartAngleDeg, 1) + ' screw angle' : '—'],
           ['Pad check', lr.cleanCheck ? IL.cleanSummary(lr.cleanCheck) : 'not run'],
-        ].flatMap(([k, v]) => [el('dt', { text: k }), el('dd', { text: v })])),
+        ].flatMap(([k, v]) => [el('dt', { text: k }), el('dd', { text: IL.nb(v) })])),
         (lr.warnings || []).length ? el('ul', { class: 'rec-warn' }, lr.warnings.map((w) => el('li', { text: w }))) : null);
       }
       if (r.kind === 'board') {
@@ -344,7 +373,7 @@
       IL.sectionK('Dot ladder'),
       lad === undefined ? el('p', { class: 'panel__lead', text: 'Loading…' }) : lad === null ? el('p', { class: 'panel__lead', text: 'Could not load the ladder.' })
         : !lad.length ? el('p', { class: 'panel__lead', text: 'No ladder rows for this calibration.' })
-          : el('table', { class: 'tbl rec-mini-t' }, el('thead', {}, el('tr', {}, ['Turn °', 'n', 'Ø mm', 'mg/dot'].map((h) => el('th', { text: h, class: 'r' })))),
+          : el('table', { class: 'tbl rec-mini-t' }, el('thead', {}, el('tr', {}, ['Turn °', 'n', 'Ø mm', 'mg/dot'].map((h) => el('th', { class: 'r' }, IL.unitText(h))))),
             el('tbody', {}, lad.map((r) => el('tr', {}, el('td', { class: 'r', text: IL.fmt(r.rotationDeg, 1) }), el('td', { class: 'r', text: String(r.n) }),
               el('td', { class: 'r', text: IL.fmt(r.diameterMeanMm, 3) }), el('td', { class: 'r', text: IL.fmt(r.mgPerDotMean, 3) }))))),
       el('p', { class: 'panel__lead', text: 'A record only: boards use the dispense profile.' })];
@@ -361,7 +390,7 @@
       return [el('div', { class: 'rec-ph' }, el('div', { class: 'eyebrow', text: 'Needle offset change #' + t.id }), el('h2', { class: 'rec-ph__n', text: v.method }),
         el('div', { class: 'rec-ph__s', text: IL.fmtDateTime(serverToClient(t.created_at)) })),
       el('div', { class: 'minis' }, mini('Offset', IL.fmtSigned(t.z_offset_mm, 3), 'mm'), mini('Change', isNum(v.delta) ? IL.fmtSigned(v.delta, 3) : '—', 'from ' + (isNum(t.previous_offset_mm) ? IL.fmtSigned(t.previous_offset_mm, 3) : '—') + ' mm')),
-      a ? [IL.sectionK('Gaps and dots'), el('table', { class: 'tbl rec-mini-t' }, el('thead', {}, el('tr', {}, ['Gap mm', 'Dot Ø mm'].map((h) => el('th', { text: h, class: 'r' })))),
+      a ? [IL.sectionK('Gaps and dots'), el('table', { class: 'tbl rec-mini-t' }, el('thead', {}, el('tr', {}, ['Gap mm', 'Dot Ø mm'].map((h) => el('th', { class: 'r' }, IL.unitText(h))))),
         el('tbody', {}, (a.gapsMm || []).map((g, i) => el('tr', { class: isNum(a.contactGapMm) && Math.abs(g - a.contactGapMm) < 1e-9 ? 'is-contact' : null },
           el('td', { class: 'r', text: IL.fmtSigned(g, 3) }), el('td', { class: 'r', text: isNum((a.diametersMm || [])[i]) ? IL.fmt(a.diametersMm[i], 3) : 'no dot' }))))),
       el('p', { class: 'panel__lead', text: isNum(a.contactGapMm) ? 'Contact at a gap of ' + IL.fmtSigned(a.contactGapMm, 3) + ' mm.' + (a.reason ? ' ' + a.reason : '') : (a.reason || 'No contact found.') })] : null,
@@ -376,9 +405,9 @@
     const dots = today.reduce((a, r) => a + (r.dots_done || 0), 0);
     const last = boards[0];
     const best = today.filter((r) => isNum(r.dph_motion)).sort((a, b) => b.dph_motion - a.dph_motion)[0];
-    IL.keyed(p.body, JSON.stringify([all.length, today.length, dots, last ? [last.id, last.status] : null, R.tab]), () => [
+    IL.keyed(p.body, JSON.stringify([all.length, today.length, dots, last ? [last.id, last.status] : null, R.tab, (R.planList || []).length]), () => [
       el('div', { class: 'panel__title' }, el('h2', { text: 'Today' })),
-      el('div', { class: 'minis' }, mini('Boards', String(today.length), today.length ? IL.plural(dots, 'dot') : 'none yet'),
+      el('div', { class: 'minis' }, mini('Board runs', String(today.length), today.length ? IL.plural(dots, 'dot') : 'none yet'),
         mini('Best DPH', best ? IL.fmtInt(best.dph_motion) : '—', best ? 'dots only · overall ' + IL.fmtInt(best.dph_overall) : 'dots only')),
       last ? el('div', {}, IL.sectionK('Last board'), el('button', { type: 'button', class: 'rec-last', onclick: () => IL.go('#records/boards/' + last.run_uuid) },
         statusCell(last.status), el('div', { class: 'rec-last__t' }, el('b', { text: last.board || 'Board' }), el('span', { text: outcome(last) + ' · ' + IL.fmtDateTime(serverToClient(last.started_at)) })), IL.icon('i-chev'))) : null,
@@ -457,8 +486,9 @@
       if (last && (last.status === 'ABORTED' || last.status === 'ERROR') && isToday(serverToClient(last.started_at))) {
         return { sub: 'Last board ' + (last.status === 'ERROR' ? 'ended by an error' : 'stopped'), kind: 'block' };
       }
+      // runs, not boards: a test, a stopped run and its finish are three runs on one board
       const n = boards.filter((r) => isToday(serverToClient(r.started_at))).length;
-      return { sub: n ? IL.plural(n, 'board') + ' today' : S.runs ? 'No boards today' : '' };
+      return { sub: n ? IL.plural(n, 'board run') + ' today' : S.runs ? 'No board runs today' : IL.loadError('runs') ? 'Runs not loaded' : '' };
     },
   });
   IL.on('taskend', () => { R.last = null; });

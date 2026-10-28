@@ -378,6 +378,13 @@ bench 5,490, total time, purge spots left, the profile token, and **`Next board`
 `Unload this board and load the next. New seat?` → opens the Board step with the re-seat question answered
 `Yes` by default and the surface check set back to needs-you (§9.1 item 6).
 
+A board with paste on part of its pads (a test run of the first N dots, or a finish that did not complete it) shows the
+same board decision as after STOP, without the red: `Finish the 140 pads left` (`#btn-run-rest` / the Run button in
+Checks / `#btn-result-rest`) or `Wipe the 20 pads, run all` (`#btn-run-all`); `Test run with fewer dots…` is not offered
+on a board that already has paste. Planning the same seat again (no `Next board` in between) is the same board: its
+number and its dispensed dots carry over. A STOP before the first board dot has nothing to keep or wipe: `No dot
+reached the board` and the one action `Run the board again`.
+
 #### 8.1.8 Recovery (`data-view=recovery`) — `mockup-run-stopped.html`
 
 Triggered by our STOP response, or by `run.status` in `ABORTED`/`ERROR`, or `machine.enabled` going false while
@@ -668,7 +675,7 @@ says these ticks live in this browser only.
 | Dialog `.scrim` + `.dialog` | head · scrolling body · pinned foot | in-page, `aria-modal="false"`, starts under the strip; focus trap that **excludes** the strip (Tab from the last control goes to STOP) |
 | Tick `.tick` | 26 px checkbox in a 52 px row · text · `you, 13:04` | unticked · ticked (teal tint) · sensed (status glyph instead of a checkbox) |
 | Refusals | inline line under the action `Refused: <why> — <fix button>` · card banner (4 px left border) · Activity log | the I-code prefix of a 409 message (`I10: …`) becomes a link to its fix |
-| Toast `#toast` | one line, bottom-left of the main column, ≤ 4 s | never over the panel or STOP; always repeated in Activity; never the only record of a safety event |
+| Toast `#toast` | at most 3 lines, top-left of the main column (over the page title, never over the live tiles or the board decision), ≤ 4 s | never over the panel or STOP; always repeated in Activity; never the only record of a safety event |
 | Sticky message area `#msg-area` | top of the main column | holds offline / vent_failed / STOP NOT CONFIRMED bands; replaces the old top-of-page `#banner` |
 
 ---

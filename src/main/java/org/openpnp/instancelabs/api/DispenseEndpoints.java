@@ -599,7 +599,8 @@ final class DispenseEndpoints {
 
     /**
      * The plans kept in memory (last {@value PlanStore#MAX}, run subsets left out), newest first, without dots or
-     * interlocks: a browser opened later shows the latest plan (GET /api/plan/{id} for the rest).
+     * interlocks: a browser opened later shows the latest plan (GET /api/plan/{id} for the rest). Each carries the
+     * profile it was made with (small), so a list of runs can name its profile without fetching every full plan.
      */
     Object plans() {
         List<Map<String, Object>> l = new ArrayList<>();
@@ -607,7 +608,7 @@ final class DispenseEndpoints {
             DispensePlan p = e.plan;
             l.add(Views.map("planId", p.planId, "boardName", p.boardName, "boardLocationId", p.boardLocationId,
                     "createdAtMs", p.createdAtMs, "source", e.source, "pads", p.pads.size(), "dots", p.dots.size(),
-                    "blockedPads", p.blockedPads().size()));
+                    "blockedPads", p.blockedPads().size(), "profile", p.profile, "profileFingerprint", p.profileFingerprint));
         }
         return l;
     }

@@ -176,7 +176,9 @@
   }
   function angleCard() {
     const set = el('button', { type: 'button', class: 'btn btn--primary', id: 'btn-pf-angle-set' }, 'Set angle');
-    set.addEventListener('click', () => IL.act(set, setAngle, { ok: (p) => 'Start angle set to ' + IL.fmtDeg(p.startAngleDeg, 1) + ': plan the board again.' }));
+    // ask for a new plan only when the angle changed and a plan is shown (its dots start from the old angle)
+    set.addEventListener('click', () => IL.act(set, setAngle, { ok: (p) => 'Start angle set to ' + IL.fmtDeg(p.startAngleDeg, 1)
+      + (p.changed && S.plan ? ': plan the board again (Run).' : p.changed ? '.' : ' (unchanged), confirmed for this controller power-up.') }));
     const input = pcr.numInput('pf-angle', null, '0.1', { min: '0', max: '359.9' });
     input.addEventListener('input', checkAngle);
     return card('cal-angle', 'Screw start angle', [abbr('I11', 'Interlock I11: partial turns depend on where the screw starts'), ' · measured with dot pairs'],
@@ -387,10 +389,16 @@
     pcr.fieldErr('pf-angle', IL.num('pf-angle') === undefined ? null : c.err);
     return c;
   }
+  /** "Offset confirmed" when the needle offset is the frame offset (confirmed, not measured), else "Touched off". */
+  function offsetWord(n) {
+    return isNum(n.zOffsetMm) && isNum(n.anchorOffsetMm) && Math.abs(n.zOffsetMm - n.anchorOffsetMm) < 0.0005 ? 'Offset confirmed' : 'Touched off';
+  }
   async function setAngle() {
     const c = checkAngle();
     if (c.err) throw new Error('Start angle: ' + c.err);
+    const before = S.status && S.status.dispense && S.status.dispense.profile ? S.status.dispense.profile.startAngleDeg : null;
     const p = await IL.api('POST', '/api/screw/start-angle', { startAngleDeg: c.v, note: 'set in Calibrate (web UI)' });
+    p.changed = !(isNum(before) && Math.abs(Number(before) - Number(p.startAngleDeg)) < 0.05);
     // the field is the operator's: only mark it synced if it still shows what was sent (never overwrite a newer edit)
     if (Number($('pf-angle').value) === Number(c.v)) C.angleShown = p.startAngleDeg;
     if (S.config) IL.loadConfig();
@@ -419,10 +427,10 @@
     pcr.fillPlaces($('to-place'), s, d.blankLocationName);
     if (!C.applyTouched) $('to-apply').checked = !n.touchedOff;
     setState('cal-touch-off', !n.anchored ? 'block' : n.touchedOff ? 'ok' : 'need',
-      !n.anchored ? 'No needle frame' : n.touchedOff ? 'Touched off ' + (n.setAtMs ? IL.fmtTime(n.setAtMs - S.skewMs) : '') : 'Not touched off');
+      !n.anchored ? 'No needle frame' : n.touchedOff ? offsetWord(n) + ' ' + (n.setAtMs ? IL.fmtTime(n.setAtMs - S.skewMs) : '') : 'Not touched off');
     const p = touchOffPlan();
     showErrs(p.errs);
-    IL.setText($('to-plan'), p.gaps ? IL.plural(p.gaps.length, 'dot') + ' on “' + (place || '—') + '” at gaps ' + p.gaps.map((g) => IL.fmt(g, 3)).join(', ') + ' mm'
+    IL.setText($('to-plan'), p.gaps ? IL.plural(p.gaps.length, 'dot') + (place ? ' on “' + place + '”' : '') + ' at gaps ' + p.gaps.map((g) => IL.fmt(g, 3)).join(', ') + ' mm'
       + ' · one profile dot each' + (IL.num('to-rot') ? ' (here ' + IL.fmt(IL.num('to-rot'), 2) + '°)' : '') : 'Enter the gaps to see the dots.');
     const blockers = renderPrereqs($('to-pre'), prereqs(s, { machine: true, engine: true, frame: true, place: true, surface: true, pressure: true }, place));
     const own = Object.values(p.errs).find(Boolean) || (!place ? 'Choose the place.' : null);
@@ -456,7 +464,7 @@
             a.reason ? el('div', { class: 'dim', text: a.reason }) : null,
             v.applied || inUse ? el('div', { class: 'cal-to__ok' }, IL.glyph('ok', 'xs'), ' In use as the needle offset')
               : el('div', { class: 'btn-row', 'data-refusals': '' }, use)),
-          el('table', { class: 'tbl cal-to__t' }, el('thead', {}, el('tr', {}, el('th', { text: 'Gap mm', class: 'r' }), el('th', { text: 'Dot Ø mm', class: 'r' }), el('th', { text: '' }))),
+          el('table', { class: 'tbl cal-to__t' }, el('thead', {}, el('tr', {}, el('th', { class: 'r' }, IL.unitText('Gap mm')), el('th', { class: 'r' }, IL.unitText('Dot Ø mm')), el('th', { text: '' }))),
             el('tbody', {}, gaps.map((g, i) => el('tr', { class: inBracket(g) ? 'is-contact' : null },
               el('td', { class: 'r', text: IL.fmtSigned(g, 3) }), el('td', { class: 'r', text: isNum(dia[i]) ? IL.fmt(dia[i], 3) : 'no dot' }),
               el('td', { class: 'dim', text: isNum(a.contactGapMm) && Math.abs(g - a.contactGapMm) < 1e-9 ? 'contact' : inBracket(g) ? 'bracket' : '' })))))),
@@ -476,7 +484,7 @@
     const state = !p.partialTurn ? 'off' : !p.startAngleSetAtMs ? 'never' : p.startAngleNeedsConfirm ? 'confirm' : 'ok';
     setState('cal-angle', { ok: 'ok', confirm: 'need', never: 'block', off: 'off' }[state], { ok: IL.fmtDeg(p.startAngleDeg, 1), confirm: 'Confirm', never: 'Not set', off: 'Whole turns' }[state]);
     IL.kv($('cal-angle-kv'), [
-      ['Start angle', IL.fmtDeg(p.startAngleDeg, 1) + (p.partialTurn && p.startAngles ? ' · dots alternate ' + p.startAngles.map((x) => IL.fmtDeg(x, 1)).join(' / ') : '')],
+      ['Start angle', IL.fmtDeg(p.startAngleDeg, 1) + (p.partialTurn && p.startAngles ? ' · dots alternate ' + IL.startAnglesText(p) : '')],
       ['Set or confirmed', p.startAngleSetAtMs ? IL.fmtDateTime(p.startAngleSetAtMs - S.skewMs) : 'never'],
       ['Controller connected', p.controllerConnectedAtMs ? IL.fmtDateTime(p.controllerConnectedAtMs - S.skewMs) : '—'],
     ]);
@@ -502,7 +510,7 @@
     const p = ladderPlan();
     showErrs(p.errs);
     const ok = !Object.values(p.errs).some(Boolean);
-    IL.setText($('dl-plan'), ok ? IL.plural(p.rots.length * p.body.repeats, 'dot') + ': ' + p.rots.length + ' turns × ' + p.body.repeats + ' repeats on “' + (place || '—') + '” at '
+    IL.setText($('dl-plan'), ok ? IL.plural(p.rots.length * p.body.repeats, 'dot') + ': ' + p.rots.length + ' turns × ' + p.body.repeats + ' repeats' + (place ? ' on “' + place + '”' : '') + ' at '
       + IL.fmt(p.body.pitchMm, 1) + ' mm, imaged before and after' + ($('dl-prime').checked ? '; a prime on the waste first' : '') + '.' : 'Fix the marked fields to see the dots.');
     const blockers = renderPrereqs($('dl-pre'), prereqs(s, { machine: true, engine: true, frame: true, touched: true, place: true, surface: true, pressure: true }, place));
     const n = d.needle || {};
@@ -710,7 +718,9 @@
       const n = (s.dispense && s.dispense.needle) || {};
       if (!n.anchored) return { sub: 'Needle frame first', kind: '' };
       if (!n.touchedOff) return { sub: 'Touch-off needed', kind: 'need' };
-      return { sub: 'Touch-off ' + (n.setAtMs ? IL.fmtTime(n.setAtMs - S.skewMs) : '') };
+      // short: the subline never wraps ("Frame offset" = the confirmed frame offset, not a measured touch-off)
+      return { sub: (offsetWord(n) === 'Touched off' ? 'Touch-off ' : 'Frame offset ') + (n.setAtMs ? IL.fmtTime(n.setAtMs - S.skewMs) : ''),
+        title: offsetWord(n) + (n.setAtMs ? ' ' + IL.fmtTime(n.setAtMs - S.skewMs) : '') };
     },
   });
 })();

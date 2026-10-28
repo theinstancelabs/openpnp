@@ -259,6 +259,16 @@
     }
     return true;
   };
+  /**
+   * Keeps a number with its unit and a short label with its number on one line ("2,343 ms", "pitch 1.65 mm",
+   * "bench 5,490", "1 to 64"): the spaces between them become no-break spaces. Display text only.
+   */
+  IL.nb = function (text) {
+    return String(text)
+      .replace(/(\d) (?=(?:mm²|mm|ms|min|s|°|psi|rpm|DPH|mg|mm\/100|%|per|spots?|dots?|pads?|of|to)(?![\w²]))/g, '$1\u00a0')
+      .replace(/\b(bench|estimate|gap|dwell|purge|pitch|slowest|fastest|median|ended|started|limit|worst|tilt|offset|frame) (?=[\d−+-])/g, '$1\u00a0')
+      .replace(/([a-z])-([a-z])/g, '$1\u2011$2');
+  };
   /** <dl class="kv"> from [[key, value, title?], ...]; rebuilt only when the pairs change. */
   IL.kv = function (dl, pairs) {
     const plain = pairs.every((p) => !(p[1] instanceof Node));
@@ -268,7 +278,7 @@
     dl.replaceChildren();
     for (const [k, v, title] of pairs) {
       dl.appendChild(el('dt', { text: k, title }));
-      dl.appendChild(v instanceof Node ? el('dd', {}, v) : el('dd', { text: v === undefined || v === null ? '—' : String(v), title }));
+      dl.appendChild(v instanceof Node ? el('dd', {}, v) : el('dd', { text: v === undefined || v === null ? '—' : IL.nb(v), title }));
     }
     return dl;
   };
@@ -379,6 +389,33 @@
     return e;
   };
   IL.profileText = (f) => (f ? IL.recipeParts(f).join(' · ') : '—');
+  /** Header text with its units kept lowercase inside uppercase table headers ("X mm", never "X MM"). */
+  IL.unitText = (t) => String(t).split(/(\bmg\/dot\b|\bmm\b|\bmg\b|\bms\b)/).map((x, i) => (i % 2 ? el('span', { class: 'unit-lc', text: x }) : x));
+  /**
+   * An OpenPnP event message for people: run / plan UUIDs shortened to the 4-character ids the page shows ("plan f85d"),
+   * a profile fingerprint ("psi=18.000 net=800 …") and JSON blobs folded to "…". The full text stays in the title.
+   */
+  IL.eventText = function (msg) {
+    const t = String(msg || '').trim();
+    // a profile logged as JSON reads as its recipe token
+    if (/^\{[\s\S]*\}$/.test(t)) {
+      try { const o = JSON.parse(t); if (o && o.name && isNum(o.pressurePsi)) return 'profile ' + IL.recipeParts(o).join(' · '); } catch (e) { /* not JSON */ }
+    }
+    return t
+      .replace(/\b([0-9a-f]{4})[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(-subset-[\w-]+)?/gi, (m, a, sub) => a + (sub ? ' (part)' : ''))
+      .replace(/ psi=[\d.]+ net=\d+ suck=[\d.]+ start=[\d.]+ rpm=[\d.]+ acc=[\d.]+ dwell=\d+ gap=[\d.]+( purge=\d+)?/g, '')
+      .replace(/\{[^{}]{40,}\}|\[[^\[\]]{60,}\]/g, '{…}');
+  };
+  /**
+   * "297.9° / 117.9° (in whole motor steps)": the angles the dots really start at (the set angle, shown next to it,
+   * rounded to whole motor steps: 298.0° reads 297.9° at 4.44 steps per degree).
+   */
+  IL.startAnglesText = function (p) {
+    if (!p || !p.partialTurn || !p.startAngles || !p.startAngles.length) return 'any angle (whole turns)';
+    const t = p.startAngles.map((x) => IL.fmtDeg(x, 1)).join(' / ');
+    const rounded = isNum(p.startAngleDeg) && IL.fmt(p.startAngles[0], 1) !== IL.fmt(p.startAngleDeg, 1);
+    return t + (rounded ? ' (in whole motor steps)' : '');
+  };
   /** The value of an input (by id or element) as a number, or undefined when empty. */
   IL.num = function (idOrEl) {
     const e = typeof idOrEl === 'string' ? $(idOrEl) : idOrEl;
@@ -486,12 +523,14 @@
     IL.emit('activity', S.activity[0]);
   };
   let toastTimer = null;
-  /** One-line toast at the bottom-left of the main column (≤ 4 s), always repeated in the activity log. */
+  /** Toast at the top-left of the main column (≤ 4 s, at most 3 lines), always repeated in the activity log. */
   IL.toast = function (msg, kind) {
     const t = $('toast');
     IL.log(msg, kind);
     if (!t) return;
-    t.textContent = msg;
+    // the text sits in an inner span that is clamped to 3 whole lines (the padding stays outside the clipped box)
+    t.replaceChildren(el('span', { class: 'toast__t', text: msg }));
+    t.title = msg;
     t.className = 'toast' + (kind === 'block' || kind === 'need' ? ' toast--' + kind : '');
     t.hidden = false;
     clearTimeout(toastTimer);
@@ -553,7 +592,7 @@
       const psi = d.profile && d.profile.pressurePsi;
       if (!isNum(psi) || Number(a.value) !== Number(psi)) return null;
       const changed = d.needle && d.needle.changedAtMs;
-      if (changed && changed > a.atMs - S.skewMs) return null;
+      if (changed && changed > a.atMs + S.skewMs) return null;   // client stamp → server time: + skew
     }
     return a;
   }
@@ -632,7 +671,7 @@
     if (r && armed && armed.btn === btn) disarm();
     const dis = !!r || btn.getAttribute('aria-busy') === 'true';   // IL.act keeps its button disabled until it ends
     if (btn.disabled !== dis) btn.disabled = dis;
-    if (r) { if (!btn.dataset.titleIdle) btn.dataset.titleIdle = btn.title || ''; IL.setAttr(btn, 'title', r); }
+    if (r) { if (btn.dataset.titleIdle === undefined) btn.dataset.titleIdle = btn.title || ''; IL.setAttr(btn, 'title', r); }
     else if (btn.dataset.titleIdle !== undefined) { IL.setAttr(btn, 'title', btn.dataset.titleIdle || null); delete btn.dataset.titleIdle; }
     if (reasonEl) { IL.setText(reasonEl, r || ''); IL.show(reasonEl, !!r); }
   };
@@ -737,6 +776,11 @@
       .sort((a, b) => (a.share === null ? -1 : b.share === null ? 1 : a.share - b.share));
   };
   /** The machine-readable first sentence of a clean-pad report (spec §8.1.4, `#clean-result`). */
+  /** True when a finished report found no clean pad at all: the board position is wrong, not every pad dirty (§13). */
+  IL.cleanPositionWrong = function (cc) {
+    if (!cc || cc.ok || cc.complete === false || !(cc.targets > 0)) return false;
+    return !(cc.pads || []).some((x) => x.clean);
+  };
   IL.cleanSummary = function (cc) {
     if (!cc) return '';
     const t = IL.fmtTime(cc.checkedAtMs);
@@ -748,18 +792,31 @@
     if (clean === 0) return '0 of ' + n + ' pads clean: the board position looks wrong (solder mask under every box), not ' + n + ' dirty pads.';
     return clean + ' of ' + n + ' pads clean, ' + (n - clean) + ' with paste left (' + t + ').';
   };
-  IL.loadRuns = async function () {
-    try { S.runs = await IL.api('GET', '/api/runs?limit=50'); IL.emit('runs', S.runs); IL.render(); } catch (e) { /* next time */ }
-    return S.runs;
-  };
-  IL.loadConfig = async function () {
-    try { S.config = await IL.api('GET', '/api/config'); IL.emit('config', S.config); IL.render(); } catch (e) { /* next time */ }
-    return S.config;
-  };
-  IL.loadEvents = async function (limit) {
-    try { S.events = await IL.api('GET', '/api/events?limit=' + (limit || 50)); IL.emit('events', S.events); IL.render(); } catch (e) { /* next time */ }
-    return S.events;
-  };
+  /**
+   * Background loads: the data in S[key], the failure in S.loadErrors[key] ({text, atMs}; cleared by the next good load)
+   * so a view waiting for it can say why and offer Retry instead of "Loading…" forever.
+   */
+  S.loadErrors = {};
+  async function load(key, path) {
+    try {
+      S[key] = await IL.api('GET', path);
+      if (S.loadErrors[key]) delete S.loadErrors[key];
+      IL.emit(key, S[key]);
+    } catch (e) {
+      const text = IL.errorText(e);
+      const prevErr = S.loadErrors[key];
+      S.loadErrors[key] = { text, atMs: Date.now() };
+      if (!prevErr || prevErr.text !== text) IL.log('Could not load ' + key + ': ' + text, 'need');
+      IL.emit(key, S[key]);
+    }
+    IL.render();
+    return S[key];
+  }
+  IL.loadRuns = () => load('runs', '/api/runs?limit=50');
+  IL.loadConfig = () => load('config', '/api/config');
+  IL.loadEvents = (limit) => load('events', '/api/events?limit=' + (limit || 50));
+  /** The failure of the last background load of key ('runs' | 'config' | 'events') or null. */
+  IL.loadError = (key) => S.loadErrors[key] || null;
 
   // ================================================================================== readiness (§9)
   IL.READY_ORDER = ['machine', 'angle', 'needle', 'regulator', 'padtypes', 'surface', 'plan', 'purge', 'clean'];
@@ -886,28 +943,40 @@
     }
 
     // 5 Pad types (PLAN)
+    const gate = d.minPadTypeStatus || 'the gate';
     if (!plan) {
       add({ key: 'padtypes', code: 'PLAN', title: 'Pad types', state: 'wait', value: '—', short: 'pad types', detail: 'Known after planning.' });
     } else {
       const pads = plan.pads || [];
       const blocked = pads.filter((p) => p.blocked);
-      const planViol = viol.filter((v) => v.code === 'PLAN');
-      if (!plan.dots || !plan.dots.length) {
-        add({ key: 'padtypes', code: 'PLAN', title: 'Pad types', state: 'block', value: 'no dots', short: 'no dots',
-          detail: 'This plan has no dots.', fixes: [{ href: '#run/board', label: 'Choose another board' }] });
-      } else if (blocked.length || planViol.length) {
+      // PLAN violations about a change after planning (gate, pad type versions) make the plan stale: item 7
+      const planViol = viol.filter((v) => v.code === 'PLAN' && !/after planning/i.test(v.message));
+      if (blocked.length || (planViol.length && plan.dots && plan.dots.length)) {
         const groups = new Map();
+        let belowGate = 0;
         for (const p of blocked) {
           const k = p.typeKey || p.packageId || 'no pad type';
-          groups.set(k, { key: p.typeKey, pkg: p.packageId, n: (groups.has(k) ? groups.get(k).n : 0) + 1 });
+          const below = (p.flags || []).includes('STATUS_BELOW_MIN');
+          if (below) belowGate++;
+          const g = groups.get(k) || { key: p.typeKey, pkg: p.packageId, status: p.typeStatus, below, n: 0 };
+          g.n++;
+          groups.set(k, g);
         }
-        const list = Array.from(groups.entries()).map(([k, g]) => k + ' ×' + g.n).join(', ');
+        const list = Array.from(groups.entries()).map(([k, g]) => k + ' ×' + g.n
+          + (g.below ? ' (' + (g.status || 'no status') + ', below the gate ' + gate + ')' : !g.key ? ' (no pad type)' : '')).join(', ');
+        const fixes = [];
+        if (belowGate) fixes.push({ href: '#setup/settings/min-status', label: 'Lowest pad-type status' });
+        // per type: set its status (pad-type side panel); a pad with no type: the pad-type dialog prefilled (§13 PLAN)
+        for (const g of Array.from(groups.values()).slice(0, 3)) {
+          fixes.push(g.key ? { href: '#profile/pad-types/' + encodeURIComponent(g.key), label: (g.below ? 'Set the status of ' : 'Open ') + g.key }
+            : { href: '#profile/new-pad-type/' + encodeURIComponent(g.pkg || ''), label: 'New pad type' + (g.pkg ? ' for ' + g.pkg : '') });
+        }
         add({ key: 'padtypes', code: 'PLAN', title: 'Pad types', state: 'block', value: (pads.length - blocked.length) + '/' + pads.length,
-          short: 'pad types', detail: blocked.length ? IL.plural(blocked.length, 'pad') + ' cannot be dispensed: ' + list + '.' : sentence(planViol[0].message),
-          // a pad with no type: the pad-type dialog opens prefilled with ^<package>$ and its footprint (§13 PLAN)
-          fixes: Array.from(groups.values()).slice(0, 3).map((g) => (g.key
-            ? { href: '#profile/pad-types/' + encodeURIComponent(g.key), label: 'Open ' + g.key }
-            : { href: '#profile/new-pad-type/' + encodeURIComponent(g.pkg || ''), label: 'New pad type' + (g.pkg ? ' for ' + g.pkg : '') })) });
+          short: 'pad types', chip: blocked.length ? IL.plural(blocked.length, 'pad') + ' cannot be dispensed' : 'pad types',
+          detail: blocked.length ? IL.plural(blocked.length, 'pad') + ' cannot be dispensed: ' + list + '.' : sentence(planViol[0].message), fixes });
+      } else if (!plan.dots || !plan.dots.length) {
+        add({ key: 'padtypes', code: 'PLAN', title: 'Pad types', state: 'block', value: 'no dots', short: 'no dots', chip: 'no dots',
+          detail: 'This plan has no dots: the board has no pads with a dispensable pad type.', fixes: [{ href: '#run/board', label: 'Choose another board' }] });
       } else {
         add({ key: 'padtypes', code: 'PLAN', title: 'Pad types', state: 'ok', value: pads.length + '/' + pads.length, short: 'pad types',
           detail: pads.length + ' of ' + pads.length + ' pads have a pad type at or above ' + (d.minPadTypeStatus || 'the gate') + '.' });
@@ -916,7 +985,7 @@
 
     // 6 Board surface (I4 board)
     const sf = (d.surfaces || {})[bsName];
-    const newSeat = !!c.newSeatAtMs && (!sf || !sf.setAtMs || sf.setAtMs < c.newSeatAtMs - S.skewMs);
+    const newSeat = !!c.newSeatAtMs && (!sf || !sf.setAtMs || sf.setAtMs < c.newSeatAtMs + S.skewMs);
     if (!plan) {
       add({ key: 'surface', code: 'I4', title: 'Surface', state: 'wait', value: '—', short: 'board surface', detail: 'Known after planning.' });
     } else {
@@ -932,7 +1001,7 @@
               : 'The board surface is not tied to this plan.';
         const fixes = [{ fix: 'probe', label: 'Probe this seat', primary: true }];
         if (newSeat) fixes.push({ fix: 'same-seat', label: 'Same board, not moved' });
-        add({ key: 'surface', code: 'I4', title: 'Surface', state: 'need', value: 'probe', short: 'probe this seat', detail: why, fixes });
+        add({ key: 'surface', code: 'I4', title: 'Surface', state: 'need', value: 'probe', short: 'probe seat', detail: why, fixes });
       } else {
         add({ key: 'surface', code: 'I4', title: 'Surface', state: 'ok', value: 'tied', short: 'board surface',
           detail: 'Board surface: ' + IL.plural((sf.points || []).length, 'point') + (sf.plane ? ', worst ' + IL.fmt(sf.plane.maxResidualMm, 3) + ' mm' : '')
@@ -952,12 +1021,27 @@
       add({ key: 'plan', code: 'PLAN', title: 'Plan', state: 'checking', value: 'checking…', short: 'checking', detail: 'Re-reading the plan…' });
     } else {
       const why = [];
-      if (prof.fingerprint && plan.profileFingerprint && prof.fingerprint !== plan.profileFingerprint) why.push('the profile');
-      if (isNum(plan.needleZOffsetMm) && isNum(nd.zOffsetMm) && Math.abs(plan.needleZOffsetMm - nd.zOffsetMm) > 1e-6) why.push('the needle offset');
-      if (i4.some((x) => x.kind === 'plan')) why.push('the board surface');
+      const at = [];
+      // the start angle is part of the profile fingerprint: name it apart when it is the only difference
+      const noStart = (f) => String(f || '').replace(/\bstart=[^ ]*/, '');
+      if (prof.fingerprint && plan.profileFingerprint && prof.fingerprint !== plan.profileFingerprint) {
+        if (noStart(prof.fingerprint) !== noStart(plan.profileFingerprint)) { why.push('the profile'); at.push(c.profileChangedAt); }
+        else { why.push('the start angle'); at.push(prof.startAngleSetAtMs ? prof.startAngleSetAtMs - S.skewMs : null); }
+      }
+      if (isNum(plan.needleZOffsetMm) && isNum(nd.zOffsetMm) && Math.abs(plan.needleZOffsetMm - nd.zOffsetMm) > 1e-6) {
+        why.push('the needle offset');
+        at.push(nd.setAtMs ? nd.setAtMs - S.skewMs : null);
+      }
+      if (i4.some((x) => x.kind === 'plan')) { why.push('the board surface'); at.push(sf && sf.setAtMs ? sf.setAtMs - S.skewMs : null); }
+      // the engine re-checks the pad types of the plan against the gate and the pad types now
+      for (const v of viol.filter((x) => x.code === 'PLAN' && /after planning/i.test(x.message))) {
+        why.push(/gate/i.test(v.message) ? 'the pad-type gate' : 'the pad types');
+        at.push(null);
+      }
       if (why.length) {
-        add({ key: 'plan', code: 'PLAN', title: 'Plan', state: 'need', value: 'stale', short: 'plan again', stale: why,
-          detail: 'Plan ' + shortId + ' is stale: ' + why.join(', ') + ' changed since planning.',
+        const when = at.filter(Boolean).reduce((a, b) => Math.max(a, b), 0) || null;
+        add({ key: 'plan', code: 'PLAN', title: 'Plan', state: 'need', value: 'stale', short: 'plan again', stale: why, staleAt: when,
+          detail: 'Plan ' + shortId + ' is stale: ' + why.join(', ') + ' changed since planning' + (when ? ' (' + IL.fmtTime(when) + ')' : '') + '.',
           fixes: [{ fix: 'plan-again', label: 'Plan again', primary: true }] });
       } else {
         add({ key: 'plan', code: 'PLAN', title: 'Plan', state: 'ok', value: 'current', short: 'plan',
@@ -973,10 +1057,14 @@
     } else if (pr.surfaceProbed === false) {
       add({ key: 'purge', code: 'I9', title: 'Purge row', state: 'block', value: 'no surface', short: 'purge surface',
         detail: "The purge row's surface '" + pr.surfaceName + "' is not probed.", fixes: [{ href: '#setup/surfaces', label: 'Probe the blank' }] });
+    } else if (pr.spots < pr.perBoard) {
+      add({ key: 'purge', code: 'I9', title: 'Purge row', state: 'block', value: 'too short', short: 'purge row too short',
+        detail: 'The row has ' + IL.plural(pr.spots, 'spot') + '; a board purges ' + pr.perBoard + '. A reset cannot fix this: give the row more spots, or purge fewer dots in the profile.',
+        fixes: [{ href: '#setup/purge', label: 'Purge row: more spots' }, { href: '#profile', label: 'Profile: purge dots' }] });
     } else if (pr.spotsLeft < pr.perBoard) {
       add({ key: 'purge', code: 'I9', title: 'Purge row', state: 'need', value: pr.spotsLeft + '/' + pr.spots, short: 'wipe row',
         detail: 'Only ' + pr.spotsLeft + ' unused purge spots left, ' + pr.perBoard + ' needed. Wipe the row, then reset it.',
-        fixes: [{ fix: 'purge-reset', label: 'Wiped: reset row' }] });
+        fixes: [{ fix: 'purge-reset', label: 'Wiped: reset row', icon: 'i-wipe' }] });
     } else {
       add({ key: 'purge', code: 'I9', title: 'Purge row', state: 'ok', value: pr.spotsLeft + '/' + pr.spots, short: 'purge row',
         detail: pr.spotsLeft + ' of ' + pr.spots + ' spots free; a board uses ' + pr.perBoard + '.' });
@@ -987,7 +1075,14 @@
     const i10 = ilk.I10;
     const cc = c.cleanCheck && plan && IL.basePlanId(c.cleanCheck.planId || plan.planId) === plan.planId ? c.cleanCheck : null;
     const runChecking = s.run && s.run.running && s.run.label === 'clean-pad check';
-    if (!cpc.enabled && cc && !cc.ok && !runChecking) {
+    // "0 of 160 clean": the board position is wrong, not every pad dirty (§13): check the position, do not wipe
+    const posWrong = IL.cleanPositionWrong(cc) && !runChecking;
+    if (posWrong) {
+      add({ key: 'clean', code: 'I10', title: 'Pads clean', state: 'need', value: 'position?', short: 'check position', posWrong: true,
+        detail: IL.cleanSummary(cc) + ' Check the board X/Y and rotation in the Board step, then check the pads again.'
+          + (cpc.enabled ? '' : ' The check before each board is off: the run will not look again.'),
+        fixes: [{ href: '#run/board', label: 'Check the board position', primary: true }, { fix: 'clean-check', label: 'Check again' }] });
+    } else if (!cpc.enabled && cc && !cc.ok && !runChecking) {
       // the check is off, but a check of this plan found paste: never "ready" next to red pads (the run will not look again)
       const n = (cc.dirtyPadIds || IL.dirtyPads(cc)).length;
       add({ key: 'clean', code: 'I10', title: 'Pads clean', state: 'need', value: n + ' dirty', short: n ? 'wipe ' + IL.plural(n, 'pad') : 'check pads',
@@ -1082,7 +1177,10 @@
     if (canRun) {
       const softNot = items.filter((x) => soft.has(x.key) && !x.ready && x.state !== 'block');
       runStyle = softNot.length ? 'hold' : 'go';
-      if (softNot.some((x) => x.key === 'clean') && !cpc.enabled) {
+      if (softNot.some((x) => x.key === 'clean' && x.posWrong)) {
+        runReason = softNot.length + ' needs you. The last pad check read no pad clean: check the board position before you run'
+          + (cpc.enabled ? ' (the run checks every pad again first and refuses).' : '.');
+      } else if (softNot.some((x) => x.key === 'clean') && !cpc.enabled) {
         runReason = softNot.length + ' needs you. Wipe the pads first: the check before each board is off, so the run dispenses on them as they are.';
       } else if (softNot.some((x) => x.key === 'clean')) {
         runReason = softNot.length + ' needs you. Run anyway: the run checks every pad first (≈ 3 min) and refuses while paste is left.';
@@ -1118,14 +1216,15 @@
         fixes: [{ view: 'interlocks', label: 'Show lines' }] });
       }
       case 'I3': return Object.assign(base, { title: 'Dispenser nozzle', short: 'N2 nozzle tips', detail: 'N2 has nozzle tips, so a pick could fire the paste pneumatics. In OpenPnP: remove N2\'s compatible nozzle tips / unload its tip.' });
-      case 'I7': return Object.assign(base, { title: 'Pressure on-time', short: 'on-time', detail: sentence(t), fixes: [{ href: '#setup/settings', label: 'Raise the limit in Settings' }] });
+      case 'I7': return Object.assign(base, { title: 'Pressure on-time', short: 'on-time', detail: sentence(t),
+        fixes: [{ fix: 'run-fewer', label: 'Run fewer dots' }, { href: '#setup/settings/max-on', label: 'Raise the limit in Settings' }] });
       default: return Object.assign(base, { title: code, detail: sentence(t) });
     }
   }
   let readyMemo = null;
   /** The context IL.ready() passes to IL.readiness (from the store). */
   IL.readyCtx = () => ({ nowMs: Date.now(), attest: IL.attest.all(), planPending: S.planPending, planForgotten: S.planForgotten,
-    cleanCheck: S.cleanCheck, newSeatAtMs: S.newSeatAtMs, homedAt: S.homedAt });
+    cleanCheck: S.cleanCheck, newSeatAtMs: S.newSeatAtMs, homedAt: S.homedAt, profileChangedAt: S.profileChangedAt });
   /** Readiness of the store now (memoised per status / plan / attestation change). */
   IL.ready = function () {
     const key = S.statusAt + '|' + planVersion + '|' + attestVersion;
@@ -1138,28 +1237,57 @@
   // ================================================================================== verdict (strip "Board run")
   const TASK_WORD = { prime: 'Prime', 'test dot': 'Test dot', 'needle touch-off': 'Touch-off', 'dot ladder': 'Dot ladder',
     'scale shots': 'Shots', 'clean-pad check': 'Pad check', board: 'Board' };
-  /** Short live label of a running task: "96/160 · 0:44 left", "Pad check · 1:52", "Prime". */
-  IL.taskLabel = function (run) {
-    if (!run) return '';
+  const VENT_S = 1;
+  /**
+   * Seconds left of a board run's dots (one number for the strip, the tiles and the timeline): the live rate blended
+   * with the plan's estimate over the first 20 dots (the first dots alone swing the rate by minutes), plus the vent.
+   */
+  IL.boardLeftS = function (run) {
+    if (!run || run.label !== 'board' || !isNum(run.dotsPlanned)) return null;
+    const remain = Math.max(0, run.dotsPlanned - (run.dotsDone || 0));
+    const p = S.plan;
+    const sm = p && IL.planMatches(run.planId) ? p.summary || {} : null;
+    const perPlan = sm && isNum(sm.estimatedWorkSeconds) && p.dots && p.dots.length ? sm.estimatedWorkSeconds / p.dots.length : null;
+    const perLive = run.liveDph > 0 && run.dotsDone > 0 ? 3600 / run.liveDph : null;
+    if (perLive === null && perPlan === null) return null;
+    const w = perPlan === null ? 1 : perLive === null ? 0 : Math.min(1, run.dotsDone / 20);
+    return remain * (w * (perLive || 0) + (1 - w) * (perPlan || 0)) + VENT_S;
+  };
+  /** The camera tour progress {k, n, left, approx} of a running check (run.js knows the per-pad time), or null. */
+  function tourOf(run) {
+    const n = S.plan && IL.planMatches(run.planId) ? (S.plan.pads || []).length : 0;
+    return IL.tourProgress && n ? IL.tourProgress(run, run.elapsedS || 0, n) : null;
+  }
+  /** Live label parts of a running task: [main, long] ("96/160", " · 0:44 left"), ["Pad check ≈ 57/160", " · 1:52 left"]. */
+  function taskParts(run) {
+    if (!run) return ['', ''];
     const word = TASK_WORD[run.label] || cap(run.label || 'Task');
+    const check = run.label === 'clean-pad check' || (run.label === 'board' && !(run.dotsDone > 0) && /I10|clean/i.test(run.phase || ''));
+    if (check) {
+      const tp = tourOf(run);
+      return tp ? ['Pad check ' + (tp.approx ? '≈ ' : '') + tp.k + '/' + tp.n, ' · ' + IL.fmtClock(tp.left) + ' left'] : ['Pad check', ' · ' + IL.fmtClock(run.elapsedS) + ' so far'];
+    }
     if (run.label === 'board') {
       if (run.dotsDone > 0) {
-        const left = run.liveDph ? (run.dotsPlanned - run.dotsDone) / run.liveDph * 3600 : null;
-        return run.dotsDone + '/' + run.dotsPlanned + (left !== null ? ' · ' + IL.fmtClock(left) + ' left' : '');
+        const left = IL.boardLeftS(run);
+        return [run.dotsDone + '/' + run.dotsPlanned, left !== null ? ' · ' + IL.fmtClock(left) + ' left' : ''];
       }
-      if (/I10|clean/i.test(run.phase || '')) return 'Pad check · ' + IL.fmtClock(run.elapsedS);
-      return '0/' + run.dotsPlanned + ' · starting';
+      return ['0/' + run.dotsPlanned, ' · starting'];
     }
-    if (run.label === 'clean-pad check') return 'Pad check · ' + IL.fmtClock(run.elapsedS);
-    return word;
-  };
+    return [word, ''];
+  }
+  /** Short live label of a running task: "96/160 · 0:44 left", "Pad check ≈ 57/160 · 1:52 left", "Prime". */
+  IL.taskLabel = (run) => taskParts(run).join('');
   /** The strip verdict now: {state, text, title} (task, recovery, offline and engine override the readiness). */
   IL.verdict = function () {
     const s = S.status;
     if (S.online === false) return { state: 'off', text: 'No answer', title: 'No answer from OpenPnP since ' + IL.fmtTimeS(S.lastOkAt) };
     if (!s) return { state: 'off', text: '…', title: 'Waiting for OpenPnP' };
     const run = s.run;
-    if (run && run.running) return { state: 'live', text: IL.taskLabel(run), title: (TASK_WORD[run.label] || run.label) + ' running: ' + (run.phase || '') };
+    if (run && run.running && !IL.stoppedRun(s)) {
+      const tp = taskParts(run);
+      return { state: 'live', text: tp.join(''), value: [tp[0], tp[1], 2], title: (TASK_WORD[run.label] || run.label) + ' running: ' + (run.phase || '') };
+    }
     if (IL.recoveryActive()) {
       const r = S.recovery;
       return { state: 'block', text: 'Stopped ' + IL.fmtTime(r.atMs), title: recoveryHeadline(r) + '. Back to ready: see the Recovery panel.' };
@@ -1220,6 +1348,7 @@
     return { runId: run.runId, label: run.label, boardName: run.boardName, planId: run.planId, status: run.status,
       message: run.message, phase: run.phase, dotsDone: run.dotsDone, dotsPlanned: run.dotsPlanned,
       doneDots: run.doneDots ? run.doneDots.slice() : [], elapsedS: run.elapsedS,
+      startedAtMs: run.startedAtMs, finishedAtMs: run.finishedAtMs, pressureOnAtMs: run.pressureOnAtMs,
       pressureOnS: S.runPressureSince ? (Date.now() - S.runPressureSince) / 1000 : null };
   }
   /**
@@ -1230,34 +1359,51 @@
     const s = status || {};
     const m = s.machine || {}, d = s.dispense || {}, pr = s.pressure || {}, prof = d.profile || {}, row = d.purgeRow || {};
     const steps = [];
-    const vented = !pr.state || pr.state === 'off';
+    // vented only once a status says so: the hold is off AND no run holds the barrel any more (right after STOP the
+    // status can still show the stopped run dispensing for ~1 s: then it reads "venting…", never a tick next to "ON")
+    const failed = pr.state === 'vent_failed';
+    const holdOn = !!pr.state && pr.state !== 'off';
+    const runHeld = !!(s.run && s.run.running && (IL.PRESSURE_PHASES.has(s.run.phase) || pr.engineRunActive));
+    const vented = !holdOn && !runHeld;
     // STOP itself closes the valve (M107 P3): the hold's last event can be older than the STOP
     const lastEv = pr.lastEventAtMs ? pr.lastEventAtMs - S.skewMs : 0;
     const ventAt = rec && rec.cause === 'stop' ? Math.max(lastEv, rec.atMs || 0) : lastEv;
-    steps.push({ key: 'vent', title: vented ? 'Pressure vented' : 'Pressure is NOT off', state: vented ? 'ok' : 'block', done: vented,
-      detail: vented ? 'valve closed' + (ventAt ? ' ' + IL.fmtTimeS(ventAt) : '') + ', pump off'
-        : 'Press Pressure off or STOP again.' + (pr.lastError ? ' ' + pr.lastError : ''),
-      fixes: vented ? [] : [{ fix: 'pressure-off', label: 'Pressure off', primary: true }] });
+    // a hold still "on" in a status that arrived well after the STOP answer did not vent
+    const lateOn = pr.state === 'on' && !!rec && S.statusAt - (rec.atMs || 0) > 1500;
+    steps.push(failed || lateOn
+      ? { key: 'vent', title: 'Pressure is NOT off', state: 'block', done: false,
+        detail: 'Press Pressure off or STOP again.' + (pr.lastError ? ' ' + pr.lastError : ''), fixes: [{ fix: 'pressure-off', label: 'Pressure off', primary: true }] }
+      : !vented
+        ? { key: 'vent', title: 'Pressure venting…', state: 'checking', done: false, wait: true,
+          detail: 'valve off, then the pump: waiting for OpenPnP to confirm', fixes: [] }
+        : { key: 'vent', title: 'Pressure vented', state: 'ok', done: true,
+          detail: 'valve closed' + (ventAt ? ' ' + IL.fmtTimeS(ventAt) : '') + ', pump off', fixes: [] });
     steps.push({ key: 'connect', title: 'Connect', detail: 'reconnects to the controller; nothing moves', done: !!m.enabled,
       fixes: m.enabled ? [] : [{ fix: 'connect', label: 'Connect', primary: true }] });
     const angleOk = !prof.startAngleNeedsConfirm;
+    const angleSetAfter = rec && prof.startAngleSetAtMs && prof.startAngleSetAtMs - S.skewMs > rec.atMs;
     steps.push({ key: 'angle', title: 'Was the controller switched off?', wait: !m.enabled, done: !!m.enabled && angleOk,
-      detail: m.enabled ? (angleOk ? 'start angle ' + IL.fmtDeg(prof.startAngleDeg, 1) + ' holds' : 'STOP and Connect keep the screw step count; only switching the controller off loses it (I11)')
+      detail: m.enabled ? (angleOk ? 'start angle ' + IL.fmtDeg(prof.startAngleDeg, 1) + (angleSetAfter ? ', set ' + IL.fmtTime(prof.startAngleSetAtMs - S.skewMs) : ' holds')
+        : 'STOP and Connect keep the screw step count; only switching the controller off loses it (I11)')
         : 'STOP keeps the screw step count; asked after Connect (I11)',
       fixes: m.enabled && !angleOk ? [{ fix: 'I11-confirm', label: 'No, it stayed on: ' + IL.fmtDeg(prof.startAngleDeg, 1) + ' still holds' },
         { href: '#calibrate/angle', label: 'Yes, it was off: measure again' }] : [] });
     steps.push({ key: 'home', title: 'Home', detail: 'M410 can lose steps: home before any move', wait: !m.enabled, done: !!m.enabled && !!m.homed,
       fixes: m.enabled && !m.homed ? [{ fix: 'home', label: 'Home', primary: true }] : [] });
     const short = !!row.defined && row.spotsLeft < row.perBoard;
+    const tooShort = !!row.defined && row.spots < row.perBoard;
     if (short || (rec && rec.purgeShort)) {
       steps.push({ key: 'purge', title: short ? 'Purge row: ' + row.spotsLeft + ' left, ' + row.perBoard + ' needed' : 'Purge row reset',
-        detail: short ? 'can be done now: wipe the row on the blank, then reset it (I9)' : row.spotsLeft + ' of ' + row.spots + ' spots free',
-        done: !short, fixes: short ? [{ fix: 'purge-reset', label: 'Wiped: reset row' }] : [] });
+        detail: tooShort ? 'the row has ' + IL.plural(row.spots, 'spot') + ', a board purges ' + row.perBoard + ': give it more spots (Setup) or purge fewer dots (Profile)'
+          : short ? 'can be done now: wipe the row on the blank, then reset it (I9)' : row.spotsLeft + ' of ' + row.spots + ' spots free',
+        done: !short, fixes: tooShort ? IL.fixesForCode('I9', s) : short ? [{ fix: 'purge-reset', label: 'Wiped: reset row', icon: 'i-wipe' }] : [] });
     }
     if (rec && rec.run && rec.run.label === 'board') {
       const pads = padsLeftOf(rec.run);
-      steps.push({ key: 'decide', title: 'Decide about this board', done: false, wait: true, fixes: [{ href: '#run', label: 'Open Run' }],
-        detail: 'finish ' + (pads !== null ? IL.plural(pads, 'pad') : 'the ' + IL.plural(Math.max(0, rec.run.dotsPlanned - rec.run.dotsDone), 'dot') + ' left')
+      const none = IL.noDotsReached(rec.run);
+      steps.push({ key: 'decide', title: none ? 'Run the board again' : 'Decide about this board', done: false, wait: true, fixes: [{ href: '#run', label: 'Open Run' }],
+        detail: none ? 'no dot reached the board: run it again from Run'
+          : 'finish ' + (pads !== null ? IL.plural(pads, 'pad') : 'the ' + IL.plural(Math.max(0, rec.run.dotsPlanned - rec.run.dotsDone), 'dot') + ' left')
           + ', or wipe all and run all' });
     }
     let nowSet = false;
@@ -1267,6 +1413,17 @@
       if (!x.done && !x.wait && !nowSet) { x.now = true; nowSet = true; }
     });
     return steps;
+  };
+  /** True when a stopped board run put no dot on the board (STOP during the pad check, pump on or purge). */
+  IL.noDotsReached = (run) => !!run && !(run.dotsDone > 0) && !(run.doneDots && run.doneDots.length);
+  /**
+   * The status still shows the run our STOP just stopped (the engine winds the task down for about a second after the
+   * STOP answer): the strip and Run show it as stopped, not as dispensing. Bounded to 5 s: after that the status wins.
+   */
+  IL.stoppedRun = function (s) {
+    const r = S.recovery;
+    const run = s && s.run;
+    return !!(r && r.cause === 'stop' && run && run.running && r.run && r.run.runId === run.runId && Date.now() - r.atMs < 5000);
   };
   /** Pads with a dot not dispensed by a stopped run of the plan shown (the in-progress pad counts), or null. */
   function padsLeftOf(run) {
@@ -1322,7 +1479,7 @@
     const surf = Object.values(d.surfaces || {}).map((x) => x.name + ':' + x.setAtMs + ':' + x.boundToBoard).join(',');
     return [m.enabled, m.homed, p.controllerConnectedAtMs, p.fingerprint, p.startAngleSetAtMs, surf, pr.usedSpots, pr.resetAtMs,
       pr.defined, n.setAtMs, n.changedAtMs, n.anchor && n.anchor.setAtMs, d.cleanPadCheck && d.cleanPadCheck.enabled,
-      s.run && s.run.running].join('|');
+      d.minPadTypeStatus, s.run && s.run.running].join('|');
   }
   let lastFreshKey = null;
 
@@ -1354,6 +1511,9 @@
     if (m.enabled && !pm.enabled) S.connectedAt = now;
     if (m.homed && !pm.homed) S.homedAt = prev ? now : null;
     if (!m.homed) S.homedAt = null;
+    // when this page saw the profile change (the plan chip says "stale: profile changed 11:07")
+    const fp = d.profile && d.profile.fingerprint, pfp = prev && prev.dispense && prev.dispense.profile && prev.dispense.profile.fingerprint;
+    if (prev && fp && pfp && fp !== pfp) S.profileChangedAt = now;
     // pressure on-time of a running task (client stamp of the first poll in the pressure session)
     if (run && run.running && run.pressureOnAtMs) S.runPressureSince = run.pressureOnAtMs - S.skewMs;
     else if (run && run.running && IL.PRESSURE_PHASES.has(run.phase)) { if (!S.runPressureSince) S.runPressureSince = now; }
@@ -1449,9 +1609,11 @@
   }
 
   // ================================================================================== offline + heartbeat
+  /** Everything but STOP is locked offline: workspaces, panel parts, strip actions and open dialogs (§15, §18). */
+  const OFFLINE_INERT = '.ws, #panel-top, #panel-body, #panel-foot, #btn-start, #btn-home, .scrim, dialog.dialog';
   function setOffline(on) {
     document.documentElement.classList.toggle('is-offline', !!on);
-    for (const n of document.querySelectorAll('.ws, #panel-top, #panel-body, #panel-foot, #btn-start, #btn-home')) n.inert = !!on;
+    for (const n of document.querySelectorAll(OFFLINE_INERT)) n.inert = !!on;
     if (on) {
       IL.msg('offline', { kind: 'block', text: 'No answer from OpenPnP for 3 s: is it running? The web STOP cannot reach the machine: use OpenPnP\'s Stop button or switch the machine off.',
         sub: 'Last answer ' + IL.fmtTimeS(S.lastOkAt) + '. Everything except STOP is locked until OpenPnP answers again.' });
@@ -1557,6 +1719,9 @@
     const pr = s.pressure || {}, d = s.dispense || {}, run = s.run;
     const lim = isNum(d.maxContinuousOnTimeS) ? IL.fmtClock(d.maxContinuousOnTimeS) : null;
     const onText = (secs) => ['ON ' + IL.fmtClock(secs), lim ? ' · auto-off ' + lim : '', 2];
+    if (pr.state !== 'vent_failed' && IL.stoppedRun(s) && IL.PRESSURE_PHASES.has(run.phase)) {
+      return { kind: 'live', v: 'Switching off…', t: 'STOP closed the valve (the barrel vents) and switched the pump off: waiting for OpenPnP to confirm.' };
+    }
     switch (pr.state) {
       case 'vent_failed': return { kind: 'block', v: 'NOT off', t: 'Pressure is NOT off: the valve did not confirm. ' + (pr.lastError || '') };
       case 'starting': return { kind: 'live', v: 'Switching on…', t: 'Pump on, then the valve (pressure hold)' };
@@ -1646,15 +1811,17 @@
       if ((i11 && i11.state === 'off') || prof.partialTurn === false) setCell(ac, 'off', 'Whole turns', 'Whole turns per dot: the start angle does not matter (I11 off)');
       else if (!prof.startAngleSetAtMs) setCell(ac, 'block', 'Not set', 'The screw start angle was never set: measure it (Calibrate, I11)');
       else if (prof.startAngleNeedsConfirm) setCell(ac, 'need', 'Confirm', 'The controller reconnected after the angle was set: was it switched off? (I11)');
+      else if (S.recovery && !(s.machine && s.machine.enabled)) setCell(ac, 'need', 'Confirm', 'After STOP: asked after Connect: was the controller switched off? (I11)');
       else setCell(ac, 'ok', IL.fmtDeg(prof.startAngleDeg, 1), 'Screw start angle ' + IL.fmtDeg(prof.startAngleDeg, 1) + ', confirmed ' + IL.fmtTime(prof.startAngleSetAtMs - S.skewMs) + ' for this controller power-up (I11)');
       const row = d.purgeRow || {};
       if (!row.defined) setCell(uc, 'block', 'Not set', 'The purge row is not set (Setup, I9)');
+      else if (row.spots < row.perBoard) setCell(uc, 'block', [row.spotsLeft + ' of ' + row.spots, ' · too short'], 'The row has ' + row.spots + ' spots; a board purges ' + row.perBoard + ': give it more spots (Setup) or purge fewer dots (Profile) (I9)');
       else if (row.spotsLeft < row.perBoard) setCell(uc, 'need', [row.spotsLeft + ' of ' + row.spots, ' · wipe'], row.spotsLeft + ' spots left, ' + row.perBoard + ' needed per board: wipe the row and reset it (I9)');
       else setCell(uc, 'ok', row.spotsLeft + ' of ' + row.spots, row.spotsLeft + ' spots free, ' + row.perBoard + ' per board (I9)');
     }
     const v = IL.verdict();
     const ve = $('pill-engine');
-    setCell(ve, v.state, v.text, v.title);
+    setCell(ve, v.state, v.value || v.text, v.title);
     IL.show(ve.querySelector('.chev'), v.state !== 'live' && v.state !== 'off');
     IL.show($('sim-tag'), !!s && IL.isSim(s));
     fitStrip();
@@ -1674,8 +1841,10 @@
       }
       if (IL.recoveryActive()) {
         const r = S.recovery;
-        const at = r.run && r.run.label === 'board' && isNum(r.run.dotsDone) ? 'Stopped at dot ' + r.run.dotsDone : 'Stopped ' + IL.fmtTime(r.atMs);
-        return { sub: at, kind: 'block', badge: '!', badgeKind: 'block', badgeLabel: 'Stopped' };
+        // short forms: the subline never wraps (§15 fixed layout)
+        const at = r.run && r.run.label === 'board' && isNum(r.run.dotsDone)
+          ? (IL.noDotsReached(r.run) ? 'Stopped · no dots' : 'Stopped · dot ' + r.run.dotsDone) : 'Stopped ' + IL.fmtTime(r.atMs);
+        return { sub: at, kind: 'block', badge: '!', badgeKind: 'block', badgeLabel: 'Stopped', title: IL.recoveryHeadline(r) };
       }
       const r = IL.ready();
       const needs = r.needs.length;
@@ -1702,6 +1871,7 @@
       if (w && w.nav && s) { const o = safe(() => w.nav(s), 'nav ' + name); if (o) v = Object.assign({}, v, o); }
       const sub = a.querySelector('.nav__s'), badge = a.querySelector('.nav__badge');
       IL.setText(sub, v.sub || '');
+      IL.setAttr(sub, 'title', v.sub || null);
       IL.setClass(sub, 'nav__s' + (v.kind ? ' nav__s--' + v.kind : ''));
       const hasBadge = v.badge !== undefined && v.badge !== null && v.badge !== '' && v.badge !== '0';
       if (hasBadge) {
@@ -1830,14 +2000,14 @@
     const s = S.status;
     if (P.pushed) {
       const sp = P.pushed.spec;
-      $('panel-bar').hidden = false;
+      IL.show($('panel-bar'), true);
       IL.setText($('panel-bar-title'), typeof sp.title === 'function' ? (s ? sp.title(s) : '') : (sp.title || cap(P.pushed.view)));
       if (s) {
         if (P.first) { clearParts(); P.first = false; IL.setAttr(p.root, 'data-view', P.pushed.view); safe(() => sp.render(p, s, true), 'view ' + P.pushed.view); }
         else safe(() => sp.render(p, s, false), 'view ' + P.pushed.view);
       }
     } else {
-      $('panel-bar').hidden = true;
+      IL.show($('panel-bar'), false);
       const w = WS[S.route.ws];
       if (P.first) {
         clearParts();
@@ -1957,6 +2127,7 @@
   const STOP = { retry: null, unconfirmed: false, tries: 0, lastConfirmAt: 0, bandTimer: null, sending: 0 };
   /** Presses STOP: POST /api/stop now (2 s timeout); retries every 1 s with the red band until one answer arrives. */
   IL.stop = function (source) {
+    STOP.pressedAt = Date.now();
     setStopping(true);
     IL.log('STOP pressed (' + (source || 'button') + ')', 'block');
     STOP.source = source || 'button';
@@ -1967,7 +2138,7 @@
     STOP.sending++;
     const t0 = Date.now();
     IL.api('POST', '/api/stop', undefined, { timeoutMs: L.stopTimeoutMs })
-      .then((r) => stopConfirmed(r))
+      .then((r) => stopConfirmed(r, t0))
       .catch((e) => stopFailed(e, t0))
       .finally(() => { STOP.sending--; });
   }
@@ -1983,7 +2154,9 @@
       STOP.retry = setInterval(sendStop, L.stopRetryMs);
     }
   }
-  function stopConfirmed(r) {
+  function stopConfirmed(r, t0) {
+    // a request sent before the last confirmation (a retry or a double press) answering late: already confirmed
+    if (t0 !== undefined && t0 < STOP.lastConfirmAt) return;
     clearInterval(STOP.retry);
     STOP.retry = null;
     const tries = STOP.tries;
@@ -1991,6 +2164,7 @@
     STOP.tries = 0;
     STOP.unconfirmed = false;
     STOP.lastConfirmAt = Date.now();
+    STOP.pressedAt = 0;
     setStopping(false);
     const actions = (r && r.actions) || [];
     const at = Date.now();
@@ -2114,17 +2288,19 @@
     const o = opts || {};
     const unknown = e && e.status === 0;
     const head = unknown ? 'Outcome unknown' : e && e.status === 409 ? 'Refused' : e && e.status === 400 ? 'Not accepted' : 'Failed';
-    IL.toast(head + ': ' + IL.errorText(e), unknown ? 'need' : 'block');
+    // "Outcome unknown" once: the head says it, the line says what happened and what to do
+    const line = unknown ? e.message + ' Look at the machine.' : IL.errorText(e);
+    IL.toast(head + ': ' + line, unknown ? 'need' : 'block');
     if (!o.host) return null;
     const viol = (e && e.data && e.data.interlocks && e.data.interlocks.violations) || [];
     const box = el('div', { class: 'refusal' + (unknown ? ' refusal--unknown' : ''), role: 'alert' },
       el('div', { class: 'refusal__t', text: head + (o.what ? ' · ' + o.what : '') + ': '
-        + (viol.length ? (e.data.reason || 'refused by the interlocks').split(':')[0] : IL.errorText(e)) }));
+        + (viol.length ? (e.data.reason || 'refused by the interlocks').split(':')[0] : line) }));
     const lines = viol.length ? viol : codeFromMessage(e && e.message);
     if (lines.length) {
       box.appendChild(el('ul', {}, lines.map((v) => el('li', {},
         el('abbr', { class: 'icode', title: 'Interlock ' + v.code, text: v.code }), el('span', { text: v.message }),
-        IL.fixesForCode(v.code, S.status).map((f) => IL.fixButton(f, { cls: 'btn--sm' }))))));
+        IL.fixesForCode(v.code, S.status, v.message).map((f) => IL.fixButton(f, { cls: 'btn--sm' }))))));
     }
     o.host.appendChild(box);
     return box;
@@ -2173,9 +2349,29 @@
       delete b.dataset.fixGate;
     }
   }
+  /**
+   * Gates every fix-it on the page, then gives each row of fix-its a visible reason line (§11: every greyed control
+   * says why, not only in its tooltip): the reasons of its gated buttons, once each. Rows that show their own reason
+   * ([data-own-reason]) are left alone.
+   */
   function gateFixButtons() {
     if (!S.status) return;
-    for (const b of document.querySelectorAll('button[data-fix]')) gateFix(b, S.status);
+    const rows = new Map();
+    for (const b of document.querySelectorAll('button[data-fix]')) {
+      gateFix(b, S.status);
+      const row = b.parentElement;
+      if (!row || row.closest('[data-own-reason]')) continue;
+      if (!rows.has(row)) rows.set(row, []);
+      if (b.dataset.fixGate && b.disabled && !b.hidden) rows.get(row).push(b.dataset.fixGate);
+    }
+    for (const [row, reasons] of rows) {
+      const text = Array.from(new Set(reasons)).join(' · ');
+      let why = row.querySelector(':scope > .fix-why');
+      if (!text) { if (why) IL.show(why, false); continue; }
+      if (!why) { why = el('div', { class: 'reason fix-why' }, IL.icon('i-lock'), el('span')); row.appendChild(why); }
+      IL.setText(why.lastChild, text);
+      IL.show(why, true);
+    }
   }
   IL.runFix = function (id, btn, arg, ev) {
     const spec = FIXES[id] || FALLBACK_FIX[id];
@@ -2187,17 +2383,31 @@
     else IL.act(btn, action, { ok: spec.ok });
   };
   const FALLBACK_FIX = { 'plan-again': { href: '#run/board' }, 'clean-check': { href: '#run/checks' }, probe: { href: '#run/probe' } };
-  /** Fix-its for a refusal's I-code. */
-  IL.fixesForCode = function (code, status) {
+  /** Fix-its for a refusal's I-code (message: the engine's text, e.g. an I4 refusal that names a place). */
+  IL.fixesForCode = function (code, status, message) {
     const s = status || S.status || {};
     const m = s.machine || {};
+    const d = s.dispense || {};
+    const row = d.purgeRow || {};
+    const msg = String(message || '');
     switch (code) {
       case 'MACHINE': return m.enabled ? [{ fix: 'home', label: 'Home' }] : [{ fix: 'connect', label: 'Connect' }];
       case 'I11': return [{ fix: 'I11-confirm', label: 'Controller stayed on: confirm' }, { href: '#calibrate/angle', label: 'Measure again' }];
-      case 'I9': return [{ fix: 'purge-reset', label: 'Wiped: reset row' }];
+      case 'I9': return row.defined && row.spots < row.perBoard
+        ? [{ href: '#setup/purge', label: 'Purge row: more spots' }, { href: '#profile', label: 'Profile: purge dots' }]
+        : [{ fix: 'purge-reset', label: 'Wiped: reset row', icon: 'i-wipe' }];
       case 'I10': return [{ fix: 'clean-check', label: 'Wiped: check again' }];
-      case 'I4': return [{ href: '#setup/needle', label: 'Open Needle Z frame' }];
-      case 'I7': return [{ href: '#setup/settings', label: 'Settings' }];
+      case 'I4': {
+        const k = i4Kind(msg, d.boardSurfaceName || 'board');
+        if (k === 'place') {
+          const pm = /^place '([^']+)'/i.exec(msg);
+          return [{ href: '#setup/places' + (pm ? '/' + encodeURIComponent(pm[1]) : ''), label: 'Retake Z with N1' + (pm ? ' (' + pm[1] + ')' : '') }];
+        }
+        if (k === 'other-surface') return [{ href: '#setup/surfaces', label: 'Open Probed surfaces' }];
+        if (k === 'seat' || k === 'surface-bad' || k === 'plan') return [{ href: '#run/probe', label: 'Probe this seat' }];
+        return [{ href: '#setup/needle', label: 'Open Needle Z frame' }];
+      }
+      case 'I7': return [{ href: '#setup/settings', label: 'Settings' }, { fix: 'run-fewer', label: 'Run fewer dots' }];
       case 'PLAN': return [{ href: '#profile', label: 'Pad types' }];
       case 'CONFIG': return [{ href: '#setup/settings', label: 'Open Settings' }];
       default: return [];
@@ -2231,7 +2441,7 @@
     run: async () => { const r = await IL.api('POST', '/api/purge-row/reset'); IL.planRefreshSoon(); return r; },
     ok: (r) => 'Purge row reset: ' + (r && isNum(r.spotsLeft) ? r.spotsLeft + ' spots free' : 'all spots free') + '.',
   });
-  IL.fix('pressure-off', { run: () => IL.api('POST', '/api/pressure/stop'), ok: (r) => (r && (r.note || r.lastEvent)) || 'Pressure off' });
+  IL.fix('pressure-off', { run: () => IL.api('POST', '/api/pressure/stop'), ok: 'Pressure off · valve closed, then pump off' });
   IL.fix('pressure-on', {
     gate: (s) => (s.pressure && s.pressure.state && s.pressure.state !== 'off' ? 'Pressure is already on'
       : IL.lockReason(s, { connected: true, engine: true })),
@@ -2290,6 +2500,7 @@
         if (prevFocus && prevFocus.isConnected && prevFocus.focus) prevFocus.focus({ preventScroll: true });
       };
       h.escOff = IL.onEsc(() => { h.close('esc'); return true; });
+      if (S.online === false) scrim.inert = true;
       document.body.appendChild(scrim);
       DLG.push(h);
       const f = typeof o.initialFocus === 'string' ? dlg.querySelector(o.initialFocus) : o.initialFocus;
@@ -2303,6 +2514,7 @@
       document.body.appendChild(scrim);
       if (dlgEl.parentNode !== document.body) document.body.appendChild(dlgEl);
       dlgEl.classList.add('dialog');
+      dlgEl.inert = S.online === false;
       if (!dlgEl.open) dlgEl.show();
       const prevFocus = document.activeElement;
       const h = { el: dlgEl, scrim, closed: false };
@@ -2434,7 +2646,7 @@
         let kind = ILK_KIND[i.state] || 'off';
         let extra = null;
         if (i.id === 'I10' && cc && i.state === 'ok') { kind = 'need'; extra = 'Paste found on ' + IL.plural((cc.dirtyPadIds || []).length, 'pad') + ' at ' + IL.fmtTime(cc.checkedAtMs) + '.'; }
-        const fixes = i.state === 'blocked' || i.state === 'warning' || extra ? IL.fixesForCode(i.id, s) : [];
+        const fixes = i.state === 'blocked' || i.state === 'warning' || extra ? IL.fixesForCode(i.id, s, i.text) : [];
         const det = i.detail && i.detail.expected ? el('details', { class: 'ilist__e' }, el('summary', { text: 'Show lines' }),
           el('div', { text: 'Stop sends: ' + ((i.detail.disableCommand || []).join(', ') || 'nothing') }),
           el('div', { text: 'Expected: ' + i.detail.expected.join(', ') })) : null;
@@ -2452,7 +2664,7 @@
         sectionK('This plan · ' + String(S.plan.planId).slice(0, 4)),
         viol.length ? el('ul', { class: 'ilist' }, viol.map((v) => el('li', { class: 'blocked' }, IL.glyph('block', 'sm'),
           el('div', { class: 'ilist__t' }, el('abbr', { class: 'icode', text: v.code }), ' ', sentence(v.message)), el('span'),
-          fixRow(IL.fixesForCode(v.code, s), 'ilist__act'))))
+          fixRow(IL.fixesForCode(v.code, s, v.message), 'ilist__act'))))
           : el('p', { class: 'panel__lead', text: 'All interlocks pass for this plan.' }),
         sectionK('Machine'),
       ] : null));
@@ -2489,7 +2701,7 @@
       const row = (label, t, z) => el('tr', {}, el('td', { text: label }), el('td', { text: t ? IL.fmt(t.x, 2) : '—' }), el('td', { text: t ? IL.fmt(t.y, 2) : '—' }), el('td', { text: t && z ? IL.fmt(t.z, 2) : '—' }));
       const posKey = [pos.n1, pos.n2, pos.cam].map((t) => (t ? [t.x, t.y, t.z].map((v) => Number(v).toFixed(2)).join(',') : '-')).join('|');
       IL.keyed($('pv-machine-head'), posKey, () => el('table', { class: 'headtable' },
-        el('thead', {}, el('tr', {}, ['mm', 'X', 'Y', 'Z'].map((h) => el('th', { text: h })))),
+        el('thead', {}, el('tr', {}, ['mm', 'X', 'Y', 'Z'].map((h) => el('th', {}, IL.unitText(h))))),
         el('tbody', {}, row('N1 nozzle', pos.n1, true), row((pos.n2 && pos.n2.name ? pos.n2.name : 'N2') + ' needle', pos.n2, true), row('Camera', pos.cam, false))));
       const ilk = ['I1', 'I3'].map((id) => IL.interlock(s, id)).filter(Boolean);
       IL.keyed($('pv-machine-ilk'), JSON.stringify(ilk), () => ilk.map((i) => el('li', { class: i.state }, IL.glyph(ILK_KIND[i.state] || 'off', 'sm'),
@@ -2507,13 +2719,13 @@
         const on = IL.fixButton({ fix: 'pressure-on', label: 'Pressure on', icon: 'i-gauge' });
         const off = IL.fixButton({ fix: 'pressure-off', label: 'Pressure off', primary: true });
         const reads = IL.fixButton({ fix: 'attest-regulator', label: 'Reads … psi' });
-        p.foot.append(el('div', { class: 'btn-row', id: 'pv-pr-act', 'data-refusals': '' }, on, off, reads),
+        p.foot.append(el('div', { class: 'btn-row', id: 'pv-pr-act', 'data-refusals': '', 'data-own-reason': '' }, on, off, reads),
           el('div', { class: 'reason', id: 'pv-pr-reason', hidden: true }),
           el('div', { class: 'reason', text: 'Switches off by itself after the on-time limit (I7). Prime, test dot and runs are locked while it is on.' }));
       }
       const pr = s.pressure || {}, d = s.dispense || {}, prof = d.profile || {};
       const pv = pressureView(s);
-      const pvText = Array.isArray(pv.v) ? pv.v.join('') : pv.v;
+      const pvText = Array.isArray(pv.v) ? pv.v.slice(0, 2).join('') : pv.v;
       IL.keyed($('pv-pr-state'), pv.kind + '|' + pvText, () => el('div', { class: 'ready-head' },
         el('div', { class: 'ready-head__t' }, el('div', { class: 'eyebrow', text: 'Barrel pressure' }), el('div', { class: 'ready-head__q', text: pvText })),
         IL.glyph(pv.kind)));
@@ -2535,9 +2747,12 @@
       const holding = pr.state && pr.state !== 'off';
       const lockOn = holding ? null : IL.lockReason(s, { connected: true, engine: true });
       IL.gate(bOn, holding ? (pr.state === 'vent_failed' ? 'Pressure is NOT off: press Pressure off' : 'Pressure is already on') : lockOn);
-      IL.setText($('pv-pr-reason'), holding ? '' : lockOn || '');
-      IL.show($('pv-pr-reason'), !holding && !!lockOn);
-      IL.gate(bOff, holding || pr.state === 'vent_failed' ? null : 'Pressure is off');
+      const offWhy = holding || pr.state === 'vent_failed' ? null : 'Already off · vented';
+      IL.gate(bOff, offWhy);
+      // every greyed control says why (§11), on one line under the buttons
+      const why = [holding ? 'Pressure on: already on' : lockOn ? 'Pressure on: ' + lockOn : null, offWhy ? 'Pressure off: ' + offWhy.toLowerCase() : null].filter(Boolean).join(' · ');
+      IL.setText($('pv-pr-reason'), why);
+      IL.show($('pv-pr-reason'), !!why);
       if (!IL.isArmed(bReads)) IL.setText(bReads, reg ? 'Read again: ' + psi + ' psi' : 'Reads ' + psi + ' psi');
     },
   };
@@ -2571,7 +2786,7 @@
       });
       IL.kv($('pv-angle-kv'), [
         ['Start angle', a],
-        ['Dots start at', prof.partialTurn && prof.startAngles ? prof.startAngles.map((x) => IL.fmtDeg(x, 1)).join(' / ') : 'any angle (whole turns)'],
+        ['Dots start at', IL.startAnglesText(prof)],
         ['Set', prof.startAngleSetAtMs ? IL.fmtDateTime(prof.startAngleSetAtMs - S.skewMs) : 'never'],
         ['Controller connected', prof.controllerConnectedAtMs ? IL.fmtDateTime(prof.controllerConnectedAtMs - S.skewMs) : '—'],
       ]);
@@ -2592,7 +2807,7 @@
         const cells = [];
         for (let i = 0; i < row.spots; i++) cells.push(el('i', { class: i < row.usedSpots ? 'used' : i < row.usedSpots + row.perBoard ? 'next' : null }));
         return [el('div', { class: 'ready-head' }, el('div', { class: 'ready-head__t' }, el('div', { class: 'eyebrow', text: 'Spots free' }),
-          el('div', { class: 'ready-head__q', text: row.spotsLeft < row.perBoard ? 'Wipe the row and reset it' : 'Enough for ' + IL.plural(row.boardsLeft, 'board') })),
+          el('div', { class: 'ready-head__q', text: row.spots < row.perBoard ? 'Too short for one board (' + row.perBoard + ' per board)' : row.spotsLeft < row.perBoard ? 'Wipe the row and reset it' : 'Enough for ' + IL.plural(row.boardsLeft, 'board') })),
         el('div', { class: 'ready-head__n' }, String(row.spotsLeft), el('small', { text: ' of ' + row.spots }))),
         el('div', { class: 'purge purge--lg', role: 'img', 'aria-label': 'Purge row: ' + row.spotsLeft + ' of ' + row.spots + ' spots free', style: 'margin-top:10px' }, cells),
         el('div', { class: 'ready-sub' }, el('span', { text: row.usedSpots + ' used · ' + row.spotsLeft + ' free' }), el('span', { text: 'next board uses ' + row.perBoard }))];
@@ -2605,7 +2820,7 @@
         ['Last wiped', row.resetAtMs ? IL.fmtDateTime(row.resetAtMs - S.skewMs) : 'never'],
       ]);
       const btn = p.foot.querySelector('[data-fix="purge-reset"]');
-      IL.gate(btn, !row.defined ? 'The purge row is not set' : IL.lockReason(s), $('pv-purge-reason'));
+      IL.gate(btn, !row.defined ? 'The purge row is not set' : IL.lockReason(s) || (row.spots < row.perBoard ? 'A reset cannot help: the row has fewer spots than one board purges' : null), $('pv-purge-reason'));
     },
   };
 
@@ -2619,12 +2834,12 @@
         clearInterval(eventsTimer);
         eventsTimer = setInterval(() => { if (!document.hidden) IL.loadEvents(50); }, L.eventsEveryMs);
       }
-      const ev = (S.events || []).map((x) => ({ atMs: x.ts - S.skewMs, text: (x.code ? x.code + ': ' : '') + x.message, kind: x.level === 'ERROR' ? 'block' : x.level === 'WARN' ? 'need' : 'info', src: 'OpenPnP' }));
+      const ev = (S.events || []).map((x) => ({ atMs: x.ts - S.skewMs, text: (x.code ? x.code + ': ' : '') + IL.eventText(x.message), full: x.message, kind: x.level === 'ERROR' ? 'block' : x.level === 'WARN' ? 'need' : 'info', src: 'OpenPnP' }));
       const page = S.activity.map((x) => Object.assign({ src: 'this page' }, x));
       const all = ev.concat(page).sort((a, b) => b.atMs - a.atMs).slice(0, 120);
       IL.keyed($('pv-activity'), all.length + '|' + (all[0] ? all[0].atMs + all[0].text : ''), () => all.map((x) => el('li', { class: x.kind === 'block' ? 'blocked' : x.kind === 'need' ? 'warning' : '' },
         IL.glyph(x.kind === 'block' ? 'block' : x.kind === 'need' ? 'need' : x.kind === 'ok' ? 'ok' : 'info', 'xs'),
-        el('div', {}, el('div', { class: 'ilist__d', style: 'color:var(--ink);margin:0' }, x.text)),
+        el('div', { title: x.full || null }, el('div', { class: 'ilist__d', style: 'color:var(--ink);margin:0' }, x.text)),
         el('span', { class: 'icode', title: x.src }, IL.fmtTimeS(x.atMs)))));
     },
     unmount() { clearInterval(eventsTimer); eventsTimer = null; },
@@ -2663,12 +2878,15 @@
   };
 
   viewDefs.recovery = {
-    title: (s) => recoveryHeadline(S.recovery || S.lastStop),
+    // the red card under it carries the time: the bar names the view
+    title: 'Recovery',
     render(p, s, first) {
       const r = S.recovery || S.lastStop;
       if (first) p.body.append(el('div', { id: 'pv-rec-card' }), el('div', { id: 'pv-rec-steps' }), el('div', { id: 'pv-rec-did' }));
       if (!r) return;
-      IL.keyed($('pv-rec-card'), r.atMs + r.cause + (r.run ? r.run.dotsDone : ''), () => {
+      // on Run the main column already says how many dots and "keep the board where it is"
+      const onRun = S.route.ws === 'run';
+      IL.keyed($('pv-rec-card'), r.atMs + r.cause + (r.run ? r.run.dotsDone : '') + onRun, () => {
         const lines = [];
         if (r.cause === 'stop') {
           lines.push(el('div', { class: 'stopcard__s', text: "By this page's STOP" + (r.source === 'F9' ? ' (F9)' : '') + '. OpenPnP confirmed it. Sent before the next line:' }),
@@ -2676,9 +2894,11 @@
         } else if (r.cause === 'error') lines.push(el('div', { class: 'stopcard__s', text: 'Ended by an error: ' + (r.message || (r.run && r.run.message) || 'see Activity') }));
         else if (r.cause === 'openpnp') lines.push(el('div', { class: 'stopcard__s', text: 'Stopped in OpenPnP while a task ran.' }));
         else lines.push(el('div', { class: 'stopcard__s', text: 'The task was stopped' + (r.message ? ': ' + r.message : '.') }));
-        if (r.run && r.run.label === 'board') {
-          lines.push(el('div', { class: 'stopcard__s' }, el('b', { text: (r.run.boardName || 'Board') + ': ' + r.run.dotsDone + ' of ' + r.run.dotsPlanned + ' dots.' }),
-            ' Keep the board where it is: the dots belong to this seat.'));
+        if (r.run && r.run.label === 'board' && !onRun) {
+          lines.push(IL.noDotsReached(r.run)
+            ? el('div', { class: 'stopcard__s' }, el('b', { text: (r.run.boardName || 'Board') + ': no dot reached the board.' }), ' Run it again once these steps are done.')
+            : el('div', { class: 'stopcard__s' }, el('b', { text: (r.run.boardName || 'Board') + ': ' + r.run.dotsDone + ' of ' + r.run.dotsPlanned + ' dots.' }),
+              ' Keep the board where it is: the dots belong to this seat.'));
         }
         return el('div', { class: 'stopcard', role: 'alert' }, el('div', { class: 'stopcard__t' }, IL.glyph('block'), recoveryHeadline(r)), lines);
       });
@@ -2688,7 +2908,9 @@
       IL.keyed($('pv-rec-steps'), key, () => [sectionK('Back to ready', done + ' of ' + steps.length),
         el('ol', { class: 'rsteps', style: 'margin-top:10px' }, steps.map((x) => el('li', {
           class: 'rstep' + (x.done ? ' rstep--done' : x.now ? ' rstep--now' : x.wait ? ' rstep--wait' : ''), 'data-step': x.key, 'data-refusals': '' },
-        x.done ? IL.glyph('ok') : x.state === 'block' ? IL.glyph('block') : IL.glyph('num', null, 'Step ' + x.n, x.n),
+        // done ✓ · blocked ✕ · checking · the step to do now (its number) · can be done now (!) · later (its number)
+        x.done ? IL.glyph('ok') : x.state === 'block' ? IL.glyph('block') : x.state === 'checking' ? IL.glyph('checking', null, 'Waiting for OpenPnP')
+          : x.now ? IL.glyph('now', null, 'Now: step ' + x.n, x.n) : !x.wait ? IL.glyph('need', null, 'Can be done now') : IL.glyph('num', null, 'Step ' + x.n, x.n),
         el('div', {}, el('div', { class: 'rstep__t', text: x.title }), el('div', { class: 'rstep__d', text: x.detail })),
         el('span'),
         x.fixes.length ? fixRow(x.fixes, 'rstep__act') : null)))]);
@@ -2722,8 +2944,7 @@
     for (const b of document.querySelectorAll('[data-theme-set]')) b.addEventListener('click', () => IL.setTheme(b.dataset.themeSet));
     for (const b of document.querySelectorAll('[data-theme-toggle]')) b.addEventListener('click', () => IL.setTheme(IL.theme() === 'dark' ? 'light' : 'dark'));
     $('skip-main').addEventListener('click', (e) => { e.preventDefault(); $('main').focus(); });
-    window.addEventListener('hashchange', applyRoute);
-    window.addEventListener('popstate', applyRoute);
+    window.addEventListener('hashchange', applyRoute);   // also fires on back / forward between our hash entries
     document.addEventListener('visibilitychange', () => { if (!document.hidden) { IL.pollNow(); IL.render(); } });
     syncThemeControls();
   }

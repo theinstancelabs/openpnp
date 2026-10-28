@@ -58,7 +58,7 @@
 .timeline .tl-left { background: var(--surface); color: var(--ink-2); box-shadow: inset 0 0 0 1px var(--line-2); border-radius: 0 8px 8px 0; }
 
 /* page head while running / stopped */
-.run-lock { margin-top: 2px; max-width: 520px; }
+.run-lock { margin-top: 2px; max-width: 620px; }
 .page-head__actions .btn { flex: none; }
 .page-head .reason { margin-top: 4px; }
 
@@ -142,6 +142,9 @@
 .run-foot__reason { display: flex; gap: 9px; align-items: flex-start; font-size: 14px; line-height: 1.4; color: var(--ink); }
 .run-foot__reason .st { margin-top: 1px; }
 .run-foot__reason--block { color: var(--block); }
+/* a lock (a task runs, the recovery, offline): the lock icon in ink, not the red ✕ of a blocked check */
+.run-foot__reason--lock { color: var(--ink-2); }
+.run-foot__reason--lock .ic { width: 17px; height: 17px; margin-top: 1px; color: var(--ink-3); flex: none; }
 .run-foot__links { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 13.5px; color: var(--ink-2); }
 .run-test { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 10px 8px 12px; border-radius: 10px; background: var(--need-bg); border: 1px solid var(--need-line); font: 600 14px/1.2 var(--font-ui); color: var(--need); }
 .run-test .input { width: 96px; height: 42px; flex: none; }
@@ -232,3 +235,24 @@
 /* Run owns the recovery: its "Decide about this board" step points at the main column, no "Open Run" button */
 body:has(#ws-run:not([hidden])) #panel[data-view="recovery"] li[data-step="decide"] .rstep__act { display: none; }
 .run-refused__t { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.4; }
+
+/* the recipe token never runs past the hero card: when it changed, its name segment goes (the chip says the rest) */
+.run-recipe { min-width: 0; max-width: 100%; display: inline-flex; }
+.hero__head .recipe { max-width: 100%; }
+.hero__head .recipe--changed span:first-child { display: none; }
+.hero__head .recipe--changed span:nth-child(2) { border-left: 0; padding-left: 12px; }
+
+/* probe: a point off its target / off the board top, and the live warning above Add point */
+.ptargets tr.bad td { background: var(--need-bg); }
+.ptargets td.bad { color: var(--need); }
+.ptargets td .st { vertical-align: -3px; }
+.probe-warn { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; font-weight: 600; line-height: 1.35; padding: 9px 12px; }
+.probe-warn .st { margin-top: 1px; flex: none; }
+
+/* Pads clean card: the check button fills the row next to the camera button, so the longer two-press label
+   ("Press again: check pads") never pushes the camera button onto a new line (no layout shift, §15) */
+#clean-result .ri__act { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+#clean-result .ri__act > .fix-why { grid-column: 1 / -1; }
+#clean-result .ri__act > [data-fix] { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#clean-result .ri__act--pos { display: flex; margin-top: 8px; }
+#clean-result .ri__act--pos + .ri__act { margin-top: 8px; }

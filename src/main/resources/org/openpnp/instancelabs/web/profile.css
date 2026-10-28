@@ -311,3 +311,5 @@
 #to-result .btn--quiet { align-self: flex-start; }
 .cal-hist { border-top: 1px solid var(--line); padding-top: 4px; }
 .cal-hist[open] .cal-tblwrap { margin-top: 6px; }
+/* the sticky unsaved bar (.pf-foot--dirty) never covers a field's message: scrolling into view keeps this much clear */
+#main:has(.pf-foot--dirty) { scroll-padding-bottom: 120px; }

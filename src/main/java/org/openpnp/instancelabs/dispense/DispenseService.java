@@ -691,6 +691,17 @@ public final class DispenseService {
         }
         in.pressureSensor = pressureSensor;
         in.plan = plan;
+        if (plan != null) {
+            try {
+                in.padTypesNow = new java.util.HashMap<>();
+                for (PadType t : db.currentPadTypes()) {
+                    in.padTypesNow.put(t.typeKey, t);
+                }
+            }
+            catch (Exception e) {
+                in.padTypesNow = null; // unknown: the version check is skipped, the gate check still runs
+            }
+        }
         in.estimatedPressurisedSeconds = est;
         in.opticalCheckAvailable = imager() != null && imager().isAvailable();
         in.scope = scope == null ? new Interlocks.Scope() : scope;

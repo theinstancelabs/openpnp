@@ -658,6 +658,9 @@ public class ApiServerSimTest {
         assertEquals(planId, first.get("planId").getAsString(), "newest first: " + keptIds);
         assertEquals(6, first.get("dots").getAsInt());
         assertEquals("file", first.getAsJsonObject("source").get("source").getAsString());
+        // the profile the plan was made with (Records names it without fetching every full plan)
+        assertTrue(first.getAsJsonObject("profile").get("name").getAsString().length() > 0, first.toString());
+        assertTrue(first.get("profileFingerprint").getAsString().contains("psi="), first.toString());
         assertTrue(first.get("createdAtMs").getAsLong() > 0);
 
         // the purge row was wiped: all spots free again

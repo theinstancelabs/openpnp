@@ -24,6 +24,11 @@ public final class Interlocks {
         public String loadedNozzleTip;
         public BarrelPressureSensor pressureSensor;
         public DispensePlan plan;
+        /**
+         * The pad types now (type key -> current version), or null if unknown: a plan whose pad types changed (edited,
+         * status changed, retired) after planning is stale.
+         */
+        public java.util.Map<String, PadType> padTypesNow;
         /** Program estimate of pressurised time (I7 pre-check). */
         public double estimatedPressurisedSeconds;
         /** Top camera + dot vision present (I10 clean-pad check). */
@@ -58,6 +63,57 @@ public final class Interlocks {
             Scope s = new Scope();
             s.needleMotion = false;
             return s;
+        }
+    }
+
+    /**
+     * The pad-type gate and the pad types are read when a plan is made (§5.7). Review finding: raising the gate or
+     * editing / retiring a pad type after planning left the plan "current", and a run then dispensed pads below the new
+     * gate. Both now make the plan stale ("... after planning ...; plan again"), so the run is refused until it is
+     * planned again.
+     */
+    static void checkPadTypesSincePlanning(Inputs in, InterlockReport r) {
+        PadTypeStatus gate;
+        try {
+            gate = in.cfg.minPadTypeStatus();
+        }
+        catch (IllegalArgumentException e) {
+            return; // an unknown gate is a CONFIG problem
+        }
+        int below = 0;
+        int nowPass = 0;
+        java.util.Set<String> changed = new java.util.TreeSet<>();
+        for (DispensePlan.PlannedPad p : in.plan.pads) {
+            if (p.typeKey == null) {
+                continue;
+            }
+            if (in.padTypesNow != null) {
+                PadType now = in.padTypesNow.get(p.typeKey);
+                if (now == null || now.version != p.typeVersion) {
+                    changed.add(p.typeKey + " v" + p.typeVersion + (now == null ? " is gone" : " is now v" + now.version));
+                }
+            }
+            if (p.typeStatus == null) {
+                continue;
+            }
+            boolean gated = p.flags.contains(PadFlag.STATUS_BELOW_MIN);
+            if (!gated && !p.isBlocked() && !p.typeStatus.atLeast(gate)) {
+                below++;
+            }
+            else if (gated && p.flags.size() == 1 && p.typeStatus.atLeast(gate)) {
+                nowPass++;
+            }
+        }
+        if (below > 0) {
+            r.add("PLAN", "the pad-type gate changed after planning: " + below + " pad(s) of this plan are below '"
+                    + gate.dbName + "' now; plan again");
+        }
+        else if (nowPass > 0) {
+            r.add("PLAN", "the pad-type gate changed after planning: " + nowPass + " blocked pad(s) would pass now; "
+                    + "plan again");
+        }
+        if (!changed.isEmpty()) {
+            r.add("PLAN", "pad types changed after planning: " + String.join(", ", changed) + "; plan again");
         }
     }
 
@@ -292,6 +348,7 @@ public final class Interlocks {
             else if (!blocked.isEmpty()) {
                 r.notes.add(blocked.size() + " flagged pad(s) will be skipped");
             }
+            checkPadTypesSincePlanning(in, r);
         }
         return r;
     }

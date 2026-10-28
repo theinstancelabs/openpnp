@@ -86,7 +86,7 @@
     const pos = IL.positions(status);
     const key = [pos.n1, pos.n2, pos.cam].map((t) => (t ? [t.x, t.y, t.z].map((v) => Number(v).toFixed(2)).join(',') : '-')).join('|');
     IL.keyed(host, key, () => el('table', { class: 'headtable' },
-      el('thead', {}, el('tr', {}, ['mm', 'X', 'Y', 'Z'].map((h) => el('th', { text: h })))),
+      el('thead', {}, el('tr', {}, ['mm', 'X', 'Y', 'Z'].map((h) => el('th', {}, IL.unitText(h))))),
       el('tbody', {}, [['N1 nozzle', pos.n1, true], [(pos.n2 && pos.n2.name ? pos.n2.name : 'N2') + ' needle', pos.n2, true], ['Camera', pos.cam, false]]
         .map(([label, t, z]) => el('tr', {}, el('td', { text: label }), el('td', { text: t ? IL.fmt(t.x, 2) : '—' }),
           el('td', { text: t ? IL.fmt(t.y, 2) : '—' }), el('td', { text: t && z ? IL.fmt(t.z, 2) : '—' }))))));
@@ -351,7 +351,12 @@
     const valid = !errs['pf-turn'] && !errs['pf-suck'] && !errs['pf-rpm'];
     IL.setText($('pf-turn-info'), valid ? (edited ? 'After saving: ' : '') + ti.text : 'Fix the turn, suck-back and speed to see the screw motion.');
     const rpm = readVal(FIELDS[6]);
-    IL.show($('pf-rpm-warn'), isNum(rpm) && rpm > BENCH_RPM);
+    const warnRpm = isNum(rpm) && rpm > BENCH_RPM;
+    const rw = $('pf-rpm-warn');
+    const shownBefore = rw && !rw.hidden;
+    IL.show(rw, warnRpm);
+    // the warning appears under the field: bring it above the sticky unsaved bar (scroll-padding keeps it clear)
+    if (warnRpm && !shownBefore && rw) requestAnimationFrame(() => rw.scrollIntoView({ block: 'nearest' }));
     renderBar(s, b, ed);
   }
   function renderBar(s, b, ed) {
@@ -523,7 +528,7 @@
     const setAt = p.startAngleSetAtMs ? p.startAngleSetAtMs - S.skewMs : null;
     const conAt = p.controllerConnectedAtMs ? p.controllerConnectedAtMs - S.skewMs : null;
     IL.setText($('pf-angle-v'), a);
-    IL.setText($('pf-angle-s'), p.partialTurn && p.startAngles ? 'dots alternate ' + p.startAngles.map((x) => IL.fmtDeg(x, 1)).join(' / ') : 'whole turns: any angle');
+    IL.setText($('pf-angle-s'), p.partialTurn && p.startAngles ? 'dots alternate ' + IL.startAnglesText(p) : 'whole turns: any angle');
     IL.kv($('pf-angle-kv'), [
       ['Set or confirmed', setAt ? IL.fmtDateTime(setAt) : 'never'],
       ['Controller connected', conAt ? IL.fmtDateTime(conAt) : (s.machine && s.machine.enabled ? 'yes' : 'not connected')],
@@ -602,7 +607,7 @@
             el('span', { class: 'family__s', text: fam.retired ? 'never matched or dispensed' : pass ? pass + ' allowed on a board' : 'none allowed on a board yet' })),
           el('table', { class: 'tbl pt-table' },
             el('colgroup', {}, COLS.map((c) => el('col', { class: c[2].split(' ')[0] }))),
-            el('thead', {}, el('tr', {}, COLS.map(([h, t, c]) => el('th', { text: h, title: t, class: c.includes(' r') ? 'r' : null, scope: 'col' })))),
+            el('thead', {}, el('tr', {}, COLS.map(([h, t, c]) => el('th', { title: t, class: c.includes(' r') ? 'r' : null, scope: 'col' }, IL.unitText(h))))),
             el('tbody', {}, types.length ? types.map((t) => padTypeRow(Object.assign({ retired: !!fam.retired }, t), stats[t.typeKey], prof))
               : [el('tr', {}, el('td', { colspan: String(COLS.length), class: 'muted', text: 'No types yet' }))]))));
       }
@@ -911,7 +916,7 @@
     const list = h.history.slice().sort((a, b) => b.version - a.version);
     if (!list.some((x) => x.operator)) cols.splice(2, 1);
     $('history-body').replaceChildren(el('div', { class: 'pt-hist__wrap' }, el('table', { class: 'tbl pt-hist__t' },
-      el('thead', {}, el('tr', {}, cols.map((c) => el('th', { text: c[0], scope: 'col' })))),
+      el('thead', {}, el('tr', {}, cols.map((c) => el('th', { scope: 'col' }, IL.unitText(c[0]))))),
       el('tbody', {}, list.map((x, i) => {
         const older = list[i + 1];
         return el('tr', {}, cols.map((c) => {
@@ -987,11 +992,13 @@
         el('div', { class: 'pf-does' }, dl.svg,
           el('ul', { class: 'pf-legend' },
             el('li', {}, el('i', { class: 'pf-legend__fwd' }), 'forward ' + IL.fmt(dl.fwd, 2) + '°'),
-            el('li', {}, el('i', { class: 'pf-legend__back' }), 'back ' + IL.fmt(dl.back, 2) + '° (suck-back)'),
+            el('li', {}, el('i', { class: 'pf-legend__back' }), IL.nb('back ' + IL.fmt(dl.back, 2) + '° (suck-back)')),
             el('li', {}, el('i', { class: 'pf-legend__start' }), dl.starts.length ? 'dots start at ' + dl.starts.map((x) => IL.fmt(x, 1) + '°').join(' / ') : 'whole turns: any start angle'))),
         el('ol', { class: 'pf-steps' },
           el('li', {}, el('b', { text: 'Pressure. ' }), 'The regulator holds ' + IL.fmtPsi(e.pressurePsi) + ' psi on the barrel. It is set by hand: no sensor reads it.'),
-          el('li', {}, el('b', { text: 'Before each board. ' }), IL.plural(e.purgeDots, 'purge dot') + ' on the purge row' + (dl.starts.length ? '; the first turns the screw to the start angle ' + IL.fmtDeg(e.startAngleDeg, 1) : '') + '.'),
+          el('li', {}, el('b', { text: 'Before each board. ' }), IL.plural(e.purgeDots, 'purge dot') + ' on the purge row' + (dl.starts.length ? '; the first turns the screw to the start angle ' + IL.fmtDeg(e.startAngleDeg, 1)
+            // the dial shows the angle in whole motor steps (298.0° → 297.9°): say so once, here
+            + (IL.fmt(dl.starts[0], 1) !== IL.fmt(e.startAngleDeg, 1) ? ' (' + IL.fmtDeg(dl.starts[0], 1) + ' in whole motor steps)' : '') : '') + '.'),
           el('li', {}, el('b', { text: 'Each dot. ' }), 'The needle stops ' + IL.fmt(e.gapMm, 2) + ' mm above the pad. The screw turns forward ' + IL.fmt(dl.fwd, 2) + '° at ' + IL.fmtInt(e.screwRpm)
             + ' rpm, waits ' + e.dwellMs + ' ms, then turns back ' + IL.fmt(dl.back, 2) + '°: net ' + turn + ' (' + IL.fmt(dl.net, 2) + '°).'),
           el('li', {}, el('b', { text: 'Plans. ' }), 'A plan remembers this recipe. After a change, a board is refused until it is planned again.'))];
@@ -1035,16 +1042,20 @@
       const back = el('button', { type: 'button', class: 'btn btn--quiet btn--icon', id: 'pt-back', 'aria-label': 'Back to the profile summary', title: 'Back (Esc)' }, IL.icon('i-back'));
       back.addEventListener('click', () => IL.go('#profile'));
       p.top.append(el('div', { class: 'pt-ph' }, back, el('div', { class: 'pt-ph__t' }, el('div', { class: 'eyebrow', id: 'pt-ph-e', text: 'Pad type' }), el('h2', { id: 'pt-ph-n', text: key })), el('span', { id: 'pt-ph-b' })));
-      p.body.append(el('div', { id: 'pt-side' }));
+      // the pad-rule form is its own region: rebuilt only for another type or a newly saved rule, never on a poll or when
+      // the package list arrives (typed values stay, §15)
+      p.body.append(el('div', { id: 'pt-side' }), el('div', { id: 'pt-rule-box' }), el('div', { id: 'pt-retire-box' }));
       const edit = el('button', { type: 'button', class: 'btn btn--primary', id: 'pt-side-edit' }, 'Edit…');
       const hist = el('button', { type: 'button', class: 'btn', id: 'pt-side-history' }, 'History');
       edit.addEventListener('click', () => { const x = typeByKey(PT.sel); if (x) openPadType(x); });
       hist.addEventListener('click', () => IL.act(hist, () => showHistory(PT.sel, hist)));
       p.foot.append(el('div', { class: 'btn-row', 'data-refusals': '' }, edit, hist));
     }
-    if (!PT.data) { IL.keyed($('pt-side'), 'loading', () => el('p', { class: 'panel__lead', text: 'Loading the pad types…' })); return; }
+    const clearRest = () => { IL.keyed($('pt-rule-box'), '', () => null); IL.keyed($('pt-retire-box'), '', () => null); };
+    if (!PT.data) { IL.keyed($('pt-side'), 'loading', () => el('p', { class: 'panel__lead', text: 'Loading the pad types…' })); clearRest(); return; }
     if (!t) {
       IL.keyed($('pt-side'), 'missing' + key, () => el('div', { class: 'notebox notebox--need' }, 'No pad type “' + key + '”. ', el('button', { type: 'button', class: 'link', text: 'Back to the profile', onclick: () => IL.go('#profile') })));
+      clearRest();
       return;
     }
     IL.setText($('pt-ph-n'), t.name);
@@ -1061,16 +1072,6 @@
       const validate = el('button', { type: 'button', class: 'btn', title: 'Dispense a coupon at this size and compare with the prediction' }, 'Validate');
       setUp.addEventListener('click', () => guide(t, false));
       validate.addEventListener('click', () => guide(t, true));
-      const ruleSave = el('button', { type: 'button', class: 'btn', id: 'btn-pt-rule-save' }, 'Save pad rule');
-      ruleSave.addEventListener('click', () => IL.act(ruleSave, () => saveRule(t), { ok: (r) => 'Pad rule saved for ' + t.name + ' (v' + r.version + ').' }));
-      const rnum = (id, val, step, extra) => el('input', Object.assign({ class: 'input', id, type: 'number', step, inputmode: 'decimal', value: isNum(val) ? String(val) : '', autocomplete: 'off' }, extra || {}));
-      const retire = el('button', { type: 'button', class: 'btn btn--danger-ghost', id: 'pt-side-retire' }, 'Retire…');
-      IL.press2(retire, 'retire ' + t.name, async () => {
-        const r = await IL.api('DELETE', '/api/pad-types/' + encodeURIComponent(t.typeKey));
-        IL.go('#profile');
-        await loadPadTypes();
-        return r;
-      }, { ok: 'Retired ' + t.name + ': kept in the history, never matched to a package, never dispensed.' });
       return [
         t.dispensable ? null : el('div', { class: 'notebox notebox--need' }, IL.glyph('need', 'xs'), ' Below the gate (', el('b', { text: STATUS_OPTION[gateStatus(s)] }), '): boards refuse its pads.'),
         el('dl', { class: 'kv kv--wrap' },
@@ -1081,7 +1082,7 @@
             ['In this plan', st ? IL.plural(st.pads, 'pad') + ', ' + IL.plural(st.dots, 'dot') + (st.blocked ? ', ' + st.blocked + ' blocked' : '') : S.plan ? 'not used' : 'no plan shown'],
             ['Versions', t.versions + ' · this one ' + IL.fmtDateTime(t.createdAtMs - S.skewMs) + (t.operator ? ' by ' + t.operator : '')],
             ['Last validated', t.lastValidatedAtMs ? IL.fmtDateTime(t.lastValidatedAtMs - S.skewMs) : 'never'],
-          ].flatMap(([k, v]) => [el('dt', { text: k }), el('dd', { text: v })])),
+          ].flatMap(([k, v]) => [el('dt', { text: k }), el('dd', { text: IL.nb(v) })])),
         t.notes ? el('p', { class: 'panel__lead', text: t.notes }) : null,
         el('div', { class: 'section-k' }, el('span', { text: 'Calibrate this size' }), el('span', { class: 'rule' })),
         el('div', { class: 'btn-row' }, setUp, validate),
@@ -1089,7 +1090,13 @@
         el('div', { class: 'pt-pkgs' }, !t.packagePattern ? el('span', { class: 'muted', text: 'No package pattern: assigned only by the engine’s own rules (e.g. QFN centre pads).' })
           : el('div', {}, el('code', { class: 'pt-pat', text: t.packagePattern }),
             el('div', { class: 'pt-pkgs__l' }, m === null ? 'Loading OpenPnP packages…' : m.bad ? 'Not a valid regular expression.'
-              : m.list.length ? m.list.join(', ') : 'No OpenPnP package matches.'))),
+              : m.list.length ? m.list.join(', ') : 'No OpenPnP package matches.')))];
+    });
+    IL.keyed($('pt-rule-box'), JSON.stringify([t.typeKey, t.rule ? t.rule.version : 0]), () => {
+      const ruleSave = el('button', { type: 'button', class: 'btn', id: 'btn-pt-rule-save' }, 'Save pad rule');
+      ruleSave.addEventListener('click', () => IL.act(ruleSave, () => saveRule(t), { ok: (r) => 'Pad rule saved for ' + t.name + ' (v' + r.version + ').' }));
+      const rnum = (id, val, step, extra) => el('input', Object.assign({ class: 'input', id, type: 'number', step, inputmode: 'decimal', value: isNum(val) ? String(val) : '', autocomplete: 'off' }, extra || {}));
+      return [
         el('div', { class: 'section-k' }, el('span', { text: 'Pad rule' }), el('span', { class: 'rule' }), t.rule ? el('span', { class: 'count', text: 'v' + t.rule.version }) : null),
         el('div', { class: 'pt-rule', 'data-enter-submits': 'btn-pt-rule-save', 'data-refusals': '' },
           el('p', { class: 'field__h', text: 'Large pads can get a grid of profile dots: above the largest single-dot area, a pad gets area ÷ that area dots, rounded up, at most the maximum.' }),
@@ -1097,10 +1104,20 @@
             ptField('pt-rule-largest', 'Largest pad for one dot', 'mm²', rnum('pt-rule-largest', rule.largestSingleDotPadMm2, '0.1', { min: '0', placeholder: 'no grid' })),
             ptField('pt-rule-maxdots', 'Most dots on one pad', '1 to 64', rnum('pt-rule-maxdots', rule.maxDots, '1', { min: '1', max: '64', placeholder: '6' }))),
           el('div', { class: 'pt-rule__pre', id: 'pt-rule-pre' }),
-          ptField('pt-rule-notes', 'Notes', null, el('input', { class: 'input', id: 'pt-rule-notes', type: 'text', autocomplete: 'off' })),
+          ptField('pt-rule-notes', 'Notes', null, el('input', { class: 'input', id: 'pt-rule-notes', type: 'text', autocomplete: 'off', value: rule.notes || '' })),
           el('details', { class: 'disclose' }, el('summary', { text: 'Fit factor (kept for older records)' }),
             ptField('pt-rule-fit', 'Fit factor', 'unused since the dose model was removed', rnum('pt-rule-fit', rule.fitFactor, '0.05', { min: '0' }))),
-          el('div', { class: 'btn-row' }, ruleSave)),
+          el('div', { class: 'btn-row' }, ruleSave))];
+    });
+    IL.keyed($('pt-retire-box'), t.typeKey + '|' + !!t.retired, () => {
+      const retire = el('button', { type: 'button', class: 'btn btn--danger-ghost', id: 'pt-side-retire' }, 'Retire…');
+      IL.press2(retire, 'retire ' + t.name, async () => {
+        const r = await IL.api('DELETE', '/api/pad-types/' + encodeURIComponent(t.typeKey));
+        IL.go('#profile');
+        await loadPadTypes();
+        return r;
+      }, { ok: 'Retired ' + t.name + ': kept in the history, never matched to a package, never dispensed.' });
+      return [
         t.retired ? null : el('div', { class: 'pt-retire', 'data-refusals': '' },
           el('div', { class: 'section-k' }, el('span', { text: 'Retire' }), el('span', { class: 'rule' })),
           el('p', { class: 'field__h', text: 'A retired type stays in the history but is never matched to a package or dispensed.' }), retire)];

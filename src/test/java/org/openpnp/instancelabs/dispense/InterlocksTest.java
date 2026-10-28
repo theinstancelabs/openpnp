@@ -177,10 +177,37 @@ public class InterlocksTest {
         assertFalse(r.has("I9") || r.has("I10") || r.has("I11"), r.toString());
     }
 
+    /** Review finding: a gate raised (or a pad type edited) after planning left the plan current and the run went on. */
+    @Test
+    public void padTypesChangedAfterPlanningMakeThePlanStale() {
+        Interlocks.Inputs in = ok();
+        assertFalse(Interlocks.check(in).has("PLAN"));
+        // the gate raised above the plan's pad types (toy pads: provisional)
+        in.cfg.minPadTypeStatus = PadTypeStatus.VALIDATED.dbName;
+        InterlockReport r = Interlocks.check(in);
+        assertTrue(r.has("PLAN"), r.toString());
+        assertTrue(r.toString().contains("gate changed after planning"), r.toString());
+        // the pad type edited (a new version) or retired after planning
+        in = ok();
+        String key = in.plan.pads.get(0).typeKey;
+        PadType now = new PadType();
+        now.typeKey = key;
+        now.version = in.plan.pads.get(0).typeVersion + 1;
+        in.padTypesNow = new java.util.HashMap<>();
+        in.padTypesNow.put(key, now);
+        r = Interlocks.check(in);
+        assertTrue(r.toString().contains("pad types changed after planning: " + key), r.toString());
+        // the same versions: still current
+        now.version = in.plan.pads.get(0).typeVersion;
+        assertFalse(Interlocks.check(in).has("PLAN"), Interlocks.check(in).toString());
+    }
+
     @Test
     public void flaggedPadsAndMachineState() {
         Interlocks.Inputs in = ok();
+        // a pad below the gate (its status too, else the plan reads as made under an older gate)
         in.plan.pads.get(0).flags.add(PadFlag.STATUS_BELOW_MIN);
+        in.plan.pads.get(0).typeStatus = PadTypeStatus.NOT_STARTED;
         assertTrue(Interlocks.check(in).has("PLAN"));
         in.cfg.refuseFlaggedPads = false;
         assertFalse(Interlocks.check(in).has("PLAN"));

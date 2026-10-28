@@ -29,8 +29,10 @@
 /* ---------------------------------------------------------------- cards (shared parts) */
 .su-cards { margin-bottom: 8px; }
 .su-head-t { flex: 1; min-width: 0; }
-.su-cards .card__head { align-items: flex-start; }
-.su-cards .card__state { padding-top: 2px; flex: none; white-space: nowrap; }
+.su-cards .card__head { align-items: flex-start; flex-wrap: wrap; row-gap: 6px; }
+/* the title column keeps a readable width: a long state ("NOT touched off · needle changed") wraps under it instead */
+.su-cards .su-head-t { flex: 1 1 220px; min-width: 0; }
+.su-cards .card__state { padding-top: 2px; flex: none; white-space: nowrap; max-width: 100%; }
 .su-col { display: flex; flex-direction: column; gap: 14px; }
 .su-ref { padding: 0 18px; }
 .su-ref:empty { display: none; }
@@ -114,7 +116,9 @@
 .su-reg__big { font: 750 18px/1.25 var(--font-ui); color: var(--ink); letter-spacing: -.01em; }
 .su-reg__d { font-size: 13.5px; color: var(--ink-2); margin-top: 2px; line-height: 1.4; }
 .su-reg__row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 8px; }
-.su-reg__row .btn { background: var(--surface); }
+/* plain buttons on the info tint get a surface fill; the primary one ("The gauge reads 18 psi" while the pressure is
+   held) keeps its teal fill and white label */
+.su-reg__row .btn:not(.btn--primary) { background: var(--surface); }
 .su-reg .who { font-size: 13px; color: var(--info); font-weight: 650; white-space: nowrap; }
 .su-reg .who.muted { color: var(--ink-3); font-weight: 600; }
 .su-waste { min-height: 44px; }
@@ -238,3 +242,10 @@
 }
 .su-bm-headsw { fill: none; stroke: var(--data); stroke-width: 1.6; }
 .su-legend li.su-legend__h { display: block; margin-bottom: 2px; }
+
+.su-set-err { margin-top: 10px; }
+/* the engine's turn values keep their digits (180.1802): the field is wide enough to show them */
+.flowrows { grid-template-columns: minmax(0, 1fr) 124px auto; }
+/* Places: the table stays inside the card (an unsaved row adds its remove button) */
+.su-ptable-wrap { max-width: 100%; overflow-x: auto; }
+.ptable td.acts { white-space: normal; }

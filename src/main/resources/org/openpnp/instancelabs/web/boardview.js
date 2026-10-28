@@ -221,6 +221,14 @@
     targetBox() {
       if (!this.plan) return null;
       let b = this.view === 'board' ? grow(this.boardBox, 3) : grow(this.dotsBox, 2.5);
+      // Dots: a board edge within 10 mm of the fit is taken in, so the board never looks cut flat on one side
+      if (this.view !== 'board' && this.boardBox) {
+        const bb = this.boardBox, NEAR = 10;
+        if (b.x0 - bb.x0 > 0 && b.x0 - bb.x0 < NEAR) b.x0 = bb.x0 - 1;
+        if (bb.x1 - b.x1 > 0 && bb.x1 - b.x1 < NEAR) b.x1 = bb.x1 + 1;
+        if (b.y0 - bb.y0 > 0 && b.y0 - bb.y0 < NEAR) b.y0 = bb.y0 - 1;
+        if (bb.y1 - b.y1 > 0 && bb.y1 - b.y1 < NEAR) b.y1 = bb.y1 + 1;
+      }
       if (this.probeBox) b = { x0: Math.min(b.x0, this.probeBox.x0), y0: Math.min(b.y0, this.probeBox.y0), x1: Math.max(b.x1, this.probeBox.x1), y1: Math.max(b.y1, this.probeBox.y1) };
       if (this.view === 'follow') {
         const n = this.state.needle || this.nextXY();
@@ -386,8 +394,8 @@
     place(node, d) { node.setAttribute('cx', f(d.x)); node.setAttribute('cy', f(-d.y)); }
     placeG(g, p) {
       if (!g) return;
-      if (p) g.setAttribute('transform', 'translate(' + f(p.x) + ' ' + f(-p.y) + ')');
-      g.setAttribute('visibility', p ? 'visible' : 'hidden');
+      if (p) IL.setAttr(g, 'transform', 'translate(' + f(p.x) + ' ' + f(-p.y) + ')');
+      IL.setAttr(g, 'visibility', p ? 'visible' : 'hidden');   // diff writes: no attribute churn on every poll
     }
 
     drawProbe(pr) {

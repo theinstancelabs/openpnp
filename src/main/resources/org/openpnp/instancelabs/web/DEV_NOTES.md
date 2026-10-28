@@ -112,6 +112,10 @@ Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, `
   `IL.dirtyPads(cc)` → `[{padId, share, error}]` worst first, `IL.cleanSummary(cc)` → the machine-readable first
   sentence of `#clean-result` (§8.1.4).
 - `IL.loadRuns()` (`/api/runs?limit=50`, also at load and after each task), `IL.loadConfig()`, `IL.loadEvents(limit)`.
+  A failed load is kept in `IL.loadError('runs' | 'config' | 'events')` (`{text, atMs}`, cleared by the next good load):
+  show it with a Retry instead of "Loading…" forever.
+- `IL.cleanPositionWrong(cc)`: a finished report with no clean pad ("the board position looks wrong", §13): never
+  painted as paste, never "wipe".
 - `IL.attest.{all(), get(key), set(key, value), clear(key), valid(key, status)}` keys `regulator` (psi),
   `paste-life`, `prime-seen`, `test-dot-seen` (§9.4; regulator invalid after a psi change, a needle change or 8 h).
   `hands-clear` is never stored. `IL.setNewSeat(atMs | null)`.
@@ -146,6 +150,12 @@ Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, `
   answer; toast `STOPPED hh:mm:ss: <actions joined "; ">`; opens the recovery.
 - Second STOP: core shows the copy at the top of the panel scroll area whenever `IL.energised(status)`. Do not add
   your own; never place a Run / commit button where it sits (top of the panel).
+- `IL.stoppedRun(s)`: the status still shows the run our STOP just stopped (≤ 5 s): the strip, the plan chip and Run
+  show it as stopped / switching off, never as dispensing. `IL.noDotsReached(run)`: a stopped board run put no dot down
+  (one action: run the board again).
+- `IL.boardLeftS(run)`: seconds left of a board run, the one number for the strip, tiles, timeline and stepper (the
+  live rate blended with the plan estimate over the first 20 dots). `IL.tourProgress` (set by run.js): the camera tour
+  progress `{text, left, k, n, approx}` the strip and the Pads clean card share.
 - `IL.recoveryActive()`, `IL.recoverySteps(status, rec)` → `[{key: vent|connect|angle|home|purge|decide, n, title,
   detail, done, wait, now, state, fixes}]` (`purge` only when the row is / was short, `decide` only for a board),
   `IL.recoveryHeadline(rec)`. Recovery clears itself when vent, connect, angle, home and purge are done
@@ -170,7 +180,10 @@ Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, `
   Core registers (with gates): `connect`, `home` (two-press), `I11-confirm`, `needle-confirm` (posts the frame offset),
   `purge-reset` (two-press), `pressure-on` (two-press unless N2 ≤ 3 mm from the waste), `pressure-off`,
   `attest-regulator`, `attest-paste`, `same-seat`. Run registers `plan-again`, `clean-check` (two-press), `probe`,
-  `run-rest` (`{planId, padIds}` → the run confirm for those pads); Setup registers `su-go-<card>`, `su-probe-blank`.
+  `run-rest` (`{planId, padIds}` → the run confirm for those pads), `run-fewer` (I7: a test run of the first N dots that
+  fits the on-time limit); Setup registers `su-go-<card>`, `su-probe-blank`. Every gated fix-it row gets a visible
+  `.fix-why` reason line from core (rows marked `[data-own-reason]` show their own).
+  `IL.fixesForCode(code, status, message)`: an I4 refusal that names a place offers `Retake Z with N1` (#setup/places/<name>).
 - `IL.lockReason(status, {connected, homed, idle = true, pressureOff = true, engine})` → the spec's locked-control
   text (`Locked while the board runs`, `Pressure is held: switch it off first`, `Not connected: connect first`, offline)
   or null. `IL.gate(btn, reason, reasonEl?)` disables with the reason (title + optional visible `.reason` line).
@@ -192,7 +205,7 @@ Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, `
   [aria-modal=false]`; Tab cycles the dialog and STOP; Esc = close. `IL.dialog.showNative(<dialog>, opts)` for
   `#dlg-padtype` / `#dlg-history` (`dialog.show()` + scrim; `[open]` still marks them). `IL.dialog.top()`.
   `IL.onEsc(fn → true if handled)` for your popovers / menus.
-- `IL.toast(text, kind)` (≤ 4 s, bottom-left of the main column, also logged), `IL.msg(key, {kind, text, sub,
+- `IL.toast(text, kind)` (≤ 4 s, top-left of the main column over the page title, also logged), `IL.msg(key, {kind, text, sub,
   actions} | null)` page band in `#msg-area` (core uses keys `offline`, `vent`), `IL.log(text, kind)`.
 - Keyboard: `Alt+1…5` workspaces, `?` key sheet, `Enter` in a field inside `[data-enter-submits="<button id>"]`
   clicks that (Save) button only. Never bind Space or Esc to a machine action.
@@ -206,7 +219,10 @@ disabled, attrs, dataset})`, `IL.keyed(container, key, build)` (rebuild only whe
 id / `data-focus-key` / `data-fix`; never while a two-press inside is pending), `IL.kv(dl, [[k, v, title]])`,
 `IL.timeEl(ms, secs)`, `IL.flash(node)` (scroll + 1.5 s outline), `IL.sectionK(text, count)`.
 Values: `IL.isNum(v)` (finite number or numeric string), `IL.toClient(serverMs)` (a server `…AtMs` stamp as client
-ms), `IL.lsJson / lsSet` (localStorage), `IL.ssJson(key, fallback) / IL.ssSet(key, value)` (sessionStorage, JSON).
+ms; a client stamp as server time is `ms + IL.S.skewMs`), `IL.nb(text)` (no-break spaces between a number and its unit
+or label: "2,343 ms", "bench 5,490"), `IL.unitText(h)` (header text whose units stay lowercase under the uppercase table
+headers), `IL.eventText(msg)` (OpenPnP event text with UUIDs, fingerprints and JSON folded; full text as title),
+`IL.startAnglesText(profile)` ("297.9° / 117.9° (in whole motor steps)"), `IL.lsJson / lsSet` (localStorage), `IL.ssJson(key, fallback) / IL.ssSet(key, value)` (sessionStorage, JSON).
 Format (display only; real minus `−`): `IL.fmt(n, d=2)`, `fmtSigned`, `fmtInt` (`5,410`), `fmtPsi` (`18`, `18.5`),
 `fmtMm`, `fmtDeg` (`298.0°`), `fmtClock` (`1:15`), `fmtDuration` (`4.0 s`, `5 min 16 s`), `fmtTime` (`13:06`),
 `fmtTimeS` (`14:19:42`), `fmtDateTime`, `fmtAgo`, `plural(n, 'dot')`, `turnLabel(800, 1600)` (`½ turn`),
@@ -288,6 +304,13 @@ Never `/dev/ttyACM*`, `/dev/serial/*`, `/dev/video*` or a real-mode OpenPnP.
   `run|setup|profile|calibrate|records`, `press2` helper, the in-page run confirm, `#pill-pressure .cell__v` `/^ON /`,
   `Not connected`, interlocks via `?panel=interlocks`, the board surface tied to the plan then plan again).
 - Every static file is checked by `ApiServerSimTest.servesTheUiAndStatus` (200, non-empty, loaded by `index.html`).
+- The sim test also covers the STOP keys (Space / Esc send nothing, Enter stops), STOP NOT CONFIRMED (band in its own
+  grid row, retries, "confirmed after n tries" stays up), the offline state (band, inert workspace and dialog), the board
+  decision after a 20-dot test run ("Finish 140 pads left") and "Wipe all, run all"; STOP answers in those checks come
+  from a stub in a second page (nothing reaches OpenPnP).
+- Board identity: a plan made again for the same seat (no "Next board" since) is the same board (`IL.run.alias`), its
+  dispensed dots carry over (`carryBoard`); a part-done board shows the board decision (`partialDecision`). Kept per tab
+  (sessionStorage), like the done-dot map.
 - Optional API additions of §17 in place: `GET /api/plans` (plan restore in a fresh browser) and `run.pressureOnAtMs`
   (pressure on-time of a run, also after a reload). Not added (fallbacks in use): `run.checkDone/checkPlanned` (camera
   tour progress is estimated, labelled `≈`), `server.simulated` (inferred from the driver connection).

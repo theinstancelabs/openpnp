@@ -475,6 +475,9 @@ public class DispenseConfig {
             p.add("travelAccelMmS2 and zLiftAccelMmS2 must be > 0 and <= 5000 (the screw's acceleration is the "
                     + "profile's)");
         }
+        if (!(maxContinuousOnTimeS > 0 && maxContinuousOnTimeS <= 3600)) {
+            p.add("maxContinuousOnTimeS must be > 0 and <= 3600 s (I7: a pressure hold switches off after it)");
+        }
         if (pumpToValveSettleMs < 0 || valveSettleMs < 0 || pumpToValveSettleMs > 9000 || valveSettleMs > 9000) {
             p.add("settle values must be 0 to 9000 ms");
         }
