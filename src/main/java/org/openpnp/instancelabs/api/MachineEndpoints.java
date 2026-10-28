@@ -72,7 +72,8 @@ final class MachineEndpoints {
         if (svc != null) {
             svc.abort(reason);
             actions.add(engineWasBusy
-                    ? "dispense engine: abort requested (it sends M410, valve off, pump off, M18 B before its next line)"
+                    ? "dispense engine: abort requested (it sends " + String.join(", ", ControllerCommands.STOP_SEQUENCE)
+                            + " before its next line)"
                     : "dispense engine: idle");
         }
         if (ctx.pressure.isActive()) {
@@ -288,7 +289,8 @@ final class MachineEndpoints {
 
     /**
      * I1 outside dispense runs depends on the driver's DISABLE_COMMAND (plan §4.4): reports whether
-     * OpenPnP's own Stop switches the valve and pump off.
+     * OpenPnP's own Stop sends the Stop sequence (M410, M107 P3, M107 P2, M107 P1, M107 P0, M18 B) in
+     * this order, comments removed (extra lines around it are allowed).
      */
     Map<String, Object> stopCommandCheck(DispenseConfig cfg) {
         Machine m = ctx.configuration.getMachine();
@@ -301,18 +303,25 @@ final class MachineEndpoints {
             }
             String dis = ((GcodeDriver) d).getCommand(null, GcodeDriver.CommandType.DISABLE_COMMAND);
             List<String> lines = new ArrayList<>();
+            List<String> norm = new ArrayList<>();
             if (dis != null) {
                 for (String l : dis.split("\n")) {
                     if (!l.trim().isEmpty()) {
                         lines.add(l.trim());
+                        String c = l.contains(";") ? l.substring(0, l.indexOf(';')) : l;
+                        if (!c.trim().isEmpty()) {
+                            norm.add(c.trim().replaceAll("\\s+", " ").toUpperCase(java.util.Locale.ROOT));
+                        }
                     }
                 }
             }
-            boolean valve = lines.contains(ControllerCommands.VALVE_OFF);
-            boolean pump = lines.contains(ControllerCommands.PUMP_OFF);
-            boolean quick = lines.contains("M410");
+            boolean valve = norm.contains(ControllerCommands.VALVE_OFF);
+            boolean pump = norm.contains(ControllerCommands.PUMP_OFF);
+            boolean quick = norm.contains("M410");
+            boolean sequence = java.util.Collections.indexOfSubList(norm, ControllerCommands.STOP_SEQUENCE) >= 0;
             return Views.map("driver", d.getName(), "disableCommand", lines, "valveOff", valve, "pumpOff", pump,
-                    "quickStop", quick, "ok", valve && pump && quick);
+                    "quickStop", quick, "stopSequence", sequence, "expected", ControllerCommands.STOP_SEQUENCE, "ok",
+                    sequence);
         }
         return null;
     }

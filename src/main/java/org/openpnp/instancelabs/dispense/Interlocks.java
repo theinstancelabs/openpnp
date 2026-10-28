@@ -26,8 +26,13 @@ public final class Interlocks {
         public DispensePlan plan;
         /** Program estimate of pressurised time (I7 pre-check). */
         public double estimatedPressurisedSeconds;
-        /** I9 optical check possible (top camera + vision present). */
+        /** Top camera + dot vision present (I10 clean-pad check). */
         public boolean opticalCheckAvailable;
+        /** When OpenPnP last connected to the controller (epoch ms; I11), or null if unknown. */
+        public Long controllerConnectedAtMs;
+        /** Purge dots this run lays (I9), and whether it is a board run (I9, I10, I11 apply). */
+        public int purgeDots;
+        public boolean boardRun;
         /** What the run touches (I4 Z frame); the default is a generic needle run. */
         public Scope scope = new Scope();
     }
@@ -46,6 +51,8 @@ public final class Interlocks {
         public final List<double[]> surfaceTargets = new java.util.ArrayList<>();
         /** Plan runs: the plan must have been made on the current surface map. */
         public boolean checkPlanSurface;
+        /** Further surfaces the run dispenses on (the purge row on the blank) and their targets. */
+        public final java.util.Map<String, List<double[]>> moreSurfaces = new java.util.LinkedHashMap<>();
 
         public static Scope noNeedle() {
             Scope s = new Scope();
@@ -104,12 +111,23 @@ public final class Interlocks {
                         a.surfaceZMm, tol, a.offsetMm()));
             }
         }
-        if (sc.surfaceName == null) {
-            return;
+        if (sc.surfaceName != null) {
+            checkSurface(in, r, sc.surfaceName, sc.surfaceTargets, sc.checkPlanSurface);
         }
-        DispenseConfig.SurfaceMap m = cfg.surface(sc.surfaceName);
+        for (java.util.Map.Entry<String, List<double[]>> e : sc.moreSurfaces.entrySet()) {
+            checkSurface(in, r, e.getKey(), e.getValue(), false);
+        }
+    }
+
+    /** I4 for one probed surface and the dots that take their Z from it. */
+    private static void checkSurface(Inputs in, InterlockReport r, String name, List<double[]> targets,
+            boolean checkPlan) {
+        DispenseConfig cfg = in.cfg;
+        DispenseConfig.NeedleAnchor a = cfg.needleAnchor;
+        double tol = cfg.zFrameToleranceMm;
+        DispenseConfig.SurfaceMap m = cfg.surface(name);
         if (m == null || m.points == null || m.points.size() < 3) {
-            r.add("I4", "no '" + sc.surfaceName + "' surface: probe at least 3 points around it with N1 (Surfaces card)");
+            r.add("I4", "no '" + name + "' surface: probe at least 3 points around it with N1 (Surfaces card)");
             return;
         }
         SurfacePlane pl;
@@ -117,21 +135,21 @@ public final class Interlocks {
             pl = SurfacePlane.fit(m.points);
         }
         catch (IllegalArgumentException e) {
-            r.add("I4", "'" + sc.surfaceName + "' surface: " + e.getMessage());
+            r.add("I4", "'" + name + "' surface: " + e.getMessage());
             return;
         }
         if (pl.maxAbsResidualMm > cfg.surfaceMaxResidualMm) {
             r.add("I4", String.format(Locale.ROOT, "'%s' surface is not flat enough for a plane: largest residual "
-                    + "%.3f mm, limit %.3f mm (gap budget)", sc.surfaceName, pl.maxAbsResidualMm, cfg.surfaceMaxResidualMm));
+                    + "%.3f mm, limit %.3f mm (gap budget)", name, pl.maxAbsResidualMm, cfg.surfaceMaxResidualMm));
         }
         if (pl.minZ < a.surfaceZMm - tol || pl.maxZ > a.surfaceZMm + tol) {
             r.add("I4", String.format(Locale.ROOT, "'%s' surface Z %.3f..%.3f is outside the needle-frame surface "
-                    + "%.3f +/- %.2f: surface points are N1 contact heights (OpenPnP frame)", sc.surfaceName, pl.minZ,
+                    + "%.3f +/- %.2f: surface points are N1 contact heights (OpenPnP frame)", name, pl.minZ,
                     pl.maxZ, a.surfaceZMm, tol));
         }
         int outside = 0;
         double worst = 0;
-        for (double[] xy : sc.surfaceTargets) {
+        for (double[] xy : targets) {
             double d = pl.distanceOutside(xy[0], xy[1]);
             if (d > cfg.surfaceMarginMm) {
                 outside++;
@@ -140,12 +158,24 @@ public final class Interlocks {
         }
         if (outside > 0) {
             r.add("I4", String.format(Locale.ROOT, "%d dot(s) lie outside the probed '%s' surface (up to %.1f mm "
-                    + "beyond its points, margin %.1f mm): probe points around them", outside, sc.surfaceName, worst,
+                    + "beyond its points, margin %.1f mm): probe points around them", outside, name, worst,
                     cfg.surfaceMarginMm));
         }
-        if (sc.checkPlanSurface && in.plan != null && !pl.fingerprint().equals(in.plan.surfaceFingerprint)) {
-            r.add("I4", "the plan was made " + (in.plan.surfaceFingerprint == null ? "without the probed '"
-                    : "on another '") + sc.surfaceName + "' surface: plan the board again");
+        if (checkPlan && in.plan != null) {
+            if (!pl.fingerprint().equals(in.plan.surfaceFingerprint)) {
+                r.add("I4", "the plan was made " + (in.plan.surfaceFingerprint == null ? "without the probed '"
+                        : "on another '") + name + "' surface: plan the board again");
+            }
+            // F3: re-probe whenever the board is re-seated (one seating was tilted 0.9 mm).
+            if (m.boardFingerprint != null && in.plan.boardFingerprint != null
+                    && !m.boardFingerprint.equals(in.plan.boardFingerprint)) {
+                r.add("I4", "the '" + name + "' surface was probed on another registration of the board (moved, "
+                        + "re-seated or fiducials re-checked since): probe it again");
+            }
+            else if (m.boardFingerprint == null) {
+                r.notes.add("I4: the '" + name + "' surface is not tied to a board registration: probe it again after "
+                        + "any re-seat");
+            }
         }
     }
 
@@ -198,17 +228,43 @@ public final class Interlocks {
                     "estimated pressurised time %.0f s exceeds the %.0f s on-time limit",
                     in.estimatedPressurisedSeconds, cfg.maxContinuousOnTimeS));
         }
-        // I9: prime + test dot.
-        if (cfg.primeAndTestDot) {
-            if (cfg.location(cfg.wasteLocationName) == null) {
-                r.add("I9", "waste location '" + cfg.wasteLocationName + "' is not set");
+        DispenseProfile prof = cfg.profile;
+        // I6: the regulator is set by hand; the profile says what it must read.
+        r.notes.add(String.format(Locale.ROOT, "I6: set the regulator to %.1f psi (profile '%s'); the window is "
+                + "narrow: 16 psi starved the screw, 20 psi drooled", prof.pressurePsi, prof.name));
+        if (in.boardRun) {
+            // I9: purge row (same recipe as the work, then cross without stopping).
+            DispenseConfig.PurgeRow row = cfg.purgeRow;
+            if (in.purgeDots > 0) {
+                if (!row.isDefined()) {
+                    r.add("I9", "the purge row is not set (origin, pitch, spots on the blank)");
+                }
+                else if (row.spotsLeft() < in.purgeDots) {
+                    r.add("I9", String.format(Locale.ROOT, "only %d unused purge spot(s) left, %d needed: wipe the "
+                            + "purge row and reset it, or set a new row", row.spotsLeft(), in.purgeDots));
+                }
             }
-            if (cfg.testDotOpticalCheck && !in.opticalCheckAvailable) {
-                r.add("I9", "optical test-dot check enabled but no top camera / dot vision is available");
+            else {
+                r.notes.add("I9: no purge dots in the profile");
             }
-        }
-        else {
-            r.notes.add("I9: prime + test dot disabled in the configuration");
+            // I10: clean-pad guard needs the top camera.
+            if (cfg.cleanPadCheck.enabled && !in.opticalCheckAvailable) {
+                r.add("I10", "clean-pad check enabled but no top camera / dot vision is available");
+            }
+            else if (!cfg.cleanPadCheck.enabled) {
+                r.notes.add("I10: clean-pad check disabled in the configuration");
+            }
+            // I11: the start angle of a partial turn is a calibration of the current controller power-up.
+            if (prof.isPartialTurn(cfg)) {
+                if (prof.startAngleSetAtMs == null) {
+                    r.add("I11", "the screw start angle has never been set: set or confirm it (Profiles)");
+                }
+                else if (in.controllerConnectedAtMs != null && prof.startAngleSetAtMs < in.controllerConnectedAtMs) {
+                    r.add("I11", "the controller (re)connected after the screw start angle was set; the B step count "
+                            + "restarts at power-up, so the angle may be lost: confirm it if the controller was not "
+                            + "power-cycled, otherwise measure it again (Profiles)");
+                }
+            }
         }
         // Plan rules (§5.6/§5.7).
         if (in.plan != null) {

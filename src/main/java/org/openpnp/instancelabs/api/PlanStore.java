@@ -22,10 +22,28 @@ final class PlanStore {
         final DispensePlan plan;
         /** How the board was chosen (job board or file + location), echoed back to the UI. */
         final Map<String, Object> source;
-        /** Kinematic lower-bound estimate of the whole program (no acceleration), s; null if unknown. */
+        /** Estimate of the whole program (moves with acceleration, dwells), s; null if unknown. */
         Double estimatedSeconds;
         Double estimatedPressurisedSeconds;
         String estimateError;
+        /** The last camera-only clean-pad check of this plan (POST /api/plan/{id}/clean-check). */
+        volatile java.util.concurrent.Future<org.openpnp.instancelabs.dispense.PadCleanReport> cleanCheckFuture;
+
+        /** The finished clean-pad check, or null (none, still running or failed). */
+        org.openpnp.instancelabs.dispense.PadCleanReport cleanCheck() {
+            java.util.concurrent.Future<org.openpnp.instancelabs.dispense.PadCleanReport> f = cleanCheckFuture;
+            try {
+                return f != null && f.isDone() ? f.get() : null;
+            }
+            catch (Exception e) {
+                return null;
+            }
+        }
+
+        boolean cleanCheckRunning() {
+            java.util.concurrent.Future<?> f = cleanCheckFuture;
+            return f != null && !f.isDone();
+        }
 
         Entry(DispensePlan plan, Map<String, Object> source) {
             this.plan = plan;
@@ -97,9 +115,8 @@ final class PlanStore {
         s.boardName = p.boardName;
         s.boardLocationId = p.boardLocationId;
         s.createdAtMs = System.currentTimeMillis();
-        s.calibrationId = p.calibrationId;
-        s.qMm3PerRev = p.qMm3PerRev;
-        s.calibrationStatus = p.calibrationStatus;
+        s.profile = p.profile;
+        s.profileFingerprint = p.profileFingerprint;
         s.needleGapMm = p.needleGapMm;
         s.needleZOffsetMm = p.needleZOffsetMm;
         s.hopHeightMm = p.hopHeightMm;
@@ -128,7 +145,6 @@ final class PlanStore {
             d.dispenseZMm = o.dispenseZMm;
             d.hopZMm = o.hopZMm;
             d.rotationDeg = o.rotationDeg;
-            d.expectedDiameterMm = o.expectedDiameterMm;
             s.dots.add(d);
         }
         s.warnings.addAll(p.warnings);
