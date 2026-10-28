@@ -1,6 +1,7 @@
 package org.openpnp.instancelabs.dispense;
 
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Pre-flight interlocks (plan §5.5). Runtime interlocks are enforced elsewhere: I1 (outputs off on
@@ -27,6 +28,125 @@ public final class Interlocks {
         public double estimatedPressurisedSeconds;
         /** I9 optical check possible (top camera + vision present). */
         public boolean opticalCheckAvailable;
+        /** What the run touches (I4 Z frame); the default is a generic needle run. */
+        public Scope scope = new Scope();
+    }
+
+    /** What a run uses, for the I4 Z-frame checks. */
+    public static class Scope {
+        /** False for runs that never move the needle (the pressure hold): no I4. */
+        public boolean needleMotion = true;
+        /** The named I4 waiver: the needle touch-off run itself (it sets the touched-off state). */
+        public boolean touchOffWaiver;
+        /** Places whose Z must agree with the needle frame (waste, blank). */
+        public final List<String> referencePlaces = new java.util.ArrayList<>();
+        /** Surface map this run takes its dot Z from (board or blank), or null. */
+        public String surfaceName;
+        /** Machine X/Y of the dots that take their Z from that surface. */
+        public final List<double[]> surfaceTargets = new java.util.ArrayList<>();
+        /** Plan runs: the plan must have been made on the current surface map. */
+        public boolean checkPlanSurface;
+
+        public static Scope noNeedle() {
+            Scope s = new Scope();
+            s.needleMotion = false;
+            return s;
+        }
+    }
+
+    /**
+     * I4 (plan §5.5): needle touched off since the last needle change, and the target inside the
+     * probed surface. Review finding: nothing tied place / board Z to the frame the needle offset
+     * was measured in. The frame is now anchored by one surface touched by N1 and by the needle;
+     * places, surface points and the offset must agree with it, every dot must lie inside its
+     * probed surface, and the surface must be flat to within the gap budget.
+     */
+    static void checkI4(Inputs in, InterlockReport r) {
+        DispenseConfig cfg = in.cfg;
+        Scope sc = in.scope == null ? new Scope() : in.scope;
+        if (!sc.needleMotion) {
+            return;
+        }
+        DispenseConfig.NeedleAnchor a = cfg.needleAnchor;
+        if (a == null) {
+            r.add("I4", "the needle Z frame is not set: touch the same surface with N1 and with the needle tip and "
+                    + "record both heights (Needle card)");
+            return;
+        }
+        if (!cfg.isNeedleAnchored()) {
+            r.add("I4", "the needle was changed after the needle Z frame was recorded: record the N1 and needle "
+                    + "contact heights again (Needle card)");
+            return;
+        }
+        if (sc.touchOffWaiver) {
+            r.notes.add("I4: touch-off run (the touched-off state is what it sets)");
+        }
+        else if (!cfg.isNeedleTouchedOff()) {
+            r.add("I4", "needle Z offset has not been set since the last needle change / needle frame (run a touch-off)");
+        }
+        double tol = cfg.zFrameToleranceMm;
+        double drift = cfg.needleZOffsetMm - a.offsetMm();
+        if (Math.abs(drift) > cfg.needleOffsetMaxDriftMm) {
+            r.add("I4", String.format(Locale.ROOT, "needle Z offset %.3f mm is %.3f mm away from the needle frame's "
+                    + "%.3f mm (limit %.2f): record the needle frame again", cfg.needleZOffsetMm, drift, a.offsetMm(),
+                    cfg.needleOffsetMaxDriftMm));
+        }
+        for (String name : sc.referencePlaces) {
+            DispenseConfig.NamedLocation loc = cfg.location(name);
+            if (loc == null) {
+                continue; // a missing place is refused by the run itself
+            }
+            double d = loc.z - a.surfaceZMm;
+            if (Math.abs(d) > tol) {
+                r.add("I4", String.format(Locale.ROOT, "place '%s' Z %.3f is %.3f mm from the needle-frame surface "
+                        + "(Z %.3f, tolerance %.2f). Place Z is the N1 contact height (OpenPnP frame); a height "
+                        + "taken with the needle differs by about the needle offset (%.2f mm)", name, loc.z, d,
+                        a.surfaceZMm, tol, a.offsetMm()));
+            }
+        }
+        if (sc.surfaceName == null) {
+            return;
+        }
+        DispenseConfig.SurfaceMap m = cfg.surface(sc.surfaceName);
+        if (m == null || m.points == null || m.points.size() < 3) {
+            r.add("I4", "no '" + sc.surfaceName + "' surface: probe at least 3 points around it with N1 (Surfaces card)");
+            return;
+        }
+        SurfacePlane pl;
+        try {
+            pl = SurfacePlane.fit(m.points);
+        }
+        catch (IllegalArgumentException e) {
+            r.add("I4", "'" + sc.surfaceName + "' surface: " + e.getMessage());
+            return;
+        }
+        if (pl.maxAbsResidualMm > cfg.surfaceMaxResidualMm) {
+            r.add("I4", String.format(Locale.ROOT, "'%s' surface is not flat enough for a plane: largest residual "
+                    + "%.3f mm, limit %.3f mm (gap budget)", sc.surfaceName, pl.maxAbsResidualMm, cfg.surfaceMaxResidualMm));
+        }
+        if (pl.minZ < a.surfaceZMm - tol || pl.maxZ > a.surfaceZMm + tol) {
+            r.add("I4", String.format(Locale.ROOT, "'%s' surface Z %.3f..%.3f is outside the needle-frame surface "
+                    + "%.3f +/- %.2f: surface points are N1 contact heights (OpenPnP frame)", sc.surfaceName, pl.minZ,
+                    pl.maxZ, a.surfaceZMm, tol));
+        }
+        int outside = 0;
+        double worst = 0;
+        for (double[] xy : sc.surfaceTargets) {
+            double d = pl.distanceOutside(xy[0], xy[1]);
+            if (d > cfg.surfaceMarginMm) {
+                outside++;
+                worst = Math.max(worst, d);
+            }
+        }
+        if (outside > 0) {
+            r.add("I4", String.format(Locale.ROOT, "%d dot(s) lie outside the probed '%s' surface (up to %.1f mm "
+                    + "beyond its points, margin %.1f mm): probe points around them", outside, sc.surfaceName, worst,
+                    cfg.surfaceMarginMm));
+        }
+        if (sc.checkPlanSurface && in.plan != null && !pl.fingerprint().equals(in.plan.surfaceFingerprint)) {
+            r.add("I4", "the plan was made " + (in.plan.surfaceFingerprint == null ? "without the probed '"
+                    : "on another '") + sc.surfaceName + "' surface: plan the board again");
+        }
     }
 
     public static InterlockReport check(Inputs in) {
@@ -49,11 +169,7 @@ public final class Interlocks {
         if (in.loadedNozzleTip != null) {
             r.add("I3", in.nozzleName + " has nozzle tip '" + in.loadedNozzleTip + "' loaded");
         }
-        // I4: needle Z offset set since the last needle change. (Z-map containment: no Z-map yet.)
-        if (!cfg.isNeedleTouchedOff()) {
-            r.add("I4", "needle Z offset has not been set since the last needle change (run a touch-off)");
-        }
-        r.notes.add("I4: board Z-map containment not checked (no Z-map exists yet; board Z from the board location)");
+        checkI4(in, r);
         // I5: barrel pressure window (disabled by default: no sensor fitted).
         if (cfg.pressureInterlockEnabled) {
             Double psi = null;

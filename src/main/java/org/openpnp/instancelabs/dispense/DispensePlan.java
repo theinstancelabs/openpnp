@@ -75,6 +75,10 @@ public class DispensePlan {
     public double needleGapMm;
     public double needleZOffsetMm;
     public double hopHeightMm;
+    /** Identity of the board surface map the dot Z came from (null: none, single board Z). */
+    public String surfaceFingerprint;
+    /** Identity of the board location, fiducial transform and placements at planning time. */
+    public String boardFingerprint;
     public final List<PlannedPad> pads = new ArrayList<>();
     public final List<PlannedDot> dots = new ArrayList<>();
     public final List<String> warnings = new ArrayList<>();

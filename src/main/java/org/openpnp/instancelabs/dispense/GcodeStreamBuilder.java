@@ -97,6 +97,53 @@ public class GcodeStreamBuilder {
         this.bFeedEnd = bPos;
         prog.bZeroedAtStart = bZeroedAtStart;
         prog.keepalive = keepalive;
+        checkTravelZ();
+    }
+
+    /**
+     * Review finding: on the see-saw, N2 "higher" pushes N1 lower and vice versa, so a travel Z
+     * outside the Z axis' safe zone can drive the needle (travel Z low) or N1 (travel Z high) into
+     * the work. The travel Z must map into the raw safe zone (when the axis has one).
+     */
+    private void checkTravelZ() {
+        double[] zone = mapper.zSafeZoneRaw();
+        if (zone == null) {
+            return;
+        }
+        double raw;
+        try {
+            raw = mapper.toRaw(nozzle[0], nozzle[1], cfg.travelSafeZMm).z;
+        }
+        catch (Exception e) {
+            throw new IllegalStateException("travelSafeZMm " + cfg.travelSafeZMm + " cannot be mapped: " + e.getMessage(), e);
+        }
+        if ((!Double.isNaN(zone[0]) && raw < zone[0] - 1e-6) || (!Double.isNaN(zone[1]) && raw > zone[1] + 1e-6)) {
+            throw new IllegalStateException(String.format(Locale.ROOT, "travelSafeZMm %.3f maps to raw Z %.3f, outside "
+                    + "the Z axis safe zone %s..%s: on the see-saw that puts a nozzle into the work",
+                    cfg.travelSafeZMm, raw, Double.isNaN(zone[0]) ? "-" : f4(zone[0]),
+                    Double.isNaN(zone[1]) ? "-" : f4(zone[1])));
+        }
+    }
+
+    /**
+     * Per-dot Z rules: dispense Z above the I4 needle floor, the lift above the dispense Z and not
+     * above the travel Z (a hop above travel Z would push N1 below its safe zone on the see-saw).
+     */
+    private void checkDotZ(DotSpec d) {
+        double floor = cfg.needleFloorZMm();
+        if (!Double.isNaN(floor) && d.dispenseZ < floor - 1e-9) {
+            throw new IllegalStateException(String.format(Locale.ROOT, "I4: dot %d (%s) at N2 Z %.3f is below the needle "
+                    + "floor %.3f (needle-frame surface - tolerance + offset)", d.index, d.label, d.dispenseZ, floor));
+        }
+        if (!(d.hopZ > d.dispenseZ)) {
+            throw new IllegalStateException(String.format(Locale.ROOT, "dot %d (%s): lift Z %.3f is not above the "
+                    + "dispense Z %.3f", d.index, d.label, d.hopZ, d.dispenseZ));
+        }
+        if (d.hopZ > cfg.travelSafeZMm + 1e-6) {
+            throw new IllegalStateException(String.format(Locale.ROOT, "dot %d (%s): lift Z %.3f is above the travel Z "
+                    + "%.3f (hopHeightMm %.3f too large): on the see-saw that pushes N1 down", d.index, d.label, d.hopZ,
+                    cfg.travelSafeZMm, cfg.hopHeightMm));
+        }
     }
 
     // ------------------------------------------------------------------------------------------
@@ -153,7 +200,15 @@ public class GcodeStreamBuilder {
      */
     public static GcodeProgram forDots(DispenseConfig cfg, RawMapper mapper, List<DotSpec> dots,
             boolean bZeroed, boolean keepalive, boolean primeAtWaste, String title) throws Exception {
+        return forDots(cfg, mapper, dots, bZeroed, keepalive, primeAtWaste, 0, title);
+    }
+
+    /** As above; the prime at the waste pad is {@code primeExtraMm} higher than a normal dot. */
+    public static GcodeProgram forDots(DispenseConfig cfg, RawMapper mapper, List<DotSpec> dots,
+            boolean bZeroed, boolean keepalive, boolean primeAtWaste, double primeExtraMm, String title)
+            throws Exception {
         GcodeStreamBuilder b = new GcodeStreamBuilder(cfg, mapper, bZeroed, keepalive);
+        b.primeExtraClearanceMm = primeExtraMm;
         b.comment("; instancelabs dispense " + title);
         b.sessionStart();
         DispenseConfig.NamedLocation waste = cfg.location(cfg.wasteLocationName);
@@ -196,9 +251,12 @@ public class GcodeStreamBuilder {
     /** Dot at a named location (+ offset) with the configured gap; lifts to travel Z after. */
     public DotSpec atLocation(DispenseConfig.NamedLocation loc, double dx, double dy, double rot, int index,
             String label) {
-        double z = loc.z + cfg.needleZOffsetMm + cfg.needleGapMm;
+        double z = loc.z + cfg.needleZOffsetMm + cfg.needleGapMm + primeExtraClearanceMm;
         return new DotSpec(loc.x + dx, loc.y + dy, z, cfg.travelSafeZMm, rot, index, label);
     }
+
+    /** Extra height for the prime at the waste pad (needle not touched off yet). */
+    private double primeExtraClearanceMm;
 
     // ------------------------------------------------------------------------------------------
     // Building blocks
@@ -251,6 +309,7 @@ public class GcodeStreamBuilder {
         if (!(pumpOn && valveOn)) {
             throw new IllegalStateException("dot outside a pressure session");
         }
+        checkDotZ(d);
         comment(String.format(Locale.ROOT, "; dot %d %s rot %.3f", d.index, d.label, d.rotationDeg));
         pending = GcodeProgram.Marker.DOT_BEGIN;
         pendingIndex = d.index;

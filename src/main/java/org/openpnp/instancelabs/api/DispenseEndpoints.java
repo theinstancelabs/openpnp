@@ -18,6 +18,7 @@ import org.openpnp.instancelabs.dispense.DotMath;
 import org.openpnp.instancelabs.dispense.GcodeProgram;
 import org.openpnp.instancelabs.dispense.GcodeStreamBuilder;
 import org.openpnp.instancelabs.dispense.InterlockReport;
+import org.openpnp.instancelabs.dispense.Interlocks;
 import org.openpnp.instancelabs.dispense.OpenPnpRawMapper;
 import org.openpnp.instancelabs.dispense.PadType;
 import org.openpnp.instancelabs.dispense.RunResult;
@@ -43,7 +44,8 @@ final class DispenseEndpoints {
     static final String TEST_DOT_LOCATION = "waste-test-dot";
     /** Settings that only the needle endpoints may change (they record a needle_touchoff row). */
     static final java.util.Set<String> PROTECTED_SETTINGS = new java.util.HashSet<>(java.util.Arrays.asList(
-            "needleZOffsetMm", "needleZOffsetSetAtMs", "needleChangedAtMs", "schemaVersion"));
+            "needleZOffsetMm", "needleZOffsetSetAtMs", "needleChangedAtMs", "needleAnchor", "surfaces",
+            "schemaVersion"));
     /** Pad type whose single-dot rotation is the default test-dot size (plan §5.6 first target). */
     static final String TEST_DOT_PAD_TYPE = "chip-0603";
 
@@ -65,6 +67,10 @@ final class DispenseEndpoints {
         s.route("PUT", "/api/locations/([A-Za-z0-9_-]{1,40})", this::setLocation);
         s.route("POST", "/api/needle/changed", r -> needleChanged());
         s.route("POST", "/api/needle/offset", this::needleOffset);
+        s.route("POST", "/api/needle/anchor", this::needleAnchor);
+        s.route("GET", "/api/surfaces", r -> surfaces());
+        s.route("PUT", "/api/surfaces/([A-Za-z0-9_-]{1,40})", this::putSurface);
+        s.route("DELETE", "/api/surfaces/([A-Za-z0-9_-]{1,40})", this::deleteSurface);
         s.route("GET", "/api/config", r -> ctx.svc().getConfig());
         s.route("PUT", "/api/config", this::putConfig);
         s.route("GET", "/api/boards", r -> boards());
@@ -109,7 +115,14 @@ final class DispenseEndpoints {
         d.put("bZeroed", svc.isBZeroed());
         d.put("needle", Views.map("touchedOff", cfg.isNeedleTouchedOff(), "zOffsetMm", cfg.needleZOffsetMm,
                 "setAtMs", cfg.needleZOffsetSetAtMs, "changedAtMs", cfg.needleChangedAtMs, "gapMm",
-                cfg.needleGapMm));
+                cfg.needleGapMm, "anchored", cfg.isNeedleAnchored(), "anchor", cfg.needleAnchor,
+                "anchorOffsetMm", cfg.needleAnchor == null ? null : cfg.needleAnchor.offsetMm()));
+        Map<String, Object> surf = new LinkedHashMap<>();
+        for (Map.Entry<String, DispenseConfig.SurfaceMap> e : cfg.surfaces.entrySet()) {
+            surf.put(e.getKey(), Views.surface(e.getKey(), e.getValue()));
+        }
+        d.put("surfaces", surf);
+        d.put("boardSurfaceName", cfg.boardSurfaceName);
         d.put("locations", cfg.locations);
         d.put("wasteLocationName", cfg.wasteLocationName);
         d.put("blankLocationName", cfg.blankLocationName);
@@ -129,7 +142,7 @@ final class DispenseEndpoints {
 
     /** Plain-language state of each §5.5 interlock (I1..I9) plus machine and config checks. */
     List<Map<String, Object>> interlockList(DispenseService svc, DispenseConfig cfg) {
-        InterlockReport r = svc.checkInterlocks(null, 0);
+        InterlockReport r = svc.checkInterlocks((DispensePlan) null, 0);
         List<Map<String, Object>> l = new ArrayList<>();
         l.add(item("MACHINE", "Machine started and homed", r, "ok", "started and homed"));
         l.add(item("CONFIG", "Dispenser settings valid (pump and valve full-on only)", r, "ok", "valid"));
@@ -145,8 +158,9 @@ final class DispenseEndpoints {
                 svc.isBZeroed() ? "B zeroed since the last home/start"
                         : "B is zeroed (G92 B0) at the start of the next run"));
         l.add(item("I3", "Dispenser nozzle can never pick or discard", r, "ok", cfg.nozzle + " has no nozzle tips"));
-        l.add(item("I4", "Needle touched off since the last needle change", r, "ok",
-                "needle Z offset " + cfg.needleZOffsetMm + " mm"));
+        l.add(item("I4", "Needle Z frame set and needle touched off since the last needle change", r, "ok",
+                "needle Z offset " + cfg.needleZOffsetMm + " mm (frame " + (cfg.needleAnchor == null ? "-"
+                        : String.format(java.util.Locale.ROOT, "%.3f", cfg.needleAnchor.offsetMm())) + " mm)"));
         if (cfg.pressureInterlockEnabled) {
             l.add(item("I5", "Barrel pressure inside the window", r, "ok", "inside the window"));
         }
@@ -209,7 +223,7 @@ final class DispenseEndpoints {
         if (ctx.pressure.isActive()) {
             throw ApiException.refused("the pressure is already " + ctx.pressure.getState().name().toLowerCase());
         }
-        ApiContext.refuseUnlessOk(ctx.preflightNoPlan(svc, false), "Pressure on");
+        ApiContext.refuseUnlessOk(ctx.preflight(svc, Interlocks.Scope.noNeedle()), "Pressure on");
         return ctx.pressure.start(svc);
     }
 
@@ -220,9 +234,9 @@ final class DispenseEndpoints {
         double rot = Json.num(b, "rotationDeg", cfg.primeRotationDeg);
         checkRotation(rot, 3600);
         DispenseConfig.NamedLocation waste = requireWaste(cfg);
-        startChecks(svc, false, "Prime");
+        startChecks(svc, DispenseService.shotsScope(cfg.wasteLocationName, true), "Prime");
         ctx.tracker.expect("prime");
-        Future<RunResult> f = svc.runShots(cfg.wasteLocationName, rot, 1);
+        Future<RunResult> f = svc.runShots(cfg.wasteLocationName, rot, 1, true);
         return ApiContext.awaitIf(Json.bool(b, "wait", false), f, rr -> Views.run(rr, false),
                 Views.map("kind", "prime", "rotationDeg", rot, "location", waste));
     }
@@ -235,7 +249,7 @@ final class DispenseEndpoints {
         double rot = Json.num(b, "rotationDeg", def == null ? 58.0 : def);
         checkRotation(rot, 720);
         DispenseConfig.NamedLocation waste = requireWaste(cfg);
-        startChecks(svc, false, "Test dot");
+        startChecks(svc, DispenseService.shotsScope(cfg.wasteLocationName, true), "Test dot");
         DispenseConfig.NamedLocation spot = new DispenseConfig.NamedLocation(waste.x + cfg.testDotOffsetXMm,
                 waste.y + cfg.testDotOffsetYMm, waste.z);
         DispenseConfig.NamedLocation cur = cfg.location(TEST_DOT_LOCATION);
@@ -244,16 +258,16 @@ final class DispenseEndpoints {
             svc.setLocation(TEST_DOT_LOCATION, spot.x, spot.y, spot.z);
         }
         ctx.tracker.expect("test dot");
-        Future<RunResult> f = svc.runShots(TEST_DOT_LOCATION, rot, 1);
+        Future<RunResult> f = svc.runShots(TEST_DOT_LOCATION, rot, 1, true);
         return ApiContext.awaitIf(Json.bool(b, "wait", false), f, rr -> Views.run(rr, false),
                 Views.map("kind", "test dot", "rotationDeg", rot, "location", spot));
     }
 
     /** Engine idle, no manual hold, interlocks (as the engine applies them to shots/calibration). */
-    void startChecks(DispenseService svc, boolean requireTouchOff, String what) throws ApiException {
+    void startChecks(DispenseService svc, Interlocks.Scope scope, String what) throws ApiException {
         ctx.requireEngineIdle(svc);
         ctx.requireNoPressureHold();
-        ApiContext.refuseUnlessOk(ctx.preflightNoPlan(svc, requireTouchOff), what);
+        ApiContext.refuseUnlessOk(ctx.preflight(svc, scope), what);
     }
 
     static void checkRotation(double rot, double max) throws ApiException {
@@ -289,7 +303,8 @@ final class DispenseEndpoints {
     Object needleChanged() throws Exception {
         DispenseService svc = ctx.svc();
         svc.markNeedleChanged();
-        return Views.map("needleChanged", true, "note", "dispensing is blocked (I4) until the needle is touched off");
+        return Views.map("needleChanged", true, "note", "dispensing is blocked (I4) until the needle Z frame is "
+                + "recorded again (N1 and needle contact) and the needle is touched off");
     }
 
     Object needleOffset(ApiServer.Request r) throws Exception {
@@ -301,6 +316,85 @@ final class DispenseEndpoints {
         }
         svc.setNeedleZOffset(off, "manual", Json.str(b, "note", "entered in the web UI"));
         return Views.map("zOffsetMm", off, "touchedOff", svc.getConfig().isNeedleTouchedOff());
+    }
+
+    /**
+     * I4 needle Z frame: the same surface touched by N1 (its Z in OpenPnP's frame) and by the needle
+     * tip (N2 Z). Body: {"surfaceZ": n1ContactZ, "needleContactZ": n2ContactZ, "x"?, "y"?}.
+     */
+    Object needleAnchor(ApiServer.Request r) throws Exception {
+        JsonObject b = r.json();
+        DispenseService svc = ctx.svc();
+        double sz = Json.reqNum(b, "surfaceZ"), nz = Json.reqNum(b, "needleContactZ");
+        if (!Double.isFinite(sz) || !Double.isFinite(nz) || Math.abs(nz - sz) > 20) {
+            throw ApiException.badRequest("the needle contact Z must be within 20 mm of the N1 contact Z");
+        }
+        DispenseConfig.NeedleAnchor a = svc.setNeedleAnchor(sz, nz, Json.num(b, "x", null), Json.num(b, "y", null));
+        return Views.map("anchor", a, "offsetMm", a.offsetMm(), "touchedOff", svc.getConfig().isNeedleTouchedOff(),
+                "note", "needle Z offset set to " + String.format(java.util.Locale.ROOT, "%.3f", a.offsetMm())
+                        + " mm; run a needle touch-off (or confirm the offset) before dispensing");
+    }
+
+    Object surfaces() throws ApiException {
+        DispenseConfig cfg = ctx.svc().getConfig();
+        Map<String, Object> out = new LinkedHashMap<>();
+        for (Map.Entry<String, DispenseConfig.SurfaceMap> e : cfg.surfaces.entrySet()) {
+            out.put(e.getKey(), Views.surface(e.getKey(), e.getValue()));
+        }
+        return Views.map("boardSurfaceName", cfg.boardSurfaceName, "blankSurfaceName", cfg.blankLocationName,
+                "surfaces", out);
+    }
+
+    /**
+     * Stores a probed surface: {"points": [{"x","y","z"}...] or [[x, y, z]...], "note"?}. Z is the N1
+     * contact height (OpenPnP frame). At least 3 points spanning an area.
+     */
+    Object putSurface(ApiServer.Request r) throws Exception {
+        JsonObject b = r.json();
+        DispenseService svc = ctx.svc();
+        if (svc.isBusy()) {
+            throw ApiException.refused("surfaces cannot change while a dispense task runs");
+        }
+        JsonElement pe = b.get("points");
+        if (pe == null || !pe.isJsonArray()) {
+            throw ApiException.badRequest("'points' must be a list of {x, y, z} (N1 contact heights)");
+        }
+        List<DispenseConfig.SurfacePoint> pts = new ArrayList<>();
+        for (JsonElement e : pe.getAsJsonArray()) {
+            try {
+                if (e.isJsonArray() && e.getAsJsonArray().size() == 3) {
+                    pts.add(new DispenseConfig.SurfacePoint(e.getAsJsonArray().get(0).getAsDouble(),
+                            e.getAsJsonArray().get(1).getAsDouble(), e.getAsJsonArray().get(2).getAsDouble()));
+                }
+                else {
+                    JsonObject o = e.getAsJsonObject();
+                    pts.add(new DispenseConfig.SurfacePoint(o.get("x").getAsDouble(), o.get("y").getAsDouble(),
+                            o.get("z").getAsDouble()));
+                }
+            }
+            catch (RuntimeException ex) {
+                throw ApiException.badRequest("each point needs numeric x, y and z: " + e);
+            }
+        }
+        if (pts.size() > 500) {
+            throw ApiException.badRequest("at most 500 points");
+        }
+        try {
+            svc.setSurface(r.group(1), pts, Json.str(b, "note", null));
+        }
+        catch (IllegalArgumentException e) {
+            throw ApiException.badRequest(e.getMessage());
+        }
+        return Views.surface(r.group(1), svc.getConfig().surface(r.group(1)));
+    }
+
+    Object deleteSurface(ApiServer.Request r) throws Exception {
+        DispenseService svc = ctx.svc();
+        if (svc.isBusy()) {
+            throw ApiException.refused("surfaces cannot change while a dispense task runs");
+        }
+        svc.clearSurface(r.group(1));
+        return surfaces();
     }
 
     /** Partial update: only the fields given replace the current settings. */
@@ -417,7 +511,8 @@ final class DispenseEndpoints {
             if (!f.isAbsolute() || !f.getName().endsWith(".board.xml") || !f.isFile()) {
                 throw ApiException.badRequest("'" + path + "' is not an existing absolute .board.xml file");
             }
-            double x = Json.reqNum(b, "x"), y = Json.reqNum(b, "y"), z = Json.num(b, "z", 0.0),
+            // z is required: a silent 0 put the needle ~10 mm into the board (review finding)
+            double x = Json.reqNum(b, "x"), y = Json.reqNum(b, "y"), z = Json.reqNum(b, "z"),
                     rot = Json.num(b, "rotation", 0.0);
             plan = svc.planBoardFile(f, new Location(LengthUnit.Millimeters, x, y, z, rot));
             src = Views.map("source", "file", "file", f.getAbsolutePath(), "x", x, "y", y, "z", z, "rotation", rot);
@@ -468,6 +563,25 @@ final class DispenseEndpoints {
         }
     }
 
+    /** Fingerprint of the board the plan came from, as it is now (null if it cannot be found). */
+    private String currentBoardFingerprint(DispenseService svc, PlanStore.Entry e) {
+        try {
+            Map<String, Object> src = e.source;
+            if ("job".equals(src.get("source"))) {
+                return DispenseService.boardFingerprint(findJobBoard((String) src.get("boardLocationId")));
+            }
+            Board board = ctx.configuration.getBoard(new File((String) src.get("file")));
+            BoardLocation bl = new BoardLocation(board);
+            bl.setLocation(new Location(LengthUnit.Millimeters, ((Number) src.get("x")).doubleValue(),
+                    ((Number) src.get("y")).doubleValue(), ((Number) src.get("z")).doubleValue(),
+                    ((Number) src.get("rotation")).doubleValue()));
+            return DispenseService.boardFingerprint(bl);
+        }
+        catch (Exception ex) {
+            return "unavailable: " + ex.getMessage();
+        }
+    }
+
     private BoardLocation findJobBoard(String id) throws ApiException {
         Job j = currentJob();
         if (j == null) {
@@ -494,6 +608,12 @@ final class DispenseEndpoints {
                 || cfg.needleGapMm != full.needleGapMm || cfg.hopHeightMm != full.hopHeightMm) {
             throw ApiException.refused("the calibration, needle offset, gap or hop height changed since this plan was "
                     + "made (its dot heights would be wrong): plan the board again");
+        }
+        // Review finding: a board moved, re-checked (fiducials) or edited after planning was not detected.
+        String now = currentBoardFingerprint(svc, e);
+        if (full.boardFingerprint != null && !full.boardFingerprint.equals(now)) {
+            throw ApiException.refused("the board's position, fiducial check or placements changed in OpenPnP since this "
+                    + "plan was made (its dot positions would be wrong): plan the board again");
         }
         DispensePlan p = PlanStore.subset(full, Json.strings(b, "padIds"), Json.integer(b, "maxDots", null));
         PlanStore.Entry runEntry = e;

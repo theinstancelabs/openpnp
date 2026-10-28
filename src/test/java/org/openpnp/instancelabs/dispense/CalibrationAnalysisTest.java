@@ -45,11 +45,49 @@ public class CalibrationAnalysisTest {
         DispenseConfig c = new DispenseConfig();
         c.needleZOffsetMm = -0.2;
         NeedleTouchOff.Request req = new NeedleTouchOff.Request();
-        List<GcodeStreamBuilder.DotSpec> l = NeedleTouchOff.layout(req, new DispenseConfig.NamedLocation(10, 20, 1.5), c);
+        List<GcodeStreamBuilder.DotSpec> l = NeedleTouchOff.layout(req, new DispenseConfig.NamedLocation(10, 20, 1.5), c,
+                null);
         assertEquals(6, l.size());
         assertEquals(1.5 - 0.2 + 0.125, l.get(0).dispenseZ, 1e-12);
         assertEquals(1.5 - 0.2 + 0.0, l.get(5).dispenseZ, 1e-12);
         assertEquals(10 + 5 * 1.5, l.get(5).x, 1e-12);
+    }
+
+    /**
+     * Review finding: the touch-off ladder used one flat Z, so a slope of the blank along the ladder
+     * changed the real gap steps (purge_spots.json: 0.0092 mm/mm down in +X) and biased the offset.
+     * With the probed blank plane every dot keeps exactly its commanded gap above the surface.
+     */
+    @Test
+    public void touchOffLayoutFollowsTheBlankPlane() {
+        DispenseConfig c = new DispenseConfig();
+        c.needleZOffsetMm = 4.9;
+        double slope = -0.0092;
+        List<DispenseConfig.SurfacePoint> pts = new ArrayList<>();
+        for (double[] p : new double[][] {{340, 230}, {390, 230}, {340, 240}, {390, 240}}) {
+            pts.add(new DispenseConfig.SurfacePoint(p[0], p[1], 5.95 + slope * (p[0] - 340)));
+        }
+        SurfacePlane plane = SurfacePlane.fit(pts);
+        NeedleTouchOff.Request req = new NeedleTouchOff.Request();
+        double[] g = NeedleTouchOff.gaps(req);
+        List<GcodeStreamBuilder.DotSpec> l = NeedleTouchOff.layout(req, new DispenseConfig.NamedLocation(350, 233.5,
+                5.86), c, plane);
+        for (int i = 0; i < l.size(); i++) {
+            double surface = 5.95 + slope * (l.get(i).x - 340);
+            assertEquals(g[i], l.get(i).dispenseZ - c.needleZOffsetMm - surface, 1e-9, "gap of dot " + i);
+        }
+        // flat layout for comparison: the real gap step is 0.025 - 1.5 * 0.0092 = 0.0112 mm
+        List<GcodeStreamBuilder.DotSpec> flat = NeedleTouchOff.layout(req, new DispenseConfig.NamedLocation(350, 233.5,
+                5.86), c, null);
+        double realStep = (flat.get(0).dispenseZ - (5.95 + slope * (flat.get(0).x - 340)))
+                - (flat.get(1).dispenseZ - (5.95 + slope * (flat.get(1).x - 340)));
+        assertEquals(0.025 + 1.5 * slope, realStep, 1e-9);
+        // the dot ladder follows the plane too
+        DotLadderCalibration.Request dl = new DotLadderCalibration.Request();
+        for (GcodeStreamBuilder.DotSpec d : DotLadderCalibration.layout(dl, new DispenseConfig.NamedLocation(350, 233.5,
+                5.86), c, plane)) {
+            assertEquals(c.needleGapMm, d.dispenseZ - c.needleZOffsetMm - plane.z(d.x, d.y), 1e-9);
+        }
     }
 
     @Test
@@ -59,7 +97,7 @@ public class CalibrationAnalysisTest {
         req.rotationsDeg = new double[] {30, 60};
         req.repeats = 3;
         List<GcodeStreamBuilder.DotSpec> specs = DotLadderCalibration.layout(req,
-                new DispenseConfig.NamedLocation(0, 0, 1), c);
+                new DispenseConfig.NamedLocation(0, 0, 1), c, null);
         assertEquals(6, specs.size());
         assertEquals(1 + c.needleZOffsetMm + c.needleGapMm, specs.get(0).dispenseZ, 1e-12);
         List<Dot> found = new ArrayList<>(Arrays.asList(new Dot(0, 0, 0.50, 0.196, 0.9), new Dot(0, 0, 0.52, 0.212, 0.9),

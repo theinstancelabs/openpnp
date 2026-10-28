@@ -135,7 +135,12 @@ public class ApiServerSimTest {
     void setPlaces() throws Exception {
         ok(call("PUT", "/api/locations/waste", "{\"x\":80,\"y\":40,\"z\":1.0}"));
         ok(call("PUT", "/api/locations/blank", "{\"x\":90,\"y\":40,\"z\":1.0}"));
+        // I4 needle frame (N1 and needle on one surface), then the offset confirmed
+        ok(post("/api/needle/anchor", "{\"surfaceZ\":1.0,\"needleContactZ\":1.05}"));
         ok(post("/api/needle/offset", "{\"offsetMm\":0.05}"));
+        // probed surfaces: the blank and the test board's area (origin 100, 80; 20 x 10 mm)
+        ok(call("PUT", "/api/surfaces/blank", "{\"points\":[[88,38,1.0],[102,38,1.0],[88,50,1.0],[102,50,1.0]]}"));
+        ok(call("PUT", "/api/surfaces/board", "{\"points\":[[98,78,1.0],[130,78,1.0],[98,95,1.0],[130,95,1.0]]}"));
     }
 
     // ------------------------------------------------------------------------------------------
@@ -459,6 +464,63 @@ public class ApiServerSimTest {
         assertEquals(409, stale.status);
         assertTrue(stale.body.contains("plan the board again"), stale.toString());
         assertEquals(404, post("/api/run", "{\"planId\":\"nope\"}").status);
+    }
+
+    /** Review findings: board Z must be given for a board file; a plan is stale when the board changed. */
+    @Test
+    public void planNeedsBoardZAndRunRefusesAChangedBoard() throws Exception {
+        setPlaces();
+        File board = writeBoard();
+        ok(call("PUT", "/api/pad-types/chip-0603", "{\"status\":\"characterized\"}"));
+        ok(call("PUT", "/api/config", "{\"testDotOpticalCheck\":false}"));
+        Res noZ = post("/api/plan", "{\"source\":\"file\",\"file\":\"" + board.getAbsolutePath() + "\",\"x\":100,\"y\":80}");
+        assertEquals(400, noZ.status, noZ.toString());
+        assertTrue(noZ.body.contains("'z'"), noZ.toString());
+        JsonObject plan = ok(post("/api/plan", planBody(board)));
+        assertTrue(plan.getAsJsonObject("interlocks").get("ok").getAsBoolean(), plan.toString());
+        assertTrue(plan.get("surfaceProbed").getAsBoolean());
+        // a placement is edited in OpenPnP after planning
+        org.openpnp.model.Placement pl = Configuration.get().getBoard(board).getPlacements().get(0);
+        org.openpnp.model.Location was = pl.getLocation();
+        pl.setLocation(was.add(new org.openpnp.model.Location(was.getUnits(), 0.8, 0, 0, 0)));
+        Res stale = post("/api/run", "{\"planId\":\"" + plan.get("planId").getAsString() + "\"}");
+        assertEquals(409, stale.status, stale.toString());
+        assertTrue(stale.body.contains("changed in OpenPnP"), stale.toString());
+        pl.setLocation(was);
+        // the board surface is re-probed after planning: the plan's dot heights are stale (I4)
+        ok(call("PUT", "/api/surfaces/board", "{\"points\":[[98,78,1.02],[130,78,1.0],[98,95,1.0],[130,95,1.0]]}"));
+        Res stale2 = post("/api/run", "{\"planId\":\"" + plan.get("planId").getAsString() + "\"}");
+        assertEquals(409, stale2.status, stale2.toString());
+        assertTrue(stale2.body.contains("plan the board again"), stale2.toString());
+        // without a board surface the plan says so and a run is refused (I4)
+        ok(call("DELETE", "/api/surfaces/board", null));
+        JsonObject flat = ok(post("/api/plan", planBody(board)));
+        assertFalse(flat.get("surfaceProbed").getAsBoolean());
+        assertTrue(flat.getAsJsonObject("interlocks").toString().contains("no 'board' surface"), flat.toString());
+    }
+
+    /** Review finding: the needle frame and the surfaces are not settings; they are validated. */
+    @Test
+    public void needleFrameAndSurfacesHaveTheirOwnEndpoints() throws Exception {
+        JsonObject a = ok(post("/api/needle/anchor", "{\"surfaceZ\":5.5,\"needleContactZ\":10.4}"));
+        assertEquals(4.9, a.get("offsetMm").getAsDouble(), 1e-9);
+        assertFalse(a.get("touchedOff").getAsBoolean(), "the frame alone is not a touch-off");
+        assertEquals(400, post("/api/needle/anchor", "{\"surfaceZ\":5.5}").status);
+        assertEquals(400, call("PUT", "/api/config", "{\"needleAnchor\":null}").status);
+        assertEquals(400, call("PUT", "/api/config", "{\"surfaces\":{\"board\":{\"points\":[]}}}").status);
+        Res line = call("PUT", "/api/surfaces/board", "{\"points\":[[0,0,5.5],[10,10,5.5],[20,20,5.5]]}");
+        assertEquals(400, line.status, line.toString());
+        assertEquals(400, call("PUT", "/api/surfaces/board", "{\"points\":[[0,0,5.5],[10,0,5.5]]}").status);
+        JsonObject sf = ok(call("PUT", "/api/surfaces/board",
+                "{\"points\":[{\"x\":0,\"y\":0,\"z\":5.5,\"bx\":8},{\"x\":30,\"y\":0,\"z\":5.6},{\"x\":0,\"y\":30,\"z\":5.4}]}"));
+        assertEquals(0, sf.getAsJsonObject("plane").get("maxResidualMm").getAsDouble(), 1e-9);
+        JsonObject st = ok(get("/api/status")).getAsJsonObject("dispense");
+        assertTrue(st.getAsJsonObject("needle").get("anchored").getAsBoolean());
+        assertTrue(st.getAsJsonObject("surfaces").has("board"));
+        // a needle change invalidates the frame
+        ok(post("/api/needle/changed", null));
+        assertFalse(ok(get("/api/status")).getAsJsonObject("dispense").getAsJsonObject("needle").get("anchored")
+                .getAsBoolean());
     }
 
     /** TCP proxy that delays every "ok" from the controller, so a run takes long enough to STOP it. */

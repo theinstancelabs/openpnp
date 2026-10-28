@@ -149,9 +149,11 @@ final class CalibrationEndpoints {
         if (count == null || count < 1 || count > 200) {
             throw ApiException.badRequest("count must be 1 to 200");
         }
-        dispense.startChecks(svc, false, "Scale shots");
+        boolean reference = loc.equals(cfg.wasteLocationName) || loc.equals(cfg.blankLocationName)
+                || loc.equals(DispenseEndpoints.TEST_DOT_LOCATION);
+        dispense.startChecks(svc, DispenseService.shotsScope(loc, reference), "Scale shots");
         ctx.tracker.expect("scale shots");
-        Future<RunResult> f = svc.runShots(loc, rot, count);
+        Future<RunResult> f = svc.runShots(loc, rot, count, reference);
         return ApiContext.awaitIf(Json.bool(b, "wait", false), f, rr -> Views.run(rr, false),
                 Views.map("kind", "scale shots", "locationName", loc, "rotationDeg", rot, "count", count));
     }
@@ -171,7 +173,9 @@ final class CalibrationEndpoints {
         if (req.repeats < 1 || req.repeats > 50 || req.pitchMm <= 0 || req.pitchMm > 10) {
             throw ApiException.badRequest("repeats must be 1 to 50 and the pitch 0 to 10 mm");
         }
-        dispense.startChecks(svc, true, "Dot ladder");
+        DispenseConfig cfg = svc.getConfig();
+        dispense.startChecks(svc, DispenseService.blankScope(cfg, req.locationName == null ? cfg.blankLocationName
+                : req.locationName, req.primeAtWaste, false, null), "Dot ladder");
         ctx.tracker.expect("dot ladder");
         Future<DotLadderCalibration.Result> f = svc.runDotLadder(req);
         return ApiContext.awaitIf(Json.bool(b, "wait", false), f, res -> {
@@ -208,7 +212,9 @@ final class CalibrationEndpoints {
                     "the lowest gap would be %.3f mm, i.e. the needle %.3f mm into the surface if the current offset is right; "
                             + "keep it at -0.1 mm or above", lowest, -lowest));
         }
-        dispense.startChecks(svc, false, "Needle touch-off");
+        DispenseConfig cfg = svc.getConfig();
+        dispense.startChecks(svc, DispenseService.blankScope(cfg, req.locationName == null ? cfg.blankLocationName
+                : req.locationName, req.primeAtWaste, true, null), "Needle touch-off");
         ctx.tracker.expect("needle touch-off");
         Future<org.openpnp.instancelabs.dispense.DispenseService.TouchOffResult> f = svc.runNeedleTouchOff(req, apply);
         return ApiContext.awaitIf(Json.bool(b, "wait", false), f, res -> Views.map("analysis", res.analysis,

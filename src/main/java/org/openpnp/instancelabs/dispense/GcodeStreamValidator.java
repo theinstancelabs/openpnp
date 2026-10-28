@@ -21,8 +21,48 @@ public final class GcodeStreamValidator {
     private GcodeStreamValidator() {
     }
 
+    /**
+     * Allowed raw Z of every G0/G1 Z word: between the raw Z of the I4 needle floor and of the
+     * travel Z (direction-agnostic, so it holds for the negated see-saw), plus the Z backlash.
+     */
+    public static final class ZWindow {
+        public final String letterZ;
+        public final double lo, hi;
+
+        public ZWindow(String letterZ, double lo, double hi) {
+            this.letterZ = letterZ;
+            this.lo = lo;
+            this.hi = hi;
+        }
+
+        @Override
+        public String toString() {
+            return String.format(java.util.Locale.ROOT, "%s %.4f..%.4f", letterZ, lo, hi);
+        }
+    }
+
+    /** The raw Z window for this configuration, or null without a needle frame (I4 refuses then). */
+    public static ZWindow zWindow(DispenseConfig cfg, RawMapper mapper) throws Exception {
+        double floor = cfg.needleFloorZMm();
+        if (Double.isNaN(floor)) {
+            return null;
+        }
+        double[] n = mapper.currentNozzleLocation();
+        double a = mapper.toRaw(n[0], n[1], floor).z;
+        double b = mapper.toRaw(n[0], n[1], cfg.travelSafeZMm).z;
+        AxisBacklash z = mapper.backlash()[2];
+        double tol = 0.01 + Math.abs(z.offsetMm) + Math.abs(z.sneakUpOffsetMm);
+        return new ZWindow(mapper.letterZ(), Math.min(a, b) - tol, Math.max(a, b) + tol);
+    }
+
     public static List<String> validate(GcodeProgram prog, DispenseConfig cfg, String letterB) {
+        return validate(prog, cfg, letterB, null);
+    }
+
+    public static List<String> validate(GcodeProgram prog, DispenseConfig cfg, String letterB, ZWindow zw) {
         List<String> p = new ArrayList<>();
+        Pattern zWord = zw == null ? null
+                : Pattern.compile("(?:^|\\s)" + Pattern.quote(zw.letterZ) + "([-+]?[0-9]*\\.?[0-9]+)");
         boolean pump = false, valve = false, zeroed = prog.bZeroedAtStart, inDot = false, armed = false;
         Pattern bWord = Pattern.compile("(^|\\s)" + Pattern.quote(letterB) + "[-+]?[0-9.]");
         int n = 0;
@@ -60,7 +100,16 @@ public final class GcodeStreamValidator {
             else if (s.matches("G92\\s.*") && bWord.matcher(s.substring(3)).find()) {
                 zeroed = true;
             }
-            else if (s.matches("G[01](\\s.*)?") && bWord.matcher(s.substring(2)).find()) {
+            if (zWord != null && s.matches("G[01](\\s.*)?")) {
+                java.util.regex.Matcher zm = zWord.matcher(s.substring(2));
+                if (zm.find()) {
+                    double z = Double.parseDouble(zm.group(1));
+                    if (z < zw.lo || z > zw.hi) {
+                        p.add(where + "I4: raw Z " + z + " outside the needle-floor / travel-Z window " + zw);
+                    }
+                }
+            }
+            if (s.matches("G[01](\\s.*)?") && bWord.matcher(s.substring(2)).find()) {
                 if (!zeroed) {
                     p.add(where + "I2: B move before G92 " + letterB + "0");
                 }

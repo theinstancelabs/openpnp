@@ -30,4 +30,12 @@ public interface RawMapper {
 
     /** Current N2 machine location {x, y, z} (mm). */
     double[] currentNozzleLocation();
+
+    /**
+     * The raw Z axis' safe zone {low, high} (NaN where a side is not enabled), or null if none:
+     * the Z range in which every nozzle on the see-saw is clear of the work (OpenPnP's safe Z).
+     */
+    default double[] zSafeZoneRaw() {
+        return null;
+    }
 }

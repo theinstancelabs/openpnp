@@ -177,6 +177,15 @@ public class OpenPnpRawMapper implements RawMapper {
         return new double[] {l.getX(), l.getY(), l.getZ()};
     }
 
+    @Override
+    public double[] zSafeZoneRaw() {
+        boolean lo = axZ.isSafeZoneLowEnabled(), hi = axZ.isSafeZoneHighEnabled();
+        if (!lo && !hi) {
+            return null;
+        }
+        return new double[] {lo ? mm(axZ.getSafeZoneLow()) : Double.NaN, hi ? mm(axZ.getSafeZoneHigh()) : Double.NaN};
+    }
+
     private static double mm(Length l) {
         return l.convertToUnits(LengthUnit.Millimeters).getValue();
     }

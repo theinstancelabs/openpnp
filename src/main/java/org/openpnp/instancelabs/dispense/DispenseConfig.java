@@ -46,7 +46,8 @@ public class DispenseConfig {
     /** Valve ON -> settle before the first rotation (measured in M8). */
     public int valveSettleMs = 300;
 
-    // --- named locations (N2 nozzle coordinates; z = surface Z of the item at that place) ----
+    // --- named locations (x, y: N2 nozzle coordinates; z: surface Z in OpenPnP's frame, i.e. the
+    // N1 nozzle Z touching that surface, the frame of OpenPnP's board Z) -------------------------
     public Map<String, NamedLocation> locations = new LinkedHashMap<>();
     /** Waste / prime pad location name (plan §4.5, I9). */
     public String wasteLocationName = "waste";
@@ -61,14 +62,36 @@ public class DispenseConfig {
     /** N2 Z used for travel to/from the board, waste and blank. 31.5 = see-saw balanced (LIVE home). */
     public double travelSafeZMm = 31.5;
     /**
-     * Needle Z offset from touch-off: N2 Z at which the needle tip touches a surface whose OpenPnP Z
-     * is s equals s + needleZOffsetMm.
+     * Needle Z offset: N2 Z at which the needle tip touches a surface whose OpenPnP Z (N1 contact
+     * Z) is s equals s + needleZOffsetMm. Bootstrapped by {@link #needleAnchor}, refined by touch-offs.
      */
     public double needleZOffsetMm = 0.0;
     /** Epoch ms of the last needle touch-off; null = never (I4). */
     public Long needleZOffsetSetAtMs = null;
     /** Epoch ms of the last needle change; I4 requires a touch-off after it. */
     public Long needleChangedAtMs = null;
+    /**
+     * I4 Z frame: one surface touched by N1 and by the needle (review finding: nothing tied the
+     * surface Z to the frame of the needle offset). Set only by POST /api/needle/anchor.
+     */
+    public NeedleAnchor needleAnchor = null;
+    /**
+     * Probed surfaces in OpenPnP's frame (N1 contact Z), by name: {@link #boardSurfaceName} for
+     * board runs (per-dot Z from its plane), {@link #blankLocationName} for the dot ladder and the
+     * touch-off. Set only through /api/surfaces.
+     */
+    public Map<String, SurfaceMap> surfaces = new LinkedHashMap<>();
+    public String boardSurfaceName = "board";
+    /** I4: waste, blank and every surface point must lie within this of the anchor surface (mm). */
+    public double zFrameToleranceMm = 1.0;
+    /** I4: largest plane-fit residual of a surface map (gap budget; must be below the gap). */
+    public double surfaceMaxResidualMm = 0.075;
+    /** I4: a dot may lie at most this far outside the probed area (convex hull of the points). */
+    public double surfaceMarginMm = 2.0;
+    /** I4: touch-offs and manual entries may move the offset at most this far from the anchor's. */
+    public double needleOffsetMaxDriftMm = 1.0;
+    /** Extra height of the prime at the waste pad while the needle is not touched off yet. */
+    public double touchOffPrimeExtraClearanceMm = 0.5;
 
     // --- motion --------------------------------------------------------------------------------
     public double travelFeedMmS = 200;
@@ -167,15 +190,86 @@ public class DispenseConfig {
         }
     }
 
+    /** N1 contact and needle contact on one surface: the needle Z frame (I4). */
+    public static class NeedleAnchor {
+        /** N1 nozzle Z (OpenPnP frame) with N1 touching the reference surface. */
+        public double surfaceZMm;
+        /** N2 Z with the needle tip touching the same surface. */
+        public double needleContactZMm;
+        /** Where (informational). */
+        public Double xMm, yMm;
+        public long setAtMs;
+
+        public NeedleAnchor() {
+        }
+
+        public NeedleAnchor(double surfaceZMm, double needleContactZMm, Double xMm, Double yMm, long setAtMs) {
+            this.surfaceZMm = surfaceZMm;
+            this.needleContactZMm = needleContactZMm;
+            this.xMm = xMm;
+            this.yMm = yMm;
+            this.setAtMs = setAtMs;
+        }
+
+        public double offsetMm() {
+            return needleContactZMm - surfaceZMm;
+        }
+    }
+
+    /** One probed point: machine X/Y, Z = N1 contact Z (OpenPnP frame). */
+    public static class SurfacePoint {
+        public double x, y, z;
+
+        public SurfacePoint() {
+        }
+
+        public SurfacePoint(double x, double y, double z) {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+        }
+    }
+
+    /** A probed surface (board Z-map or blank plane). */
+    public static class SurfaceMap {
+        public java.util.List<SurfacePoint> points = new java.util.ArrayList<>();
+        public Long setAtMs;
+        public String note;
+    }
+
     public NamedLocation location(String name) {
         return locations == null ? null : locations.get(name);
     }
 
+    public SurfaceMap surface(String name) {
+        return surfaces == null || name == null ? null : surfaces.get(name);
+    }
+
+    /** Needle frame anchored since the last needle change (I4). */
+    public boolean isNeedleAnchored() {
+        return needleAnchor != null && (needleChangedAtMs == null || needleAnchor.setAtMs >= needleChangedAtMs);
+    }
+
+    /** Offset touched off (or entered) since the last needle change and since the last anchor (I4). */
     public boolean isNeedleTouchedOff() {
         if (needleZOffsetSetAtMs == null) {
             return false;
         }
+        if (needleAnchor != null && needleZOffsetSetAtMs < needleAnchor.setAtMs) {
+            return false;
+        }
         return needleChangedAtMs == null || needleZOffsetSetAtMs >= needleChangedAtMs;
+    }
+
+    /**
+     * Lowest N2 Z the needle may ever be commanded to (I4 hard floor): the anchor surface minus the
+     * frame tolerance, plus the offset, minus the deepest touch-off gap (0.1 mm). NaN without anchor.
+     */
+    public double needleFloorZMm() {
+        if (needleAnchor == null) {
+            return Double.NaN;
+        }
+        return needleAnchor.surfaceZMm - zFrameToleranceMm + needleZOffsetMm - 0.1;
     }
 
     public PadTypeStatus minPadTypeStatus() {
@@ -197,6 +291,9 @@ public class DispenseConfig {
         }
         if (c.locations == null) {
             c.locations = new LinkedHashMap<>();
+        }
+        if (c.surfaces == null) {
+            c.surfaces = new LinkedHashMap<>();
         }
         return c;
     }
@@ -232,11 +329,32 @@ public class DispenseConfig {
     public java.util.List<String> validate() {
         java.util.List<String> p = new java.util.ArrayList<>();
         // Pump and valve G-code: constants (ControllerCommands), nothing to validate here.
-        if (needleGapMm <= 0) {
-            p.add("needleGapMm must be > 0");
+        // Z geometry (review finding: hop/travel values could move a nozzle down on the see-saw).
+        // Machine-dependent bounds (travel Z inside the Z axis safe zone, hop <= travel) are checked
+        // against the live axes when a program is built (GcodeStreamBuilder).
+        if (!(needleGapMm > 0 && needleGapMm <= 1.0)) {
+            p.add("needleGapMm must be > 0 and <= 1.0");
         }
-        if (hopHeightMm <= 0) {
-            p.add("hopHeightMm must be > 0");
+        if (!(hopHeightMm > 0 && hopHeightMm <= 10)) {
+            p.add("hopHeightMm must be > 0 and <= 10");
+        }
+        if (!Double.isFinite(travelSafeZMm)) {
+            p.add("travelSafeZMm must be a number");
+        }
+        if (!(zFrameToleranceMm > 0 && zFrameToleranceMm <= 3)) {
+            p.add("zFrameToleranceMm must be > 0 and <= 3 (it must catch a needle-frame mix-up of ~5 mm)");
+        }
+        if (!(surfaceMaxResidualMm > 0 && surfaceMaxResidualMm < needleGapMm)) {
+            p.add("surfaceMaxResidualMm must be > 0 and below needleGapMm");
+        }
+        if (!(surfaceMarginMm >= 0 && surfaceMarginMm <= 20)) {
+            p.add("surfaceMarginMm must be 0 to 20");
+        }
+        if (!(needleOffsetMaxDriftMm > 0 && needleOffsetMaxDriftMm <= 2)) {
+            p.add("needleOffsetMaxDriftMm must be > 0 and <= 2");
+        }
+        if (!(touchOffPrimeExtraClearanceMm >= 0 && touchOffPrimeExtraClearanceMm <= 5)) {
+            p.add("touchOffPrimeExtraClearanceMm must be 0 to 5");
         }
         if (bFeedDegS <= 0 || retractFeedDegS <= 0 || bMaxFeedDegS < Math.max(bFeedDegS, retractFeedDegS)) {
             p.add("B feeds must be > 0 and bMaxFeedDegS >= max(bFeedDegS, retractFeedDegS)");

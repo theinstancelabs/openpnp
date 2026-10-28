@@ -35,6 +35,26 @@ final class Views {
         return m;
     }
 
+    /** A stored surface map with its plane fit (or the reason it cannot be fitted). */
+    static Map<String, Object> surface(String name, org.openpnp.instancelabs.dispense.DispenseConfig.SurfaceMap m) {
+        Map<String, Object> o = new LinkedHashMap<>();
+        o.put("name", name);
+        o.put("points", m.points);
+        o.put("setAtMs", m.setAtMs);
+        o.put("note", m.note);
+        try {
+            org.openpnp.instancelabs.dispense.SurfacePlane pl = org.openpnp.instancelabs.dispense.SurfacePlane
+                    .fit(m.points);
+            o.put("plane", map("a", pl.a, "b", pl.b, "c", pl.c, "slopeMmPerMm", pl.slope(), "maxResidualMm",
+                    pl.maxAbsResidualMm, "minZ", pl.minZ, "maxZ", pl.maxZ, "residuals", pl.residuals));
+        }
+        catch (IllegalArgumentException e) {
+            o.put("plane", null);
+            o.put("error", e.getMessage());
+        }
+        return o;
+    }
+
     /** A finished (or never started) run. Do not call with a run that is still streaming. */
     static Map<String, Object> run(RunResult r, boolean withLines) {
         if (r == null) {
@@ -96,6 +116,7 @@ final class Views {
         m.put("needleGapMm", p.needleGapMm);
         m.put("needleZOffsetMm", p.needleZOffsetMm);
         m.put("hopHeightMm", p.hopHeightMm);
+        m.put("surfaceProbed", p.surfaceFingerprint != null);
 
         Map<String, Object> s = new LinkedHashMap<>();
         int blocked = p.blockedPads().size();

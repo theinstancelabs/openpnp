@@ -9,6 +9,7 @@ import java.util.function.Function;
 import org.openpnp.instancelabs.dispense.DispensePlan;
 import org.openpnp.instancelabs.dispense.DispenseService;
 import org.openpnp.instancelabs.dispense.InterlockReport;
+import org.openpnp.instancelabs.dispense.Interlocks;
 import org.openpnp.model.Configuration;
 import org.openpnp.spi.Machine;
 
@@ -91,13 +92,11 @@ final class ApiContext {
     }
 
     /**
-     * The engine's pre-flight interlocks, as its calibration/shots runs apply them: no I9 (no
-     * board) and, unless {@code requireTouchOff}, no I4. The engine re-checks when it runs.
+     * The engine's pre-flight interlocks for a run without a board plan (no plan rules, no I9),
+     * with the run's I4 scope. The engine re-checks, with the exact dots, when it runs.
      */
-    InterlockReport preflightNoPlan(DispenseService s, boolean requireTouchOff) {
-        InterlockReport r = s.checkInterlocks(null, 0);
-        r.violations.removeIf(v -> v.code.equals("I9") || (!requireTouchOff && v.code.equals("I4")));
-        return r;
+    InterlockReport preflight(DispenseService s, Interlocks.Scope scope) {
+        return s.checkInterlocks(scope, 0);
     }
 
     InterlockReport preflightPlan(DispenseService s, DispensePlan plan, double estimatedPressurisedSeconds) {

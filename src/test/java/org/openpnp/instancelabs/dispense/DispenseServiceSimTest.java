@@ -69,10 +69,51 @@ public class DispenseServiceSimTest {
         c.locations.put("blank", new DispenseConfig.NamedLocation(90, 40, 1.0));
         c.minPadTypeStatus = "provisional";
         svc.updateConfig(c);
+        // I4 needle frame: N1 at 1.3 and the needle at 1.35 on the same surface (offset 0.05)
+        svc.setNeedleAnchor(1.3, 1.35, null, null);
         svc.setNeedleZOffset(0.05, "manual", "test");
+        // probed surfaces: the board (around the toy pads, Z 1.6) and the blank (Z 1.0)
+        svc.setSurface("board", pts(new double[][] {{95, 75, 1.6}, {115, 75, 1.6}, {95, 90, 1.6}, {115, 90, 1.6}}),
+                "test");
+        svc.setSurface("blank", pts(new double[][] {{88, 38, 1.0}, {102, 38, 1.0}, {88, 50, 1.0}, {102, 50, 1.0}}),
+                "test");
         PadType t = svc.getDb().currentPadType("chip-0603");
         t.status = PadTypeStatus.PROVISIONAL;
         svc.savePadType(t);
+    }
+
+    static List<DispenseConfig.SurfacePoint> pts(double[][] p) {
+        List<DispenseConfig.SurfacePoint> l = new ArrayList<>();
+        for (double[] v : p) {
+            l.add(new DispenseConfig.SurfacePoint(v[0], v[1], v[2]));
+        }
+        return l;
+    }
+
+    /** Fake squash: touch-off dots whose commanded gap <= 0.05 come out 1.0 mm wide. */
+    static DotImager squashImager() {
+        final double[] gapsSeen = NeedleTouchOff.gaps(new NeedleTouchOff.Request());
+        return new DotImager() {
+            int i = 0;
+            final List<Frame> afterFrames = new ArrayList<>();
+
+            @Override
+            public boolean isAvailable() {
+                return true;
+            }
+
+            @Override
+            public Frame capture(double x, double y) {
+                return new Frame(null, 0.01, 0.01, x, y);
+            }
+
+            @Override
+            public List<Dot> inspect(Frame before, Frame after) {
+                double g = gapsSeen[i++];
+                double dia = g <= 0.05 + 1e-9 ? 1.0 : 0.62;
+                return Arrays.asList(new Dot(0, 0, dia, 0.3, 0.9));
+            }
+        };
     }
 
     @AfterEach
@@ -221,30 +262,7 @@ public class DispenseServiceSimTest {
 
     @Test
     public void touchOffAndLadderCalibrations() throws Exception {
-        // fake squash: dots whose commanded gap <= 0.05 come out 1.0 mm wide
-        final double[] gapsSeen = NeedleTouchOff.gaps(new NeedleTouchOff.Request());
-        DotImager squash = new DotImager() {
-            int i = 0;
-            final List<Frame> afterFrames = new ArrayList<>();
-
-            @Override
-            public boolean isAvailable() {
-                return true;
-            }
-
-            @Override
-            public Frame capture(double x, double y) {
-                return new Frame(null, 0.01, 0.01, x, y);
-            }
-
-            @Override
-            public List<Dot> inspect(Frame before, Frame after) {
-                double g = gapsSeen[i++];
-                double dia = g <= 0.05 + 1e-9 ? 1.0 : 0.62;
-                return Arrays.asList(new Dot(0, 0, dia, 0.3, 0.9));
-            }
-        };
-        svc.setDotImager(squash);
+        svc.setDotImager(squashImager());
         double before = svc.getConfig().needleZOffsetMm;
         DispenseService.TouchOffResult t = svc.runNeedleTouchOff(new NeedleTouchOff.Request(), true)
                 .get(60, TimeUnit.SECONDS);
@@ -263,8 +281,63 @@ public class DispenseServiceSimTest {
         assertEquals(2, lr.rows.size());
         assertEquals(2, svc.getDotLadder(lr.calibrationId).size());
 
-        RunResult shots = svc.runShots("waste", 360, 3).get(60, TimeUnit.SECONDS);
+        RunResult shots = svc.runShots("waste", 360, 3, true).get(60, TimeUnit.SECONDS);
         assertEquals(RunResult.Status.OK, shots.status, shots.toString());
         assertEquals(3, shots.dotsDone);
+    }
+
+    static double primeRawZ(List<String> sent) {
+        // the first Z down after the first valve ON is the prime at the waste pad
+        int v = sent.indexOf("M106 P3 S255");
+        for (String l : sent.subList(v, sent.size())) {
+            if (l.startsWith("G1 Z")) {
+                return Double.parseDouble(l.split("\\s+")[1].substring(1));
+            }
+        }
+        return Double.NaN;
+    }
+
+    /**
+     * Review finding: after "I changed the needle", prime, test dot and shots still dispensed with
+     * the stale offset (I4 was waived for them). Now they are refused; only the touch-off itself
+     * runs (named waiver), needs a fresh needle frame, and primes higher while not touched off.
+     */
+    @Test
+    public void needleChangeBlocksEverythingButTheTouchOff() throws Exception {
+        svc.markNeedleChanged();
+        sim.server.mark();
+        RunResult prime = svc.runShots("waste", 90, 1, true).get(60, TimeUnit.SECONDS);
+        assertEquals(RunResult.Status.REFUSED, prime.status, prime.toString());
+        assertTrue(prime.interlocks.has("I4"), prime.interlocks.toString());
+        // touch-off without a new needle frame: refused too (the old frame belongs to the old needle)
+        RunResult to = svc.runNeedleTouchOff(new NeedleTouchOff.Request(), false).get(60, TimeUnit.SECONDS).run;
+        assertEquals(RunResult.Status.REFUSED, to.status, to.toString());
+        for (String l : sim.server.sinceMark()) {
+            assertFalse(l.startsWith("M106") || l.startsWith("G1"), "nothing pressurised or moved: " + l);
+        }
+        // new frame (the replacement needle is 0.3 mm longer): prime, ladder still refused
+        svc.setNeedleAnchor(1.3, 1.05, null, null);
+        assertEquals(RunResult.Status.REFUSED, svc.runShots("waste", 90, 1, true).get(60, TimeUnit.SECONDS).status);
+        DotLadderCalibration.Request lr = new DotLadderCalibration.Request();
+        lr.rotationsDeg = new double[] {30};
+        lr.repeats = 1;
+        assertEquals(RunResult.Status.REFUSED, svc.runDotLadder(lr).get(60, TimeUnit.SECONDS).run.status);
+        // the touch-off runs under its waiver; its prime is 0.5 mm higher than a normal prime
+        svc.setDotImager(squashImager());
+        sim.server.mark();
+        DispenseService.TouchOffResult t = svc.runNeedleTouchOff(new NeedleTouchOff.Request(), true)
+                .get(60, TimeUnit.SECONDS);
+        assertEquals(RunResult.Status.OK, t.run.status, t.run.toString());
+        double offset = -0.25; // anchor offset
+        double expected = 63 - (1.0 + offset + 0.15 + 0.5);
+        assertEquals(expected, primeRawZ(sim.server.sinceMark()), 1e-4);
+        assertTrue(t.run.interlocks.notes.stream().anyMatch(n -> n.contains("touch-off run")),
+                t.run.interlocks.toString());
+        assertTrue(svc.getConfig().isNeedleTouchedOff());
+        // now a prime runs, at the normal height
+        sim.server.mark();
+        RunResult ok = svc.runShots("waste", 90, 1, true).get(60, TimeUnit.SECONDS);
+        assertEquals(RunResult.Status.OK, ok.status, ok.toString());
+        assertEquals(63 - (1.0 + svc.getConfig().needleZOffsetMm + 0.15), primeRawZ(sim.server.sinceMark()), 1e-4);
     }
 }

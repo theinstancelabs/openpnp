@@ -15,6 +15,8 @@ public class InterlocksTest {
         DispenseConfig c = GcodeStreamTest.toyConfig();
         c.needleZOffsetSetAtMs = 2000L;
         c.needleChangedAtMs = 1000L;
+        // needle frame: N1 and the needle touched the same surface (waste 1.0, board 1.6)
+        c.needleAnchor = new DispenseConfig.NeedleAnchor(1.3, 1.35, null, null, 1500L);
         in.cfg = c;
         in.machineEnabled = true;
         in.machineHomed = true;

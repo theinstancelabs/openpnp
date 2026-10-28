@@ -56,14 +56,22 @@ public final class NeedleTouchOff {
         return g;
     }
 
+    /**
+     * Dot i at blank.x + i * pitch. Its Z is the probed blank plane at that dot plus the offset and
+     * gap i (review finding: with one flat Z, a slope of the blank along the ladder was mixed into
+     * the gap steps and biased the offset). Without a plane (null) the blank place's single Z is
+     * used; runs refuse that (I4: no blank surface).
+     */
     public static List<GcodeStreamBuilder.DotSpec> layout(Request req, DispenseConfig.NamedLocation blank,
-            DispenseConfig cfg) {
+            DispenseConfig cfg, SurfacePlane plane) {
         List<GcodeStreamBuilder.DotSpec> l = new ArrayList<>();
         double[] g = gaps(req);
         for (int i = 0; i < g.length; i++) {
-            double z = blank.z + cfg.needleZOffsetMm + g[i];
-            double hop = blank.z + cfg.needleZOffsetMm + Math.max(g[0], cfg.needleGapMm) + cfg.hopHeightMm;
-            l.add(new GcodeStreamBuilder.DotSpec(blank.x + i * req.pitchMm, blank.y, z, hop, req.rotationDeg, i,
+            double x = blank.x + i * req.pitchMm, y = blank.y;
+            double surface = plane == null ? blank.z : plane.z(x, y);
+            double z = surface + cfg.needleZOffsetMm + g[i];
+            double hop = surface + cfg.needleZOffsetMm + Math.max(g[0], cfg.needleGapMm) + cfg.hopHeightMm;
+            l.add(new GcodeStreamBuilder.DotSpec(x, y, z, hop, req.rotationDeg, i,
                     String.format(java.util.Locale.ROOT, "touch-off gap %.3f", g[i])));
         }
         return l;

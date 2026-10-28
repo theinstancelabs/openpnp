@@ -32,18 +32,23 @@ public final class DotLadderCalibration {
         public RunResult run;
     }
 
-    /** Dot specs: one row per rotation, `repeats` columns, at the coupon's dispense Z. */
+    /**
+     * Dot specs: one row per rotation, `repeats` columns, each at the probed blank plane under it
+     * plus the offset and gap (one flat Z would vary the gap with the blank's slope). Without a
+     * plane (null) the blank place's single Z is used; runs refuse that (I4: no blank surface).
+     */
     public static List<GcodeStreamBuilder.DotSpec> layout(Request req, DispenseConfig.NamedLocation blank,
-            DispenseConfig cfg) {
+            DispenseConfig cfg, SurfacePlane plane) {
         List<GcodeStreamBuilder.DotSpec> l = new ArrayList<>();
-        double z = blank.z + cfg.needleZOffsetMm + cfg.needleGapMm;
         int idx = 0;
         for (int r = 0; r < req.rotationsDeg.length; r++) {
             for (int c = 0; c < req.repeats; c++) {
                 // serpentine rows keep the path short
                 int col = (r % 2 == 0) ? c : req.repeats - 1 - c;
-                l.add(new GcodeStreamBuilder.DotSpec(blank.x + col * req.pitchMm, blank.y + r * req.pitchMm, z,
-                        z + cfg.hopHeightMm, req.rotationsDeg[r], idx++, "ladder r=" + req.rotationsDeg[r]));
+                double x = blank.x + col * req.pitchMm, y = blank.y + r * req.pitchMm;
+                double z = (plane == null ? blank.z : plane.z(x, y)) + cfg.needleZOffsetMm + cfg.needleGapMm;
+                l.add(new GcodeStreamBuilder.DotSpec(x, y, z, z + cfg.hopHeightMm, req.rotationsDeg[r], idx++,
+                        "ladder r=" + req.rotationsDeg[r]));
             }
         }
         return l;

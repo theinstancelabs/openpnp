@@ -8,6 +8,8 @@ public class ToyMapper implements RawMapper {
     double[] nozzle;
     double b;
     AxisBacklash[] backlash = {AxisBacklash.none(), AxisBacklash.none(), AxisBacklash.none()};
+    /** z1 safe zone as in LIVE (26.5..36.5). */
+    double[] safeZone = {26.5, 36.5};
 
     public ToyMapper(double x, double y, double z, double b) {
         this.nozzle = new double[] {x, y, z};
@@ -63,5 +65,10 @@ public class ToyMapper implements RawMapper {
     @Override
     public double[] currentNozzleLocation() {
         return nozzle.clone();
+    }
+
+    @Override
+    public double[] zSafeZoneRaw() {
+        return safeZone;
     }
 }

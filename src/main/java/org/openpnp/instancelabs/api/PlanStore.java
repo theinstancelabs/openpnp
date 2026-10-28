@@ -103,6 +103,8 @@ final class PlanStore {
         s.needleGapMm = p.needleGapMm;
         s.needleZOffsetMm = p.needleZOffsetMm;
         s.hopHeightMm = p.hopHeightMm;
+        s.surfaceFingerprint = p.surfaceFingerprint;
+        s.boardFingerprint = p.boardFingerprint;
         double path = 0;
         for (int i = 1; i < dots.size(); i++) {
             path += Math.hypot(dots.get(i).xMm - dots.get(i - 1).xMm, dots.get(i).yMm - dots.get(i - 1).yMm);

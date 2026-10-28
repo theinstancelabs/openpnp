@@ -16,6 +16,7 @@ public class DispensePlanner {
     private final Calibration calibration;
     private final DotLadder ladder;
     private java.util.Map<String, PadRule> rules = java.util.Collections.emptyMap();
+    private SurfacePlane surface;
 
     public DispensePlanner(DispenseConfig cfg, PadTypeResolver resolver, Calibration calibration,
             List<DotLadderRow> ladderRows) {
@@ -31,6 +32,15 @@ public class DispensePlanner {
     /** Per pad-type layout rules (pad_rules); missing entries use the config defaults. */
     public DispensePlanner withRules(java.util.Map<String, PadRule> rules) {
         this.rules = rules == null ? java.util.Collections.emptyMap() : rules;
+        return this;
+    }
+
+    /**
+     * The probed board surface (I4): every dot takes its Z from this plane. Without one the dots
+     * use the board's single Z, the plan says so, and a run is refused by I4.
+     */
+    public DispensePlanner withSurface(SurfacePlane surface) {
+        this.surface = surface;
         return this;
     }
 
@@ -59,6 +69,8 @@ public class DispensePlanner {
         plan.needleGapMm = cfg.needleGapMm;
         plan.needleZOffsetMm = cfg.needleZOffsetMm;
         plan.hopHeightMm = cfg.hopHeightMm;
+        plan.surfaceFingerprint = surface == null ? null : surface.fingerprint();
+        double worstBoardZDiff = 0;
         double density = calibration.densityMgMm3 != null ? calibration.densityMgMm3 : cfg.pasteDensityMgMm3;
         DotSizer sizer = new DotSizer(calibration.qMm3PerRev, ladder, cfg.maxDotsPerPad, cfg.dotFitFactor, density);
         PadTypeStatus minStatus = cfg.minPadTypeStatus();
@@ -76,7 +88,10 @@ public class DispensePlanner {
             p.rotationDeg = g.rotationDeg;
             p.wMm = g.wMm;
             p.hMm = g.hMm;
-            p.surfaceZMm = g.surfaceZMm;
+            p.surfaceZMm = surface == null ? g.surfaceZMm : surface.z(g.xMm, g.yMm);
+            if (surface != null) {
+                worstBoardZDiff = Math.max(worstBoardZDiff, Math.abs(g.surfaceZMm - p.surfaceZMm));
+            }
             plan.pads.add(p);
             PadType t = g.padType;
             if (t == null) {
@@ -118,8 +133,8 @@ public class DispensePlanner {
                 d.padId = g.padId;
                 d.xMm = g.xMm + o[0] * c - o[1] * sn;
                 d.yMm = g.yMm + o[0] * sn + o[1] * c;
-                d.surfaceZMm = g.surfaceZMm;
-                d.dispenseZMm = g.surfaceZMm + cfg.needleZOffsetMm + cfg.needleGapMm;
+                d.surfaceZMm = surface == null ? g.surfaceZMm : surface.z(d.xMm, d.yMm);
+                d.dispenseZMm = d.surfaceZMm + cfg.needleZOffsetMm + cfg.needleGapMm;
                 d.hopZMm = d.dispenseZMm + cfg.hopHeightMm;
                 d.rotationDeg = s.rotationPerDotDeg;
                 d.expectedDiameterMm = s.predictedDiameterMm;
@@ -132,6 +147,15 @@ public class DispensePlanner {
         for (int i = 0; i < xs.length; i++) {
             xs[i] = dotXy.get(i)[0];
             ys[i] = dotXy.get(i)[1];
+        }
+        if (surface == null) {
+            plan.warnings.add("no probed board surface: dot Z is the board's single Z; a run is refused (I4) until "
+                    + "the board surface is probed (at least 3 N1 points)");
+        }
+        else if (worstBoardZDiff > cfg.zFrameToleranceMm) {
+            plan.warnings.add(String.format(java.util.Locale.ROOT, "the board location Z differs from the probed "
+                    + "surface by up to %.2f mm; dot Z comes from the probed surface. Check the board Z in OpenPnP "
+                    + "(it is also used for placing)", worstBoardZDiff));
         }
         PathOrder.Result order = PathOrder.order(xs, ys, startX, startY, cfg.twoOptMaxPasses);
         for (int i = 0; i < order.order.length; i++) {

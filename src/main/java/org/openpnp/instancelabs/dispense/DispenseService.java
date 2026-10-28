@@ -258,6 +258,115 @@ public final class DispenseService {
         db.insertTouchOff(method, offsetMm, prev, details, null);
     }
 
+    /**
+     * I4 needle Z frame: the same surface touched by N1 (OpenPnP frame, {@code surfaceZMm}) and by the
+     * needle tip ({@code needleContactZMm}, N2 Z). Sets the offset to their difference; a touch-off
+     * (or a manual entry within the drift limit) is still required before dispensing.
+     */
+    public synchronized DispenseConfig.NeedleAnchor setNeedleAnchor(double surfaceZMm, double needleContactZMm,
+            Double xMm, Double yMm) throws IOException, SQLException {
+        DispenseConfig c = cfg.copy();
+        double prev = c.needleZOffsetMm;
+        long now = Math.max(System.currentTimeMillis(), c.needleChangedAtMs == null ? 0 : c.needleChangedAtMs);
+        c.needleAnchor = new DispenseConfig.NeedleAnchor(surfaceZMm, needleContactZMm, xMm, yMm, now);
+        c.needleZOffsetMm = c.needleAnchor.offsetMm();
+        updateConfig(c);
+        db.insertTouchOff("needle-frame (N1 + needle contact)", c.needleZOffsetMm, prev, new com.google.gson.Gson()
+                .toJson(c.needleAnchor), null);
+        db.event(null, "INFO", "I4", String.format(java.util.Locale.ROOT,
+                "needle frame: N1 contact %.3f, needle contact %.3f -> offset %.3f; touch-off required",
+                surfaceZMm, needleContactZMm, c.needleZOffsetMm));
+        return c.needleAnchor;
+    }
+
+    /** Stores a probed surface (validated: at least 3 points spanning an area). */
+    public synchronized SurfacePlane setSurface(String name, List<DispenseConfig.SurfacePoint> points, String note)
+            throws IOException {
+        SurfacePlane plane = SurfacePlane.fit(points); // throws IllegalArgumentException if unusable
+        DispenseConfig c = cfg.copy();
+        DispenseConfig.SurfaceMap m = new DispenseConfig.SurfaceMap();
+        m.points = new ArrayList<>(points);
+        m.setAtMs = System.currentTimeMillis();
+        m.note = note;
+        c.surfaces.put(name, m);
+        updateConfig(c);
+        db.event(null, "INFO", "SURFACE", String.format(java.util.Locale.ROOT,
+                "surface '%s': %d points, Z %.3f..%.3f, slope %.4f, largest residual %.3f mm", name, points.size(),
+                plane.minZ, plane.maxZ, plane.slope(), plane.maxAbsResidualMm));
+        return plane;
+    }
+
+    public synchronized void clearSurface(String name) throws IOException {
+        DispenseConfig c = cfg.copy();
+        if (c.surfaces.remove(name) != null) {
+            updateConfig(c);
+            db.event(null, "INFO", "SURFACE", "surface '" + name + "' cleared");
+        }
+    }
+
+    /** The fitted plane of a stored surface, or null if there is none or it cannot be fitted. */
+    public SurfacePlane surfacePlane(String name) {
+        return planeOf(cfg, name);
+    }
+
+    static SurfacePlane planeOf(DispenseConfig c, String name) {
+        DispenseConfig.SurfaceMap m = c.surface(name);
+        if (m == null || m.points == null || m.points.size() < 3) {
+            return null;
+        }
+        try {
+            return SurfacePlane.fit(m.points);
+        }
+        catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Identity of a board location as a plan depends on it: global location, side, fiducial
+     * transform (status and matrix) and every placement (review finding: a board moved, re-checked
+     * or edited after planning was not detected at Run).
+     */
+    public static String boardFingerprint(BoardLocation bl) {
+        StringBuilder sb = new StringBuilder();
+        Location g = bl.getGlobalLocation().convertToUnits(LengthUnit.Millimeters);
+        sb.append(String.format(java.util.Locale.ROOT, "%.4f,%.4f,%.4f,%.4f;%s;%s;", g.getX(), g.getY(), g.getZ(),
+                g.getRotation(), bl.getGlobalSide(), bl.getPlacementsTransformStatus()));
+        java.awt.geom.AffineTransform t;
+        try {
+            t = bl.getLocalToGlobalTransform();
+        }
+        catch (RuntimeException e) {
+            t = null;
+        }
+        if (t != null) {
+            double[] m = new double[6];
+            t.getMatrix(m);
+            for (double v : m) {
+                sb.append(String.format(java.util.Locale.ROOT, "%.6f,", v));
+            }
+        }
+        if (bl.getBoard() != null) {
+            for (org.openpnp.model.Placement pl : bl.getBoard().getPlacements()) {
+                Location l = pl.getLocation().convertToUnits(LengthUnit.Millimeters);
+                sb.append(String.format(java.util.Locale.ROOT, "|%s,%s,%s,%s,%.4f,%.4f,%.4f,%.4f", pl.getId(),
+                        pl.getSide(), pl.getType(), pl.isEnabled(), l.getX(), l.getY(), l.getZ(), l.getRotation()));
+            }
+        }
+        try {
+            byte[] h = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(sb.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder();
+            for (int i = 0; i < 12; i++) {
+                hex.append(String.format("%02x", h[i]));
+            }
+            return hex.toString();
+        }
+        catch (java.security.NoSuchAlgorithmException e) {
+            return sb.toString();
+        }
+    }
+
     /** Whether B has been zeroed (G92 B0) since the last home / reconnect (I2). */
     public boolean isBZeroed() {
         return bZeroed.get();
@@ -348,7 +457,7 @@ public final class DispenseService {
     public DispensePlanner newPlanner() throws SQLException {
         Calibration cal = getCurrentCalibration();
         return new DispensePlanner(cfg, new PadTypeResolver(db.currentPadTypes(), db.packageMappings()), cal,
-                db.dotLadder(cal.id)).withRules(db.currentPadRules());
+                db.dotLadder(cal.id)).withRules(db.currentPadRules()).withSurface(planeOf(cfg, cfg.boardSurfaceName));
     }
 
     /** Plans a board location; the path starts at the waste location (or N2's current XY). */
@@ -356,6 +465,7 @@ public final class DispenseService {
         requireAvailable();
         double[] start = planStart();
         DispensePlan plan = newPlanner().planBoard(bl, start[0], start[1]);
+        plan.boardFingerprint = boardFingerprint(bl);
         db.insertPadPlan(plan);
         db.event(null, "INFO", "PLAN", plan.summary());
         return plan;
@@ -378,12 +488,69 @@ public final class DispenseService {
         return new double[] {l.getX(), l.getY()};
     }
 
-    /** Pre-flight interlocks for a plan (I3, I4, I5, I7 estimate, I9, plan rules). */
+    /**
+     * Pre-flight interlocks for a plan (I3, I4 with the board surface, I5, I7 estimate, I9, plan
+     * rules); without a plan the generic checks (needle frame, touch-off) only.
+     */
     public InterlockReport checkInterlocks(DispensePlan plan, double estimatedPressurisedSeconds) {
-        return Interlocks.check(interlockInputs(cfg, plan, estimatedPressurisedSeconds));
+        return Interlocks.check(interlockInputs(cfg, plan, estimatedPressurisedSeconds, boardScope(cfg, plan)));
     }
 
-    private Interlocks.Inputs interlockInputs(DispenseConfig c, DispensePlan plan, double est) {
+    /** Pre-flight interlocks for a calibration / shots / hold scope (no plan rules, no I9). */
+    public InterlockReport checkInterlocks(Interlocks.Scope scope, double estimatedPressurisedSeconds) {
+        DispenseConfig ic = cfg.copy();
+        ic.primeAndTestDot = false;
+        return Interlocks.check(interlockInputs(ic, null, estimatedPressurisedSeconds, scope));
+    }
+
+    /** I4 scope of a board run: waste (prime / test dot) and the board surface under every dot. */
+    public static Interlocks.Scope boardScope(DispenseConfig c, DispensePlan plan) {
+        Interlocks.Scope sc = new Interlocks.Scope();
+        if (plan == null) {
+            return sc;
+        }
+        if (c.primeAndTestDot) {
+            sc.referencePlaces.add(c.wasteLocationName);
+        }
+        sc.surfaceName = c.boardSurfaceName;
+        for (DispensePlan.PlannedDot d : plan.dots) {
+            sc.surfaceTargets.add(new double[] {d.xMm, d.yMm});
+        }
+        sc.checkPlanSurface = true;
+        return sc;
+    }
+
+    /**
+     * I4 scope of shots at a place: a place that stands for a needle-frame surface (waste, test-dot
+     * spot) is checked against the frame; any other place (a cup on the scale) only gets the floor.
+     */
+    public static Interlocks.Scope shotsScope(String place, boolean referenceSurface) {
+        Interlocks.Scope sc = new Interlocks.Scope();
+        if (referenceSurface) {
+            sc.referencePlaces.add(place);
+        }
+        return sc;
+    }
+
+    /** I4 scope of a dot ladder / touch-off on the blank: its plane under every dot. */
+    public static Interlocks.Scope blankScope(DispenseConfig c, String blankName, boolean primeAtWaste,
+            boolean touchOff, List<GcodeStreamBuilder.DotSpec> specs) {
+        Interlocks.Scope sc = new Interlocks.Scope();
+        sc.touchOffWaiver = touchOff;
+        sc.referencePlaces.add(blankName);
+        if (primeAtWaste) {
+            sc.referencePlaces.add(c.wasteLocationName);
+        }
+        sc.surfaceName = blankName;
+        if (specs != null) {
+            for (GcodeStreamBuilder.DotSpec d : specs) {
+                sc.surfaceTargets.add(new double[] {d.x, d.y});
+            }
+        }
+        return sc;
+    }
+
+    private Interlocks.Inputs interlockInputs(DispenseConfig c, DispensePlan plan, double est, Interlocks.Scope scope) {
         Interlocks.Inputs in = new Interlocks.Inputs();
         Machine m = configuration.getMachine();
         in.cfg = c;
@@ -401,6 +568,7 @@ public final class DispenseService {
         in.plan = plan;
         in.estimatedPressurisedSeconds = est;
         in.opticalCheckAvailable = imager() != null && imager().isAvailable();
+        in.scope = scope == null ? new Interlocks.Scope() : scope;
         return in;
     }
 
@@ -420,9 +588,15 @@ public final class DispenseService {
             DispenseConfig c = cfg;
             Session s = new Session(c, r);
             boolean optical = c.primeAndTestDot && c.testDotOpticalCheck;
+            // Interlocks first (I4 Z frame before any program is built), then again with the estimate (I7).
+            r.interlocks = Interlocks.check(interlockInputs(c, plan, 0, boardScope(c, plan)));
+            if (!r.interlocks.ok()) {
+                return s.refuse(r.interlocks.toString());
+            }
             GcodeProgram full = GcodeStreamBuilder.forPlan(c, s.mapper, plan, bZeroed.get(), s.keepalive,
                     GcodeStreamBuilder.Part.FULL);
-            r.interlocks = Interlocks.check(interlockInputs(c, plan, full.estimatedPressurisedSeconds));
+            r.interlocks = Interlocks.check(interlockInputs(c, plan, full.estimatedPressurisedSeconds,
+                    boardScope(c, plan)));
             if (!r.interlocks.ok()) {
                 return s.refuse(r.interlocks.toString());
             }
@@ -451,14 +625,24 @@ public final class DispenseService {
         });
     }
 
-    /** Dispenses `count` shots of rotationDeg at a named location (calibration cup), for the scale. */
-    public Future<RunResult> runShots(String locationName, double rotationDeg, int count) throws Exception {
+    /**
+     * Dispenses `count` shots of rotationDeg at a named location: prime / test dot at the waste pad
+     * ({@code referenceSurface}: the place is checked against the needle frame) or shots into a
+     * cup on the scale. I4 applies in full (review finding: it was waived for prime, test dot and
+     * shots, so they dispensed with a stale offset after a needle change).
+     */
+    public Future<RunResult> runShots(String locationName, double rotationDeg, int count, boolean referenceSurface)
+            throws Exception {
         requireAvailable();
         DispenseConfig.NamedLocation loc = requireLocation(locationName);
         RunResult r = newRun("shots", null, locationName, getCurrentCalibration().id, count);
         return submit(r, () -> {
             DispenseConfig c = cfg;
             Session s = new Session(c, r);
+            Interlocks.Scope scope = shotsScope(locationName, referenceSurface);
+            if (!s.preflight(scope, 0)) {
+                return r;
+            }
             List<GcodeStreamBuilder.DotSpec> specs = new ArrayList<>();
             double z = loc.z + c.needleZOffsetMm + c.needleGapMm;
             for (int i = 0; i < count; i++) {
@@ -466,7 +650,7 @@ public final class DispenseService {
             }
             GcodeProgram p = GcodeStreamBuilder.forDots(c, s.mapper, specs, bZeroed.get(), s.keepalive, false,
                     "shots x" + count + " @" + locationName);
-            if (!s.preflightCalibration(p, false)) {
+            if (!s.preflight(scope, p.estimatedPressurisedSeconds)) {
                 return r;
             }
             s.runSegment(() -> p, "shots");
@@ -477,8 +661,8 @@ public final class DispenseService {
     /** Optical dot ladder at the blank location (plan §5.6); appends dot_ladder rows. */
     public Future<DotLadderCalibration.Result> runDotLadder(DotLadderCalibration.Request req) throws Exception {
         requireAvailable();
-        DispenseConfig.NamedLocation blank = requireLocation(
-                req.locationName == null ? cfg.blankLocationName : req.locationName);
+        String blankName = req.locationName == null ? cfg.blankLocationName : req.locationName;
+        DispenseConfig.NamedLocation blank = requireLocation(blankName);
         Calibration cal = getCurrentCalibration();
         int n = req.rotationsDeg.length * req.repeats;
         RunResult r = newRun("dot-ladder", null, "blank", cal.id, n);
@@ -488,13 +672,18 @@ public final class DispenseService {
         return submitResult(r, res, () -> {
             DispenseConfig c = cfg;
             Session s = new Session(c, r);
-            List<GcodeStreamBuilder.DotSpec> specs = DotLadderCalibration.layout(req, blank, c);
-            GcodeProgram p = GcodeStreamBuilder.forDots(c, s.mapper, specs, bZeroed.get(), s.keepalive,
-                    req.primeAtWaste, "dot ladder");
-            if (!s.preflightCalibration(p, true)) {
+            SurfacePlane plane = planeOf(c, blankName);
+            List<GcodeStreamBuilder.DotSpec> specs = DotLadderCalibration.layout(req, blank, c, plane);
+            Interlocks.Scope scope = blankScope(c, blankName, req.primeAtWaste, false, specs);
+            if (!s.preflight(scope, 0)) {
                 return;
             }
-            List<Dot> found = s.imageDots(specs, req.primeAtWaste, req.pitchMm / 2);
+            GcodeProgram p = GcodeStreamBuilder.forDots(c, s.mapper, specs, bZeroed.get(), s.keepalive,
+                    req.primeAtWaste, "dot ladder");
+            if (!s.preflight(scope, p.estimatedPressurisedSeconds)) {
+                return;
+            }
+            List<Dot> found = s.imageDots(specs, req.primeAtWaste, 0, req.pitchMm / 2);
             res.rows.addAll(DotLadderCalibration.analyze(cal.id, req, specs, found, c.needleGapMm, res.notes));
             for (DotLadderRow row : res.rows) {
                 db.insertDotLadderRow(row);
@@ -514,21 +703,30 @@ public final class DispenseService {
     /** Needle touch-off by dot ladder at stepped gaps (plan §6.1). Applies the new offset if found and asked. */
     public Future<TouchOffResult> runNeedleTouchOff(NeedleTouchOff.Request req, boolean apply) throws Exception {
         requireAvailable();
-        DispenseConfig.NamedLocation blank = requireLocation(
-                req.locationName == null ? cfg.blankLocationName : req.locationName);
+        String blankName = req.locationName == null ? cfg.blankLocationName : req.locationName;
+        DispenseConfig.NamedLocation blank = requireLocation(blankName);
         RunResult r = newRun("touch-off", null, "blank", getCurrentCalibration().id, req.steps);
         TouchOffResult res = new TouchOffResult();
         res.run = r;
         return submitResult(r, res, () -> {
             DispenseConfig c = cfg;
             Session s = new Session(c, r);
-            List<GcodeStreamBuilder.DotSpec> specs = NeedleTouchOff.layout(req, blank, c);
-            GcodeProgram p = GcodeStreamBuilder.forDots(c, s.mapper, specs, bZeroed.get(), s.keepalive,
-                    req.primeAtWaste, "needle touch-off");
-            if (!s.preflightCalibration(p, false)) {
+            SurfacePlane plane = planeOf(c, blankName);
+            List<GcodeStreamBuilder.DotSpec> specs = NeedleTouchOff.layout(req, blank, c, plane);
+            // The named I4 waiver: this run sets the touched-off state. The needle frame (anchor) is
+            // still required, and while the needle is not touched off the prime at the waste pad is
+            // made higher, as the offset is only the coarse anchor value.
+            Interlocks.Scope scope = blankScope(c, blankName, req.primeAtWaste, true, specs);
+            if (!s.preflight(scope, 0)) {
                 return;
             }
-            List<Dot> found = s.imageDots(specs, req.primeAtWaste, req.pitchMm / 2);
+            double primeExtra = c.isNeedleTouchedOff() ? 0 : c.touchOffPrimeExtraClearanceMm;
+            GcodeProgram p = GcodeStreamBuilder.forDots(c, s.mapper, specs, bZeroed.get(), s.keepalive,
+                    req.primeAtWaste, primeExtra, "needle touch-off");
+            if (!s.preflight(scope, p.estimatedPressurisedSeconds)) {
+                return;
+            }
+            List<Dot> found = s.imageDots(specs, req.primeAtWaste, primeExtra, req.pitchMm / 2);
             double[] gaps = NeedleTouchOff.gaps(req);
             Double[] d = new Double[gaps.length];
             for (int i = 0; i < d.length; i++) {
@@ -536,7 +734,13 @@ public final class DispenseService {
             }
             res.analysis = NeedleTouchOff.analyze(gaps, d, req.jumpRatio);
             res.previousOffsetMm = c.needleZOffsetMm;
-            String details = new com.google.gson.Gson().toJson(res.analysis);
+            java.util.Map<String, Object> det = new java.util.LinkedHashMap<>();
+            det.put("analysis", res.analysis);
+            det.put("blank", blankName);
+            det.put("blankPlane", plane == null ? null : java.util.Arrays.asList(plane.a, plane.b, plane.c));
+            det.put("blankPlaneMaxResidualMm", plane == null ? null : plane.maxAbsResidualMm);
+            det.put("dotZ", specs.stream().map(x -> x.dispenseZ).collect(java.util.stream.Collectors.toList()));
+            String details = new com.google.gson.Gson().toJson(det);
             if (res.analysis.found()) {
                 res.newOffsetMm = c.needleZOffsetMm + res.analysis.contactGapMm;
                 if (apply) {
@@ -766,14 +970,11 @@ public final class DispenseService {
             }
         }
 
-        /** Interlocks for calibration/shots runs (no plan rules, no I9; I4 optional). */
-        boolean preflightCalibration(GcodeProgram p, boolean requireTouchOff) {
+        /** Interlocks for calibration/shots runs (no plan rules, no I9; I4 per the scope). */
+        boolean preflight(Interlocks.Scope scope, double estimatedPressurisedSeconds) {
             DispenseConfig ic = c.copy();
             ic.primeAndTestDot = false;
-            r.interlocks = Interlocks.check(interlockInputs(ic, null, p.estimatedPressurisedSeconds));
-            if (!requireTouchOff) {
-                r.interlocks.violations.removeIf(v -> v.code.equals("I4"));
-            }
+            r.interlocks = Interlocks.check(interlockInputs(ic, null, estimatedPressurisedSeconds, scope));
             if (!r.interlocks.ok()) {
                 refuse(r.interlocks.toString());
                 return false;
@@ -789,7 +990,8 @@ public final class DispenseService {
             // OpenPnP may have moved in between (camera for I9/calibration images): settle first.
             configuration.getMachine().getMotionPlanner().waitForCompletion(null, CompletionType.WaitForStillstand);
             GcodeProgram p = build.call();
-            List<String> problems = GcodeStreamValidator.validate(p, c, mapper.letterB());
+            List<String> problems = GcodeStreamValidator.validate(p, c, mapper.letterB(),
+                    GcodeStreamValidator.zWindow(c, mapper));
             if (!problems.isEmpty()) {
                 throw new IllegalStateException("generated G-code failed validation: " + problems);
             }
@@ -814,8 +1016,8 @@ public final class DispenseService {
         }
 
         /** Before/after images of every spec around one pressure session; returns the dot per spec. */
-        List<Dot> imageDots(List<GcodeStreamBuilder.DotSpec> specs, boolean primeAtWaste, double radius)
-                throws Exception {
+        List<Dot> imageDots(List<GcodeStreamBuilder.DotSpec> specs, boolean primeAtWaste, double primeExtra,
+                double radius) throws Exception {
             DotImager im = imager();
             if (im == null || !im.isAvailable()) {
                 throw new IllegalStateException("no top camera / dot vision available");
@@ -826,7 +1028,7 @@ public final class DispenseService {
                 before.add(im.capture(d.x, d.y));
             }
             runSegment(() -> GcodeStreamBuilder.forDots(c, mapper, specs, bZeroed.get(), keepalive, primeAtWaste,
-                    "calibration dots"), "dispensing calibration dots");
+                    primeExtra, "calibration dots"), "dispensing calibration dots");
             phase(r, "after images");
             List<Dot> found = new ArrayList<>();
             for (int i = 0; i < specs.size(); i++) {
