@@ -367,7 +367,7 @@ def press_stop(s, how):
         return s.api("POST", "/api/stop")
     btn = s.mcp_button("Stop")
     sig = s.ui.classify("click", path=btn["path"])
-    if "startStopMachineAction" not in json.dumps(sig):
+    if "field:startstopmachineaction" not in json.dumps(sig).lower():  # uinav lower-cases signatures
         raise RuntimeError("the Stop button found is not OpenPnP's power button: %s" % json.dumps(sig))
     r = s.ui.act("click", path=btn["path"], timeout_ms=20000)
     r["button"] = {"path": btn["path"], "text": btn.get("text"), "action": btn.get("action"),
