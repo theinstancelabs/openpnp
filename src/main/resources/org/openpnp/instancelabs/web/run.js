@@ -2014,6 +2014,7 @@
       body, foot: [sum, cancel, go], initialFocus: first, onClose: () => { if (R.dlg === h) R.dlg = null; } });
     h.mode = mode;
     h.n = { gauge, paste, hands, pon, held, sensed, sum, go, refusals, blockBox };
+    h.runId = s.run ? s.run.runId : null;   // the last task this tab knew of when the confirm opened
     R.dlg = h;
     cancel.addEventListener('click', () => h.close('cancel'));
     go.addEventListener('click', () => startRun(h));
@@ -2171,9 +2172,11 @@
     IL.safe(() => trackPhases(s), 'run phases');
     IL.safe(() => trackDone(s), 'run done');
     // a task started while the run confirm is open (another tab or client, or ours): its ticks, "hands clear" above
-    // all, and its dot count were for the board before that task, so the confirm closes
-    if (R.dlg && IL.taskRunning(s) && prev && !IL.taskRunning(prev)) {
-      if (!R.dlg.starting) IL.toast('Run confirm closed: ' + (s.run && s.run.running && s.run.label === 'board' ? 'a board run' : 'a task') + ' started meanwhile.', 'need');
+    // all, and its dot count were for the board before that task, so the confirm closes. A new run id also counts:
+    // a short task can start and end between two polls this tab saw (offline, a throttled hidden tab)
+    const newRun = !!R.dlg && !!s.run && !!s.run.runId && s.run.runId !== R.dlg.runId;
+    if (R.dlg && (newRun || (IL.taskRunning(s) && prev && !IL.taskRunning(prev)))) {
+      if (!R.dlg.starting) IL.toast('Run confirm closed: ' + (newRun && s.run.label === 'board' ? 'a board run' : 'a task') + ' started meanwhile.', 'need');
       R.dlg.close('task');
     }
     if (R.dlg) IL.safe(() => updateDialog(s), 'run confirm');

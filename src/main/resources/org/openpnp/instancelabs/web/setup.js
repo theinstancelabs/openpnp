@@ -814,7 +814,9 @@
         rows.push(['Seat', src && src.source === 'file' ? fmt(src.x, 2) + ', ' + fmt(src.y, 2) + ' · ' + fmt(src.rotation || 0, 1) + '°' : src ? 'job board (fiducials)' : 'no plan shown']);
         if (flat && S.plan) {
           if (surfItem && surfItem.state === 'ok') { o.pill = 'tied to plan ' + String(S.plan.planId).slice(0, 4); o.pillKind = 'ok'; }
-          else if (surfItem && surfItem.state === 'need') { o.pill = sf.boundToBoard ? 'another seat' : 'not tied'; o.pillKind = 'need'; o.kind = 'need'; o.short = 'probe this seat'; }
+          else if (surfItem && (surfItem.state === 'need' || surfItem.seat)) {
+            o.pill = sf.boundToBoard ? 'another seat' : 'not tied'; o.pillKind = 'need'; o.kind = surfItem.state === 'block' ? 'block' : 'need'; o.short = 'probe this seat';
+          }
         } else if (flat) { o.pill = sf.boundToBoard ? 'tied to a seat' : 'not tied'; o.pillKind = sf.boundToBoard ? 'ok' : 'need'; }
       }
       rows.push(['Points', pts.length + ' · worst ' + fmt(pl.maxResidualMm, 3) + ' mm']);

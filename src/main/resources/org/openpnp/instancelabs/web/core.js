@@ -1006,19 +1006,22 @@
     } else {
       const bad = i4.filter((x) => x.kind === 'surface-bad');
       const seat = i4.filter((x) => x.kind === 'seat');
+      // seat: 'new' (the operator said re-seated), 'none' (no surface), 'other' (probed on another registration),
+      // 'untied' (saved without a plan: saving the same points with this plan ties them); set in the block state too
+      // (a moved board's dots usually fall outside the old seat's surface), Setup's editor reads it
+      const which = !(seat.length || newSeat || !sf) ? undefined : newSeat ? 'new'
+        : !sf || /^no '/i.test(seat[0] ? seat[0].v.message : 'no ') ? 'none'
+          : /another registration/.test(seat[0].v.message) ? 'other' : 'untied';
+      const why = which && { new: 'You said the board was re-seated: probe this seat.', none: 'No board surface yet: probe this seat.',
+        other: 'The board surface belongs to another seat of this board.', untied: 'The board surface is not tied to this plan.' }[which];
+      const seatFixes = [{ fix: 'probe', label: 'Probe this seat', primary: true }];
+      if (newSeat) seatFixes.push({ fix: 'same-seat', label: 'Same board, not moved' });
       if (bad.length) {
         add({ key: 'surface', code: 'I4', title: 'Surface', state: 'block', value: 'probe again', short: 'board surface',
-          detail: bad.map((x) => sentence(x.v.message)).join(' '), fixes: [{ fix: 'probe', label: 'Add probe points' }] });
-      } else if (seat.length || newSeat || !sf) {
-        // seat: 'new' (the operator said re-seated), 'none' (no surface), 'other' (probed on another registration),
-        // 'untied' (saved without a plan: saving the same points with this plan ties them)
-        const which = newSeat ? 'new' : !sf || /^no '/i.test(seat[0] ? seat[0].v.message : 'no ') ? 'none'
-          : /another registration/.test(seat[0].v.message) ? 'other' : 'untied';
-        const why = { new: 'You said the board was re-seated: probe this seat.', none: 'No board surface yet: probe this seat.',
-          other: 'The board surface belongs to another seat of this board.', untied: 'The board surface is not tied to this plan.' }[which];
-        const fixes = [{ fix: 'probe', label: 'Probe this seat', primary: true }];
-        if (newSeat) fixes.push({ fix: 'same-seat', label: 'Same board, not moved' });
-        add({ key: 'surface', code: 'I4', title: 'Surface', state: 'need', value: 'probe', short: 'probe seat', detail: why, fixes, seat: which });
+          detail: bad.map((x) => sentence(x.v.message)).concat(why || []).join(' '),
+          fixes: which ? seatFixes : [{ fix: 'probe', label: 'Add probe points' }], seat: which });
+      } else if (which) {
+        add({ key: 'surface', code: 'I4', title: 'Surface', state: 'need', value: 'probe', short: 'probe seat', detail: why, fixes: seatFixes, seat: which });
       } else {
         add({ key: 'surface', code: 'I4', title: 'Surface', state: 'ok', value: 'tied', short: 'board surface',
           detail: 'Board surface: ' + IL.plural((sf.points || []).length, 'point') + (sf.plane ? ', worst ' + IL.fmt(sf.plane.maxResidualMm, 3) + ' mm' : '')
@@ -1532,9 +1535,10 @@
     const fp = d.profile && d.profile.fingerprint, pfp = prev && prev.dispense && prev.dispense.profile && prev.dispense.profile.fingerprint;
     if (prev && fp && pfp && fp !== pfp) S.profileChangedAt = now;
     // the gauge reading expires with any psi change (§9.4), for good: set back to the old psi, the regulator may still
-    // be at the other one
+    // be at the other one. A reading at the new psi stays: another tab ticked it after the change this tab sees late
     const psi = d.profile && d.profile.pressurePsi, ppsi = prev && prev.dispense && prev.dispense.profile && prev.dispense.profile.pressurePsi;
-    if (isNum(psi) && isNum(ppsi) && Number(psi) !== Number(ppsi) && IL.attest.get('regulator')) IL.attest.clear('regulator');
+    const reg = IL.attest.get('regulator');
+    if (isNum(psi) && isNum(ppsi) && Number(psi) !== Number(ppsi) && reg && Number(reg.value) !== Number(psi)) IL.attest.clear('regulator');
     // pressure on-time of a running task (client stamp of the first poll in the pressure session)
     if (run && run.running && run.pressureOnAtMs) S.runPressureSince = run.pressureOnAtMs - S.skewMs;
     else if (run && run.running && IL.PRESSURE_PHASES.has(run.phase)) { if (!S.runPressureSince) S.runPressureSince = now; }
@@ -2145,7 +2149,7 @@
   }
 
   // ================================================================================== STOP (§5)
-  const STOP = { retry: null, unconfirmed: false, tries: 0, lastConfirmAt: 0, bandTimer: null, sending: 0 };
+  const STOP = { retry: null, unconfirmed: false, tries: 0, lastConfirmAt: 0, bandTimer: null, bandRo: null, sending: 0 };
   /** Presses STOP: POST /api/stop now (2 s timeout); retries every 1 s with the red band until one answer arrives. */
   IL.stop = function (source) {
     STOP.pressedAt = Date.now();
@@ -2208,6 +2212,12 @@
   function showStopBand(kind, tries) {
     const b = $('stop-unconfirmed');
     if (!b) return;
+    // at <= 1100 px both bands stick under the strip: --stop-band-h (0 while hidden) puts the page bands (offline,
+    // vent_failed) below the STOP band instead of under it
+    if (!STOP.bandRo && window.ResizeObserver) {
+      STOP.bandRo = new ResizeObserver(() => document.documentElement.style.setProperty('--stop-band-h', b.offsetHeight + 'px'));
+      STOP.bandRo.observe(b);
+    }
     clearTimeout(STOP.bandTimer);
     if (!kind) { b.hidden = true; return; }
     if (kind === 'fail') {

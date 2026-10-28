@@ -718,9 +718,10 @@ label.tick.on, label.tick:has(input:checked) { border-color: var(--accent); back
 @media (max-width: 1100px) {
   .app { grid-template-columns: var(--nav-w) minmax(0, 1fr); grid-template-rows: var(--strip-h) auto auto auto; height: auto; min-height: 100vh; }
   .strip { position: sticky; top: 0; }
-  /* the page scrolls here: the STOP band and the page bands (offline, pressure NOT off) stay in view under the strip */
+  /* the page scrolls here: the STOP band and, below it, the page bands (offline, pressure NOT off) stay in view under
+     the strip (the page bands while the main column is in view: they live in it) */
   .stop-band { position: sticky; top: var(--strip-h); }
-  .msg-area { top: var(--strip-h); }
+  .msg-area { top: calc(var(--strip-h) + var(--stop-band-h, 0px)); }
   .nav { grid-row: 3 / 5; }
   .main { overflow: visible; }
   .panel { grid-row: 4; grid-column: 2; border-left: 0; border-top: 1px solid var(--line); }

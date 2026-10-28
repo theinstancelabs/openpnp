@@ -118,8 +118,9 @@ Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, `
   painted as paste, never "wipe".
 - `IL.attest.{all(), get(key), set(key, value), clear(key), valid(key, status)}` keys `regulator` (psi),
   `paste-life`, `prime-seen`, `test-dot-seen` (§9.4; regulator cleared by any psi change a page sees, also a change
-  back, invalid after a needle change or 8 h). `hands-clear` is never stored. `IL.setNewSeat(atMs | null)`. Both live
-  in localStorage: another tab's tick or new-seat answer counts at once (`storage` event).
+  back, unless the tick is already at the new psi; invalid after a needle change or 8 h). `hands-clear` is never
+  stored. `IL.setNewSeat(atMs | null)`. Both live in localStorage: another tab's tick or new-seat answer counts at
+  once (`storage` event).
 - Machine helpers: `IL.positions(status)` → `{n1, n2, cam}`, `IL.wasteDistance(status)` (mm or null),
   `IL.isSim(status)`, `IL.taskRunning(status)`, `IL.energised(status)`, `IL.interlock(status, id)`,
   `IL.taskLabel(run)` (`96/160 · 0:44 left`, `Pad check · 1:52`, `Prime`).
@@ -137,7 +138,7 @@ Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, `
     planLabel }
   Item = { key, n, code ('MACHINE','I11','I4','I6','PLAN','I9','I10',...), title, state, ready, value (short, right-aligned),
            short (for the verdict / nav), detail (plain sentence with numbers), tip, fixes: [Fix], you?, stale?, dirty?,
-           seat? (surface item when it needs a probe: new | none | other | untied) }
+           seat? (surface item, need or block, when the seat needs a probe: new | none | other | untied) }
   state: ok | you (operator attestation, blue ring) | off (counted ready) | need | block | live | checking | wait (needs a plan)
   Fix = {fix: '<id>', label, arg?, primary?} | {href: '#setup/needle', label} | {view: 'pressure', label}
   ```
@@ -312,9 +313,10 @@ Never `/dev/ttyACM*`, `/dev/serial/*`, `/dev/video*` or a real-mode OpenPnP.
   grid row, retries, "confirmed after n tries" stays up), the offline state (band, inert workspace and dialog), the board
   decision after a 20-dot test run ("Finish 140 pads left", "Wipe all, run all"); STOP answers in those checks come
   from a stub in a second page (nothing reaches OpenPnP). Final review fixes: the regulator tick expires for good on a
-  psi change and back; "new seat" empties Setup's board-surface editor (Save waits for new points) and counts in a
-  second tab at once; the run of the 140 pads left is stopped and Records › Finish offers only its own pads (none of
-  the test run's 20).
+  psi change and back (a tick already at the new psi stays); "new seat" empties Setup's board-surface editor (Save
+  waits for new points) and counts in a second tab at once, a board planned 15 mm away does the same; the run of the
+  140 pads left is stopped and Records › Finish offers only its own pads (none of the test run's 20); a run confirm
+  in a tab that saw no status during a test dot closes; at 1024 px the offline band sits below STOP NOT CONFIRMED.
 - Board identity: a plan made again for the same seat (no "Next board" since) is the same board (`IL.run.alias`), its
   dispensed dots carry over (`carryBoard`); a part-done board shows the board decision (`partialDecision`). Kept per tab
   (sessionStorage), like the done-dot map.
