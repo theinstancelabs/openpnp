@@ -97,7 +97,7 @@ public class DispenseServiceSimTest {
         svc.setNeedleZOffset(-2.59, "manual", "test");
         // probed surfaces: the board (around the toy pads, Z 5.6) and the blank (Z 5.45, purge row too)
         svc.setSurface("board", pts(new double[][] {{95, 75, 5.6}, {115, 75, 5.6}, {95, 90, 5.6}, {115, 90, 5.6}}),
-                "test");
+                "test", TOY_BOARD); // tied to the toy board's registration (I4)
         svc.setSurface("blank", pts(new double[][] {{85, 35, 5.45}, {130, 35, 5.45}, {85, 50, 5.45},
             {130, 50, 5.45}}), "test");
         PadType t = svc.getDb().currentPadType("chip-0603");
@@ -153,8 +153,13 @@ public class DispenseServiceSimTest {
         pads.add(new PadGeometry("R1.1", 100.0, 80.0, 0, 0.8, 0.95, 5.6, t));
         pads.add(new PadGeometry("R1.2", 101.65, 80.0, 0, 0.8, 0.95, 5.6, t));
         pads.add(new PadGeometry("R2.1", 110.0, 85.0, 90, 0.8, 0.95, 5.6, t));
-        return svc.newPlanner().plan("sim-toy", pads, 105.5, 45); // from the purge row's end
+        DispensePlan p = svc.newPlanner().plan("sim-toy", pads, 105.5, 45); // from the purge row's end
+        p.boardRegistration = TOY_BOARD; // planned from pads, not an OpenPnP board location
+        return p;
     }
+
+    /** Registration of the toy board the probed board surface belongs to. */
+    static final String TOY_BOARD = "toy-board-seat-1";
 
     static int count(List<String> l, String s) {
         return java.util.Collections.frequency(l, s);

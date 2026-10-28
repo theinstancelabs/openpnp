@@ -48,11 +48,13 @@ final class DispenseEndpoints {
     static final java.util.Set<String> NESTED_SETTINGS = new java.util.HashSet<>(java.util.Arrays.asList(
             "profile", "purgeRow", "cleanPadCheck", "needleXyTrim"));
     /**
-     * Nested fields only their own endpoints stamp: the start angle's set time (I11: POST
-     * /api/screw/start-angle, or a changed angle) and the times of the trim and the purge reset.
+     * Nested fields only the engine or their own endpoints change: the start angle's set time (I11:
+     * POST /api/screw/start-angle, or a changed angle), the times of the trim and the purge reset,
+     * and the used purge spots (runs reserve them, POST /api/purge-row/reset frees them: a stale
+     * full-settings save must not put paste-covered spots back in use).
      */
     static final java.util.Set<String> PROTECTED_NESTED = new java.util.HashSet<>(java.util.Arrays.asList(
-            "profile.startAngleSetAtMs", "needleXyTrim.setAtMs", "purgeRow.resetAtMs"));
+            "profile.startAngleSetAtMs", "needleXyTrim.setAtMs", "purgeRow.resetAtMs", "purgeRow.usedSpots"));
 
     private final ApiContext ctx;
     private final MachineEndpoints machine;
@@ -266,7 +268,7 @@ final class DispenseEndpoints {
         DispenseService svc = ctx.availableSvc();
         DispenseConfig cfg = svc.getConfig();
         double rot = Json.num(b, "rotationDeg", defaultTestDotRotation(cfg));
-        checkRotation(rot, 720);
+        checkRotation(rot, maxDotRotation(cfg));
         DispenseConfig.NamedLocation waste = requireWaste(cfg);
         startChecks(svc, DispenseService.shotsScope(cfg.wasteLocationName, true), "Test dot");
         DispenseConfig.NamedLocation spot = new DispenseConfig.NamedLocation(waste.x + cfg.testDotOffsetXMm,
@@ -287,6 +289,11 @@ final class DispenseEndpoints {
         ctx.requireEngineIdle(svc);
         ctx.requireNoPressureHold();
         ApiContext.refuseUnlessOk(ctx.preflight(svc, scope), what);
+    }
+
+    /** Largest single-dot rotation: 720 deg, or more for a profile of two revolutions (720.72 deg). */
+    static double maxDotRotation(DispenseConfig cfg) {
+        return Math.max(720, cfg.profile.forwardDeg(cfg));
     }
 
     static void checkRotation(double rot, double max) throws ApiException {
@@ -410,7 +417,7 @@ final class DispenseEndpoints {
         String planId = Json.str(b, "planId", null);
         String boardFp = null;
         if (planId != null) {
-            boardFp = currentBoardFingerprint(svc, requirePlan(planId));
+            boardFp = currentBoardRegistration(svc, requirePlan(planId));
             if (boardFp == null || boardFp.startsWith("unavailable")) {
                 throw ApiException.refused("the board of plan " + planId + " cannot be found: " + boardFp);
             }
@@ -624,20 +631,34 @@ final class DispenseEndpoints {
     /** Fingerprint of the board the plan came from, as it is now (null if it cannot be found). */
     private String currentBoardFingerprint(DispenseService svc, PlanStore.Entry e) {
         try {
-            Map<String, Object> src = e.source;
-            if ("job".equals(src.get("source"))) {
-                return DispenseService.boardFingerprint(findJobBoard((String) src.get("boardLocationId")));
-            }
-            Board board = ctx.configuration.getBoard(new File((String) src.get("file")));
-            BoardLocation bl = new BoardLocation(board);
-            bl.setLocation(new Location(LengthUnit.Millimeters, ((Number) src.get("x")).doubleValue(),
-                    ((Number) src.get("y")).doubleValue(), ((Number) src.get("z")).doubleValue(),
-                    ((Number) src.get("rotation")).doubleValue()));
-            return DispenseService.boardFingerprint(bl);
+            return DispenseService.boardFingerprint(currentBoardLocation(e));
         }
         catch (Exception ex) {
             return "unavailable: " + ex.getMessage();
         }
+    }
+
+    /** Registration (X/Y/rotation, side, fiducial transform) of the plan's board as it is now. */
+    private String currentBoardRegistration(DispenseService svc, PlanStore.Entry e) {
+        try {
+            return DispenseService.boardRegistration(currentBoardLocation(e));
+        }
+        catch (Exception ex) {
+            return "unavailable: " + ex.getMessage();
+        }
+    }
+
+    private BoardLocation currentBoardLocation(PlanStore.Entry e) throws Exception {
+        Map<String, Object> src = e.source;
+        if ("job".equals(src.get("source"))) {
+            return findJobBoard((String) src.get("boardLocationId"));
+        }
+        Board board = ctx.configuration.getBoard(new File((String) src.get("file")));
+        BoardLocation bl = new BoardLocation(board);
+        bl.setLocation(new Location(LengthUnit.Millimeters, ((Number) src.get("x")).doubleValue(),
+                ((Number) src.get("y")).doubleValue(), ((Number) src.get("z")).doubleValue(),
+                ((Number) src.get("rotation")).doubleValue()));
+        return bl;
     }
 
     private BoardLocation findJobBoard(String id) throws ApiException {

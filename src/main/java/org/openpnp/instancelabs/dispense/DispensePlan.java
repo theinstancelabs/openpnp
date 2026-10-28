@@ -79,6 +79,8 @@ public class DispensePlan {
     public String surfaceFingerprint;
     /** Identity of the board location, fiducial transform and placements at planning time. */
     public String boardFingerprint;
+    /** Identity of the board registration only (X/Y/rotation, side, fiducial transform): I4 surface tie. */
+    public String boardRegistration;
     public final List<PlannedPad> pads = new ArrayList<>();
     public final List<PlannedDot> dots = new ArrayList<>();
     public final List<String> warnings = new ArrayList<>();

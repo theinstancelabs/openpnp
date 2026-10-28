@@ -18,6 +18,13 @@ public class PadCleanReport {
         public Double brightFraction;
         public boolean clean;
         public String error;
+        /** The box used at this dot (mm): the configured one, or smaller for a small pad. */
+        public double boxWMm, boxHMm;
+    }
+
+    /** True once every dot was looked at (an aborted or failed check stays incomplete). */
+    public boolean isComplete() {
+        return checkedAtMs > 0;
     }
 
     public String planId;

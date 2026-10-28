@@ -45,9 +45,13 @@ public class ZFrameTest {
         c.locations.put("waste", new DispenseConfig.NamedLocation(290, 125, 5.6));
         DispenseConfig.SurfaceMap m = new DispenseConfig.SurfaceMap();
         m.points = points(ZMAP, 0);
+        m.boardFingerprint = SEAT; // probed on this board registration (I4)
         c.surfaces.put("board", m);
         return c;
     }
+
+    /** Registration of the board the surface was probed on. */
+    static final String SEAT = "seat-1";
 
     /** Three 0603 pads of the p18_board1 run (inside the probed area), at the given board location Z. */
     static DispensePlan plan(DispenseConfig c, double boardZ) {
@@ -58,8 +62,10 @@ public class ZFrameTest {
         pads.add(new PadGeometry("R24.1", 359.584, 131.569, 0, 0.8, 0.95, boardZ, t));
         pads.add(new PadGeometry("R1.1", 333.581, 157.339, 0, 0.8, 0.95, boardZ, t));
         pads.add(new PadGeometry("D12.1", 318.494, 144.152, 0, 0.8, 0.95, boardZ, t));
-        return new DispensePlanner(c, new PadTypeResolver(Collections.singletonList(t), null))
+        DispensePlan p = new DispensePlanner(c, new PadTypeResolver(Collections.singletonList(t), null))
                 .withSurface(DispenseService.planeOf(c, c.boardSurfaceName)).plan("ftp", pads, 290, 125);
+        p.boardRegistration = SEAT;
+        return p;
     }
 
     static InterlockReport check(DispenseConfig c, DispensePlan p) {
@@ -180,14 +186,11 @@ public class ZFrameTest {
     public void boardSurfaceBelongsToTheBoardRegistration() {
         DispenseConfig c = cfg();
         DispensePlan p = plan(c, 5.5);
-        p.boardFingerprint = "seat-1";
-        InterlockReport r = check(c, p);
-        assertTrue(r.ok(), r.toString());
-        assertTrue(r.notes.stream().anyMatch(n -> n.contains("not tied to a board registration")), r.notes.toString());
-        c.surfaces.get("board").boardFingerprint = "seat-1";
-        r = check(c, p);
-        assertTrue(r.ok(), r.toString());
-        assertFalse(r.notes.stream().anyMatch(n -> n.contains("not tied to a board registration")), r.notes.toString());
+        assertTrue(check(c, p).ok(), check(c, p).toString());
+        // an untied board surface cannot notice a re-seat: refused
+        c.surfaces.get("board").boardFingerprint = null;
+        v(i4(check(c, p)), "not tied to a board registration");
+        // probed on an earlier seating of the board: refused
         c.surfaces.get("board").boardFingerprint = "seat-0";
         v(i4(check(c, p)), "probed on another registration of the board");
     }

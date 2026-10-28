@@ -203,7 +203,7 @@ final class CalibrationEndpoints {
         req.jumpRatio = Json.num(b, "jumpRatio", req.jumpRatio);
         boolean apply = Json.bool(b, "apply", false);
         if (!Double.isNaN(req.rotationDeg)) {
-            DispenseEndpoints.checkRotation(req.rotationDeg, 720);
+            DispenseEndpoints.checkRotation(req.rotationDeg, DispenseEndpoints.maxDotRotation(svc.getConfig()));
         }
         if (req.steps < 2 || req.steps > 20 || req.stepMm <= 0 || req.stepMm > 0.5 || req.startGapMm > 2
                 || req.pitchMm <= 0 || req.jumpRatio <= 0) {

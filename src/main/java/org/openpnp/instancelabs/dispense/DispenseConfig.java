@@ -34,6 +34,8 @@ public class DispenseConfig {
      * and {@link #migrate()} brings the motion values to the bench recipe.
      */
     public static final int SCHEMA_VERSION = 3;
+    /** Largest I4 frame tolerance: below half the needle's 2.59 mm offset from N1 (bench, new mount). */
+    public static final double MAX_FRAME_TOLERANCE_MM = 1.2;
     public int schemaVersion = SCHEMA_VERSION;
 
     // --- identity of the dispenser in the OpenPnP machine -----------------------------------
@@ -293,8 +295,9 @@ public class DispenseConfig {
         public Long setAtMs;
         public String note;
         /**
-         * Board surfaces: the board registration (location + fiducial transform) the points were
-         * probed on. A re-seated board gets a new registration, and I4 then asks for new probes.
+         * Board surfaces: the board registration the points were probed on (board X/Y/rotation, side
+         * and fiducial transform; {@link DispenseService#boardRegistration}). A re-seated board gets a
+         * new registration, and I4 then asks for new probes; an untied board surface is refused.
          */
         public String boardFingerprint;
     }
@@ -393,7 +396,7 @@ public class DispenseConfig {
         bMaxFeedDegS = Math.max(bMaxFeedDegS, 2400);
         surfaceMaxResidualMm = Math.min(surfaceMaxResidualMm, 0.04);
         surfaceMarginMm = Math.max(surfaceMarginMm, 3.5);
-        zFrameToleranceMm = Math.min(zFrameToleranceMm, 2.0);
+        zFrameToleranceMm = Math.min(zFrameToleranceMm, MAX_FRAME_TOLERANCE_MM);
         if (Math.abs(primeRotationDeg - 360) < 1e-9) {
             primeRotationDeg = 360.36;
         }
@@ -443,9 +446,9 @@ public class DispenseConfig {
         if (!Double.isFinite(travelSafeZMm)) {
             p.add("travelSafeZMm must be a number");
         }
-        if (!(zFrameToleranceMm > 0 && zFrameToleranceMm <= 2)) {
-            p.add("zFrameToleranceMm must be > 0 and <= 2 (it must catch a needle-frame mix-up: the needle "
-                    + "contact is ~2.6 mm from the N1 contact)");
+        if (!(zFrameToleranceMm > 0 && zFrameToleranceMm <= MAX_FRAME_TOLERANCE_MM)) {
+            p.add("zFrameToleranceMm must be > 0 and <= 1.2: a height taken with the needle instead of N1 is 2.59 mm "
+                    + "off, and only a tolerance below half of that always catches it");
         }
         if (!(surfaceMaxResidualMm > 0 && surfaceMaxResidualMm < profile.gapMm)) {
             p.add("surfaceMaxResidualMm must be > 0 and below the profile gap");

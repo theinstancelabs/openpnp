@@ -79,8 +79,8 @@ BOARD_PROBES_R7 = [(8.0, 8.0, 5.425), (67.0, 8.0, 5.35), (67.0, 67.0, 5.45), (8.
 BLANK_PROBES = [(288.0, 232.0, 5.6), (310.0, 232.0, 5.6), (345.0, 232.0, 5.55), (300.0, 238.0, 5.65),
                 (360.0, 238.0, 5.475)]
 # The bench purge row (runs/purge_spots.json y 237.5): 15 spots x 292..327, before the tape gap at x 331-339.
-PURGE_ROW = {"surfaceName": "blank", "x0Mm": 292.0, "y0Mm": 237.5, "pitchXMm": 2.5, "pitchYMm": 0.0, "spots": 15,
-             "usedSpots": 0}
+# usedSpots is the engine's (runs reserve spots; POST /api/purge-row/reset frees them after a wipe).
+PURGE_ROW = {"surfaceName": "blank", "x0Mm": 292.0, "y0Mm": 237.5, "pitchXMm": 2.5, "pitchYMm": 0.0, "spots": 15}
 PURGE_SPOTS = os.path.join(RUNS, "purge_spots.json")
 # Needle Z frame from the bench relation: needle contact raw Z = K - N1 contact Z (side camera, K 65.59),
 # i.e. N2 contact = N1 - 2.59 in OpenPnP's frame (z2 = 63 - raw). The needle dispenses at raw 65.49 - c.
@@ -290,6 +290,7 @@ def setup_machine(s, characterize=True):
     s.api("PUT", "/api/surfaces/blank", {"points": [list(p) for p in BLANK_PROBES],
                                          "note": "sim: bench N1 probes along the purge row"})
     s.api("PUT", "/api/config", SIM_CONFIG)
+    s.api("POST", "/api/purge-row/reset", {})  # the sim's blank is clean
     # I11: the start angle is valid for this controller connection only (confirmed after enable).
     s.api("POST", "/api/screw/start-angle", {"note": "sim acceptance: confirmed after connect"})
     if characterize:

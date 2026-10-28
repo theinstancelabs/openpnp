@@ -12,6 +12,7 @@ const S = {
   placesKey: null,
   settingsLoaded: false,
   defaultsFilled: false,
+  testDotDefault: null,
   camTimer: null,
   lastRunId: null,
   online: false,
@@ -235,8 +236,14 @@ function renderStatus(s) {
   renderPlanStale(d);
   if (!S.defaultsFilled && d.running) {
     if (!$('prime-rot').value) $('prime-rot').value = d.primeRotationDeg;
-    if (!$('testdot-rot').value && d.testDot && d.testDot.defaultRotationDeg) $('testdot-rot').value = d.testDot.defaultRotationDeg;
     S.defaultsFilled = true;
+  }
+  // the test dot is one profile dot: follow the profile unless the operator typed another value
+  const tdDef = d.testDot ? d.testDot.defaultRotationDeg : null;
+  if (tdDef && tdDef !== S.testDotDefault) {
+    const v = $('testdot-rot').value;
+    if (!v || Number(v) === S.testDotDefault) $('testdot-rot').value = tdDef;
+    S.testDotDefault = tdDef;
   }
   if (!S.settingsLoaded && d.running) loadSettings();
   refreshButtons();
@@ -305,6 +312,8 @@ function renderRun(run, last) {
       else if (run.label === 'clean-pad check') toast(run.message || 'clean-pad check finished');
       else toast(run.label + (run.label === 'board' && run.boardName ? ' ' + run.boardName : '') + ' finished: ' + run.dotsDone + ' dot(s)');
       loadCalibrations();
+      refreshSettingsJson(); // a board run used purge spots
+      refreshPlan();
     }
   } else {
     fillKv(live, [['Task', 'none yet']]);
@@ -470,6 +479,7 @@ function profileText(f) {
 
 /** "R3-1 (0.42), R7-2 (0.55)" for the dirty pads of a clean-pad check. */
 function dirtyText(cc) {
+  if (cc.complete === false) return 'the check did not finish (' + cc.targets + ' pad(s) looked at)';
   const dirty = cc.pads.filter((x) => !x.clean);
   if (!dirty.length) return cc.targets ? 'none' : 'no pad was checked';
   return dirty.slice(0, 12).map((x) => x.padId + ' (' + (x.brightFraction === null ? x.error : fmt(x.brightFraction, 2)) + ')').join(', ')
@@ -495,6 +505,12 @@ function renderCleanCheck() {
   if (!cc.targets) {
     box.className = 'result bad';
     box.replaceChildren('No pad was checked (no camera picture): see the message of the clean-pad check above.');
+    return;
+  }
+  if (cc.complete === false) {
+    box.className = 'result bad';
+    box.replaceChildren('The clean-pad check did not finish (stopped or failed after ' + cc.targets
+      + ' pad(s)): see the message above, then check again.');
     return;
   }
   box.className = 'result ' + (cc.ok ? 'ok' : 'bad');
@@ -523,8 +539,9 @@ async function checkClean() {
       const cc = q.cleanCheck;
       if (cc && !q.cleanCheckRunning) {
         if (S.plan === p) { S.plan.cleanCheck = cc; S.cleanCheck = cc; renderCleanCheck(); }
-        toast(!cc.targets ? 'Clean-pad check: no pad was checked' : cc.ok ? 'All ' + cc.targets + ' pads are clean'
-          : 'Paste left on ' + cc.dirtyPadIds.length + ' pad(s): wipe them and check again', !cc.ok);
+        toast(!cc.targets ? 'Clean-pad check: no pad was checked' : cc.complete === false ? 'The clean-pad check did not finish'
+          : cc.ok ? 'All ' + cc.targets + ' pads are clean'
+            : 'Paste left on ' + cc.dirtyPadIds.length + ' pad(s): wipe them and check again', !cc.ok);
         return;
       }
       if (!q.cleanCheckRunning || Date.now() - t0 > 15 * 60000) {
@@ -735,6 +752,8 @@ function renderSurfaces(d) {
     : sf.plane ? sf.points.length + ' points, Z ' + fmt(sf.plane.minZ, 3) + '…' + fmt(sf.plane.maxZ, 3)
       + ', slope ' + fmt(sf.plane.slopeMmPerMm * 1000, 2) + ' µm/mm, largest residual ' + fmt(sf.plane.maxResidualMm, 3)
       + ' mm · saved ' + fmtTime(sf.setAtMs)
+      + (name === d.boardSurfaceName ? (sf.boundToBoard ? ' · tied to a board registration'
+        : ' · NOT tied to a board: plan the board, then save again (runs are refused until then)') : '')
       : 'Cannot fit a plane: ' + sf.error;
 }
 
@@ -917,6 +936,7 @@ async function saveProfile() {
   S.pfDirty = false;
   S.pfKey = null;
   refreshSettingsJson();
+  loadPadTypes(); // their dot plan shows the profile's turn
   toast('Profile saved. Set the regulator to ' + fmt(body.pressurePsi, 1) + ' psi; plan the board again before a run.');
 }
 
@@ -929,6 +949,7 @@ async function startAngle(set) {
   const p = await api('POST', '/api/screw/start-angle', body);
   $('pf-angle').value = p.startAngleDeg;
   refreshSettingsJson();
+  refreshPlan(); // I11 in the plan shown
   toast(set ? 'Start angle set to ' + fmt(p.startAngleDeg, 1) + '°: plan the board again.' : 'Start angle ' + fmt(p.startAngleDeg, 1)
     + '° confirmed for this controller power-up.');
 }
@@ -963,13 +984,21 @@ function renderPurgeRow(d) {
 }
 
 async function savePurgeRow() {
-  await api('PUT', '/api/config', { purgeRow: {
+  const old = S.status && S.status.dispense ? S.status.dispense.purgeRow : null;
+  const row = {
     surfaceName: $('pr-surface').value, x0Mm: num('pr-x0'), y0Mm: num('pr-y0'), pitchXMm: num('pr-pitchx'),
     pitchYMm: num('pr-pitchy'), spots: num('pr-spots'),
-  } });
+  };
+  await api('PUT', '/api/config', { purgeRow: row });
+  // a row somewhere else starts with all its spots free, but only if it is clean (the used count is the engine's)
+  const moved = old && old.usedSpots > 0 && (old.surfaceName !== row.surfaceName || old.x0Mm !== row.x0Mm || old.y0Mm !== row.y0Mm);
+  if (moved && confirm('The purge row moved. Is the new row clean? Then all its spots will be used from the first one.')) {
+    await api('POST', '/api/purge-row/reset');
+  }
   S.prDirty = false;
   S.prKey = null;
   refreshSettingsJson();
+  refreshPlan(); // I9 in the plan shown
   toast('Purge row saved');
 }
 
@@ -978,7 +1007,30 @@ async function resetPurgeRow() {
   const r = await api('POST', '/api/purge-row/reset');
   S.prKey = null;
   refreshSettingsJson();
+  refreshPlan();
   toast('Purge row reset: ' + r.spotsLeft + ' spots free');
+}
+
+/** Re-reads the plan shown: its interlocks follow the purge row, start angle, needle and surfaces. */
+async function refreshPlan() {
+  const p = S.plan;
+  if (!p) return;
+  try {
+    const q = await api('GET', '/api/plan/' + encodeURIComponent(p.planId));
+    if (S.plan === p) {
+      S.plan = q;
+      renderPlan(q);
+    }
+  } catch (e) { /* the server forgot the plan (OpenPnP restarted): plan the board again */ }
+}
+
+/** True if the plan shown is for the board selected on the Run tab, at the position entered there. */
+function planMatchesBoard(p) {
+  if (!p || !p.source) return false;
+  const c = boardChoice();
+  if (p.source.source === 'job') return c.kind === 'job' && c.id === p.source.boardLocationId;
+  return c.kind !== 'job' && c.file === p.source.file && num('board-x') === p.source.x && num('board-y') === p.source.y
+    && (num('board-rot') || 0) === (p.source.rotation || 0);
 }
 
 /** Keeps the full-settings editor in step after a card saved part of the settings (stamped fields change). */
@@ -1275,12 +1327,16 @@ function wire() {
     if (!confirm('Mark the needle as changed? Dispensing is blocked until the needle Z frame is recorded again and the needle is touched off.')) return;
     await api('POST', '/api/needle/changed');
     toast('Needle marked as changed');
+    refreshSettingsJson();
+    refreshPlan();
   }));
   $('btn-needle-offset').addEventListener('click', (ev) => act(ev.target, async () => {
     const off = num('needle-offset');
     if (off === undefined) throw new Error('Enter the offset in mm');
     await api('POST', '/api/needle/offset', { offsetMm: off });
     toast('Needle offset saved');
+    refreshSettingsJson();
+    refreshPlan();
   }));
   $('btn-anchor-n1').addEventListener('click', () => { const n = n1Pos(); if (n) $('anchor-n1').value = n.z.toFixed(3); });
   $('btn-anchor-n2').addEventListener('click', () => { const n = nozzlePos(); if (n) $('anchor-n2').value = n.z.toFixed(3); });
@@ -1289,6 +1345,8 @@ function wire() {
     if (n1 === undefined || n2 === undefined) throw new Error('Enter both contact heights');
     const r = await api('POST', '/api/needle/anchor', { surfaceZ: n1, needleContactZ: n2 });
     toast('Needle frame recorded: offset ' + fmt(r.offsetMm, 3) + ' mm. Touch off the needle next.');
+    refreshSettingsJson();
+    refreshPlan();
   }));
   $('btn-anchor-k').addEventListener('click', (ev) => act(ev.target, async () => {
     const n1 = num('anchor-n1'), k = num('anchor-k');
@@ -1297,6 +1355,8 @@ function wire() {
     $('anchor-n2').value = r.anchor.needleContactZMm.toFixed(3);
     toast('Needle frame recorded from K = ' + fmt(k, 2) + ': needle contact Z ' + fmt(r.anchor.needleContactZMm, 3)
       + ', offset ' + fmt(r.offsetMm, 3) + ' mm. Touch off the needle (or confirm the offset) next.');
+    refreshSettingsJson();
+    refreshPlan();
   }));
   $('btn-trim').addEventListener('click', (ev) => act(ev.target, async () => {
     const dx = num('trim-dx'), dy = num('trim-dy');
@@ -1317,16 +1377,16 @@ function wire() {
   $('btn-surf-save').addEventListener('click', (ev) => act(ev.target, async () => {
     const name = $('surf-name').value;
     const body = { points: surfPoints() };
-    // a board surface probed while a board is planned belongs to that board registration (re-probe after a re-seat)
-    const tie = name === S.status.dispense.boardSurfaceName && S.plan;
+    // a board surface belongs to the registration of the board it was probed on (I4: re-probe after a re-seat):
+    // tie it to the plan shown, if that plan is for the board selected on the Run tab
+    const isBoard = name === S.status.dispense.boardSurfaceName;
+    const tie = isBoard && planMatchesBoard(S.plan);
     if (tie) body.planId = S.plan.planId;
     await api('PUT', '/api/surfaces/' + encodeURIComponent(name), body);
     S.surfKey = null;
-    toast('Saved surface ' + name + (tie ? ', tied to the planned board ' + S.plan.boardName + ': plan the board again' : ''));
-    if (tie) {
-      S.plan = await api('GET', '/api/plan/' + encodeURIComponent(S.plan.planId));
-      renderPlan(S.plan);
-    }
+    toast('Saved surface ' + name + (tie ? ', tied to the planned board ' + S.plan.boardName
+      : isBoard ? ': not tied to a board yet (plan the board on the Run tab, then save these points again)' : ''), isBoard && !tie);
+    if (tie) await refreshPlan();
   }));
   $('btn-surf-clear').addEventListener('click', (ev) => act(ev.target, async () => {
     const name = $('surf-name').value;

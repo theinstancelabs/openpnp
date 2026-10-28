@@ -184,7 +184,8 @@ public class GcodeStreamBuilder {
                 b.travelTo(dots.get(0).x, dots.get(0).y);
                 b.markWorkStart();
             }
-            b.dot(dots.get(i));
+            // whole steps from the profile (not the plan's degrees: a changed bStepsPerDeg would drift)
+            b.dot(dots.get(i), cfg.profile.netStepsPerDot);
         }
         // From the cross after the purge to the last dot's lift: what the bench's DPH counts.
         b.prog.estimatedWorkSeconds = b.t - workT0;

@@ -119,12 +119,13 @@ final class Views {
         m.put("boxWMm", r.boxWMm);
         m.put("boxHMm", r.boxHMm);
         m.put("checkedAtMs", r.checkedAtMs);
+        m.put("complete", r.isComplete());
         m.put("targets", r.pads.size());
         m.put("dirtyPadIds", r.dirtyPadIds());
         List<Map<String, Object>> pads = new ArrayList<>();
         for (PadCleanReport.Pad x : r.pads) {
             pads.add(map("padId", x.padId, "dotIndex", x.dotIndex, "x", x.xMm, "y", x.yMm, "brightFraction",
-                    x.brightFraction, "clean", x.clean, "error", x.error));
+                    x.brightFraction, "clean", x.clean, "error", x.error, "boxWMm", x.boxWMm, "boxHMm", x.boxHMm));
         }
         m.put("pads", pads);
         return m;

@@ -183,8 +183,10 @@ public class DispenseProfileTest {
         assertRefused(p -> p.suckBackDeg = 31, "suckBackDeg");
         assertRefused(p -> p.startAngleDeg = 360, "startAngleDeg");
         assertRefused(p -> p.purgeDots = 61, "purgeDots");
-        // the first purge dot sets the start angle of a partial turn: purge 0 is refused for a half turn
-        assertRefused(p -> p.purgeDots = 0, "purgeDots must be at least 1");
+        // the first purge dot sets the start angle of a partial turn and a normal dot must flush it before
+        // the work: purge 0 and 1 are refused for a half turn
+        assertRefused(p -> p.purgeDots = 0, "purgeDots must be at least 2");
+        assertRefused(p -> p.purgeDots = 1, "purgeDots must be at least 2");
         DispenseProfile full = new DispenseProfile();
         full.netStepsPerDot = 1600;
         full.purgeDots = 0;

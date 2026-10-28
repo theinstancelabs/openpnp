@@ -525,8 +525,32 @@ public class ApiServerSimTest {
         return f;
     }
 
+    /** Review finding: the used purge spots are the engine's (a stale full-settings save must not free them). */
+    @Test
+    public void usedPurgeSpotsOnlyChangeThroughRunsAndTheReset() throws Exception {
+        setUpBoardRuns();
+        assertEquals(400, call("PUT", "/api/config", "{\"purgeRow\":{\"usedSpots\":3}}").status);
+        ok(call("PUT", "/api/config", "{\"purgeRow\":{\"usedSpots\":0,\"spots\":40}}")); // unchanged round trip
+        assertEquals(40, ok(get("/api/status")).getAsJsonObject("dispense").getAsJsonObject("purgeRow")
+                .get("spotsLeft").getAsInt());
+    }
+
     String planBody(File board) {
         return planBody(board, 100);
+    }
+
+    /** The board probe points of {@link #setPlaces}. */
+    static final String BOARD_POINTS = "\"points\":[[98,78,5.5],[130,78,5.5],[98,95,5.5],[130,95,5.5]]";
+
+    /**
+     * Plans the board and ties the board surface to it, as an operator does (plan, probe, save the points
+     * with the plan): I4 refuses a board surface that is not tied to the board's registration.
+     */
+    JsonObject planTied(File board) throws Exception {
+        JsonObject plan = ok(post("/api/plan", planBody(board)));
+        String id = plan.get("planId").getAsString();
+        ok(call("PUT", "/api/surfaces/board", "{" + BOARD_POINTS + ",\"planId\":\"" + id + "\"}"));
+        return ok(get("/api/plan/" + id));
     }
 
     String planBody(File board, double x) {
@@ -547,7 +571,7 @@ public class ApiServerSimTest {
         assertTrue(runRefused.body.contains("PLAN"), runRefused.toString());
 
         ok(call("PUT", "/api/pad-types/chip-0603", "{\"status\":\"characterized\"}"));
-        JsonObject plan = ok(post("/api/plan", planBody(board)));
+        JsonObject plan = planTied(board);
         JsonObject sum = plan.getAsJsonObject("summary");
         assertEquals(6, sum.get("pads").getAsInt());
         assertEquals(6, sum.get("dots").getAsInt());
@@ -644,7 +668,7 @@ public class ApiServerSimTest {
         JsonObject p = ok(get("/api/status")).getAsJsonObject("dispense").getAsJsonObject("profile");
         assertTrue(p.get("startAngleNeedsConfirm").getAsBoolean(), p.toString());
         assertFalse(p.get("controllerConnectedAtMs").isJsonNull());
-        JsonObject plan = ok(post("/api/plan", planBody(board)));
+        JsonObject plan = planTied(board);
         assertTrue(plan.getAsJsonObject("interlocks").toString().contains("I11"), plan.toString());
         Res run = post("/api/run", "{\"planId\":\"" + plan.get("planId").getAsString() + "\"}");
         assertEquals(409, run.status, run.toString());
@@ -681,7 +705,7 @@ public class ApiServerSimTest {
         Res noZ = post("/api/plan", "{\"source\":\"file\",\"file\":\"" + board.getAbsolutePath() + "\",\"x\":100,\"y\":80}");
         assertEquals(400, noZ.status, noZ.toString());
         assertTrue(noZ.body.contains("'z'"), noZ.toString());
-        JsonObject plan = ok(post("/api/plan", planBody(board)));
+        JsonObject plan = planTied(board);
         assertTrue(plan.getAsJsonObject("interlocks").get("ok").getAsBoolean(), plan.toString());
         assertTrue(plan.get("surfaceProbed").getAsBoolean());
         // a placement is edited in OpenPnP after planning
@@ -830,7 +854,7 @@ public class ApiServerSimTest {
             sim.machine.setEnabled(true);
             sim.machine.home();
             ok(post("/api/screw/start-angle", "{}")); // I11: a reconnect asks for the start angle again
-            JsonObject plan = ok(post("/api/plan", planBody(board)));
+            JsonObject plan = planTied(board);
             assertEquals(60, plan.getAsJsonObject("summary").get("dots").getAsInt(), plan.toString());
             assertTrue(plan.getAsJsonObject("interlocks").get("ok").getAsBoolean(), plan.toString());
             assertEquals(202, post("/api/run", "{\"planId\":\"" + plan.get("planId").getAsString() + "\"}").status);
@@ -1023,7 +1047,7 @@ public class ApiServerSimTest {
         FakeImager cam = new FakeImager();
         svc.setDotImager(cam);
         ok(call("PUT", "/api/config", "{\"cleanPadCheck\":{\"enabled\":true}}"));
-        JsonObject plan = ok(post("/api/plan", planBody(board)));
+        JsonObject plan = planTied(board);
         assertTrue(plan.getAsJsonObject("interlocks").get("ok").getAsBoolean(), plan.toString());
         String planId = plan.get("planId").getAsString();
         JsonObject dirtyDot = plan.getAsJsonArray("dots").get(2).getAsJsonObject();

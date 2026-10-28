@@ -166,15 +166,15 @@ public final class Interlocks {
                 r.add("I4", "the plan was made " + (in.plan.surfaceFingerprint == null ? "without the probed '"
                         : "on another '") + name + "' surface: plan the board again");
             }
-            // F3: re-probe whenever the board is re-seated (one seating was tilted 0.9 mm).
-            if (m.boardFingerprint != null && in.plan.boardFingerprint != null
-                    && !m.boardFingerprint.equals(in.plan.boardFingerprint)) {
+            // F3: re-probe whenever the board is re-seated (one seating was tilted 0.9 mm). The surface
+            // must be tied to the board registration it was probed on, else a re-seat goes unnoticed.
+            if (m.boardFingerprint == null) {
+                r.add("I4", "the '" + name + "' surface is not tied to a board registration: save the probe points "
+                        + "with this plan (Surfaces card) so a re-seated board is noticed");
+            }
+            else if (!m.boardFingerprint.equals(in.plan.boardRegistration)) {
                 r.add("I4", "the '" + name + "' surface was probed on another registration of the board (moved, "
                         + "re-seated or fiducials re-checked since): probe it again");
-            }
-            else if (m.boardFingerprint == null) {
-                r.notes.add("I4: the '" + name + "' surface is not tied to a board registration: probe it again after "
-                        + "any re-seat");
             }
         }
     }
@@ -245,7 +245,8 @@ public final class Interlocks {
                 }
                 else if (row.spotsLeft() < in.purgeDots) {
                     r.add("I9", String.format(Locale.ROOT, "only %d unused purge spot(s) left, %d needed: wipe the "
-                            + "purge row and reset it, or set a new row", row.spotsLeft(), in.purgeDots));
+                            + "purge row and reset it (or set a clean new row and reset it)", row.spotsLeft(),
+                            in.purgeDots));
                 }
             }
             else {

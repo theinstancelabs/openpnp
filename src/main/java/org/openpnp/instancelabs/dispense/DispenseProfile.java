@@ -169,8 +169,9 @@ public class DispenseProfile {
         if (!(purgeDots >= 0 && purgeDots <= 60)) {
             p.add("profile purgeDots must be 0 to 60");
         }
-        else if (purgeDots == 0 && netStepsPerDot > 0 && isPartialTurn(c)) {
-            p.add("profile purgeDots must be at least 1 for a partial turn: the first purge dot sets the start angle");
+        else if (purgeDots < 2 && netStepsPerDot > 0 && isPartialTurn(c)) {
+            p.add("profile purgeDots must be at least 2 for a partial turn: the first purge dot sets the start angle "
+                    + "and at least one normal dot must flush its odd size before the work");
         }
         return p;
     }

@@ -33,14 +33,15 @@ already running")` otherwise).
 | `public double needleContactZFromRawSum(double n1ContactZ, double rawSumMm) throws Exception` | Needle contact (N2 Z, OpenPnP frame) from the bench relation "needle contact raw Z = K − N1 contact Z" (side camera, 2026-10-27: K = 65.59). On the Lumen see-saw (z2 = 63 − raw) that is N1 − 2.59: N1 5.5 → needle 2.91, offset −2.59. |
 | `public synchronized void setNeedleZOffset(double offsetMm, String method, String details) throws IOException, SQLException` | Manual offset entry or touch-off result; appends a `needle_touchoff` row. Must stay within `needleOffsetMaxDriftMm` of the frame's offset (I4). |
 | `public synchronized SurfacePlane setSurface(String name, List<SurfacePoint> points, String note[, String boardFingerprint])` / `clearSurface(name)` / `surfacePlane(name)` | Probed surfaces (N1 contact heights, >= 3 points spanning an area; least-squares plane + convex hull). `board`: per-dot Z of board runs; `boardFingerprint` ties it to the board registration it was probed on (I4 asks for new probes after a re-seat). `blank`: the purge row, dot ladder and touch-off. |
-| `public static String boardFingerprint(BoardLocation bl)` | Global location, side, fiducial transform and every placement, hashed. A plan and a board surface carry it. |
+| `public static String boardFingerprint(BoardLocation bl)` | Global location (incl. Z), side, fiducial transform and every placement, hashed: plan staleness at Run. |
+| `public static String boardRegistration(BoardLocation bl)` | Board X/Y/rotation, side and fiducial transform only, hashed (`plan.boardRegistration`). A board surface is tied to it: I4 refuses an untied board surface and one probed on another registration (re-seat); editing placements or the nominal board Z does not change it. |
 | `public boolean isBZeroed()` | I2 state: `G92 B0` sent since the last home / enable / disable. |
 
 ### `DispenseConfig` (schema 3)
 
 `schemaVersion 3`. Schema 1/2 files load: removed keys are ignored, and `migrate()` brings the motion values to the
 bench recipe (`travelAccelMmS2` and `zLiftAccelMmS2` 2000, `zLiftFeedMmS` >= 50, `bMaxFeedDegS` >= 2400,
-`surfaceMaxResidualMm` <= 0.04, `surfaceMarginMm` >= 3.5, `zFrameToleranceMm` <= 2, `primeRotationDeg` 360 → 360.36).
+`surfaceMaxResidualMm` <= 0.04, `surfaceMarginMm` >= 3.5, `zFrameToleranceMm` <= 1.2, `primeRotationDeg` 360 → 360.36).
 Values a schema-2 file sets explicitly and `migrate()` does not touch (for example `valveSettleMs 1500` in
 `/home/lumen/instancelabs/config/dispense-config.json`) stay as they are.
 
@@ -56,8 +57,9 @@ Fields and defaults:
 - Z: `hopHeightMm 1.0` (0 < hop <= 10), `travelSafeZMm 31.5` (must map into the Z axis safe zone),
   `needleZOffsetMm 0`, `needleZOffsetSetAtMs null`, `needleChangedAtMs null`, `needleAnchor null`
   (`surfaceZMm`, `needleContactZMm`, `xMm`, `yMm`, `setAtMs`, `rawSumMm`), `surfaces {}` (`points`, `setAtMs`, `note`,
-  `boardFingerprint`), `boardSurfaceName "board"`, `zFrameToleranceMm 1.0` (0 < tol <= 2: it must catch a needle-frame
-  mix-up, the needle contact is ~2.6 mm from N1's), `surfaceMaxResidualMm 0.04` (below the gap),
+  `boardFingerprint` = the board registration it was probed on), `boardSurfaceName "board"`, `zFrameToleranceMm 1.0`
+  (0 < tol <= 1.2: a height taken with the needle is 2.59 mm off, and only a tolerance below half of that always
+  catches it), `surfaceMaxResidualMm 0.04` (below the gap),
   `surfaceMarginMm 3.5` (the bench probes 8 mm in from the board edge, the edge pads lie ~3 mm beyond),
   `needleOffsetMaxDriftMm 1.0`, `touchOffPrimeExtraClearanceMm 0.5`;
 - needle XY: `needleXyTrim {dxMm 0, dyMm 0, setAtMs null, note null}` (within ±1 mm): the needle lands at camera +
@@ -90,7 +92,7 @@ One profile per pressure session, the same for the purge row and the work. Defau
 | `screwAccelDegS2` | 20000 | Sent as `M204 S` around the B moves only (1000..30000). |
 | `dwellMs` | 250 | Dwell after the forward turn, before the suck-back: the dot-size knob at fixed pressure. |
 | `gapMm` | 0.10 | Needle-to-surface gap while dispensing (0.05..0.15; >= 0.20 misses dots). |
-| `purgeDots` | 8 | Purge dots on the purge row before the work (>= 1 for a partial turn). |
+| `purgeDots` | 8 | Purge dots on the purge row before the work (>= 2 for a partial turn: the first sets the start angle, at least one normal dot flushes it). |
 | `notes` | | Operator notes. |
 
 Derived: `netDeg(c)` = 800 / 4.44 = 180.1802°, `forwardDeg(c)` = 844 / 4.44 = 190.0901°, `suckBackSteps(c)` = 44,
@@ -111,7 +113,9 @@ y 237.5, x0 292, pitch 2.5 (x 292..327, before the tape gap at x 331–339).
 
 `enabled true`, `grayLevel 200`, `minBrightFraction 0.8`, `boxWMm 0.806`, `boxHMm 0.807`. Before the pressure goes on,
 the top camera is centred on every distinct work dot; the share of pixels brighter than `grayLevel` (OpenCV
-`COLOR_BGR2GRAY`) in a `boxWMm × boxHMm` box at the frame centre must be >= `minBrightFraction`. Bare copper reads
+`COLOR_BGR2GRAY`) in a `boxWMm × boxHMm` box at the frame centre must be >= `minBrightFraction` (the box is the bench's
+where the pad, or the dot's grid cell, is at least about that large, as on 0603 pads of 0.80 × 0.95 mm; on smaller pads
+it is 0.05 mm inside the pad edges, so a clean 0402 or fine-pitch pad is not read as dirty). Bare copper reads
 >= 0.90; paste left from an earlier run reads dark blue, and so does solder mask (a mis-registered board). This is
 `tools/disp.py --require-clean` (`[504:577, 923:998]` of a 1920×1080 frame at 0.01074 × 0.01106 mm/px) in mm, computed
 by `vision.PadCleanCheck` through `DotImager.brightFraction` (a default method; fakes can override it).
@@ -189,7 +193,8 @@ and mass (informational), `dotCount`, `rotationPerDotDeg`, `flags`. Blocking fla
 | `public void setDotImager(DotImager imager)` | Override the camera/vision (default: top camera + `CameraCapture`/`DotInspector`; `brightFraction` for I10). |
 
 What `runPlan` does, in order:
-1. Refuses (REFUSED, nothing sent) if the profile's fingerprint differs from the plan's: plan the board again.
+1. Refuses (REFUSED, nothing sent, before the session opens) if the profile's fingerprint differs from the plan's: plan
+   the board again.
 2. Waits for OpenPnP motion to complete; sends `M115` (the host-watchdog keepalive is used only if a response line
    contains `Cap:HOST_WATCHDOG:1`; a pending controller error refuses the run, un-zeroes B and un-homes the machine).
 3. Interlocks (I3, I4 with the board and purge surfaces, I5, I6 note, I9, I10, I11, plan rules), then builds the
@@ -262,8 +267,9 @@ acceleration"); a B feed above `bMaxFeedDegS × 60`; an `M400` inside a dot; a r
 I4 needle floor and the travel Z; pneumatics ON or the watchdog armed at the end.
 
 `GcodeProgram.estimatedSeconds` / `estimatedPressurisedSeconds`: moves as trapezoids at the M204 in force (B at
-`min(M204 S, M201 B)`), dwells; no look-ahead or host latency (the web UI's `estimatedDph` is the whole program, so
-it is below a bench DPH, which is timed from the cross to the last dot).
+`min(M204 S, M201 B)`), dwells; no look-ahead or host latency. `estimatedWorkSeconds`: from the cross after the purge
+to the last dot's lift, the window the bench's DPH is timed over (web UI: "dots only"; the whole program is
+"overall"). Against the bench's p18_board1 the move model is about 3 % slow.
 
 `RunResult`: `runId`, `kind` (`board`/`shots`/`dot-ladder`/`touch-off`/`clean-check`), `status`, `message`,
 `startedAtMs`, `endedAtMs`, `dotsPlanned`, `dotsDone` (work dots), `firstDotStartMs`, `lastDotEndMs`, `dotTimings`
@@ -275,7 +281,8 @@ was acknowledged (queued in Marlin, not executed); `lastDotEndMs` is the complet
 last dot (true completion).
 
 `PadCleanReport`: `planId`, `ok`, `grayLevel`, `minBrightFraction`, `boxWMm`, `boxHMm`, `checkedAtMs`, `pads`
-(`padId`, `dotIndex`, `xMm`, `yMm`, `brightFraction`, `clean`, `error`), `dirtyPadIds()`, `refusal()`.
+(`padId`, `dotIndex`, `xMm`, `yMm`, `brightFraction`, `clean`, `error`, `boxWMm`, `boxHMm` used at that dot),
+`dirtyPadIds()`, `refusal()`, `isComplete()` (`checkedAtMs > 0`: false for a check that was stopped or failed).
 
 ## 6. Calibration
 

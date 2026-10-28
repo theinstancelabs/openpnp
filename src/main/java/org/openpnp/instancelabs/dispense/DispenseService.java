@@ -408,8 +408,31 @@ public final class DispenseService {
     public static String boardFingerprint(BoardLocation bl) {
         StringBuilder sb = new StringBuilder();
         Location g = bl.getGlobalLocation().convertToUnits(LengthUnit.Millimeters);
-        sb.append(String.format(java.util.Locale.ROOT, "%.4f,%.4f,%.4f,%.4f;%s;%s;", g.getX(), g.getY(), g.getZ(),
-                g.getRotation(), bl.getGlobalSide(), bl.getPlacementsTransformStatus()));
+        sb.append(String.format(java.util.Locale.ROOT, "%.4f;", g.getZ()));
+        appendRegistration(sb, bl);
+        if (bl.getBoard() != null) {
+            for (org.openpnp.model.Placement pl : bl.getBoard().getPlacements()) {
+                Location l = pl.getLocation().convertToUnits(LengthUnit.Millimeters);
+                sb.append(String.format(java.util.Locale.ROOT, "|%s,%s,%s,%s,%.4f,%.4f,%.4f,%.4f", pl.getId(),
+                        pl.getSide(), pl.getType(), pl.isEnabled(), l.getX(), l.getY(), l.getZ(), l.getRotation()));
+            }
+        }
+        return digest(sb);
+    }
+
+    /**
+     * Identity of where the board sits: X/Y/rotation, side and the fiducial transform (not its Z or
+     * placements). A board surface is tied to it (I4: re-probe after a re-seat; editing a placement
+     * or the board's nominal Z does not move the board).
+     */
+    public static String boardRegistration(BoardLocation bl) {
+        return digest(appendRegistration(new StringBuilder("reg;"), bl));
+    }
+
+    private static StringBuilder appendRegistration(StringBuilder sb, BoardLocation bl) {
+        Location g = bl.getGlobalLocation().convertToUnits(LengthUnit.Millimeters);
+        sb.append(String.format(java.util.Locale.ROOT, "%.4f,%.4f,%.4f;%s;%s;", g.getX(), g.getY(), g.getRotation(),
+                bl.getGlobalSide(), bl.getPlacementsTransformStatus()));
         java.awt.geom.AffineTransform t;
         try {
             t = bl.getLocalToGlobalTransform();
@@ -424,13 +447,10 @@ public final class DispenseService {
                 sb.append(String.format(java.util.Locale.ROOT, "%.6f,", v));
             }
         }
-        if (bl.getBoard() != null) {
-            for (org.openpnp.model.Placement pl : bl.getBoard().getPlacements()) {
-                Location l = pl.getLocation().convertToUnits(LengthUnit.Millimeters);
-                sb.append(String.format(java.util.Locale.ROOT, "|%s,%s,%s,%s,%.4f,%.4f,%.4f,%.4f", pl.getId(),
-                        pl.getSide(), pl.getType(), pl.isEnabled(), l.getX(), l.getY(), l.getZ(), l.getRotation()));
-            }
-        }
+        return sb;
+    }
+
+    private static String digest(StringBuilder sb) {
         try {
             byte[] h = java.security.MessageDigest.getInstance("SHA-256")
                     .digest(sb.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -544,6 +564,7 @@ public final class DispenseService {
         double[] start = planStart();
         DispensePlan plan = newPlanner().planBoard(bl, start[0], start[1]);
         plan.boardFingerprint = boardFingerprint(bl);
+        plan.boardRegistration = boardRegistration(bl);
         db.insertPadPlan(plan);
         db.event(null, "INFO", "PLAN", plan.summary());
         return plan;
@@ -697,10 +718,14 @@ public final class DispenseService {
         RunResult r = newRun("board", plan.planId, plan.boardName, 0, plan.dots.size());
         return submit(r, () -> {
             DispenseConfig c = cfg;
-            Session s = new Session(c, r);
             if (plan.profileFingerprint == null || !plan.profileFingerprint.equals(c.profile.fingerprint())) {
-                return s.refuse("the dispense profile changed since this plan was made: plan the board again");
+                // before the session: nothing at all is sent to the controller
+                r.startedAtMs = System.currentTimeMillis();
+                r.status = RunResult.Status.REFUSED;
+                r.message = "the dispense profile changed since this plan was made: plan the board again";
+                return r;
             }
+            Session s = new Session(c, r);
             r.profile = c.profile.copy();
             db.event(r.runId, "INFO", "PROFILE", new com.google.gson.Gson().toJson(r.profile));
             // Interlocks first (I4 Z frame before any program is built), then again with the estimate (I7).
@@ -768,6 +793,10 @@ public final class DispenseService {
             throw new RunRefusedException("I10: no top camera / dot vision available for the clean-pad check", null);
         }
         rep.planId = plan.planId;
+        java.util.Map<String, DispensePlan.PlannedPad> pads = new java.util.HashMap<>();
+        for (DispensePlan.PlannedPad pp : plan.pads) {
+            pads.put(pp.padId, pp);
+        }
         java.util.Set<String> seen = new java.util.HashSet<>();
         for (DispensePlan.PlannedDot d : plan.dots) {
             if (!seen.add(String.format(java.util.Locale.ROOT, "%.3f,%.3f", d.xMm, d.yMm))) {
@@ -781,9 +810,12 @@ public final class DispenseService {
             pad.dotIndex = d.index;
             pad.xMm = d.xMm;
             pad.yMm = d.yMm;
+            DispenseConfig.CleanPadCheck box = cleanBox(c.cleanPadCheck, pads.get(d.padId));
+            pad.boxWMm = box.boxWMm;
+            pad.boxHMm = box.boxHMm;
             DotImager.Frame f = im.capture(d.xMm, d.yMm);
             try {
-                pad.brightFraction = im.brightFraction(f, c.cleanPadCheck);
+                pad.brightFraction = im.brightFraction(f, box);
                 pad.clean = pad.brightFraction >= c.cleanPadCheck.minBrightFraction;
             }
             catch (IllegalArgumentException e) {
@@ -796,6 +828,47 @@ public final class DispenseService {
         rep.ok = !rep.pads.isEmpty() && rep.dirtyPadIds().isEmpty();
         db.event(null, rep.ok ? "INFO" : "WARN", "I10", rep.ok ? "clean-pad check: all " + rep.pads.size()
                 + " targets clean" : rep.refusal());
+    }
+
+    /**
+     * The clean-pad box for one dot: the bench box (0.806 x 0.807 mm, validated on 0.80 x 0.95 mm 0603
+     * pads) where the pad (or the dot's grid cell) is at least about that large, otherwise 0.05 mm
+     * inside its edges, so a clean small pad is not read as dirty because the box spills onto the
+     * solder mask. Pads at other than a multiple of 90 deg get the square that fits inside.
+     */
+    static DispenseConfig.CleanPadCheck cleanBox(DispenseConfig.CleanPadCheck s, DispensePlan.PlannedPad pad) {
+        DispenseConfig.CleanPadCheck b = new DispenseConfig.CleanPadCheck();
+        b.enabled = s.enabled;
+        b.grayLevel = s.grayLevel;
+        b.minBrightFraction = s.minBrightFraction;
+        b.boxWMm = s.boxWMm;
+        b.boxHMm = s.boxHMm;
+        if (pad == null || !(pad.wMm > 0 && pad.hMm > 0)) {
+            return b;
+        }
+        int[] grid = DotSizer.bestGrid(Math.max(1, pad.dotCount), pad.wMm, pad.hMm);
+        double w = pad.wMm / grid[0], h = pad.hMm / grid[1];
+        double r = Math.toRadians(pad.rotationDeg);
+        double c = Math.abs(Math.cos(r)), sn = Math.abs(Math.sin(r));
+        double ex, ey;
+        if (sn < 0.09) { // ~0/180 deg (within 5 deg)
+            ex = w;
+            ey = h;
+        }
+        else if (c < 0.09) { // ~90/270 deg
+            ex = h;
+            ey = w;
+        }
+        else {
+            ex = ey = Math.min(w, h) / (c + sn);
+        }
+        b.boxWMm = fitBox(s.boxWMm, ex);
+        b.boxHMm = fitBox(s.boxHMm, ey);
+        return b;
+    }
+
+    private static double fitBox(double box, double extent) {
+        return extent >= box - 0.02 ? box : Math.max(0.15, extent - 0.10);
     }
 
     /** Marks the next n purge spots used (before streaming: an aborted purge leaves them dirty). */
