@@ -58,10 +58,14 @@ DEF = {
     "out": "/home/lumen/instancelabs/sim-acceptance/" + time.strftime("%Y%m%d-%H%M%S"),
 }
 # Board placed where the top camera found it on the real machine (runs/board_registration.json:
-# origin 301.646, 115.334; rotation from the affine's first column). Z: N2 surface height that
-# gives raw Z ~52.45 at the needle gap, as on the bench. Sim only.
-BOARD_LOC = {"x": 301.646, "y": 115.334, "z": 10.4, "rotation": -0.5208}
-WASTE = {"x": 290.0, "y": 125.0, "z": 10.4}
+# origin 301.646, 115.334; rotation from the affine's first column).
+# Z frame (I4) with the bench numbers: board Z, places and surface points are N1 contact heights
+# (OpenPnP's frame; runs/zmap.json 5.425..5.70); the needle frame is N1 5.5 / needle 10.4 (offset 4.9),
+# so the needle dispenses at raw z1 ~52.45 as on the bench (runs/board_plan_r2.json). Sim only.
+BOARD_LOC = {"x": 301.646, "y": 115.334, "z": 5.55, "rotation": -0.5208}
+WASTE = {"x": 290.0, "y": 125.0, "z": 5.6}
+NEEDLE_FRAME = {"surfaceZ": 5.5, "needleContactZ": 10.4, "note": "sim acceptance: bench relation needle raw = 57.9 - N1"}
+ZMAP = "/home/lumen/instancelabs/runs/zmap.json"
 SIM_XML_SETS = [".//head@visual-homing-method=None"]
 DISABLE_SEQ = ["M410", "M107 P3", "M107 P2", "M107 P1", "M107 P0", "M18 B"]
 ENGINE_I1 = ["M410", "M107 P3", "M107 P2", "M18 B"]
@@ -245,12 +249,40 @@ def setup_machine(s, characterize=True):
     s.api("POST", "/api/machine/home", {"wait": True}, timeout=180)
     s.wait_status(lambda st: st["machine"]["homed"], 60, "homed")
     s.api("PUT", "/api/locations/waste", WASTE)
-    s.api("POST", "/api/needle/offset", {"offsetMm": 0.0, "note": "sim acceptance (no needle)"})
+    s.api("POST", "/api/needle/anchor", NEEDLE_FRAME)
+    s.api("POST", "/api/needle/offset", {"offsetMm": NEEDLE_FRAME["needleContactZ"] - NEEDLE_FRAME["surfaceZ"],
+                                          "note": "sim acceptance (no needle): the frame offset confirmed"})
+    s.api("PUT", "/api/surfaces/board", {"points": board_surface_points(), "note": "sim: runs/zmap.json + corners"})
     s.api("PUT", "/api/config", {"testDotOpticalCheck": False})
     if characterize:
         s.api("PUT", "/api/pad-types/chip-0603", {"status": "characterized",
                                                    "notes": "SIM ONLY: marked characterized for the acceptance run"})
     return s.api("GET", "/api/config")
+
+
+def board_surface_points():
+    """runs/zmap.json (9 N1 contacts on this board) plus 4 corner points from its own plane fit.
+
+    The 9 bench points stop ~3 mm short of the outermost pads (x 306.8..372.1 vs 309.7..369.1), which
+    I4 refuses (2 mm margin); a real run probes the corners. Sim only: the corners lie on the fitted
+    plane, so they change neither the plane nor its residuals.
+    """
+    z = json.load(open(ZMAP))
+    pts = [[p["x"], p["y"], p["z"]] for p in z["points"]]
+    n = len(pts)
+    mx, my, mz = (sum(p[i] for p in pts) / n for i in range(3))
+    sxx = sum((p[0] - mx) ** 2 for p in pts)
+    syy = sum((p[1] - my) ** 2 for p in pts)
+    sxy = sum((p[0] - mx) * (p[1] - my) for p in pts)
+    sxz = sum((p[0] - mx) * (p[2] - mz) for p in pts)
+    syz = sum((p[1] - my) * (p[2] - mz) for p in pts)
+    det = sxx * syy - sxy * sxy
+    b, c = (sxz * syy - syz * sxy) / det, (syz * sxx - sxz * sxy) / det
+    a0 = mz - b * mx - c * my
+    for bx, by in ((2, 13), (73, 13), (2, 62), (73, 62)):
+        gx, gy = to_global(bx, by)
+        pts.append([round(gx, 3), round(gy, 3), round(a0 + b * gx + c * gy, 4)])
+    return pts
 
 
 def plan_board(s):
@@ -317,7 +349,8 @@ def scenario_load(a):
             "DISABLE_COMMAND": all(x in saved for x in ["<![CDATA[%s]]>" % l for l in DISABLE_SEQ]),
             "HOME G92 A0 B0": "G92 A0 B0" in saved,
             "CONNECT M906 B540": "M906 B540" in saved,
-            "VAC2 S255": "{True:M106 P3 S255}{False:M107 P3};" in saved and "M106 P3 S180" not in saved,
+            "VAC2 S255, OFF valve first": "{True:M106 P2 S255}{False:M107 P3};" in saved
+                                           and "{True:M106 P3 S255}{False:M107 P2};" in saved and "M106 P3 S180" not in saved,
         }
         root = ET.fromstring(saved)
         for name in ("VAC1", "VAC2"):
@@ -353,12 +386,13 @@ def analyze_stop(lines):
     r["outputs_on_after_first_M410"] = [l for l in after if strip(l).upper().startswith("M106")]
     offs = [strip(l) for l in lines if strip(l) in ("M107 P2", "M107 P3")]
     r["first_off_pair"] = offs[:2]
+    r["valve_off_before_pump_off"] = offs[:2] == ["M107 P3", "M107 P2"]
     r["valve_off_present"] = any(strip(l) == "M107 P3" for l in lines)
     r["pump_off_present"] = any(strip(l) == "M107 P2" for l in lines)
     r["auger_disabled"] = any(strip(l) == "M18 B" for l in lines)
     r["pass"] = (i410 >= 0 and r["disable_command_in_order_lines"] is not None and not r["motion_after_first_M410"]
                  and not r["outputs_on_after_first_M410"] and r["valve_off_present"] and r["pump_off_present"]
-                 and r["auger_disabled"])
+                 and r["auger_disabled"] and r["valve_off_before_pump_off"])
     return r
 
 
@@ -585,7 +619,8 @@ def scenario_board(a):
         # ---- OpenPnP's own N2 move to every pad (Scripts menu, il_n2_reference.js)
         dz = dots[0]["dispenseZ"]
         inp = dict(BOARD_LOC, boardFile=board_file, nozzle=cfg["nozzle"], dispenseZ=dz,
-                   pads=[{"padId": d["padId"], "bx": pads[d["padId"]][0], "by": pads[d["padId"]][1]} for d in dots])
+                   pads=[{"padId": d["padId"], "bx": pads[d["padId"]][0], "by": pads[d["padId"]][1],
+                          "dz": d["dispenseZ"]} for d in dots])
         sdir = os.path.join(s.cfg, "scripts")
         outp = os.path.join(sdir, "il_n2_reference.output.json")
         with open(os.path.join(sdir, "il_n2_reference.input.json"), "w") as f:
@@ -641,18 +676,27 @@ def scenario_board(a):
                            "max_dz_mm": max(dzz) if dzz else None,
                            "max_utils2d_vs_python_mm": max(r["utils2d_vs_python_mm"] for r in cmp_rows),
                            "within_0_01": bool(dxy) and len(dxy) == len(dots) and max(dxy) <= 0.01 and max(dzz) <= 0.01}
-        # see-saw: z2 = 63 - z1 (machine.xml ReferenceMappedAxis); raw Z of the needle
-        hop = dots[0]["hopZ"]
-        res["z_check"] = {"dispense_z_n2": dz, "hop_z_n2": hop, "board_surface_z": BOARD_LOC["z"],
+        # see-saw: z2 = 63 - z1 (machine.xml ReferenceMappedAxis); raw Z of the needle. Every dot has
+        # its own Z from the probed board plane (I4), so the check is per dot.
+        dz_err, hop_err, ref_err = [], [], []
+        for k, (d, f) in enumerate(zip(dots, board_feeds)):
+            dz_err.append(abs(f["z"] - (63.0 - d["dispenseZ"])))
+            hop_err.append(abs(f.get("lift_z", float("nan")) - (63.0 - d["hopZ"])))
+            if refpos.get(k):
+                ref_err.append(abs(f["z"] - refpos[k]["Z"]))
+        raw = [f["z"] for f in board_feeds]
+        res["z_check"] = {"board_location_z": BOARD_LOC["z"], "needle_frame": NEEDLE_FRAME,
                           "needle_offset": cfg["needleZOffsetMm"], "gap": cfg["needleGapMm"],
-                          "expected_raw_dispense_z": round(63.0 - dz, 4), "expected_raw_hop_z": round(63.0 - hop, 4),
-                          "engine_raw_dispense_z": sorted({round(f["z"], 4) for f in board_feeds}),
-                          "engine_raw_hop_z": sorted({round(f.get("lift_z", float("nan")), 4) for f in board_feeds}),
-                          "openpnp_raw_z": sorted({round(p["Z"], 4) for p in refpos.values()})}
+                          "plan_surface_z_range": [min(d["surfaceZ"] for d in dots), max(d["surfaceZ"] for d in dots)],
+                          "engine_raw_dispense_z_range": [min(raw), max(raw)],
+                          "bench_raw_dispense_z_range_board_plan_r2": [52.244, 52.461],
+                          "max_err_vs_expected_raw_dispense_z": max(dz_err), "max_err_vs_expected_raw_hop_z": max(hop_err),
+                          "max_err_vs_openpnp_raw_z": max(ref_err) if ref_err else None,
+                          "openpnp_compared": len(ref_err)}
         zc = res["z_check"]
-        zc["pass"] = (zc["engine_raw_dispense_z"] == [zc["expected_raw_dispense_z"]] == zc["openpnp_raw_z"]
-                      and zc["engine_raw_hop_z"] == [zc["expected_raw_hop_z"]]
-                      and zc["expected_raw_hop_z"] < zc["expected_raw_dispense_z"])
+        zc["pass"] = (zc["max_err_vs_expected_raw_dispense_z"] <= 1e-3 and zc["max_err_vs_expected_raw_hop_z"] <= 1e-3
+                      and zc["openpnp_compared"] == len(dots) and zc["max_err_vs_openpnp_raw_z"] <= 0.01
+                      and 52.0 < min(raw) and max(raw) < 52.8)
         o = res["order"]
         res["pass"] = (res["run"]["status"] == "OK" and res["run"]["dotsDone"] == 160 and res["board_dots_streamed"] == 160
                        and res["xy_check"]["within_0_01"] and zc["pass"] and o["pump_then_valve_on"]
@@ -825,7 +869,9 @@ def main(argv=None):
     results = {"jar": a.jar, "patched": a.patched, "dispense_config": a.dispense_config, "board": a.board,
                "sim_only_changes": ["head visual-homing-method=None (uinav --xml-set; not in the load scenario)",
                                     "waste location %s (web API)" % WASTE,
-                                    "needle Z offset 0 entered (web API; I4)", "testDotOpticalCheck=false (web API)",
+                                    "needle Z frame %s and its offset confirmed (web API; I4)" % NEEDLE_FRAME,
+                                    "board surface: runs/zmap.json + 4 corners on its plane (web API; I4)",
+                                    "testDotOpticalCheck=false (web API)",
                                     "chip-0603 status characterized (web API; §5.7 rule)"],
                "started": time.strftime("%Y-%m-%d %H:%M:%S")}
     rpath = os.path.join(a.out, "results.json")

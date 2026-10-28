@@ -12,7 +12,10 @@ Items (plan docs/plan-2026-10-27-evidence-backed-roadmap.md §10):
   4  HOME_COMMAND: existing lines + G92 A0 B0 after G28                  (§4.3)
   6  N2: no compatible nozzle tips and no loaded tip (checked; already true in the live file)
   7  CONNECT_COMMAND: + M906 B540 (auger motor current, §4.2 / §10 item 7)
-  8  VAC2 valve line: M106 P3 S180 -> M106 P3 S255                       (§4.2, approved)
+  8  VAC2: valve M106 P3 S180 -> S255 (§4.2, approved), and the OFF parts swapped so that OFF
+     sends the valve first (§4.5): {True:M106 P2 S255}{False:M107 P3}; {True:M106 P3 S255}{False:M107 P2}
+     ON stays pump -> valve. On Stop OpenPnP fires the actuators' ActuateOff before the driver's
+     DISABLE_COMMAND, and the listener order is not fixed (review finding: pump OFF went out first).
 
 Edits are textual and anchored: every anchor must match exactly once, otherwise the tool stops
 without writing anything. The output keeps the input's formatting so the diff shows only the
@@ -30,6 +33,9 @@ USB_DESCRIPTION = "MARLIN_OPULO_LUMEN_REV5"
 DISABLE_LINES = ["M410", "M107 P3", "M107 P2", "M107 P1", "M107 P0", "M18 B"]
 HOME_EXTRA = "G92 A0 B0 ; OpenPnP assumes A=B=0 after homing; Marlin boots at A=B=720 (plan 4.3)"
 CONNECT_EXTRA = "M906 B540 ; auger motor (J/B) current, mA (plan 10 item 7)"
+# Line 1 ON = pump, line 2 ON = valve (plan 4.5 ON order); line 1 OFF = valve, line 2 OFF = pump.
+VAC2_LINES = ["<text><![CDATA[{True:M106 P2 S255}{False:M107 P3};]]></text>",
+              "<text><![CDATA[{True:M106 P3 S255}{False:M107 P2};]]></text>"]
 
 
 class PatchError(Exception):
@@ -124,14 +130,17 @@ def patch(src, stock_compatible=False):
                    "7 CONNECT_COMMAND", re.S)
     notes.append("7 CONNECT_COMMAND: + " + CONNECT_EXTRA)
 
-    # 8. VAC2 right valve S180 -> S255 (only the P3 line of the VAC2 boolean command).
+    # 8. VAC2: valve S180 -> S255, and OFF = valve first (both lines of the boolean command, exact).
     vac2 = re.search(r'<actuator [^>]*\bid="([^"]+)"[^>]*\bname="VAC2"', out)
     if not vac2:
         raise PatchError("8 VAC2 actuator id not found")
-    pat = (r'(<command head-mountable-id="%s" type="ACTUATE_BOOLEAN_COMMAND">\n(?:.*?\n)*?.*?)'
-           r'\{True:M106 P3 S180\}' % re.escape(vac2.group(1)))
-    out = sub_once(out, pat, r"\g<1>{True:M106 P3 S255}", "8 VAC2 valve S180")
-    notes.append("8 VAC2 (%s): valve line M106 P3 S180 -> M106 P3 S255" % vac2.group(1))
+    pat = (r'(<command head-mountable-id="%s" type="ACTUATE_BOOLEAN_COMMAND">\n( *))'
+           r'<text><!\[CDATA\[\{True:M106 P2 S255\}\{False:M107 P2\};\]\]></text>\n *'
+           r'<text><!\[CDATA\[\{True:M106 P3 S180\}\{False:M107 P3\};\]\]></text>\n' % re.escape(vac2.group(1)))
+    out = sub_once(out, pat, lambda m: m.group(1) + VAC2_LINES[0] + "\n" + m.group(2) + VAC2_LINES[1] + "\n",
+                   "8 VAC2 boolean command")
+    notes.append("8 VAC2 (%s): valve M106 P3 S180 -> S255; OFF order valve (M107 P3) then pump (M107 P2)"
+                 % vac2.group(1))
 
     ET.fromstring(out.encode("utf-8"))  # still well-formed XML
     return out, notes

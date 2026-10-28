@@ -5,7 +5,7 @@
  * Scripts menu. Never part of a real machine config.
  *
  * Input  scripts/il_n2_reference.input.json:
- *   {boardFile, x, y, z, rotation, nozzle, dispenseZ, pads: [{padId, bx, by}]}
+ *   {boardFile, x, y, z, rotation, nozzle, dispenseZ, pads: [{padId, bx, by, dz?}]} (dz: that pad's N2 Z)
  *   (bx, by = pad centre in board coordinates, computed by the harness from the board file)
  * For each pad it lets OpenPnP compute the machine location (Utils2D.calculateBoardPlacementLocation,
  * the same board transform the job processor uses), commands nozzle.moveTo() (OpenPnP's motion
@@ -40,7 +40,8 @@ with (imports) {
             var g = Utils2D.calculateBoardPlacementLocation(bl, new Location(LengthUnit.Millimeters, p.bx, p.by, 0, 0))
                     .convertToUnits(LengthUnit.Millimeters);
             var rot = nozzle.getLocation().getRotation();
-            nozzle.moveTo(new Location(LengthUnit.Millimeters, g.getX(), g.getY(), inp.dispenseZ, rot));
+            var z = (p.dz === undefined) ? inp.dispenseZ : p.dz; // per-pad Z (probed board plane)
+            nozzle.moveTo(new Location(LengthUnit.Millimeters, g.getX(), g.getY(), z, rot));
             machine.getMotionPlanner().waitForCompletion(null, CompletionType.WaitForStillstand);
             driver.sendCommand("M118 P" + (i + 1)); // marker: pad index + 1 (numeric, GcodeServer parses it)
             var n = nozzle.getLocation().convertToUnits(LengthUnit.Millimeters);
