@@ -69,6 +69,8 @@ public class GcodeProgram {
      * settles (no host latency, no look-ahead between moves).
      */
     public double estimatedSeconds;
+    /** Board programs: estimated seconds from the cross after the purge to the last dot (bench DPH). */
+    public double estimatedWorkSeconds;
     /** Estimated seconds from the pump ON line to the pump OFF line. */
     public double estimatedPressurisedSeconds;
     public int dotCount;

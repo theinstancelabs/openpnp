@@ -233,6 +233,9 @@ final class Views {
         s.put("estimatedDph", e.estimatedSeconds == null || e.estimatedSeconds <= 0 || p.dots.isEmpty()
                 ? null : p.dots.size() / e.estimatedSeconds * 3600.0);
         s.put("purgeDots", p.profile == null ? 0 : p.profile.purgeDots);
+        s.put("estimatedWorkSeconds", e.estimatedWorkSeconds);
+        s.put("estimatedWorkDph", e.estimatedWorkSeconds == null || e.estimatedWorkSeconds <= 0 || p.dots.isEmpty()
+                ? null : p.dots.size() / e.estimatedWorkSeconds * 3600.0);
         s.put("text", p.summary());
         m.put("summary", s);
 

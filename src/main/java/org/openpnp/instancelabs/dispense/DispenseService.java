@@ -69,6 +69,8 @@ public final class DispenseService {
     private MachineListener machineListener;
     /** When OpenPnP last enabled (connected to) the controller: the B step count may restart (I11). */
     private volatile Long controllerConnectedAtMs;
+    /** Set by {@link #abort}: stops a camera-only clean-pad check (it has no executor). */
+    private volatile boolean cameraTourAbort;
 
     // ------------------------------------------------------------------------------------------
     // Lifecycle
@@ -479,6 +481,7 @@ public final class DispenseService {
 
     /** Thread-safe: stops the active stream before its next line; pneumatics are switched off (I1). */
     public void abort(String reason) {
+        cameraTourAbort = true;
         DispenseExecutor e = activeExecutor;
         if (e != null) {
             e.requestAbort(reason);
@@ -745,11 +748,12 @@ public final class DispenseService {
         requireAvailable();
         RunResult r = newRun("clean-check", plan.planId, plan.boardName, 0, 0);
         PadCleanReport rep = PadCleanReport.of(cfg.cleanPadCheck);
+        cameraTourAbort = false;
         return submitResult(r, rep, () -> {
             r.startedAtMs = System.currentTimeMillis();
             activeRun = r;
             phase(r, "I10 clean pads: top camera at every dot (pressure off)");
-            cleanCheck(cfg, plan, rep, () -> false);
+            cleanCheck(cfg, plan, rep, () -> cameraTourAbort);
             r.cleanCheck = rep;
             r.status = RunResult.Status.OK;
             r.message = rep.ok ? "all " + rep.pads.size() + " targets clean" : rep.refusal();
@@ -1014,7 +1018,9 @@ public final class DispenseService {
                 }
                 catch (Exception e) {
                     if (r.status == RunResult.Status.RUNNING) {
-                        r.status = e instanceof RunRefusedException ? RunResult.Status.REFUSED : RunResult.Status.ERROR;
+                        r.status = e instanceof RunRefusedException ? RunResult.Status.REFUSED
+                                : e instanceof DispenseExecutor.AbortedException ? RunResult.Status.ABORTED
+                                        : RunResult.Status.ERROR;
                         r.message = String.valueOf(e.getMessage());
                     }
                     Logger.error(e, "dispense {} failed", r.kind);
@@ -1047,7 +1053,9 @@ public final class DispenseService {
                 }
                 catch (Exception e) {
                     if (r.status == RunResult.Status.RUNNING) {
-                        r.status = e instanceof RunRefusedException ? RunResult.Status.REFUSED : RunResult.Status.ERROR;
+                        r.status = e instanceof RunRefusedException ? RunResult.Status.REFUSED
+                                : e instanceof DispenseExecutor.AbortedException ? RunResult.Status.ABORTED
+                                        : RunResult.Status.ERROR;
                         r.message = String.valueOf(e.getMessage());
                     }
                     Logger.error(e, "dispense {} failed", r.kind);

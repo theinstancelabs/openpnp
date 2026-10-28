@@ -614,6 +614,7 @@ final class DispenseEndpoints {
                     svc.isBZeroed(), false, 0L);
             e.estimatedSeconds = p.estimatedSeconds;
             e.estimatedPressurisedSeconds = p.estimatedPressurisedSeconds;
+            e.estimatedWorkSeconds = p.estimatedWorkSeconds;
         }
         catch (Exception ex) {
             e.estimateError = MachineEndpoints.rootMessage(ex);

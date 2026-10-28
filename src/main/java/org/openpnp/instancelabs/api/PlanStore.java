@@ -25,6 +25,8 @@ final class PlanStore {
         /** Estimate of the whole program (moves with acceleration, dwells), s; null if unknown. */
         Double estimatedSeconds;
         Double estimatedPressurisedSeconds;
+        /** Cross after the purge to the last dot (the bench's DPH window), s. */
+        Double estimatedWorkSeconds;
         String estimateError;
         /** The last camera-only clean-pad check of this plan (POST /api/plan/{id}/clean-check). */
         volatile java.util.concurrent.Future<org.openpnp.instancelabs.dispense.PadCleanReport> cleanCheckFuture;

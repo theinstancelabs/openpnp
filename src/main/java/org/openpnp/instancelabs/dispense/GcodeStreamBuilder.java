@@ -178,6 +178,7 @@ public class GcodeStreamBuilder {
         }
         b.pressurize();
         b.purge(purge);
+        double workT0 = b.t;
         for (int i = 0; i < dots.size(); i++) {
             if (i == 0) {
                 b.travelTo(dots.get(0).x, dots.get(0).y);
@@ -185,6 +186,8 @@ public class GcodeStreamBuilder {
             }
             b.dot(dots.get(i));
         }
+        // From the cross after the purge to the last dot's lift: what the bench's DPH counts.
+        b.prog.estimatedWorkSeconds = b.t - workT0;
         b.endSession();
         return b.build();
     }
