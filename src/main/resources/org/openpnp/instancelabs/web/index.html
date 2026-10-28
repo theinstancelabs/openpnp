@@ -52,7 +52,7 @@
         <legend title="Where the board's origin (its 0,0 corner) sits on the machine, in mm. Z is the board's top surface.">Board position on the machine (mm)</legend>
         <label>X <input id="board-x" type="number" step="0.01"></label>
         <label>Y <input id="board-y" type="number" step="0.01"></label>
-        <label title="Height of the board's top surface">Z <input id="board-z" type="number" step="0.01" value="0"></label>
+        <label title="Height of the board's top surface: the N1 nozzle Z touching it (OpenPnP's frame). Required. The dots take their height from the probed board surface (Dispense tab, Surfaces).">Z <input id="board-z" type="number" step="0.01" placeholder="required"></label>
         <label title="Board rotation in degrees, counter-clockwise">Rot. <input id="board-rot" type="number" step="0.1" value="0"></label>
       </fieldset>
       <p class="hint" id="board-hint"></p>
@@ -137,7 +137,7 @@
 
     <div class="card wide">
       <h2>Places</h2>
-      <p class="hint">Positions of the dispenser needle (N2) in machine mm. Z is the height of the surface at that place. Jog N2 there in OpenPnP, then use its position.</p>
+      <p class="hint">Positions of the dispenser needle (N2) in machine mm. <b>Z is the surface height in OpenPnP's frame: the N1 nozzle Z touching that surface</b> (the frame OpenPnP's board Z uses). Jog N2 there in OpenPnP for X/Y; take Z with N1 touching, or with the needle touching once the needle Z frame is set.</p>
       <table class="tbl" id="places-table">
         <thead><tr><th>Name</th><th>X</th><th>Y</th><th title="Surface height at this place">Z (surface)</th><th></th></tr></thead>
         <tbody></tbody>
@@ -151,12 +151,38 @@
     <div class="card">
       <h2>Needle</h2>
       <p id="needle-state" class="big"></p>
-      <button id="btn-needle-changed" type="button" title="Tell the machine the needle was changed: dispensing is blocked until it is touched off again">I changed the needle</button>
+      <button id="btn-needle-changed" type="button" title="Tell the machine the needle was changed: dispensing is blocked until the needle Z frame is recorded again and the needle is touched off">I changed the needle</button>
+      <h3 title="Ties the needle offset to OpenPnP's Z frame (I4): touch the same surface with N1 and with the needle tip">Needle Z frame</h3>
+      <p id="anchor-state" class="hint"></p>
+      <div class="row2">
+        <label title="N1 nozzle Z with N1 touching the reference surface (e.g. the blank)">N1 contact Z
+          <input id="anchor-n1" type="number" step="0.005"></label>
+        <button id="btn-anchor-n1" type="button" class="small" title="Copy N1's current Z (N1 tip resting on the surface)">Use N1 Z (tip touching)</button>
+      </div>
+      <div class="row2">
+        <label title="N2 Z with the needle tip touching the same surface">Needle contact Z
+          <input id="anchor-n2" type="number" step="0.005"></label>
+        <button id="btn-anchor-n2" type="button" class="small" title="Copy N2's current Z (needle tip resting on the same surface)">Use N2 Z (tip touching)</button>
+      </div>
+      <button id="btn-anchor" type="button" title="Record the needle Z frame: offset = needle contact Z − N1 contact Z. A touch-off is still needed before dispensing.">Record needle frame</button>
       <div class="row2">
         <label title="How far below/above the nominal needle position the real tip is (mm), if you measured it yourself">Needle Z offset (mm)
           <input id="needle-offset" type="number" step="0.005"></label>
         <button id="btn-needle-offset" type="button">Save offset</button>
       </div>
+    </div>
+
+    <div class="card wide">
+      <h2>Surfaces</h2>
+      <p class="hint">Probed heights for the board (every dot takes its Z from this plane) and the blank (dot ladder and touch-off). Touch at least 3 points spread around the area with <b>N1</b> (Z in OpenPnP's frame), or paste points, e.g. <code>[[x, y, z], …]</code> or the <code>points</code> of a zmap.json.</p>
+      <div class="row3">
+        <label>Surface <select id="surf-name"><option value="board">board</option><option value="blank">blank</option></select></label>
+        <button id="btn-surf-add" type="button" class="small" title="Add N1's current X, Y and Z (N1 tip resting on the surface)">Add N1 point (tip touching)</button>
+        <button id="btn-surf-clear" type="button" class="small" title="Delete the stored surface">Delete surface</button>
+      </div>
+      <textarea id="surf-points" rows="5" spellcheck="false" placeholder="[[x, y, z], ...]"></textarea>
+      <button id="btn-surf-save" type="button">Save surface</button>
+      <p id="surf-state" class="hint"></p>
     </div>
 
     <div class="card">

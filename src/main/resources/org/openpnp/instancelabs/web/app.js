@@ -309,8 +309,13 @@ function renderInterlocks(list) {
 function renderNeedle(d) {
   const n = d.needle;
   if (!n) return;
-  $('needle-state').textContent = (n.touchedOff ? 'Touched off ' + fmtTime(n.setAtMs) : 'NOT touched off since the last needle change')
+  $('needle-state').textContent = (n.touchedOff ? 'Touched off ' + fmtTime(n.setAtMs) : 'NOT touched off since the last needle change / frame')
     + ' · offset ' + fmt(n.zOffsetMm, 3) + ' mm · gap ' + fmt(n.gapMm, 3) + ' mm';
+  const a = n.anchor;
+  $('anchor-state').textContent = !a ? 'Not set: nothing can be dispensed until N1 and the needle have touched the same surface.'
+    : (n.anchored ? 'Set ' : 'OUT OF DATE (needle changed) · set ') + fmtTime(a.setAtMs) + ': N1 ' + fmt(a.surfaceZMm, 3)
+      + ', needle ' + fmt(a.needleContactZMm, 3) + ' → frame offset ' + fmt(n.anchorOffsetMm, 3) + ' mm';
+  renderSurfaces(d);
   if (document.activeElement !== $('needle-offset') && $('needle-offset').value === '') {
     $('needle-offset').value = n.zOffsetMm;
   }
@@ -392,7 +397,9 @@ async function planBoard() {
   } else {
     if (!c.file) { banner('Choose a board file.'); return; }
     body = { source: 'file', file: c.file, x: num('board-x'), y: num('board-y'), z: num('board-z'), rotation: num('board-rot') };
-    if (body.x === undefined || body.y === undefined) { banner('Enter the board position X and Y.'); return; }
+    if (body.x === undefined || body.y === undefined || body.z === undefined) {
+      banner('Enter the board position X, Y and Z (Z: the N1 nozzle Z touching the board top).'); return;
+    }
     localStorage.setItem('il.boardloc.' + c.file, JSON.stringify({ x: body.x, y: body.y, z: body.z, rotation: body.rotation }));
   }
   const p = await api('POST', '/api/plan', body);
@@ -567,6 +574,41 @@ function nozzlePos() {
   return n || null;
 }
 
+/** The pick nozzle (N1): the nozzle that is not the dispenser. */
+function n1Pos() {
+  const s = S.status;
+  if (!s) return null;
+  const all = (s.machine.positions || []).filter((t) => t.kind === 'nozzle' && t.name !== s.dispense.nozzle);
+  return all.find((t) => t.name === 'N1') || all[0] || null;
+}
+
+function renderSurfaces(d) {
+  const all = d.surfaces || {};
+  const name = $('surf-name').value || 'board';
+  const sf = all[name];
+  const key = name + JSON.stringify(sf || null);
+  if (key === S.surfKey) return;
+  S.surfKey = key;
+  if (document.activeElement !== $('surf-points')) {
+    $('surf-points').value = sf ? JSON.stringify(sf.points.map((p) => [p.x, p.y, p.z])) : '';
+  }
+  $('surf-state').textContent = !sf ? 'No ' + name + ' surface yet.'
+    : sf.plane ? sf.points.length + ' points, Z ' + fmt(sf.plane.minZ, 3) + '…' + fmt(sf.plane.maxZ, 3)
+      + ', slope ' + fmt(sf.plane.slopeMmPerMm * 1000, 2) + ' µm/mm, largest residual ' + fmt(sf.plane.maxResidualMm, 3)
+      + ' mm · saved ' + fmtTime(sf.setAtMs)
+      : 'Cannot fit a plane: ' + sf.error;
+}
+
+function surfPoints() {
+  const txt = $('surf-points').value.trim();
+  if (!txt) return [];
+  let v;
+  try { v = JSON.parse(txt); } catch (e) { throw new Error('The points are not valid JSON: ' + e.message); }
+  if (v && !Array.isArray(v) && Array.isArray(v.points)) v = v.points;
+  if (!Array.isArray(v)) throw new Error('Points must be a list');
+  return v.map((p) => (Array.isArray(p) ? { x: p[0], y: p[1], z: p[2] } : { x: p.x, y: p.y, z: p.z }));
+}
+
 function renderPlaces(d) {
   const locs = d.locations || {};
   const key = JSON.stringify(locs) + (d.wasteLocationName || '') + (d.blankLocationName || '');
@@ -598,8 +640,15 @@ function placeRow(name, loc, d) {
     title: 'Copy the dispenser needle\'s current X and Y',
     onclick: () => { const n = nozzlePos(); if (n) { x.value = n.x.toFixed(3); y.value = n.y.toFixed(3); } } });
   const useZ = el('button', { type: 'button', class: 'small', text: 'Use N2 Z (tip touching)', disabled: derived,
-    title: 'If the needle tip is resting on the surface now: surface Z = N2 Z − needle offset',
-    onclick: () => { const n = nozzlePos(); if (n) z.value = (n.z - S.status.dispense.needle.zOffsetMm).toFixed(3); } });
+    title: 'If the needle tip is resting on the surface now: surface Z = N2 Z − needle offset (needs the needle Z frame)',
+    onclick: () => {
+      const nd = S.status.dispense.needle;
+      if (!nd.anchored) { banner('Record the needle Z frame first (Needle card): without it, N2 Z cannot be converted to the surface height.'); return; }
+      const n = nozzlePos(); if (n) z.value = (n.z - nd.zOffsetMm).toFixed(3);
+    } });
+  const useZ1 = el('button', { type: 'button', class: 'small', text: 'Use N1 Z (tip touching)', disabled: derived,
+    title: 'If the N1 nozzle tip is resting on the surface now: surface Z = N1 Z',
+    onclick: () => { const n = n1Pos(); if (n) z.value = n.z.toFixed(3); } });
   const save = el('button', { type: 'button', class: 'small primary', text: 'Save', disabled: derived, 'data-action': 'save',
     onclick: (ev) => act(ev.target, async () => {
       if (x.value === '' || y.value === '' || z.value === '') throw new Error('Enter X, Y and Z for ' + name);
@@ -608,7 +657,7 @@ function placeRow(name, loc, d) {
       toast('Saved place ' + name);
     }) });
   return el('tr', { 'data-place': name }, el('td', { title: hint }, el('b', { text: name }), hint ? el('div', { class: 'hint', text: hint }) : null),
-    el('td', {}, x), el('td', {}, y), el('td', {}, z), el('td', {}, el('div', { class: 'btns' }, useXY, useZ, save)));
+    el('td', {}, x), el('td', {}, y), el('td', {}, z), el('td', {}, el('div', { class: 'btns' }, useXY, useZ1, useZ, save)));
 }
 
 function addPlace() {
@@ -899,7 +948,7 @@ function setUp(t, validate) {
       el('li', { text: 'Weigh it and enter the batch under "Scale: dot batch". Predicted: ' + fmt(t.targetMassMg, 3) + ' mg per pad.' }),
       el('li', { text: 'If the result matches your tolerance, edit the type in Profiles and set its status to "validated on a board".' }),
     ] : [
-      el('li', { text: 'Needle touched off and the blank place set (Dispense tab).' }),
+      el('li', { text: 'Needle Z frame recorded, blank place and blank surface set, needle touched off (Dispense tab).' }),
       el('li', { text: 'Run the dot ladder (rotations filled in around ' + fmt(r, 1) + '°) and/or weigh a dot batch.' }),
       el('li', { text: 'When the dots are repeatable, edit the type in Profiles and set its status to "characterized".' }),
     ]));
@@ -930,7 +979,7 @@ function wire() {
   $('cam-auto').addEventListener('change', toggleCam);
   $('btn-place-add').addEventListener('click', addPlace);
   $('btn-needle-changed').addEventListener('click', (ev) => act(ev.target, async () => {
-    if (!confirm('Mark the needle as changed? Dispensing is blocked until it is touched off again.')) return;
+    if (!confirm('Mark the needle as changed? Dispensing is blocked until the needle Z frame is recorded again and the needle is touched off.')) return;
     await api('POST', '/api/needle/changed');
     toast('Needle marked as changed');
   }));
@@ -939,6 +988,36 @@ function wire() {
     if (off === undefined) throw new Error('Enter the offset in mm');
     await api('POST', '/api/needle/offset', { offsetMm: off });
     toast('Needle offset saved');
+  }));
+  $('btn-anchor-n1').addEventListener('click', () => { const n = n1Pos(); if (n) $('anchor-n1').value = n.z.toFixed(3); });
+  $('btn-anchor-n2').addEventListener('click', () => { const n = nozzlePos(); if (n) $('anchor-n2').value = n.z.toFixed(3); });
+  $('btn-anchor').addEventListener('click', (ev) => act(ev.target, async () => {
+    const n1 = num('anchor-n1'), n2 = num('anchor-n2');
+    if (n1 === undefined || n2 === undefined) throw new Error('Enter both contact heights');
+    const r = await api('POST', '/api/needle/anchor', { surfaceZ: n1, needleContactZ: n2 });
+    toast('Needle frame recorded: offset ' + fmt(r.offsetMm, 3) + ' mm. Touch off the needle next.');
+  }));
+  $('surf-name').addEventListener('change', () => { S.surfKey = null; if (S.status) renderSurfaces(S.status.dispense); });
+  $('btn-surf-add').addEventListener('click', (ev) => act(ev.target, async () => {
+    const n = n1Pos();
+    if (!n) throw new Error('No N1 position');
+    const pts = surfPoints();
+    pts.push({ x: Number(n.x.toFixed(3)), y: Number(n.y.toFixed(3)), z: Number(n.z.toFixed(3)) });
+    $('surf-points').value = JSON.stringify(pts.map((p) => [p.x, p.y, p.z]));
+  }));
+  $('btn-surf-save').addEventListener('click', (ev) => act(ev.target, async () => {
+    const name = $('surf-name').value;
+    await api('PUT', '/api/surfaces/' + encodeURIComponent(name), { points: surfPoints() });
+    S.surfKey = null;
+    toast('Saved surface ' + name);
+  }));
+  $('btn-surf-clear').addEventListener('click', (ev) => act(ev.target, async () => {
+    const name = $('surf-name').value;
+    if (!confirm('Delete the ' + name + ' surface?')) return;
+    await api('DELETE', '/api/surfaces/' + encodeURIComponent(name));
+    S.surfKey = null;
+    $('surf-points').value = '';
+    toast('Deleted surface ' + name);
   }));
   $('btn-settings').addEventListener('click', (ev) => act(ev.target, saveSettings));
   $('btn-settings-json').addEventListener('click', (ev) => act(ev.target, saveSettingsJson));

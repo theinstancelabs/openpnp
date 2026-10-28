@@ -130,10 +130,22 @@ async function waitText(page, id, re, timeout) {
     await waste.locator('button[data-action=save]').click();
     await waitStatus(page, (s) => s.dispense.locations.waste && s.dispense.locations.waste.x === 100, 10000);
     check('waste place saved from the Places table', true);
+    // I4 needle Z frame: N1 and the needle touched the same surface (sim: both at Z 10, offset 0)
+    await page.fill('#anchor-n1', '10');
+    await page.fill('#anchor-n2', '10');
+    await page.click('#btn-anchor');
+    await waitStatus(page, (s) => s.dispense.needle.anchored, 10000);
+    check('needle Z frame recorded from the Needle card', true);
     await page.fill('#needle-offset', '0');
     await page.click('#btn-needle-offset');
     await waitText(page, 'needle-state', /^Touched off/, 10000);
-    check('manual needle offset clears I4', true);
+    check('manual needle offset (after the frame) clears I4', true);
+    // probed board surface (sim: flat at Z 10 around the board at 120, 120)
+    await page.selectOption('#surf-name', 'board');
+    await page.fill('#surf-points', '[[110,110,10],[205,110,10],[110,205,10],[205,205,10.01]]');
+    await page.click('#btn-surf-save');
+    await waitStatus(page, (s) => s.dispense.surfaces && s.dispense.surfaces.board && s.dispense.surfaces.board.plane, 10000);
+    check('board surface saved from the Surfaces card', true);
     await page.uncheck('#set-optical'); // simulated camera: a static image, no dot can appear
     await page.click('#btn-settings');
     await waitText(page, 'toast', /Settings saved/, 10000);
