@@ -81,6 +81,12 @@ public class DispensePlan {
     public String boardFingerprint;
     /** Identity of the board registration only (X/Y/rotation, side, fiducial transform): I4 surface tie. */
     public String boardRegistration;
+    /**
+     * The board location's Z when planned (the board file seat's z or the job board's Z), null for a
+     * plan without a board location: the frame reference of the board surface (I4) and of the needle
+     * floor under its dots.
+     */
+    public Double boardZMm;
     /** Identity of the pad types and package mappings the pads were resolved with ({@link PadTypeResolver#fingerprint}). */
     public String padTypesFingerprint;
     public final List<PlannedPad> pads = new ArrayList<>();

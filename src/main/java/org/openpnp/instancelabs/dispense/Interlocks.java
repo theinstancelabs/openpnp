@@ -45,6 +45,16 @@ public final class Interlocks {
         public boolean boardRun;
         /** What the run touches (I4 Z frame); the default is a generic needle run. */
         public Scope scope = new Scope();
+        /** The task homes first ({@link HomeTracker}): "not homed" is a note, not a violation. */
+        public boolean homeFirst;
+        /** The task checks Z itself after the home ({@link ZCheck}): stale Z data are a note. */
+        public boolean zCheckFirst;
+        /** The last home seen ({@link HomeTracker#getLastHomeAtMs()}), or null: Z data older are stale. */
+        public Long lastHomeAtMs;
+        /** The latest Z check, or null. */
+        public ZCheck.Result zCheck;
+        /** The controller is confirmed to be OpenPnP's simulator: surfaces probed there are usable. */
+        public boolean simulatorConfirmed;
     }
 
     /** What a run uses, for the I4 Z-frame checks. */
@@ -184,6 +194,42 @@ public final class Interlocks {
         for (java.util.Map.Entry<String, List<double[]>> e : sc.moreSurfaces.entrySet()) {
             checkSurface(in, r, e.getKey(), e.getValue(), false);
         }
+        checkZAfterHome(in, r, sc);
+    }
+
+    /**
+     * I4, Z after a home: a home can move the Z zero (0.7 mm on 2026-10-28; the needle then moves
+     * about twice that on the see-saw). The needle frame, the touch-off and the surfaces the scope
+     * uses, measured before the last home, are accepted only after a passing Z check for that home.
+     */
+    static void checkZAfterHome(Inputs in, InterlockReport r, Scope sc) {
+        if (in.homeFirst && in.zCheckFirst) {
+            r.notes.add(ZCheck.checksFirstNote(in.lastHomeAtMs, true));
+            return;
+        }
+        List<ZCheck.Stale> stale = ZCheck.stale(in.cfg, sc, in.lastHomeAtMs);
+        if (stale.isEmpty() || ZCheck.accepts(in.zCheck, in.lastHomeAtMs)) {
+            return;
+        }
+        if (ZCheck.failed(in.zCheck, in.lastHomeAtMs)) {
+            r.add("I4", ZCheck.movedMessage(in.zCheck));
+        }
+        else if (in.zCheckFirst) {
+            r.notes.add(ZCheck.checksFirstNote(in.lastHomeAtMs, false));
+        }
+        else {
+            r.add("I4", ZCheck.notCheckedMessage(stale, in.lastHomeAtMs));
+        }
+    }
+
+    /**
+     * The frame reference of a surface (one per surface): a board surface tied to a plan is checked
+     * against the plan's board top Z (the board location's Z), so a board that is simply lower than
+     * the blank is not refused; every other surface, and a plan without a board Z, against the
+     * needle-frame anchor. Either reference still catches a height taken with the needle (2.59 mm off).
+     */
+    static Double boardReferenceZ(Inputs in, boolean planSurface) {
+        return planSurface && in.plan != null ? in.plan.boardZMm : null;
     }
 
     /** I4 for one probed surface and the dots that take their Z from it. */
@@ -209,7 +255,19 @@ public final class Interlocks {
             r.add("I4", String.format(Locale.ROOT, "'%s' surface is not flat enough for a plane: largest residual "
                     + "%.3f mm, limit %.3f mm (gap budget)", name, pl.maxAbsResidualMm, cfg.surfaceMaxResidualMm));
         }
-        if (pl.minZ < a.surfaceZMm - tol || pl.maxZ > a.surfaceZMm + tol) {
+        if (Boolean.TRUE.equals(m.simulated) && !in.simulatorConfirmed) {
+            r.add("I4", "the '" + name + "' surface was probed on the simulator: probe it again on this machine");
+        }
+        Double boardZ = boardReferenceZ(in, checkPlan);
+        if (boardZ != null) {
+            if (pl.minZ < boardZ - tol || pl.maxZ > boardZ + tol) {
+                r.add("I4", String.format(Locale.ROOT, "'%s' surface Z %.3f..%.3f is outside the board top Z %.3f "
+                        + "+/- %.2f (the board location's Z of the plan): surface points are N1 contact heights "
+                        + "(OpenPnP frame); a height taken with the needle is about 2.59 mm off", name, pl.minZ,
+                        pl.maxZ, boardZ, tol));
+            }
+        }
+        else if (pl.minZ < a.surfaceZMm - tol || pl.maxZ > a.surfaceZMm + tol) {
             r.add("I4", String.format(Locale.ROOT, "'%s' surface Z %.3f..%.3f is outside the needle-frame surface "
                     + "%.3f +/- %.2f: surface points are N1 contact heights (OpenPnP frame)", name, pl.minZ,
                     pl.maxZ, a.surfaceZMm, tol));
@@ -246,18 +304,38 @@ public final class Interlocks {
         }
     }
 
-    public static InterlockReport check(Inputs in) {
+    /**
+     * CONFIG and MACHINE only: the tasks that never dispense (Register board, the blank probe, the Z
+     * check). I4/I5/I7/I9-I11 are about dispensing.
+     */
+    public static InterlockReport checkBasic(Inputs in) {
         InterlockReport r = new InterlockReport();
-        DispenseConfig cfg = in.cfg;
-        for (String problem : cfg.validate()) {
+        checkConfigAndMachine(in, r);
+        return r;
+    }
+
+    private static void checkConfigAndMachine(Inputs in, InterlockReport r) {
+        for (String problem : in.cfg.validate()) {
             r.add("CONFIG", problem);
         }
+        // Homing needs a started machine, and nothing presses Start for the operator.
         if (!in.machineEnabled) {
             r.add("MACHINE", "machine is not enabled");
         }
         if (!in.machineHomed) {
-            r.add("MACHINE", "machine is not homed");
+            if (in.homeFirst) {
+                r.notes.add("MACHINE: not homed: homes first");
+            }
+            else {
+                r.add("MACHINE", "machine is not homed");
+            }
         }
+    }
+
+    public static InterlockReport check(Inputs in) {
+        InterlockReport r = new InterlockReport();
+        DispenseConfig cfg = in.cfg;
+        checkConfigAndMachine(in, r);
         // I3: the paste tool is not a vacuum nozzle; N2 must not be usable for pick/discard.
         if (in.compatibleNozzleTips != null && !in.compatibleNozzleTips.isEmpty()) {
             r.add("I3", in.nozzleName + " is configured as a pick nozzle with compatible nozzle tips "

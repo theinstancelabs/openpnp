@@ -32,6 +32,14 @@ public interface DotImager {
     /** Centres the top camera on machine (x, y) at safe Z, settles and captures. */
     Frame capture(double xMm, double yMm) throws Exception;
 
+    /**
+     * As {@link #capture}, with the camera's light on (fiducials, the look before an N1 touch); the
+     * scale is taken at {@code surfaceZMm} (null = the camera's default plane).
+     */
+    default Frame captureLit(double xMm, double yMm, Double surfaceZMm) throws Exception {
+        return capture(xMm, yMm);
+    }
+
     /** New blobs between two frames from the same camera position (offsets from frame centre). */
     List<Dot> inspect(Frame before, Frame after) throws Exception;
 

@@ -70,6 +70,8 @@ public class GcodeStreamBuilder {
     private double accel = Double.NaN;
     /** M201 B sent at session start (caps the screw acceleration). */
     private double bAccelLimit = Double.NaN;
+    /** Frame reference of the dots' surface when it is not the needle frame (board top Z), or null. */
+    private Double floorReferenceZ;
     private GcodeProgram.Marker pending;
     private int pendingIndex;
     private String pendingPad;
@@ -128,10 +130,12 @@ public class GcodeStreamBuilder {
      * above the travel Z (a hop above travel Z would push N1 below its safe zone on the see-saw).
      */
     private void checkDotZ(DotSpec d) {
-        double floor = cfg.needleFloorZMm();
+        double floor = cfg.needleFloorZMm(floorReferenceZ);
         if (!Double.isNaN(floor) && d.dispenseZ < floor - 1e-9) {
             throw new IllegalStateException(String.format(Locale.ROOT, "I4: dot %d (%s) at N2 Z %.3f is below the needle "
-                    + "floor %.3f (needle-frame surface - tolerance + offset)", d.index, d.label, d.dispenseZ, floor));
+                    + "floor %.3f (%s - tolerance + offset)", d.index, d.label, d.dispenseZ, floor,
+                    floorReferenceZ == null ? "needle-frame surface"
+                            : "the lower of the needle-frame surface and the board top Z"));
         }
         if (!(d.hopZ > d.dispenseZ)) {
             throw new IllegalStateException(String.format(Locale.ROOT, "dot %d (%s): lift Z %.3f is not above the "
@@ -167,6 +171,8 @@ public class GcodeStreamBuilder {
         }
         GcodeStreamBuilder b = new GcodeStreamBuilder(cfg, mapper, bZeroed, keepalive);
         b.bCountAtStart = bCount;
+        b.floorReferenceZ = plan.boardZMm;
+        b.prog.floorReferenceZMm = plan.boardZMm;
         b.comment("; instancelabs dispense plan " + plan.planId + " board " + plan.boardName + " profile '"
                 + cfg.profile.name + "' " + cfg.profile.fingerprint());
         b.sessionStart();

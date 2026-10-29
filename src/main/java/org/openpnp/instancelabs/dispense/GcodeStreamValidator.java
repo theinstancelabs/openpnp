@@ -9,7 +9,8 @@ import java.util.regex.Pattern;
  * <ul>
  * <li>Every line is a command the dispenser sends ({@link ControllerCommands#check}): M106/M107 only
  * as the four fixed pump/valve commands (no PWM, no other port), no M42/M43 or other output
- * commands, the watchdog only as M990 / M990 S0 / M990 S&lt;window&gt;.</li>
+ * commands, the watchdog only as M990 / M990 S0 / M990 S&lt;window&gt;. The N1 vacuum and VAC1
+ * lines belong to the probe only ({@link ControllerCommands#checkProbe}), never to a program.</li>
  * <li>Valve ON only while the pump is ON; valve OFF before pump OFF (plan §4.5).</li>
  * <li>I2: no B move before G92 B0 unless B was already zeroed since home/reconnect.</li>
  * <li>B moves only inside a pressure session (pump and valve ON).</li>
@@ -46,7 +47,16 @@ public final class GcodeStreamValidator {
 
     /** The raw Z window for this configuration, or null without a needle frame (I4 refuses then). */
     public static ZWindow zWindow(DispenseConfig cfg, RawMapper mapper) throws Exception {
-        double floor = cfg.needleFloorZMm();
+        return zWindow(cfg, mapper, null);
+    }
+
+    /**
+     * As above, for a program whose dots take their Z from a surface with its own frame reference
+     * ({@link GcodeProgram#floorReferenceZMm}: a board's top Z); the floor follows the lower of the
+     * two ({@link DispenseConfig#needleFloorZMm(Double)}).
+     */
+    public static ZWindow zWindow(DispenseConfig cfg, RawMapper mapper, Double surfaceReferenceZMm) throws Exception {
+        double floor = cfg.needleFloorZMm(surfaceReferenceZMm);
         if (Double.isNaN(floor)) {
             return null;
         }
@@ -83,7 +93,8 @@ public final class GcodeStreamValidator {
             String where = "line " + n + " '" + s + "': ";
             String refused = ControllerCommands.check(s);
             if (refused != null) {
-                p.add(where + refused);
+                p.add(where + (ControllerCommands.isProbeLine(s)
+                        ? "N1 vacuum and I2C lines belong to the probe, never to a dispense program" : refused));
                 continue;
             }
             String norm = ControllerCommands.normalize(s);

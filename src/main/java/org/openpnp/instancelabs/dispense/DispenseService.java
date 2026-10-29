@@ -1292,7 +1292,7 @@ public final class DispenseService {
             configuration.getMachine().getMotionPlanner().waitForCompletion(null, CompletionType.WaitForStillstand);
             GcodeProgram p = build.call();
             List<String> problems = GcodeStreamValidator.validate(p, c, mapper.letterB(),
-                    GcodeStreamValidator.zWindow(c, mapper));
+                    GcodeStreamValidator.zWindow(c, mapper, p.floorReferenceZMm));
             if (!problems.isEmpty()) {
                 throw new IllegalStateException("generated G-code failed validation: " + problems);
             }
