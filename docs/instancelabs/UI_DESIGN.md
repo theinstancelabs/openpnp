@@ -4,6 +4,12 @@ Status: final design, 2026-10-28. Audience: the engineer who rebuilds
 `src/main/resources/org/openpnp/instancelabs/web/{index.html, app.css, app.js}` (worktree
 `~/instancelabs/wt/bench-sync-uirevamp`, branch `il/bench-sync-uirevamp`).
 
+Updated 2026-10-29 for what is built on `il/bench-sync-autoreg` and its web branches: the board drawing, path
+preview and pad inspector (merged), Register board, the blank probe, home at run and the Z check (`il/ar-webui`,
+`AUTO_REGISTER_DESIGN.md` §8), and the KiCad upload, board thumbnails and "Camera is on FID1" (`il/bi-web-flow`,
+`BOARD_IMPORT_DESIGN.md` §5). Those sections say "as built"; where they differ from the mockups, the code is right.
+Profile › Needs a profile and the pad calibration UI (`PROFILE_CALIBRATION_DESIGN.md` §13) are still to come.
+
 Mockups (self-contained, no script, light theme) and their screenshots:
 
 | Mockup | State shown | Screenshots (`shots/`) |
@@ -232,6 +238,16 @@ Hero card:
   `.pv-hull`, `.pv-probe`. Dirty pads get a dashed ring and a callout `R17.1 0.41` (pad id + bright share). The
   view fit (`Dots`) includes fiducials plus 2 mm so nothing is clipped. A click on a pad opens the Camera panel for
   it (nothing moves).
+  **As built (board import):** the board's drawing lies under the dots in a second SVG (`g.pv-l-art`: substrate,
+  copper, mask, exposed copper, silkscreen, holes, drawn once per art id) with the picture control `#pv-picture`
+  (`Full` · `Quiet` (default, remembered in `localStorage['il.pv.picture']`: pads, holes and the outline, so the dots
+  stand out) · `Off` (the drawing without art)). A click on a pad or a part opens the **pad inspector** (panel view
+  `pad`) instead of the camera; `#btn-pad-inspect` opens the first pad in path order. The **path preview**
+  (`#pv-play`) expands the row `#run-preview` (`#pv-scrub`, `#pv-speed` 1× · 4× · 16×, `#pv-readout`, `#pv-reset`):
+  a ghost needle moves dot to dot on the plan's clock (`dots[i].ta / te`) and the dots appear as they would be
+  dispensed; nothing moves. Register board's overlay (`g.pv-l-fids`): the search circle at each expected fiducial,
+  a cross there, a filled dot at the found one; probe targets with their alternates as small rings, a refused
+  target struck through.
 - Stage bar: legend that doubles as the layer switch (only states present, with counts), `Dots | Whole board`
   (running: `Follow needle | Dots`), zoom − / +.
 - While running: the session **timeline** (`#run-timeline`) between stage and stage bar: proportional segments
@@ -254,8 +270,9 @@ panel only; the board stays in view. This replaces the ~5 tab switches per board
 | State | Main | Panel |
 |---|---|---|
 | No board chosen | hero shows the picker hint `Choose a board on the right` and a faint outline | Board step |
-| Board chosen, no plan | outline, `Plan to see the dots` | Board step with Plan primary |
-| Planned, this seat not probed / tie missing | board + probe targets | Probe step |
+| Board chosen, no plan | outline, `Plan to see the dots`; as built: the board's drawing at the form's seat (Full), the live top camera and a 5 mm scale bar (`#board-preplan`) | Board step with Plan primary |
+| Planned, this seat not registered / tie missing | board + expected fiducials and probe targets | Register step |
+| Registering | live fiducials and probe points on the board | Register step (phases, tables) |
 | Planned, checks | `mockup-run.html` | Checks step |
 | Confirm open | dialog over everything except the strip | unchanged under the scrim |
 | Running | `mockup-run-progress.html`; plan-changing controls locked | Run step |
@@ -276,10 +293,40 @@ panel only; the board stays in view. This replaces the ~5 tab switches per board
   **`Was the board re-seated or changed since then?`** `Yes: new seat` (clears the surface tie expectation and
   opens Probe after planning) / `No, same seat`.
 - Primary `Plan` (`#btn-plan`), 60 px. Plan errors appear under it (inline refusal, §11).
+- **As built (Register board):** `#board-z` is `Board top Z (approximate, ±1 mm)`, prefilled when empty from the board
+  surface probed for it or the needle frame (`#board-z-note` says from where); Register board measures it. The plan's
+  frame check shows under it. The re-seat answer is the engine's new-seat flag (`POST /api/board/new-seat`), shared by
+  every browser: `New seat: after planning, Register board checks the fiducials and probes this seat.`
+- **As built (board import, `boardflow.js`):** `Upload KiCad board…` (`#btn-board-upload`) opens the upload dialog
+  (§11); `#board-thumbs`, one row of board pictures (a click chooses that board); `#board-imported` says where the
+  drawing comes from; **`Camera is on FID1`** (`#btn-board-use-fid`, next to `Use camera X/Y`) sets the origin from
+  the top camera centred on the board's first fiducial: origin = camera − R(rotation)·(FID1's board X/Y). After a save,
+  `Use this board` chooses it here.
 
-#### 8.1.3 Probe step (`data-view=probe`)
+#### 8.1.3 Register step (`data-view=probe`; was "Probe")
 
-As C's `run-probe.html` (concepts/C-studio), with fixes:
+**As built** (`il/ar-webui`, `AUTO_REGISTER_DESIGN.md` §8.1). The step's key and route stay `probe`; the stepper
+reads `Board → Register → Checks → Run → Result`.
+
+- `#reg-correction`: what the plan's dots use (`fiducial check 13:05`, `… (before the last Next board)`, `no fiducial
+  correction`). `#reg-preview` (idle): the seat it expects and the spots, `Fiducials · searched within 8 mm`, `N1
+  vacuum touch, pressure off`, the home line when Register homes first.
+- Live: `ol.phases#reg-phases` (Home · Fiducials · Fit the board to the fiducials · Probe or Same-seat check · Plan
+  again), `table#reg-fids` (expected, found, moved) and `table#reg-probes` (target, Z, state; a refused point has a
+  row with its reason in words).
+- `div.ri#reg-result`, first sentence machine-readable: `Registered 13:05: …` · `Same seat 13:12: …` · `Re-seated …` ·
+  `Not registered: …` · `Registered 13:05, but the probe failed: …` · `Stopped 13:06 during …`; then
+  `#btn-reg-again` and `#btn-reg-probe` (`probe: always`). Refusals carry fix-its (`Look with the camera`, `Change
+  board`, `Plan without fiducial correction`, `Register again`, `Do it by hand`).
+- Foot: `#register-note`, **`#btn-register`** (two-press, `Register board · ≈ 1:45` from the plan's
+  `registrationTargets.estimatedSeconds` and the live home plan; `Registering… · ≈ 0:41 left` while it runs),
+  `#btn-reg-continue` (`Checks ›` after a good result), `#register-why`. `STOP (F9) stops it at once: N1 stays where it
+  stopped, its vacuum off; Home raises it first.`
+- `details#probe-by-hand` keeps the by-hand probe below (targets from `plan.registrationTargets.probes`, the
+  bounding-box targets as the fallback; ids unchanged: `#probe-targets`, `#btn-probe-add`, `#btn-probe-save`), with
+  its own foot. Without a top camera: `No top camera in OpenPnP: do it by hand`.
+
+The design text below is the by-hand probe as first specified (C's `run-probe.html`, with fixes):
 - Banner `New seat: probing from empty` (never appends to the last seat's points); link `Same seat? Keep them`.
 - Targets table in machine mm computed from the plan (corners and centre of the dot hull, inset so the
   margin-inflated hull covers every dot): `#probe-targets` rows `n · X · Y · measured Z · Delete`, next target
@@ -353,6 +400,11 @@ aria-modal="false" id="dlg-run">`, width ≤ 760 px, `max-height: calc(100vh - s
    tick is set, with the visible label `Tick 2 more to run`.
 7. `#btn-run-go` posts `POST /api/run {planId, maxDots?|padIds?}`; a 409 keeps the dialog open and shows the
    refusal inside it with fix-it buttons.
+8. **As built:** `#run-confirm-home` (an info note at the top) when the run homes or checks Z first: `Homes first
+   (stopped at 14:19), ≈ 22 s: the head goes to its home corner and the top camera finds the homing fiducial. The
+   pressure stays off until homing is done. Then one N1 touch checks Z (≈ 17 s).` or `Checks Z first: one N1 touch on
+   the blank (≈ 17 s), because the N1 heights predate the home at 14:19.` The Run step's phases add Home and Z check
+   rows (`run.detail.stage`).
 
 #### 8.1.6 Run step (`data-view=run`) — `mockup-run-progress.html`
 
@@ -408,7 +460,9 @@ never outlives it.
   1. `Pressure vented` (`valve closed 14:19:42, pump off`; red `Pressure is NOT off` + `Pressure off` if not).
   2. `Connect` (`reconnects to the controller; nothing moves`) — button.
   3. `Was the controller switched off?` — asked after Connect with the two equal answers of §8.2 (never asserted).
-  4. `Home` (`M410 can lose steps: home before any move`) — two-press button.
+  4. `Home` (`M410 can lose steps: home before any move`) — two-press button. **As built:** done without a home when
+     Run will home by itself (`homeBeforeRun`), unless a STOP left N1 low (`status.machine.home.n1Low`): then Home
+     (which raises N1 first) is needed.
   5. `Purge row: 7 left, 8 needed` — only when short; available at once (`can be done now`), two-press
      `Wiped: reset row`. Comes **before** the board decision because every run, including a pad subset, purges.
   6. `Decide about this board` — points to the main-column buttons, which unlock when 2–5 are done.
@@ -448,6 +502,12 @@ your tick is kept in this browser.`; filter `All steps | Needs you · 2`.
    (`Clear points`), `#btn-surf-save`; `Delete surface` (two-press) lives here, away from Add. When the board
    surface belongs to another seat (`Yes: new seat`, or probed on another registration) the editor starts empty
    and Save waits for new points: one press never ties the old seat's points to the new plan.
+   **As built:** `Probe the board…` opens Run › Register. `Probe the blank…` opens the `probe-blank` view: automatic
+   first (`ol.phases#blank-phases`, `table#blank-targets`, `div.ri#blank-result`: `Saved 13:20: 6 points, worst 0.012
+   mm, covers 15 of 15 spots.` · `Not saved: …` · `Stopped …: nothing was saved.`; foot `#blank-note`,
+   `#btn-blank-auto` (two-press, `POST /api/surfaces/blank/probe`), `#blank-why`), by hand below
+   (`details#blank-by-hand`, `#btn-blank-add` / `#btn-blank-save`). Settings add `#set-homebefore`
+   (`homeBeforeRun`: when needed / always); the JSON editor never sends `boardRegistrations` or `newSeatAtMs`.
 3. **Purge row** (`#card-purge`, `#pr-state`): large strip (used / this board / free), `8 used · 7 free`, last
    wiped; `#pr-surface`, `#pr-x0`, `#pr-y0`, `#pr-pitchx`, `#pr-pitchy`, `#pr-spots`, `Use live N2 X/Y …`
    (`#btn-pr-usexy`), `Save purge row` (`#btn-pr-save`, disabled with `No unsaved changes`),
@@ -536,6 +596,9 @@ remaining pads` for an aborted board; a run of part of the board, a test or a fi
 own pads, and the run confirm drops any pad this tab saw pasted) · **Activity** (`#records-events`,
 `GET /api/events?limit=100` + this page's log) · **Calibrations** · **Touch-offs**.
 
+**As built:** the done-dot map draws the plan's board drawing under it (Quiet); the new task kinds read
+`Registration · <board>`, `Surface probe · <name>` and `Z check`.
+
 ---
 
 ## 9. Readiness model (one pure function)
@@ -548,12 +611,12 @@ the Run button state and the tab title. Nothing else may compute "ready". Unit-t
 
 | # | Item | Ready when | Not ready: severity → fix |
 |---|---|---|---|
-| 1 | Machine | `machine.enabled && homed && !busy` | not connected → blocked: `Connect`; not homed → needs-you: `Home` (two-press); homing → energised |
+| 1 | Machine | `machine.enabled && homed && !busy` | not connected → blocked: `Connect`; not homed → needs-you: `Home` (two-press); homing → energised. **As built:** when Run homes first (`machine.home.policy`), a note that counts ready (`homes first`, `homes first, checks Z`; verdict `Ready to run · homes first (≈ 25 s)`); needs-you only when a STOP left N1 low. Homed with Z data from before the home: `checks Z`, fix-it `Check Z` (two-press) |
 | 2 | Start angle (I11) | I11 `ok` or `off` | reconnect → needs-you: the two answers in place; never set → blocked: `Measure the angle` |
 | 3 | Needle offset (I4 needle) | frame set, touched off or confirmed, drift ≤ 1.0 mm | not touched off but frame set → needs-you: `Confirm frame offset −2.590 mm`; frame missing / needle changed → blocked: `Open Needle Z frame` |
 | 4 | Regulator (I6, you) | a valid attestation (§9.4) | needs-you: `Pressure on to read the gauge` + `Reads 18 psi` |
 | 5 | Pad types (PLAN) | no blocked pads | blocked: `3 pads below characterized: chip-0603 ×2, sot-23 ×1` → each opens that type |
-| 6 | Board surface (I4 board) | tied to this plan's registration, covers every dot, fit ok, and the operator did not answer "new seat" since | needs-you: `Probe this seat` / `Same board, not moved`; fit or coverage problem → blocked with the bad points/dots |
+| 6 | Board surface (I4 board) | tied to this plan's registration, covers every dot, fit ok, and the operator did not answer "new seat" since | needs-you: `Probe this seat` / `Same board, not moved`; fit or coverage problem → blocked with the bad points/dots. **As built:** the fix is `Register board` (`register`, two-press) or `Same seat? Check the fiducials` (`register-check`), with `Do it by hand`; texts `No board surface for this seat yet: register the board (fiducials, then N1 touches the board).`, `You said the board was re-seated: register it …`, `The board surface belongs to another seat of this board: register it again.` |
 | 7 | Plan current | plan exists on the server and its fingerprints match (profile, surface, needle, registration) | needs-you: `Plan again` (in place); 404 → `Plan forgotten (OpenPnP restarted): plan again` |
 | 8 | Purge row (I9) | `spotsLeft ≥ perBoard` | needs-you: `Wiped: reset row` (two-press); not set → blocked: `Set the purge row` |
 | 9 | Pads clean (I10) | last clean check of this plan passed, or I10 off (then grey `Off: not checked`, counted ready) | needs-you: `Wiped: check again`; the run may still start (it re-checks) |
@@ -682,6 +745,10 @@ tick or a `new seat` answer in one tab counts in the others at once).
 | Refusals | inline line under the action `Refused: <why> — <fix button>` · card banner (4 px left border) · Activity log | the I-code prefix of a 409 message (`I10: …`) becomes a link to its fix |
 | Toast `#toast` | at most 3 lines, top-left of the main column (over the page title, never over the live tiles or the board decision), ≤ 4 s | never over the panel or STOP; always repeated in Activity; never the only record of a safety event |
 | Sticky message area `#msg-area` | top of the main column | holds offline / vent_failed / STOP NOT CONFIRMED bands; replaces the old top-of-page `#banner` |
+| Upload dialog `#dlg-board-import` (as built, `boardimport.js`) | drop zone and file picker · reading (Cancel) · preview: the board drawn, what was found, warnings in four groups (Blocks dispensing, Registration, Check in the preview, Notes), packages and their pad types, the name and slug · saved: pad types to add, `Use this board`, `Upload another` | choose · reading · preview · saving (Esc and Cancel do nothing) · saved · refused (reason + `Choose another file`); `exists` asks a two-press replace; attach offered when a listed board file matches |
+| Pad inspector (panel view `pad`, `padinspect.js`) | the part drawn to scale (its paste openings, its dots at their real size in path order), the pad type and the rule that chose it in a sentence, the stencil-equivalent amount, flags and why a pad is blocked, `Edit pad type Chip 0603` (or `New pad type for <package>`), prev / next pad | opens on a pad or part click; Esc back |
+| Path preview row `#run-preview` (`pathpreview.js`) | `#pv-play` · scrub `#pv-scrub` · speed `#pv-speed` · readout `#pv-readout` (`Dot 37 of 160 · R12.1 · ½ turn · Z 2.91 mm · 0:41 of 1:36`) · `#pv-reset` | collapsed until it starts; hidden while a task runs or after a STOP; times from the plan's estimate, else illustrative (50 mm/s, 0.6 s per dot) |
+| Board thumbnails `#board-thumbs` | one row of board pictures from `art.thumb` (blob: images) | a click chooses the board |
 
 ---
 
@@ -747,6 +814,14 @@ tick or a `new seat` answer in one tab counts in the others at once).
 - Motion: 120 ms ease-out on hover/press only; panel swap 150 ms cross-fade; pulses only on energised dots and the
   next-dot halo (2 s), none under `prefers-reduced-motion`; numbers never animate; countdowns tick once a second.
 
+**As built (board import):** `board.css` adds the board palette, one for both themes (only the stage and the board edge
+follow the theme): `--pv-a-sub`, `--pv-a-cu`, `--pv-a-mask` (slate, at `--pv-a-mask-op` 0.86), `--pv-a-bare`,
+`--pv-a-silk`, `--pv-a-hole`, `--pv-a-edge`, `--pv-a-fab`, `--pv-a-ref`, `--pv-a-fabref`, `--pv-a-paste`; and the
+overlay marks restated on the board under `.pv--art` with a two-tone casing: `--pv-o-ap`, `--pv-o-dot`, `--pv-o-next`,
+`--pv-o-block`, `--pv-o-check`, `--pv-o-probe`, `--pv-o-path`, `--pv-o-path-q`, `--pv-o-trail-q`, `--pv-o-ghost`,
+`--pv-o-case-d`, `--pv-o-case-l` (≥ 3:1 on exposed copper, casing ≥ 6.5:1 elsewhere). The art's mask and silkscreen
+colours come from the KiCad file (slate, green, red, blue, purple, black, white, yellow).
+
 ## 13. Copy guidelines and exact key texts
 
 Rules: plain words, operator's point of view; every number has a unit (`5.62 mm`, `298.0°`, `18 psi`,
@@ -810,6 +885,11 @@ line):
 | I10 paste found | `Paste on {k} pads at {t}.` | `Wiped: check again` · `Show on board` |
 | I11 reconnect / never set | `The controller reconnected after the start angle was set.` / `The start angle was never set.` | the two answers · `Measure the angle` |
 | PLAN no dots / blocked pads | `This plan has no dots.` / `{n} pads cannot be dispensed: {types}.` | `Choose another board` · per type: `Set its status`, `New pad type` (prefilled `^<package>$`), `Lowest pad-type status` |
+| Machine homes first (as built) | `Ready to run · homes first (≈ 25 s)` | none: Run homes by itself |
+| I4 Z before the home (as built) | `… The N1 heights predate this home: Run checks Z first, one N1 touch on the {name}.` | `Check Z` (two-press) |
+| I4 surface, no seat (as built) | `No board surface for this seat yet: register the board (fiducials, then N1 touches the board).` | `Register board` · `Do it by hand` |
+| REG / PROBE refusals (as built) | the engine's text (`AUTO_REGISTER_DESIGN.md` §6.2) | `Look with the camera` · `Change board` · `Plan without fiducial correction` · `Register again` · `Do it by hand` · `Probe the blank…` |
+| Upload while a task runs (as built) | `Upload the board when the run has finished.` | — |
 
 ## 14. Keyboard and pointer
 
@@ -852,6 +932,13 @@ Pressure on over the waste, saves, navigation. Two-press ignores key auto-repeat
   value and its receive time, ticking once a second, re-synced on every poll.
 - Board SVG: built once per plan (`plan.dots`, `plan.pads`); polls toggle `done`, `pasted`, `dirty`, `next`,
   `check` classes from `run.doneDots` (incremental). ~5,000 elements is fine; beyond that switch to canvas.
+- **As built (board import):** the drawing is its own SVG under the overlay, built once per art id per view (15–25
+  merged paths, at most ~200 labels); polls, preview frames and hover repaint only the overlay; a re-plan of the same
+  board changes only the art group's `transform`. The path preview runs on `requestAnimationFrame` only while playing
+  and visible, at most 30 updates per second, rewriting the path only when the dot count changes. Drawings come
+  through the browser's HTTP cache (immutable); the newest 8 are kept in memory. Every replaced view is destroyed.
+  Gate (`boardview.playwright.cjs`, CPU throttled 4×): mobo's art drawn ≤ 1,000 ms; p95 frame ≤ 33 ms during a 16×
+  preview; `update()` plus paint ≤ 16 ms.
 - Loads on demand: `GET /api/boards` on Board step open and Refresh; `GET /api/calibrations` on Calibrate and
   after a task ends; `GET /api/runs` on load, after a task ends and on Records; `GET /api/events` every 5 s only
   while Activity or Records › Activity is visible; `GET /api/config` on Settings open and after saves; camera
@@ -900,6 +987,21 @@ all `pt-*`, `pt-error`, `pt-cancel`, `pt-save`, `dlg-history`, `dlg-history-titl
 `records-events`, `records-cals`, `records-touchoffs`. Fix-it aliases elsewhere use `data-fix="<code>"` (never a
 duplicate id). `#run-live` carries `data-label` and `data-status` mirroring `run.label` / `run.status`.
 
+**New, as built (2026-10-29):**
+- Register board (`il/ar-webui`): `reg-correction`, `reg-corr`, `reg-preview`, `reg-live`, `reg-phases`, `reg-tables`,
+  `reg-fids`, `reg-probes`, `reg-result`, `reg-result-t`, `reg-stop-line`, `reg-foot`, `register-note`,
+  `btn-register`, `btn-reg-continue`, `register-why`, `btn-reg-again`, `btn-reg-probe`, `probe-by-hand`,
+  `probe-foot-hand`, `board-z-note`, `run-confirm-home`; Setup: `blank-phases`, `blank-targets`, `blank-result`,
+  `blank-note`, `btn-blank-auto`, `blank-why`, `blank-by-hand`, `set-homebefore`; fix-its `data-fix` = `register`,
+  `register-check`, `probe-by-hand`, `look-camera`, `plan-unregistered`, `board-step`, `check-z`.
+- Board drawing (merged): `pv-picture`, `btn-pad-inspect`, `pv-play`, `run-preview`, `pv-scrub`, `pv-speed`,
+  `pv-readout`, `pv-reset`, `pad-insp-*` (`svg`, `part`, `kv`, `rule`, `types`, `pads`, `dots`, `flags`, `why`, `cam`,
+  `edit`, `prev`, `next`).
+- Board upload (`il/bi-web-flow`): `btn-board-upload`, `board-thumbs`, `board-imported`, `btn-board-use-fid`,
+  `board-preplan`, `dlg-board-import`, `board-import-*` (`drop`, `file`, `size`, `status`, `preview`, `found`, `warn`,
+  `packages`, `paste-dnp`, `name`, `name-err`, `slug`, `exists`, `stale`, `attach`, `saved`), `btn-board-import-*`
+  (`choose`, `cancel`, `save`, `attach`, `use`, `again`, `other`).
+
 **Removed:** `banner`, `banner-text`, `banner-close` (replaced by `msg-area` and inline refusals), `tab-run`,
 `tab-dispense`, `tab-calibrate`, `tab-profiles` containers (replaced by `[data-workspace]` sections with ids
 `ws-run`, `ws-setup`, `ws-profile`, `ws-calibrate`, `ws-records`), `tabbtn-*` (nav items get `tab-btn-<name>`),
@@ -940,6 +1042,10 @@ duplicate id). `#run-live` carries `data-label` and `data-status` mirroring `run
 | `run.checkDone`, `run.checkPlanned` (clean-check tour progress via a listener callback) | `pad 57 of 160` during the 3-minute camera tour | estimate from elapsed time vs the plan's tour estimate, labelled `≈` |
 | `run.pressureOnAtMs` | exact pressure on-time during a run | client stamps the first poll with phase `dispensing`; after a reload `≈ elapsed − tour time` |
 | `server.simulated` (true when the driver is the simulator) | the `Simulator` tag and sim wording | infer from `drivers[].connection` or the run warning `simulated controller` |
+
+**As built:** `GET /api/plans`, `run.pressureOnAtMs` and `server.simulated` (with `server.simulatorConfirmed`) exist
+(`WEB_API.md`); `run.checkDone` / `run.checkPlanned` do not (the camera tour is estimated, labelled `≈`). Register board
+added `run.detail`, `run.nextPlanId`, `machine.home`, `machine.zCheck` and `dispense.newSeatAtMs` (`WEB_API.md` §3.1).
 | Run-only abort (stop after this dot, stay connected and homed) | softer stop | not offered; STOP is the only stop (open question, not required) |
 
 ## 18. Acceptance checklist
