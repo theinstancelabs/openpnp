@@ -28,12 +28,15 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.openpnp.instancelabs.board.EdtRunner;
+import org.openpnp.instancelabs.dispense.DispenseConfig;
 import org.openpnp.instancelabs.dispense.DispenseService;
 import org.openpnp.instancelabs.dispense.DoseBlocksRequest;
 import org.openpnp.instancelabs.dispense.DoseBlocksResult;
 import org.openpnp.instancelabs.dispense.FlatVacuum;
+import org.openpnp.instancelabs.dispense.PlaneReport;
 import org.openpnp.instancelabs.dispense.RunResult;
 import org.openpnp.instancelabs.dispense.SimMachine;
+import org.openpnp.instancelabs.dispense.SurfacePlane;
 import org.openpnp.instancelabs.dispense.SurfaceProbeRequest;
 import org.openpnp.instancelabs.dispense.SurfaceProbeResult;
 import org.openpnp.instancelabs.padprofile.DoseModel;
@@ -104,6 +107,11 @@ public class PadCalibrationJobTest {
                 res.run = r;
                 res.ok = r.status == RunResult.Status.OK;
                 res.message = r.message;
+                List<DispenseConfig.SurfacePoint> pts = new ArrayList<>();
+                for (double[] t : req.targets) {
+                    pts.add(new DispenseConfig.SurfacePoint(t[0], t[1], req.nominalZ));
+                }
+                res.plane = PlaneReport.of(SurfacePlane.fit(pts));
                 return res;
             });
         }
@@ -466,7 +474,9 @@ public class PadCalibrationJobTest {
     @Test
     public void cancelDuringAnEngineStepAbortsIt() throws Exception {
         plan();
-        engine.holdAt = 3;
+        // no blank surface: it is probed first (the purge row's targets, the area's corners inset 1 mm and its centre)
+        ok(call("DELETE", "/api/surfaces/blank", null));
+        engine.holdAt = 4;
         String id = str(ok(call("POST", "/api/pad-calibrations", body(group, attest()))), "id");
         engine.awaitHeld();
         assertEquals("ladder", str(job(), "step"));
@@ -474,7 +484,8 @@ public class PadCalibrationJobTest {
         JsonObject j = awaitState("cancelled");
         assertTrue(str(j.getAsJsonObject("result"), "sentence").matches("Cancelled \\d\\d:\\d\\d during ladder: nothing "
                 + "was measured\\."), j.toString());
-        assertEquals(List.of("probe coupon1", "probe coupon2", "pad-ladder"), engine.calls, "no step after it");
+        assertEquals(List.of("probe blank", "probe coupon1", "probe coupon2", "pad-ladder"), engine.calls,
+                "no step after it");
         // the pad_calibrations row of the group says so
         com.google.gson.JsonArray rows = new JsonParser().parse(get("/api/pad-calibrations").body).getAsJsonArray();
         assertEquals("cancelled", str(rows.get(0).getAsJsonObject(), "outcome"));

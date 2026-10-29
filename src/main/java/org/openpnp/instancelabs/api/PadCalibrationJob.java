@@ -1592,10 +1592,9 @@ final class PadCalibrationJob {
             rec.outcome = PadCalibrationRecord.PROVISIONAL;
             boolean moved = cur.dotSteps == null || cur.dotSteps != d.steps || cur.dotsPerPad == null
                     || cur.dotsPerPad != d.perPad;
-            if (moved) {
+            // what was measured goes on a type below the gate; a failed calibration never demotes one above it
+            if (moved && !cur.status.atLeast(PadTypeStatus.CHARACTERIZED)) {
                 v = cur.copy();
-                v.status = cur.status == PadTypeStatus.VALIDATED || cur.status == PadTypeStatus.CHARACTERIZED
-                        ? PadTypeStatus.PROVISIONAL : cur.status;
                 plan(v, d, c, g);
                 v.doseFp = null;
                 v.massPerPadMg = null;

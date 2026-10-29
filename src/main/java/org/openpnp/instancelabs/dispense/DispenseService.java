@@ -2425,11 +2425,16 @@ public final class DispenseService {
         double[] blank = null;
         if (k.blankSpot != null) {
             DotImager.Frame f = im.captureLit(k.blankSpot[0], k.blankSpot[1], null);
-            BareSpotCheck.Result b = BareSpotCheck.check(f.image, f.mmPerPxX, f.mmPerPxY, null);
-            blank = new double[] {b.refB, b.refG, b.refR};
+            if (f != null && f.image != null) {
+                BareSpotCheck.Result b = BareSpotCheck.check(f.image, f.mmPerPxX, f.mmPerPxY, null);
+                blank = new double[] {b.refB, b.refG, b.refR};
+            }
         }
         double[] centre = k.looks.get(k.looks.size() - 1);
         DotImager.Frame cf = im.captureLit(centre[0], centre[1], req.nominalZ);
+        if (cf == null || cf.image == null) {
+            throw refused(NO_CAMERA_PCAL);
+        }
         BareSpotCheck.Result cr = BareSpotCheck.check(cf.image, cf.mmPerPxX, cf.mmPerPxY, null);
         double[] ref = {cr.refB, cr.refG, cr.refR};
         if (blank != null && PadLadder.colourDistance(ref, blank) > PadLadder.COUPON_COLOUR_DELTA) {
@@ -2586,6 +2591,7 @@ public final class DispenseService {
         t.detail.put("home", homeDetail(hp));
         t.detail.put("blocks", req.blocks.size());
         t.detail.put("dots", req.dots());
+        t.stepsPlanned = req.dots();
         t.send();
         homeIfNeeded(s, res.home, t::aborted);
         r.interlocks = Interlocks.checkBasic(interlockInputs(c, null, 0, null, false, false));
@@ -2732,6 +2738,7 @@ public final class DispenseService {
                 }
                 t.detail.put("block", k + 1);
                 t.detail.put("dot", timing.dotIndex + 1);
+                t.stepsDone = timing.dotIndex + 1;
                 double end = estimate.dotEndSeconds == null ? 0 : estimate.dotEndSeconds[timing.dotIndex];
                 t.secondsLeft = Math.max(0, estimate.estimatedSeconds - end) + 0.9 * tiles.size();
                 t.send();

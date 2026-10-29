@@ -895,8 +895,16 @@ public class PadCalibrationSimTest {
     @Test
     public void thePurgeAbsorbsDeadFirstDots() throws Exception {
         start(sc -> paste(sc).addProperty("idleDeadS", 0));
+        // no blank surface yet: the job probes it first (the purge row's targets and the area's corners, each looked at)
+        ok(call("DELETE", "/api/surfaces/blank", null));
+        JsonObject pv = ok(get("/api/pad-calibrations/preview?steps=ladder&doseSteps=800&typeKeys=chip-0603"));
+        assertEquals("no 'blank' surface yet", str(pv.getAsJsonObject("blank"), "probeWhy"));
+        assertTrue(str(pv, "sentence").startsWith("Probes the blank with N1 ("), str(pv, "sentence"));
         JsonObject job = ladder(800, "chip-0603");
         assertEquals("done", str(job, "state"), job.toString());
+        JsonObject blank = job.getAsJsonArray("steps").get(0).getAsJsonObject();
+        assertEquals("done", str(blank, "state"), blank.toString());
+        assertTrue(str(blank, "text").startsWith("blank surface probed: "), blank.toString());
         assertTrue(str(result(job), "sentence").endsWith("every camera check passed."), job.toString());
         boolean p7 = false;
         for (JsonElement e : result(job).getAsJsonArray("predictions")) {
