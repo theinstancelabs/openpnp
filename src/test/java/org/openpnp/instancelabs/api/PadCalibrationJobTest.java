@@ -3,6 +3,7 @@ package org.openpnp.instancelabs.api;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
@@ -79,6 +80,8 @@ public class PadCalibrationJobTest {
         /** The dispense service's own stop epoch (a STOP through the API moves it), added to {@link #epoch}. */
         volatile java.util.function.LongSupplier base = () -> 0L;
         volatile String aborted;
+        /** The camera misses the first this many weigh dots of each coupon. */
+        volatile int missWeighDots;
 
         private <T> Future<T> step(String what, java.util.function.Function<RunResult, T> result) {
             calls.add(what);
@@ -144,7 +147,8 @@ public class PadCalibrationJobTest {
                         double a = area * (1 + 0.03 * ((i * 37) % 7 - 3) / 3.0);
                         d.dxMm = 0.01;
                         d.dyMm = -0.01;
-                        d.found = new Dot(d.dxMm, d.dyMm, DoseModel.diameterOfArea(a), a, 0.85);
+                        d.found = DoseBlocksRequest.WEIGH.equals(req.kind) && i < missWeighDots ? null
+                                : new Dot(d.dxMm, d.dyMm, DoseModel.diameterOfArea(a), a, 0.85);
                         o.dots.add(d);
                     }
                     res.blocks.add(o);
@@ -472,6 +476,48 @@ public class PadCalibrationJobTest {
         assertEquals("done", str(job, "state"), finished.toString());
         assertEquals("characterized", str(job.getAsJsonObject("result"), "outcome"), job.toString());
         assertEquals(calls, engine.calls.size(), "no engine step: " + engine.calls);
+    }
+
+    /**
+     * Review 2: one coupon typed twice wrote its mass row, then failed on the second (half saved); after Cancel at
+     * the readings a coupon could be typed but not skipped, as the reservation's text offers; and the mass per dot
+     * was divided by the dots the camera found, where §7.5 divides by the dots laid.
+     */
+    @Test
+    public void readingsAreCheckedBeforeAnythingIsWrittenAndALeftCouponCanBeSkipped() throws Exception {
+        plan();
+        engine.missWeighDots = 8;
+        String id = str(ok(call("POST", "/api/pad-calibrations", body(group, attest()))), "id");
+        awaitState("awaiting-reading");
+        Res twice = call("POST", "/api/pad-calibrations/" + id + "/answer", "{\"step\":\"readings\",\"coupons\":["
+                + "{\"place\":\"coupon1\",\"fullG\":4.172,\"emptyG\":4.100},{\"place\":\"coupon2\",\"fullG\":4.132,"
+                + "\"emptyG\":4.060},{\"place\":\"coupon1\",\"fullG\":4.172,\"emptyG\":4.100}]}");
+        assertEquals(400, twice.status, twice.toString());
+        assertEquals("coupon1 is typed twice: type each coupon's two readings once", str(twice.json(), "reason"));
+        assertEquals("awaiting-reading", str(job(), "state"));
+        assertEquals(2, ok2(get("/api/coupons/pending")), "nothing was written");
+        ok(call("POST", "/api/pad-calibrations/" + id + "/cancel", null));
+        com.google.gson.JsonArray pending = new JsonParser().parse(get("/api/coupons/pending").body).getAsJsonArray();
+        JsonObject c1 = pending.get(0).getAsJsonObject();
+        JsonObject c2 = pending.get(1).getAsJsonObject();
+        assertEquals("coupon1", str(c1, "place"));
+        assertEquals(68, c1.get("dots").getAsInt());
+        assertEquals(60, c1.get("found").getAsInt());
+        // per dot laid: 72 mg over the 68 dots, not over the 60 the camera found
+        JsonObject typed = ok(call("POST", "/api/coupons/" + c1.get("recordId").getAsLong() + "/reading",
+                "{\"fullG\":4.172,\"emptyG\":4.100}"));
+        assertEquals(72.0 / 68, typed.getAsJsonObject("record").get("mgPerDot").getAsDouble(), 1e-9);
+        // the other one is skipped: no reading, and the place is free again
+        assertNotNull(svc.couponReservation("coupon2"));
+        JsonObject skipped = ok(call("POST", "/api/coupons/" + c2.get("recordId").getAsLong() + "/reading",
+                "{\"skip\":true}"));
+        assertEquals("coupon2: weighing skipped; wipe its 68 half-turn dots off before it is used again",
+                str(skipped, "text"));
+        assertTrue(skipped.getAsJsonObject("record").get("skipped").getAsBoolean());
+        assertNull(svc.couponReservation("coupon2"));
+        assertEquals(0, ok2(get("/api/coupons/pending")));
+        assertEquals(404, call("POST", "/api/coupons/" + c2.get("recordId").getAsLong() + "/reading",
+                "{\"skip\":true}").status, "skipped once");
     }
 
     @Test

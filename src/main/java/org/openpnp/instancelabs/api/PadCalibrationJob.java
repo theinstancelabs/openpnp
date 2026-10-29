@@ -1326,6 +1326,10 @@ final class PadCalibrationJob {
             if (k == null || k.record == null) {
                 throw ApiException.badRequest("no weigh coupon '" + r.place + "' in this calibration");
             }
+            if (order.contains(k)) {
+                // one mass row per coupon: the second would be refused after the first was written
+                throw ApiException.badRequest(r.place + " is typed twice: type each coupon's two readings once");
+            }
             order.add(k);
         }
         for (CouponPlan k : coupons) {
@@ -1403,19 +1407,22 @@ final class PadCalibrationJob {
         return m.whyStale(now, c, ep);
     }
 
-    /** The mass record of a coupon's readings (§7.5), confirmed by the newest fresh reading it agrees with. */
+    /**
+     * The mass record of a coupon's readings (§7.5), confirmed by the newest fresh reading it agrees with. Per
+     * dot is per dot laid: every screw turn pushes its paste out, and a dot the camera missed left it on the tip
+     * for the next one.
+     */
     static DoseRecord massRow(DispenseService svc, DoseRecord coupon, double fullG, double emptyG, String method,
             String operator, String jobId) throws Exception {
         DispenseConfig c = svc.getConfig();
         DispenseDb db = svc.getDb();
-        int found = coupon.found != null && coupon.found > 0 ? coupon.found : coupon.n;
         DoseRecord m = massBase(coupon, method, operator, jobId);
         m.fullMg = round3(fullG * 1000);
         m.emptyMg = round3(emptyG * 1000);
         m.totalMg = round3(m.fullMg - m.emptyMg);
-        m.mgPerDot = m.totalMg / found;
+        m.mgPerDot = m.totalMg / coupon.n;
         m.mgPerStep = m.mgPerDot / coupon.steps;
-        m.mgSe = Math.sqrt(2) * ManualBalance.RESOLUTION_MG / found;
+        m.mgSe = Math.sqrt(2) * ManualBalance.RESOLUTION_MG / coupon.n;
         long now = System.currentTimeMillis();
         m.weighDelayS = (int) Math.max(0, (now - coupon.createdAtMs) / 1000);
         DoseRecord.Epochs ep = new DoseRecord.Epochs(svc.getControllerConnectedAtMs(), svc.isSimulatorConfirmed());

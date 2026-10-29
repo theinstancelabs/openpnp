@@ -5,7 +5,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+
 import org.junit.jupiter.api.Test;
+import org.openpnp.instancelabs.padprofile.LadderStats;
 
 /**
  * Freshness of a dose record (profile calibration design §1.7): each rule alone, the partial-turn
@@ -225,5 +230,24 @@ public class DoseRecordTest {
         m.totalMg = null;
         assertFalse(m.hasReading());
         assertFalse(record(DoseRecord.OPTICAL, 800, c, NOW).hasReading());
+    }
+
+    /**
+     * Review 2: §7.5 divides a coupon's paste by the dots laid (every turn pushes its paste out; a dot the camera
+     * missed left it on the tip for the next one), not by the dots the camera found.
+     */
+    @Test
+    public void aReadingIsPerDotLaid() {
+        DispenseConfig c = setup();
+        DoseRecord coupon = record(DoseRecord.COUPON, 800, c, NOW - H);
+        coupon.id = 1;
+        coupon.found = 60;
+        DoseRecord m = mass(coupon, 72);
+        m.id = 2;
+        List<LadderStats.MassReading> l = DoseRecords.readings(Collections.singletonList(m), Arrays.asList(coupon,
+                m));
+        assertEquals(1, l.size());
+        assertEquals(68, l.get(0).dots);
+        assertEquals(72.0 / 68, l.get(0).mgPerDot(), 1e-12);
     }
 }

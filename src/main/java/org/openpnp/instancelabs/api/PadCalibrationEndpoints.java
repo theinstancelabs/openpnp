@@ -353,8 +353,9 @@ final class PadCalibrationEndpoints {
     }
 
     /**
-     * POST /api/coupons/{recordId}/reading {fullG, emptyG, confirm?}: the readings of a coupon whose job is
-     * gone (stopped, cancelled, OpenPnP restarted). A coupon its job waits for is answered there.
+     * POST /api/coupons/{recordId}/reading {fullG, emptyG, confirm?} or {skip: true}: the readings of a coupon
+     * whose job is gone (stopped, cancelled, OpenPnP restarted), or none (§7.5's "skip them": the coupon is free
+     * again). A coupon its job waits for is answered there.
      */
     Object reading(ApiServer.Request r) throws Exception {
         DispenseService svc = ctx.svc();
@@ -374,6 +375,13 @@ final class PadCalibrationEndpoints {
         if (j != null && PadCalibrationJob.AWAITING.equals(j.state) && j.id.equals(coupon.jobId)) {
             throw ApiException.refused("the pad calibration " + j.id + " is waiting for these readings: type them "
                     + "there (Calibrate › Pad calibration)");
+        }
+        if (Json.bool(b, "skip", false)) {
+            DoseRecord m = PadCalibrationJob.skipRow(svc, coupon, Json.str(b, "operator", null), null);
+            return Views.map("record", Views.map("id", m.id, "place", m.couponPlace, "steps", m.steps, "skipped",
+                    true), "confirmed", false, "text", String.format(Locale.ROOT, "%s: weighing skipped; wipe its %d "
+                            + "%s dots off before it is used again", m.couponPlace, coupon.n,
+                            DoseModel.turnName(m.steps)));
         }
         double full = Json.reqNum(b, "fullG");
         double empty = Json.reqNum(b, "emptyG");
