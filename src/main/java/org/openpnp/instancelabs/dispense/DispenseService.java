@@ -2728,6 +2728,12 @@ public final class DispenseService {
         }
         t.stage = "z check";
         res.zCheck = zCheckIfNeeded(s, null, scope, t::aborted);
+        for (DoseBlocksRequest.Block b : req.blocks) {
+            String why = b.couponPlace == null ? null : couponFrame(b.surfaceName);
+            if (why != null) {
+                throw refused(why);
+            }
+        }
         t.stage = "interlocks";
         r.interlocks = Interlocks.check(blockInputs(c, scope, 0, need, partial, null));
         if (!r.interlocks.ok()) {
@@ -2933,6 +2939,25 @@ public final class DispenseService {
                     + "its place Z %.3f: probe it again", b.surfaceName, plane.minZ, plane.maxZ, window, place.z);
         }
         return null;
+    }
+
+    /**
+     * I4 for a weigh coupon's plane: no Z check touches a coupon, so its touches count only in the Z frame they were
+     * made in (measured after the last home), or when this home's Z check vouched for that frame. Null when it may
+     * be used.
+     */
+    private String couponFrame(String surfaceName) {
+        Long home = homeTracker.getLastHomeAtMs();
+        DispenseConfig.SurfaceMap m = cfg.surface(surfaceName);
+        if (home == null || m == null || m.setAtMs != null && m.setAtMs >= home) {
+            return null;
+        }
+        ZCheck.Stale d = new ZCheck.Stale(ZCheck.surfaceDatum(surfaceName), m.setAtMs, m.homeAtMs);
+        if (ZCheck.unchecked(homeTracker.getZCheck(), home, Collections.singletonList(d)).isEmpty()) {
+            return null;
+        }
+        return "I4: the '" + surfaceName + "' coupon was touched before the home at " + ZCheck.clock(home)
+                + ", and no Z check since vouches for its Z: touch it again before laying dots on it";
     }
 
     /** After frames of every tile; every dot found, landed, its thread to the next told; 3 crops per block. */

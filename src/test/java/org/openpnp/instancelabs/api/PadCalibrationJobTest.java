@@ -527,6 +527,29 @@ public class PadCalibrationJobTest {
         assertTrue(engine.calls.isEmpty(), "no engine step after the STOP: " + engine.calls);
     }
 
+    /**
+     * Review 2: a step the job gives up waiting for (here it never ends; on the machine its task can wait behind a busy
+     * machine thread) is stopped as by STOP: it must not lay its dots later, when no job records them, nor go on alone.
+     */
+    @Test
+    public void aStepThatNeverEndsIsStoppedWhenTheJobGivesUpOnIt() throws Exception {
+        plan();
+        engine.holdAt = 1;
+        DispenseEndpoints dispense = new DispenseEndpoints(ctx, new MachineEndpoints(ctx));
+        PadProfileEndpoints profile = new PadProfileEndpoints(ctx, dispense);
+        PadCalibrationJob job = PadCalibrationJob.prepare(ctx, profile, dispense, svc, PadCalibrationEndpoints.request(
+                new JsonParser().parse(body(group, attest())).getAsJsonObject()));
+        assertEquals(null, job.refusal, job.refusal);
+        job.stepWaitMs = 300;
+        job.save();
+        ctx.padCalJobs.start(job);
+        JsonObject j = awaitState("failed");
+        assertEquals("the coupons step did not end within 0 min: the engine was stopped", str(j.getAsJsonObject(
+                "result"), "refusal"), j.toString());
+        assertEquals("the pad calibration gave up waiting for its coupons step", engine.aborted);
+        assertEquals(List.of("probe coupon1"), engine.calls, "no step after it");
+    }
+
     @Test
     public void theEngineWritesCharacterizedOnlyWithEveryCheckAndNeverValidated() throws Exception {
         org.openpnp.instancelabs.dispense.PadType t = svc.getDb().currentPadType("chip-0805").copy();
@@ -615,5 +638,95 @@ public class PadCalibrationJobTest {
         awaitState("awaiting-reading");
         ArrayList<String> all = new ArrayList<>(engine.calls);
         assertEquals(4, all.size());
+    }
+
+    /**
+     * Review 2: the shortened statistics only a SIM test may use are refused when the machine calibrates, not only
+     * when they are saved: PUT /api/config keeps a value that is already below its floor (a configuration carried
+     * over from the simulator), and the job would lay a 4-dot ladder and decide on it.
+     */
+    @Test
+    public void theSimulatorsShortStatisticsAreRefusedOnTheMachine() throws Exception {
+        plan();
+        ok(call("PUT", "/api/config", "{\"padCalibration\":{\"ladderDotsPerPhase\":2,\"minLadderDots\":4}}"));
+        String preview = "/api/pad-calibrations/preview?planId=" + planId + "&groups=all";
+        assertTrue(str(ok(get(preview)), "sentence").contains("Lays 4 test dots on the blank"), "the SIM's ladder");
+        // the same configuration with a controller that is not the simulator
+        SimGuard.noteIdentity(sim.machine, List.of("FIRMWARE_NAME:Marlin 2.1"));
+        assertFalse(svc.isSimulatorConfirmed());
+        assertEquals("padCalibration.ladderDotsPerPhase below 12 is allowed in the simulator only; padCalibration"
+                + ".minLadderDots below 28 is allowed in the simulator only: set them back to calibrate on this machine",
+                refused(call("POST", "/api/pad-calibrations", body(group, attest())), "refused"));
+        assertTrue(engine.calls.isEmpty(), "nothing was started: " + engine.calls);
+    }
+
+    /** The blank probe's touches of a preview: [x, y]. */
+    static List<double[]> blankProbes(JsonObject pv) {
+        List<double[]> l = new ArrayList<>();
+        for (JsonElement e : pv.getAsJsonArray("probes")) {
+            JsonObject p = e.getAsJsonObject();
+            if ("blank".equals(str(p, "surface"))) {
+                l.add(new double[] {p.get("x").getAsDouble(), p.get("y").getAsDouble()});
+            }
+        }
+        return l;
+    }
+
+    /**
+     * Review 2, the blank step: the surface its own touches make covers the calibration area for the next job (it
+     * touches the area's corners inset 1 mm, √2 mm from the corners themselves), and N1 never touches the band of the
+     * area where earlier ladders left their dots (the area's lower corners and centre, and the purge-row target past
+     * the blank place, lay in it).
+     */
+    @Test
+    public void theBlankProbeCoversTheAreaForTheNextJobAndStaysOffItsUsedBand() throws Exception {
+        plan();
+        ok(call("DELETE", "/api/surfaces/blank", null));
+        JsonObject pv = ok(get("/api/pad-calibrations/preview?planId=" + planId + "&groups=all"));
+        assertTrue(pv.getAsJsonObject("blank").get("probe").getAsBoolean(), pv.getAsJsonObject("blank").toString());
+        StringBuilder pts = new StringBuilder();
+        for (double[] p : blankProbes(pv)) {
+            pts.append(pts.length() == 0 ? "" : ",").append("[").append(p[0]).append(",").append(p[1]).append(",5.5]");
+        }
+        // the surface as that probe leaves it: the next job needs no probe of its own
+        ok(call("PUT", "/api/surfaces/blank", "{\"points\":[" + pts + "]}"));
+        pv = ok(get("/api/pad-calibrations/preview?planId=" + planId + "&groups=all"));
+        assertFalse(pv.getAsJsonObject("blank").get("probe").getAsBoolean(), pv.getAsJsonObject("blank").toString());
+
+        // 11 mm of the area used by earlier ladders (paste), then a reconnect: the probe stays above that band
+        DispenseConfig c = svc.getConfig();
+        c.calibrationArea.usedMm = 11;
+        svc.updateConfig(c);
+        ok(call("DELETE", "/api/surfaces/blank", null));
+        pv = ok(get("/api/pad-calibrations/preview?planId=" + planId + "&groups=all"));
+        JsonObject area = ok(get("/api/calibration-area")).getAsJsonObject("effective");
+        double x0 = area.get("x0Mm").getAsDouble(), x1 = x0 + area.get("widthMm").getAsDouble();
+        double y0 = area.get("y0Mm").getAsDouble(), used = y0 + 11;
+        assertEquals(used, pv.getAsJsonObject("blank").get("y0").getAsDouble(), 1e-6, "the ladder starts above it");
+        List<double[]> touches = blankProbes(pv);
+        assertTrue(touches.size() >= 5, pv.toString());
+        for (double[] p : touches) {
+            assertFalse(p[0] > x0 - 1 && p[0] < x1 + 1 && p[1] > y0 - 1 && p[1] < used + 1, String.format(
+                    java.util.Locale.ROOT, "N1 touches X %.2f, Y %.2f, in the used band Y %.1f..%.1f", p[0], p[1], y0,
+                    used));
+        }
+    }
+
+    /**
+     * Review 2: under homeBeforeRun "always" every engine step homes first, so the weigh step would lay its dots
+     * after a home that came after the coupons were touched; the engine refuses that coupon Z (I4), and the start
+     * says so before the ladder spends paste.
+     */
+    @Test
+    public void homingBeforeEveryStepRefusesAWeighingAtTheStart() throws Exception {
+        plan();
+        ok(call("PUT", "/api/config", "{\"homeBeforeRun\":\"always\"}"));
+        assertEquals("homeBeforeRun is 'always': every step homes first, so the coupons' Z would be from before the "
+                + "weigh step's home: set homeBeforeRun to 'whenNeeded' to weigh coupons", refused(call("POST",
+                        "/api/pad-calibrations", body(group, attest())), "refused"));
+        assertTrue(engine.calls.isEmpty(), "nothing was started: " + engine.calls);
+        ok(call("PUT", "/api/config", "{\"homeBeforeRun\":\"whenNeeded\"}"));
+        ok(call("POST", "/api/pad-calibrations", body(group, attest())));
+        awaitState("awaiting-reading");
     }
 }
