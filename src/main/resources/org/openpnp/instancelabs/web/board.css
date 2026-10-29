@@ -78,9 +78,10 @@ svg.pv-art[data-silk="yellow"] { --pv-a-silk: #e8d44d; }
 /* art-only mode (upload preview, the hero before planning): paste apertures and the origin marker */
 .pv-art.pv-art--board .pv-a-paste, .pv-art.pv-art--board .pv-a-origin { display: inline; }
 
-/* Quiet: copper under the mask, tracks, silkscreen, references and fab off; the mask lightened toward the stage */
-.pv-art.pv-art--quiet { --pv-a-mask: #aab2b1; --pv-a-mask-op: 1; }
-[data-theme="dark"] .pv-art.pv-art--quiet { --pv-a-mask: #243034; }
+/* Quiet: copper under the mask, tracks, silkscreen, references and fab off; the mask lightened toward the stage
+   (svg.pv-art.pv-art--quiet has the specificity of the svg.pv-art[data-mask] palettes above and comes later, so it wins) */
+svg.pv-art.pv-art--quiet { --pv-a-mask: #aab2b1; --pv-a-mask-op: 1; }
+[data-theme="dark"] svg.pv-art.pv-art--quiet { --pv-a-mask: #243034; }
 .pv-art--quiet .pv-a-cu, .pv-art--quiet .pv-a-tracks, .pv-art--quiet .pv-a-silk, .pv-art--quiet .pv-a-silklines,
 .pv-art--quiet .pv-a-text, .pv-art--quiet .pv-a-fab, .pv-art.pv-art--quiet .pv-a-refs text { display: none; }
 
@@ -89,6 +90,7 @@ svg.pv-art[data-silk="yellow"] { --pv-a-silk: #e8d44d; }
 
 /* in-pad marks on the finish (rule 1): >= 3:1 against --pv-a-bare */
 .pv--art rect.pad { fill: none; stroke: var(--pv-o-ap); stroke-width: 1px; pointer-events: visible; }   /* unfilled: still a click target */
+.pv--art rect.pad:hover { stroke: var(--pv-o-case-d); stroke-width: 1.6px; }   /* run.css hovers in --ink: 1.24:1 on the finish in dark */
 .pv--art rect.pad.blocked { fill: rgba(180, 35, 24, .15); stroke: var(--pv-o-block); stroke-dasharray: 2 1.5; }
 .pv--art rect.pad.pasted { fill: rgba(31, 95, 209, .18); stroke: var(--pv-o-dot); stroke-opacity: 1; }
 .pv--art rect.pad.check { fill: rgba(122, 80, 0, .15); stroke: var(--pv-o-check); }
@@ -118,7 +120,7 @@ svg.pv-art[data-silk="yellow"] { --pv-a-silk: #e8d44d; }
 .pv--art .pv-probe text { fill: var(--pv-o-probe); stroke: var(--pv-o-case-l); stroke-width: .5px; paint-order: stroke; }
 .pv--art .pv-n1 circle:not(.pv-case), .pv--art .pv-n1 path:not(.pv-case) { stroke: var(--pv-o-probe); }
 .pv--art .pv-callout path:not(.pv-case) { stroke-width: 1.5px; }
-.pv--no-path .pv-cased--path, .pv--no-dots .pv-cased--first { visibility: hidden; }
+.pv--no-path .pv-cased--path, .pv--no-dots .pv-cased--first, .pv--no-dirty .pv-cased--dirty { visibility: hidden; }
 
 /* parts: hit rects (click opens the inspector), selection outlines */
 .pv .pv-l-parts { display: none; }
@@ -148,7 +150,11 @@ svg.pv-art[data-silk="yellow"] { --pv-a-silk: #e8d44d; }
 .pv--art .pv-cam circle:not(.pv-case), .pv--art .pv-cam path:not(.pv-case) { stroke: var(--pv-o-probe); }
 .pv .pv-scale path:not(.pv-case) { fill: none; stroke: var(--ink); stroke-width: 2px; vector-effect: non-scaling-stroke; }
 .pv--art .pv-scale path:not(.pv-case) { stroke: var(--pv-o-case-d); }
-.pv .pv-scale text { font: 650 12px var(--font-ui); fill: var(--ink); }
+/* the label's size is its font-size attribute (boardview.placeScale: 12 px on screen, in mm); a CSS font size here
+   would be read in mm too (user units), so 12px would draw a 12 mm label */
+.pv .pv-scale text { font-family: var(--font-ui); font-weight: 650; fill: var(--ink); }
+.pv--art .pv-scale text { fill: var(--pv-o-case-d); stroke: var(--pv-o-case-l); stroke-width: 3px; paint-order: stroke; stroke-linejoin: round;
+  vector-effect: non-scaling-stroke; }
 
 /* path numbers next to dots (inspector) */
 .pv .pv-dotlabel { font-family: var(--font-ui); font-weight: 700; fill: var(--pv-o-case-d); stroke: var(--pv-o-case-l); stroke-width: 3px; paint-order: stroke;

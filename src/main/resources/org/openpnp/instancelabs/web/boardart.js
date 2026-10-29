@@ -3,7 +3,8 @@
 
    API (IL.boardart):
      get(id)                     Promise of the art (GET /api/board-art/<id> through the browser's HTTP cache: the server
-                                 answers with an immutable header, so the client keeps no cache of its own), or null
+                                 answers with an immutable header, so the client keeps no cache of its own), or null;
+                                 art.id = id
      build(art, {uid})           → {root: g.pv-l-art, labels: {lb1, lb2, lb3: smallest label height in mm}, parts}
                                  one merged path per layer (§5.5); texts and labels read the right way round
      thumbUrl(art, {w, h, id})   blob: URL of a small picture made from art.thumb (rendered once per art id, or art object,
@@ -22,13 +23,19 @@
   const SILKS = { white: '#f3f3ee', black: '#15181a', yellow: '#e8d44d' };
   const LABEL_MIN = 0.3, LABEL_MAX = 1.2;
 
-  /** The art JSON of an art id, or null (404 art-gone: the view keeps drawing without art). */
+  /**
+   * The art JSON of an art id, or null (404 art-gone: the view keeps drawing without art). The JSON has no id of its own:
+   * art.id is set to the id asked for, so a view builds each drawing once per id (two fallback drawings of one board
+   * file can match in every other field).
+   */
   async function get(id) {
     if (!id || !/^[0-9a-f]{16}$/.test(String(id))) return null;
     const r = await fetch('/api/board-art/' + id, { cache: 'default', headers: { Accept: 'application/json' } });
     if (r.status === 404) return null;
     if (!r.ok) throw new Error('board drawing ' + id + ': HTTP ' + r.status);
-    return r.json();
+    const art = await r.json();
+    if (art && typeof art === 'object' && art.id === undefined) art.id = String(id);
+    return art;
   }
 
   const toSvgMatrix = (m) => 'matrix(' + [m[0], -m[1], m[2], -m[3], m[4], -m[5]].map(f).join(' ') + ')';

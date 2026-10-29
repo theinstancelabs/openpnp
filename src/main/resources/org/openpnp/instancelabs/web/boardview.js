@@ -233,6 +233,8 @@
       this.padDots = new Map();
       this.preN = 0;
       this.sel = null;
+      this.selKey = '';
+      this.selDrawn = null;
       this.labelIdx = null;
       for (const g of [this.gBoard, this.gHull, this.gPath, this.gPads, this.gDots, this.gSel, this.gMarks, this.gProbe, this.gGhost, this.gLabels, this.gCall]) g.replaceChildren();
       toggle(this.svg, 'pv--preview', false);
@@ -781,17 +783,25 @@
       }
       IL.setAttr(this.legC.g, 'visibility', gh && last ? 'visible' : 'hidden');
     }
-    /** {padIds, refs} | null: .sel on those pads, an outline around those parts. */
+    /** {padIds, refs} | null: .sel on those pads, an outline around those parts. The same selection again does nothing. */
     select(sel) {
-      this.sel = sel && ((sel.padIds && sel.padIds.length) || (sel.refs && sel.refs.length))
+      const s = sel && ((sel.padIds && sel.padIds.length) || (sel.refs && sel.refs.length))
         ? { padIds: new Set(sel.padIds || []), refs: new Set(sel.refs || []) } : null;
-      if (this.padEls) for (const [pid, r] of this.padEls) toggle(r, 'sel', !!this.sel && this.sel.padIds.has(pid));
+      const key = s ? Array.from(s.padIds).join(',') + '|' + Array.from(s.refs).join(',') : '';
+      if (key === this.selKey) return;
+      this.selKey = key;
+      this.sel = s;
+      if (this.padEls) for (const [pid, r] of this.padEls) toggle(r, 'sel', !!s && s.padIds.has(pid));
       this.drawSel();
     }
+    /** The part outlines of the selection: redrawn only when the selection, the plan, the drawing or its seat changed. */
     drawSel() {
+      const m = this.matrix();
+      const key = [this.selKey, this.planId, this.artSig, m ? m.join(',') : ''].join('|');
+      if (key === this.selDrawn) return;
+      this.selDrawn = key;
       this.gSel.replaceChildren();
       if (!this.sel || !this.sel.refs.size) return;
-      const m = this.matrix();
       const parts = this.art && m ? (this.art.parts || []).filter((p) => p && this.sel.refs.has(p.ref) && Array.isArray(p.box)) : [];
       const drawn = new Set();
       if (parts.length) {
@@ -816,9 +826,11 @@
         this.gSel.appendChild(c.g);
       }
     }
-    /** Path numbers (1-based, path order) next to the dots with these indexes; null removes them. */
+    /** Path numbers (1-based, path order) next to the dots with these indexes; null removes them. The same list again does nothing. */
     dotLabels(indexes) {
-      this.labelIdx = indexes && indexes.length ? Array.from(indexes) : null;
+      const idx = indexes && indexes.length ? Array.from(indexes) : null;
+      if (String(idx) === String(this.labelIdx)) return;
+      this.labelIdx = idx;
       this.dotLabelKey = null;
       this.drawDotLabels();
     }

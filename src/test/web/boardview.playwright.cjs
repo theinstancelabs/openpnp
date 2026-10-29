@@ -15,7 +15,9 @@
  * swatches on the marks' colours; (4) the preview clock (scrub, readout, 16× play, Clear); (5) picture modes; (6)
  * reference labels (size buckets, never mirrored); (7) a performance gate at 4× CPU throttling with the largest drawing
  * in the fixtures; (8) 20 create/destroy cycles leave no ResizeObserver; plus thumbnails, the pad inspector, the Records
- * map, the preview row's layout at 1280 and 1024 px, no JavaScript errors, no native dialogs. Screenshots (1440 and
+ * map, the preview row's layout at 1280 and 1024 px, the mask as painted in Quiet, the scale bar's size, keyboard focus
+ * in the inspector table and after Clear, no rebuild when a render repeats the selection, the dirty layer's casing, no
+ * JavaScript errors, no native dialogs. Screenshots (1440 and
  * 1280 px, light and dark) of the Run hero (Full and Quiet), the path preview mid-play, the pad inspector and the
  * Records map go to SHOTS_DIR.
  *
@@ -250,6 +252,12 @@ async function glueRecords(page) {
     const cl = await page.evaluate(() => ({ pre: document.querySelectorAll('#plan-svg circle.dot.pv-pre').length, row: document.getElementById('run-preview').hidden,
       preview: IL.run.bv.svg.classList.contains('pv--preview') }));
     check('Clear: no .pv-pre, the row collapsed', cl.pre === 0 && cl.row && !cl.preview, cl);
+    // keyboard: Clear hides its own row, so the focus goes back to #pv-play (not to the page)
+    await page.evaluate(() => window.__pp.seek(10));
+    await page.focus('#pv-reset');
+    await page.keyboard.press('Enter');
+    const kf = await page.evaluate(() => ({ id: document.activeElement && document.activeElement.id, row: document.getElementById('run-preview').hidden }));
+    check('keyboard: Clear collapses the row and gives the focus back to #pv-play', kf.row && kf.id === 'pv-play', kf);
     // the row fits at 1280 and 1024 px
     // (at 1024 × 768 the hero stage is at its 280 px minimum before the row opens, run.css: only the overflow is checked)
     for (const [w, h] of [[1280, 800], [1024, 768]]) {
@@ -291,6 +299,13 @@ async function glueRecords(page) {
     await page.click('#pad-insp-svg rect.pad[data-pad="R1.2"]');
     await page.waitForFunction(() => document.getElementById('panel-bar-title').textContent === 'Pad R1.2', null, { timeout: 5000 }).catch(() => {});
     check('a pad click in the inspector selects that pad', (await page.textContent('#panel-bar-title')) === 'Pad R1.2', await page.textContent('#panel-bar-title'));
+    // keyboard: Enter on a pad row's button selects that pad; the table is rebuilt, the focus stays on that row
+    await page.focus('#pad-insp-pads button[aria-label="Inspect pad R1.1"]');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => document.getElementById('panel-bar-title').textContent === 'Pad R1.1', null, { timeout: 5000 }).catch(() => {});
+    const kp = await page.evaluate(() => ({ title: document.getElementById('panel-bar-title').textContent,
+      focus: document.activeElement && document.activeElement.getAttribute('aria-label') }));
+    check('keyboard: Enter on a pad row selects it and keeps the focus on that row', kp.title === 'Pad R1.1' && kp.focus === 'Inspect pad R1.1', kp);
     const before = await page.textContent('#pad-insp-part');
     await page.click('#pad-insp-next');
     await sleep(300);
@@ -320,6 +335,11 @@ async function glueRecords(page) {
       const t = v.artSvg.querySelector('g.pv-l-art').getAttribute('transform');
       v.update({ cam: { x: 150, y: 140 } });
       const cam = { vis: v.svg.querySelector('.pv-cam').getAttribute('visibility'), scale: v.svg.querySelector('.pv-scale').getAttribute('visibility'), vb: v.svg.getAttribute('viewBox') };
+      // the scale bar is 5 mm of the drawing, its label about 12 px on screen whatever the zoom
+      const bar = v.svg.querySelector('.pv-scale path:not(.pv-case)'), lab = v.svg.querySelector('.pv-scale text');
+      cam.barPx = +bar.getBoundingClientRect().width.toFixed(1);
+      cam.fivePx = +(5 / v.k).toFixed(1);
+      cam.labelPx = +lab.getBoundingClientRect().height.toFixed(1);
       v.setAffine([1, 0, 0, 1, 0, 0]);
       v.update({});
       return { a, t, cam };
@@ -328,6 +348,8 @@ async function glueRecords(page) {
       && ao.a.art && /^-3 -78 81 81$/.test(ao.a.vb), ao.a);
     check('art-only mode: a new seat changes the transform only; the camera crosshair and the 5 mm scale bar show, the view takes the camera in',
       ao.t === 'matrix(0 -1 -1 0 200 -100)' && ao.cam.vis === 'visible' && ao.cam.scale === 'visible', ao);
+    check('scale bar: 5 mm long, its "5 mm" label 8 to 24 px tall on screen', Math.abs(ao.cam.barPx - ao.cam.fivePx) <= 1.5
+      && ao.cam.labelPx >= 8 && ao.cam.labelPx <= 24, ao.cam);
     await sleep(200);
     await shot(page, 'art-only-preview-1440-light', await page.locator('#pw-art-only').boundingBox());
     await page.evaluate(() => { const h = document.getElementById('pw-art-only'); IL.boardview.of(h).destroy(); h.remove(); });
@@ -341,9 +363,10 @@ async function glueRecords(page) {
       const img = new Image();
       img.src = u1;
       await img.decode();
-      return { blob: u1.startsWith('blob:'), same: u1 === u2, w: img.naturalWidth, h: img.naturalHeight };
+      return { blob: u1.startsWith('blob:'), same: u1 === u2, w: img.naturalWidth, h: img.naturalHeight, artId: art.id === id };
     });
     check('thumbnail: a blob: image of 96 × 64 px, rendered once per drawing', th.blob && th.same && th.w === 96 && th.h === 64, th);
+    check('IL.boardart.get(id) gives the drawing its id (a view builds once per art id)', th.artId, th);
 
     // ---- (3) contrast: both themes × 8 mask palettes × Full and Quiet --------------------------------------------------
     const ct = await page.evaluate(async () => {
@@ -376,7 +399,9 @@ async function glueRecords(page) {
       v.select({ padIds: [pad.dataset.pad], refs: [IL.S.plan.pads[0].placementId] });
       const fails = [];
       let worstIn = Infinity, worstCase = Infinity;
+      const same = (a1, b1) => a1 && b1 && a1.every((x, i) => Math.abs(x - b1[i]) <= 1);
       const MASKS = ['slate', 'green', 'red', 'blue', 'purple', 'black', 'white', 'yellow'];
+      const maskEl = v.artSvg.querySelector('.pv-a-mask');
       for (const theme of ['light', 'dark']) {
         IL.setTheme(theme);
         for (const mask of MASKS) {
@@ -385,7 +410,10 @@ async function glueRecords(page) {
             v.picture(pic);
             const a = cs(v.artSvg);
             const bare = parse(a.getPropertyValue('--pv-a-bare')), sub = parse(a.getPropertyValue('--pv-a-sub'));
-            const mk = parse(a.getPropertyValue('--pv-a-mask')), op = Number(a.getPropertyValue('--pv-a-mask-op'));
+            // the mask as painted (not the token): the palette at .86 in Full, the stage-toned mask of §5.3 in Quiet
+            const mk = parse(cs(maskEl).fill), op = Number(cs(maskEl).fillOpacity);
+            const want = pic === 'quiet' ? parse(theme === 'dark' ? '#243034' : '#aab2b1') : parse(IL.boardart.MASKS[mask]);
+            if (!same(mk, want) || Math.abs(op - (pic === 'quiet' ? 1 : 0.86)) > 0.01) fails.push([theme, mask, pic, 'mask painted', mk, op]);
             const comp = mk.map((x, i) => Math.round(x * op + sub[i] * (1 - op)));
             // rule 1: marks inside a pad, on the finish
             const inPad = { aperture: parse(cs(pad).stroke), blocked: stateCol('blocked', 'stroke'), pasted: stateCol('pasted', 'stroke'),
@@ -416,7 +444,6 @@ async function glueRecords(page) {
             // rule 4: legend swatches on the marks' colours
             const sw = (cls, prop) => parse(cs(legend.querySelector('.' + cls))[prop]);
             dot.classList.add('done'); const doneFill = parse(cs(dot).fill); dot.classList.remove('done');
-            const same = (a1, b1) => a1 && b1 && a1.every((x, i) => Math.abs(x - b1[i]) <= 1);
             if (!same(sw('lg-dot', 'borderTopColor'), parse(cs(dot).stroke))) fails.push([theme, 'lg-dot']);
             if (!same(sw('lg-done', 'backgroundColor'), doneFill)) fails.push([theme, 'lg-done']);
             if (!same(sw('lg-next', 'borderTopColor'), parse(cs(v.svg.querySelector('.pv-next')).stroke))) fails.push([theme, 'lg-next']);
@@ -431,6 +458,33 @@ async function glueRecords(page) {
     });
     check('contrast: in-pad marks >= 3:1 on the finish, the better casing tone >= 3:1 on the finish and every mask composite (2 themes × 8 palettes × Full/Quiet), legend swatches = marks',
       ct.nFails === 0, ct);
+
+    // ---- polls only toggle classes; a hidden layer hides its casing too -----------------------------------------------
+    const ch = await page.evaluate(async () => {
+      const host = document.createElement('div');
+      host.style.cssText = 'position:fixed;left:0;top:0;width:400px;height:300px;opacity:0;pointer-events:none';
+      document.body.appendChild(host);
+      const v = IL.boardview.create(host, {});   // not lite: callouts and dirty rings are drawn
+      const art = await IL.boardart.get(IL.S.plan.board.art.id);
+      v.setPlan(IL.S.plan, {});
+      v.setArt(art);
+      const p0 = IL.S.plan.pads[0];
+      const sel = () => ({ padIds: [p0.padId], refs: [p0.placementId] });
+      v.select(sel());
+      v.dotLabels([0, 1]);
+      const s0 = v.svg.querySelector('.pv-l-sel').firstChild, l0 = v.svg.querySelector('.pv-l-labels').firstChild;
+      for (let i = 0; i < 3; i++) { v.select(sel()); v.dotLabels([0, 1]); v.setArt(art); }   // what a render does on every poll
+      const kept = !!(s0 && s0.isConnected && l0 && l0.isConnected);
+      v.update({ dirty: new Map([[p0.padId, 0.4]]) });
+      const rings = v.svg.querySelectorAll('.pv-cased--dirty .pv-case').length;
+      v.layers(['dirty']);
+      const shown = Array.from(v.svg.querySelectorAll('.pv-cased--dirty .pv-case')).filter((n) => getComputedStyle(n).visibility !== 'hidden').length;
+      v.destroy();
+      host.remove();
+      return { kept, rings, shown };
+    });
+    check('the same selection, path numbers and drawing again (a poll) rebuild nothing', ch.kept, ch);
+    check('dirty layer hidden: the dirty rings\' casing is hidden too', ch.rings > 0 && ch.shown === 0, ch);
 
     // ---- (8) destroy: no ResizeObserver left after 20 create/destroy cycles ---------------------------------------------
     const ds = await page.evaluate(async () => {

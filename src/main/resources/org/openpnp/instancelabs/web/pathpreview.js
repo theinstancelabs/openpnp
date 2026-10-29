@@ -84,7 +84,10 @@
           onclick: () => this.setSpeed(x) }, x + '×')));
       this.readout = el('span', { class: 'pv-readout', id: 'pv-readout' });
       this.reset = el('button', { type: 'button', class: 'link', id: 'pv-reset' }, 'Clear');
-      this.reset.addEventListener('click', () => this.clear());
+      this.reset.addEventListener('click', () => {
+        this.clear();
+        if (!this.button.hidden && this.button.isConnected) this.button.focus();   // the row (and Clear) just went away
+      });
       this.row = el('div', { class: 'pv-preview', id: 'run-preview', role: 'group', 'aria-label': 'Path preview: nothing moves', hidden: true },
         this.toggleBtn, this.scrub, this.speedSeg, this.readout, this.reset);
       if (this.o.host) this.o.host.insertBefore(this.row, this.o.before && this.o.before.parentNode === this.o.host ? this.o.before : null);

@@ -202,6 +202,7 @@
           el('th', { class: 'r', title: 'Time from the program start (estimate)' }, 't'))),
         el('tbody')));
     parts.foot.append(el('div', { class: 'btn-row' }, edit, cam));
+    if (M.view) M.view.destroy();   // a panel reset rebuilds the parts without an unmount
     M.view = IL.boardview.create(host, { lite: true, aria: 'The part and its dots, zoomed',
       onPad: (id) => open({ padId: id }),
       onPart: (ref) => open({ ref }) });
@@ -245,7 +246,8 @@
     IL.keyed(body, JSON.stringify([p.planId, sel.ref, sel.padId, !!M.types]), () => pads.map((x) => {
       const tt = typeOf(x.typeKey);
       const tr = el('tr', { 'data-pad': x.padId, 'aria-selected': String(x.padId === sel.padId) },
-        el('td', {}, el('button', { type: 'button', class: 'link', text: x.padId, 'aria-label': 'Inspect pad ' + x.padId })),
+        el('td', {}, el('button', { type: 'button', class: 'link', text: x.padId, 'aria-label': 'Inspect pad ' + x.padId,
+          'data-focus-key': 'pad-' + x.padId })),   // the rebuilt table keeps the keyboard focus on this row (IL.keyed)
         el('td', { text: IL.fmt(x.w, 2) + ' × ' + IL.fmt(x.h, 2), title: opening(x) }), el('td', { text: x.typeKey ? typeName(x, tt) : 'No pad type' }),
         el('td', { class: 'r', text: String(x.dotCount || 0) }), el('td', { text: x.blocked ? 'Blocked' : (x.flags && x.flags.length ? 'Check' : 'Planned') }));
       tr.addEventListener('click', () => open({ padId: x.padId }));
@@ -288,7 +290,7 @@
     IL.show($('pad-insp-dots'), !!pad);
     // edit the pad type (or make one for the package)
     const edit = $('pad-insp-edit');
-    const href = pad && pad.typeKey ? '#profile/pad-types/' + pad.typeKey : pkg ? '#profile/new-pad-type/' + encodeURIComponent(pkg) : null;
+    const href = pad && pad.typeKey ? '#profile/pad-types/' + encodeURIComponent(pad.typeKey) : pkg ? '#profile/new-pad-type/' + encodeURIComponent(pkg) : null;
     IL.patch(edit, { text: pad && pad.typeKey ? 'Edit pad type ' + typeName(pad, t) : pkg ? 'New pad type for ' + pkg : 'Edit pad type', hidden: !href || !pads.length });
     edit.dataset.href = href || '';
     IL.patch($('pad-insp-prev'), { disabled: list.length < 2 });
