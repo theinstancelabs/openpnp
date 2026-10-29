@@ -290,7 +290,7 @@ public class DispensePlanner {
      * paste the dispensable pads anyway ({@link PadTypeResolver#pastePartial()}). The pads the tip
      * cannot dispense (reason "tip") of such a part get no paste either way, also when a pad type
      * covers them: only its dispensable pads are ever pasted. A part made only of such pads is left
-     * to the gate (§3.3).
+     * to the gate (§3.3), unless they are too close to a neighbour (decision 14: always held back).
      */
     private Set<String> wholePartPads(List<PadGeometry> pads, DispensePlan plan) {
         Set<String> ids = new HashSet<>();
@@ -309,6 +309,7 @@ public class DispensePlanner {
         }
         Set<String> refs = new TreeSet<>(GroupKey.NATURAL);
         Set<String> tip = new HashSet<>();
+        Set<String> near = new HashSet<>();
         for (ProfileCheck.Group g : r.groups) {
             if (ProfileCheck.PART.equals(g.reason)) {
                 ids.addAll(g.padIds);
@@ -316,6 +317,9 @@ public class DispensePlanner {
             }
             else if (ProfileCheck.TIP.equals(g.reason)) {
                 tip.addAll(g.padIds);
+                if (ProfileCheck.TIP_NEAR.equals(g.tipKind)) {
+                    near.addAll(g.padIds);
+                }
             }
         }
         if (!ids.isEmpty()) {
@@ -335,7 +339,8 @@ public class DispensePlanner {
         Set<String> tipIds = new HashSet<>();
         Set<String> tipRefs = new TreeSet<>(GroupKey.NATURAL);
         for (PadGeometry g : pads) {
-            if (g.padType != null && tip.contains(g.padId) && mixed.contains(g.placementId)) {
+            if (g.padType != null && tip.contains(g.padId)
+                    && (mixed.contains(g.placementId) || near.contains(g.padId))) {
                 tipIds.add(g.padId);
                 tipRefs.add(g.placementId);
             }
