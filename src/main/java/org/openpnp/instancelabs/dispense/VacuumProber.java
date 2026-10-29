@@ -322,12 +322,7 @@ public final class VacuumProber {
             out.add(p);
         }
         if (emu == null) {
-            AxisBacklash[] b = n1.backlash();
-            double[] planned = n1.currentPlanned();
-            lastDriver = n1.currentDriver();
-            double[] off = {lastDriver[0] - planned[0], lastDriver[1] - planned[1], lastDriver[2] - planned[2]};
-            // Z goes exactly where it is sent (bench raw Z; z1 has no backlash offset): no Z compensation.
-            emu = new BacklashEmulator(new AxisBacklash[] {b[0], b[1], AxisBacklash.none()}, planned, off, true);
+            readPosition();
             letters = new String[] {n1.letterX(), n1.letterY(), n1.letterZ()};
         }
         try {
@@ -366,7 +361,7 @@ public final class VacuumProber {
     }
 
     /** The refusal text of the first target that ended no-contact or not-bare, or null. */
-    public static String refusal(List<Point> points, Window w) {
+    public static String refusal(List<Point> points) {
         for (Point p : points) {
             if (p.failure != null) {
                 return p.failure;
@@ -405,7 +400,7 @@ public final class VacuumProber {
             if (look != null) {
                 p.state = "look";
                 report(p);
-                Look lk = look.look(p.x, p.y);
+                Look lk = lookAt(p);
                 p.look = lk;
                 if (lk != null && !lk.bare) {
                     p.notBareSpots++;
@@ -649,6 +644,36 @@ public final class VacuumProber {
         p.lowestZ = p.lowestZ == null ? z : Math.min(p.lowestZ, z);
         report(p);
         return m;
+    }
+
+    /** Where N1 is now (raw planned and driver X/Y/Z), the start of the next raw move. */
+    private void readPosition() {
+        AxisBacklash[] b = n1.backlash();
+        double[] planned = n1.currentPlanned();
+        lastDriver = n1.currentDriver();
+        double[] off = {lastDriver[0] - planned[0], lastDriver[1] - planned[1], lastDriver[2] - planned[2]};
+        // Z goes exactly where it is sent (bench raw Z; z1 has no backlash offset): no Z compensation.
+        emu = new BacklashEmulator(new AxisBacklash[] {b[0], b[1], AxisBacklash.none()}, planned, off, true);
+    }
+
+    /**
+     * The camera look moves the head through OpenPnP: before it, OpenPnP learns where the probe left N1
+     * (lifted and at rest after the end lines), after it the probe starts from where the camera left the
+     * head (the capture waited for still-stand).
+     */
+    private Look lookAt(Point p) throws Exception {
+        OpenPnpRawMapper m = n1 instanceof OpenPnpRawMapper ? (OpenPnpRawMapper) n1 : null;
+        if (m != null) {
+            m.resync(emu.planned(), lastDriver.clone(), m.currentB());
+        }
+        try {
+            return look.look(p.x, p.y);
+        }
+        finally {
+            if (m != null) {
+                readPosition(); // also after a failed look: OpenPnP's state is the truth once it moved
+            }
+        }
     }
 
     // ------------------------------------------------------------------------------------------

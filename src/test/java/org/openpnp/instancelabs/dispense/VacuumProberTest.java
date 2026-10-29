@@ -19,7 +19,10 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.junit.jupiter.api.Test;
+import org.openpnp.model.LengthUnit;
+import org.openpnp.model.Location;
 import org.openpnp.model.Part;
+import org.openpnp.spi.MotionPlanner.CompletionType;
 import org.openpnp.spi.base.AbstractNozzle;
 
 /**
@@ -517,9 +520,9 @@ public class VacuumProberTest {
         assertTrue(p.retried);
         assertEquals(2, rig.ch.sent.stream().filter(l -> l.equals("G1 Z7.0000 F300")).count(), "probed again");
         assertEquals(2, rig.ch.sent.stream().filter(l -> l.equals("G4 P1500")).count(), "with a new baseline");
-        assertNotNull(VacuumProber.refusal(pts, w));
-        assertTrue(VacuumProber.refusal(pts, w).startsWith("PROBE: no contact at board X 8.0, Y 8.0 (N1 went down"),
-                VacuumProber.refusal(pts, w));
+        assertNotNull(VacuumProber.refusal(pts));
+        assertTrue(VacuumProber.refusal(pts).startsWith("PROBE: no contact at board X 8.0, Y 8.0 (N1 went down"),
+                VacuumProber.refusal(pts));
         assertEquals(END, rig.ch.sent.subList(rig.ch.sent.size() - 4, rig.ch.sent.size()));
         // one fine miss, then a good re-probe: the re-probe's contact
         Rig rig2 = new Rig();
@@ -875,6 +878,51 @@ public class VacuumProberTest {
         }
     }
 
+    @Test
+    public void openPnpMovesTheHeadForTheLookAndTheProbeStartsFromThere() throws Exception {
+        try (SimMachine sim = new SimMachine()) {
+            Rig rig = new Rig();
+            OpenPnpRawMapper n1 = OpenPnpRawMapper.forProbeNozzle(sim.machine, sim.n1, "b");
+            rig.n1 = n1;
+            double[] head = n1.currentPlanned();
+            rig.ch.x = head[0];
+            rig.ch.y = head[1];
+            rig.ch.z = head[2];
+            VacuumProber.Window w = VacuumProber.Window.of(4.5, null, head[2], rig.s);
+            List<double[]> seenAt = new ArrayList<>();
+            rig.look = (x, y) -> {
+                if (y > 105) {
+                    seenAt.add(n1.currentPlanned()); // what OpenPnP was told before it moves the head
+                    // the camera tour: OpenPnP moves the head elsewhere (here N1 itself stands in for the camera)
+                    sim.n1.moveTo(new Location(LengthUnit.Millimeters, 180, 110, head[2], 0));
+                    sim.machine.getMotionPlanner().waitForCompletion(null, CompletionType.WaitForStillstand);
+                    double[] now = n1.currentPlanned();
+                    rig.ch.x = now[0];
+                    rig.ch.y = now[1];
+                    seenAt.add(now);
+                }
+                return look(true, 0);
+            };
+            rig.ch.onLine = l -> {
+                if (l.equals("M106")) {
+                    seenAt.add(new double[] {rig.ch.x, rig.ch.y});
+                }
+            };
+            List<VacuumProber.Point> pts = rig.prober().probe(Arrays.asList(target(1, 200, 100, null, null),
+                    target(2, 200, 110, null, null)), w);
+            assertEquals("contact", pts.get(1).state);
+            // the vacuum went on with the head where each target needs it, not where the probe last sent it
+            assertEquals(200 - N1X, seenAt.get(0)[0], 1e-6);
+            // OpenPnP was told where the probe had left N1 (lifted over point 1) before it moved the head
+            assertEquals(200 - N1X, seenAt.get(1)[0], 1e-6);
+            assertEquals(100 - N1Y, seenAt.get(1)[1], 1e-6);
+            assertEquals(head[2], seenAt.get(1)[2], 1e-6);
+            assertEquals(180 - N1X, seenAt.get(2)[0], 1e-6, "OpenPnP moved the head for the look");
+            assertEquals(200 - N1X, seenAt.get(3)[0], 1e-6);
+            assertEquals(110 - N1Y, seenAt.get(3)[1], 1e-6);
+        }
+    }
+
     static VacuumProber.Look look(boolean bare, double share) {
         VacuumProber.Look l = new VacuumProber.Look();
         l.bare = bare;
@@ -909,7 +957,7 @@ public class VacuumProberTest {
         assertEquals("not-bare", pts.get(0).state);
         assertEquals("skipped", pts.get(1).state);
         assertEquals("PROBE: something on the surface at board X 8.0, Y 8.0 and 2 spots nearby (paste, a part or print: "
-                + "up to 14 % of the spot): wipe it, or probe by hand", VacuumProber.refusal(pts, w));
+                + "up to 14 % of the spot): wipe it, or probe by hand", VacuumProber.refusal(pts));
         assertFalse(all.ch.sent.contains("M106"), "no vacuum, no touch");
         assertEquals(END, all.ch.sent.subList(all.ch.sent.size() - 4, all.ch.sent.size()), "lifted and vented anyway");
     }
