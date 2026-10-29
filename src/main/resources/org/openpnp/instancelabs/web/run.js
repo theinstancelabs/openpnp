@@ -2310,12 +2310,12 @@
   }
   const SEG_CLASS = { ok: 'ok', you: 'you', info: 'you', off: '', need: 'need', block: 'block', live: 'live', checking: 'checking', wait: 'wait' };
   const TILE_GO = { machine: { view: 'machine' }, angle: { view: 'angle' }, needle: { href: '#setup/needle' }, regulator: { view: 'pressure' },
-    padtypes: { href: '#profile' }, surface: { step: 'probe' }, plan: { view: 'interlocks' }, purge: { view: 'purge' }, clean: { view: 'camera' } };
+    padtypes: { href: '#profile', hrefNow: () => IL.padProfile && IL.padProfile.needsHref() }, surface: { step: 'probe' }, plan: { view: 'interlocks' }, purge: { view: 'purge' }, clean: { view: 'camera' } };
   function tileGo(key) {
     const g = TILE_GO[key];
     if (!g) return;
     if (g.view) IL.openView(g.view, { keep: true });
-    else if (g.href) IL.go(g.href);
+    else if (g.href) IL.go((g.hrefNow && g.hrefNow()) || g.href);
     else if (g.step) goStep(g.step);
   }
   function cleanCard(it, first, s) {

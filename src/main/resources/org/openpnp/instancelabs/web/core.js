@@ -706,6 +706,7 @@
       const lab = s.run && s.run.running ? s.run.label : 'task';
       return lab === 'board' ? 'Locked while the board runs' : 'Locked while the ' + (lab === 'z check' ? 'Z check' : lab) + ' runs';
     }
+    if (n.idle && IL.padProfile && IL.padProfile.jobLock(s)) return 'Locked while the pad calibration runs';
     if (n.pressureOff && pr.state && pr.state !== 'off') return 'Pressure is held: switch it off first';
     if (n.connected && !m.enabled) return 'Not connected: connect first';
     if (n.homed && !m.homed) return 'Not homed: home first';
@@ -1032,9 +1033,12 @@
         fixes: [{ view: 'pressure', label: 'Pressure on to read the gauge' }, { fix: 'attest-regulator', label: 'Reads ' + psi + ' psi' }] });
     }
 
-    // 5 Pad types (PLAN)
+    // 5 Pad types (PLAN); with the profile check, padprofile.js words it (PROFILE_CALIBRATION_DESIGN.md §13.2, H-P1)
     const gate = d.minPadTypeStatus || 'the gate';
-    if (!plan) {
+    const ppItem = IL.padProfile && plan && plan.profileCheck ? IL.padProfile.padTypesItem(plan, d, viol) : null;
+    if (ppItem) {
+      add(ppItem);
+    } else if (!plan) {
       add({ key: 'padtypes', code: 'PLAN', title: 'Pad types', state: 'wait', value: '—', short: 'pad types', detail: 'Known after planning.' });
     } else {
       const pads = plan.pads || [];
@@ -1360,7 +1364,7 @@
   // ================================================================================== verdict (strip "Board run")
   const TASK_WORD = { prime: 'Prime', 'test dot': 'Test dot', 'needle touch-off': 'Touch-off', 'dot ladder': 'Dot ladder',
     'scale shots': 'Shots', 'clean-pad check': 'Pad check', board: 'Board', 'board registration': 'Register', 'blank probe': 'Blank probe',
-    'z check': 'Z check' };
+    'z check': 'Z check', 'pad calibration': 'Pad calibration' };
   IL.TASK_WORD = TASK_WORD;
   const VENT_S = 1;
   /**
@@ -1403,6 +1407,7 @@
       if (st === 'z check') return ['Checking Z', ' · 0/' + run.dotsPlanned];
       return ['0/' + run.dotsPlanned, ' · starting'];
     }
+    if (run.label === 'pad calibration' && IL.padProfile) return IL.padProfile.taskParts(run);
     if (run.label === 'board registration' || run.label === 'blank probe') {
       const g = IL.regProgress(run);
       return [word + ' · ' + g.part, g.left !== null ? ' · ≈ ' + IL.fmtClock(g.left) + ' left' : ''];
@@ -1455,6 +1460,8 @@
       const r = S.recovery;
       return { state: 'block', text: 'Stopped ' + IL.fmtTime(r.atMs), title: recoveryHeadline(r) + '. Back to ready: see the Recovery panel.' };
     }
+    const pcal = IL.padProfile ? IL.padProfile.verdict(s) : null;
+    if (pcal) return pcal;
     const d = s.dispense || {};
     if (!d.running || !d.available) return { state: 'block', text: 'Dispenser unavailable', title: d.unavailableReason || 'The dispense engine is not running.' };
     return IL.ready().verdict;
@@ -2024,6 +2031,7 @@
       if (S.online === false) return { sub: 'No answer', kind: 'block' };
       if (run && run.running) {
         if (run.label === 'board') return { sub: run.dotsDone + ' of ' + run.dotsPlanned, kind: 'live', badge: String(run.dotsDone), badgeKind: 'live', badgeLabel: run.dotsDone + ' dots done' };
+        if (run.label === 'pad calibration') return { sub: 'Calibrating pads', kind: 'live' };
         return { sub: (TASK_WORD[run.label] || cap(run.label)) + ' running', kind: 'live' };
       }
       if (IL.recoveryActive()) {
@@ -3148,6 +3156,7 @@
     for (const c of document.querySelectorAll('[data-open-view]')) c.addEventListener('click', () => IL.openView(c.dataset.openView));
     $('pill-engine').addEventListener('click', () => {
       const s = S.status;
+      if (IL.padProfile && IL.padProfile.jobActive(s) && !IL.recoveryActive()) { IL.openView('pad-cal', { keep: true }); return; }
       IL.go(IL.recoveryActive() ? '#run' : s && s.run && s.run.running ? '#run/run' : '#run/checks');
     });
     $('btn-start').addEventListener('click', (ev) => IL.runFix('connect', ev.currentTarget, null, ev));

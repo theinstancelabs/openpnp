@@ -65,3 +65,5 @@ export UINAV UINAV_SESSION="$SESSION"
 export SIM_SCENE="$SESSION_CONFIG/instancelabs/sim-scene.json"
 export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/tmp/il-webui-pw-browsers}"
 node "$HERE/webui-sim.playwright.cjs"
+# missing paste profiles and the pad calibration (PROFILE_CALIBRATION_DESIGN.md §14.4): moves the SIM, ≈ 6 min
+SHOTS_DIR="${PP_SHOTS_DIR:-$OUT_DIR/pad-profile-shots}" node "$HERE/pad-profile.playwright.cjs"

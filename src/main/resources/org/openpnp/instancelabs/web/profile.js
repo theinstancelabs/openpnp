@@ -69,7 +69,8 @@
     return names;
   };
   pcr.TASK = { 'needle touch-off': 'Touch-off', 'dot ladder': 'Dot ladder', 'scale shots': 'Scale shots', prime: 'Prime',
-    'test dot': 'Test dot', 'clean-pad check': 'Pad check', board: 'Board', 'board registration': 'Register', 'blank probe': 'Blank probe', 'z check': 'Z check' };
+    'test dot': 'Test dot', 'clean-pad check': 'Pad check', board: 'Board', 'board registration': 'Register', 'blank probe': 'Blank probe', 'z check': 'Z check',
+    'pad calibration': 'Pad calibration' };
   pcr.statusWord = (st) => ({ OK: 'Finished', ABORTED: 'Stopped', ERROR: 'Ended by an error', REFUSED: 'Refused', RUNNING: 'Running' }[st] || IL.cap(String(st || '—').toLowerCase()));
   pcr.statusKind = (st) => ({ OK: 'ok', ABORTED: 'block', ERROR: 'block', REFUSED: 'need', RUNNING: 'live' }[st] || 'off');
   /**
@@ -562,7 +563,7 @@
     const segAll = el('button', { type: 'button', 'aria-pressed': 'true', 'data-filter': 'all' }, 'All types');
     const segPlan = el('button', { type: 'button', 'aria-pressed': 'false', 'data-filter': 'plan', id: 'pt-filter-plan' }, 'Used by this plan');
     for (const b of [segAll, segPlan]) b.addEventListener('click', () => { if (!b.disabled) { PT.filter = b.dataset.filter; IL.render(); } });
-    return el('div', { class: 'pt-section', id: 'pt-section' },
+    const section = el('div', { class: 'pt-section', id: 'pt-section' },
       el('div', { class: 'pt-head' },
         el('div', { class: 'pt-head__t' }, el('h2', { text: 'Pad types' }), el('span', { class: 'count', id: 'pt-count' })),
         el('div', { class: 'pt-tools' },
@@ -571,13 +572,15 @@
           add)),
       el('p', { class: 'pt-hint', id: 'profiles-hint' }),
       el('div', { id: 'profiles', class: 'pt-families', 'aria-live': 'off' }));
+    for (const f of IL.pt.sectionExtras) f(section);
+    return section;
   }
   const COLS = [['Pad type', null, 'pt-c-name'], ['Status', 'not started → provisional → characterized → validated on a board', 'pt-c-st'],
     ['Pad mm', 'Pad width × height in mm', 'pt-c-pad r'], ['Dots', 'Dots per pad, each one dot of the dispense profile', 'pt-c-dots r'],
     ['In plan', 'Pads of this type in the plan shown', 'pt-c-plan r'], ['Validated', 'Last time this type was saved as validated on a board', 'pt-c-val'], ['', null, 'pt-c-act']];
   function renderPadTypes(s) {
     const host = $('profiles');
-    const stats = planStats();
+    const stats = IL.pt.planStats();
     const hasPlan = !!(S.plan && S.plan.pads);
     if (!hasPlan && PT.filter === 'plan') PT.filter = 'all';
     for (const b of $('pt-filter').children) IL.setAttr(b, 'aria-pressed', String(b.dataset.filter === PT.filter));
@@ -588,7 +591,7 @@
     const gate = gateStatus(s);
     const prof = srvProfile(s);
     IL.setText($('profiles-hint'), 'A board refuses pads whose type is below “' + (STATUS_OPTION[gate] || gate) + '” (Lowest pad-type status allowed on a board, in Setup › Settings). '
-      + 'Every dot is one dot of the dispense profile' + (prof ? ' “' + prof.name + '” (' + IL.turnLabel(prof.netStepsPerDot, prof.stepsPerRev) + ')' : '') + '.');
+      + IL.pt.texts.hint(prof));
     const n = allTypes().filter((t) => !t.retired).length;
     IL.setText($('pt-count'), PT.data ? String(n) : '');
     const key = JSON.stringify([PT.ver, PT.error, PT.showRetired, PT.filter, hasPlan ? S.plan.planId : '', hasPlan ? S.plan.pads.length : 0, gate]);
@@ -598,8 +601,8 @@
       const fams = PT.data.families.filter((f) => (!f.retired || PT.showRetired));
       const out = [];
       for (const fam of fams) {
-        const types = fam.types.filter((t) => PT.filter !== 'plan' || stats[t.typeKey]);
-        if (PT.filter === 'plan' && !types.length) continue;
+        const types = fam.types.filter((t) => PT.filter === 'all' || (PT.filter === 'plan' ? stats[t.typeKey] : !IL.pt.filters[PT.filter] || IL.pt.filters[PT.filter](t)));
+        if (PT.filter !== 'all' && !types.length) continue;
         const pass = fam.types.filter((t) => t.dispensable).length;
         out.push(el('section', { class: 'card family' + (fam.retired ? ' family--retired' : ''), 'data-family': fam.family },
           el('div', { class: 'family__head' }, el('h2', { text: fam.family }),
@@ -607,11 +610,11 @@
             el('span', { class: 'family__s', text: fam.retired ? 'never matched or dispensed' : pass ? pass + ' allowed on a board' : 'none allowed on a board yet' })),
           el('table', { class: 'tbl pt-table' },
             el('colgroup', {}, COLS.map((c) => el('col', { class: c[2].split(' ')[0] }))),
-            el('thead', {}, el('tr', {}, COLS.map(([h, t, c]) => el('th', { title: t, class: c.includes(' r') ? 'r' : null, scope: 'col' }, IL.unitText(h))))),
+            el('thead', {}, el('tr', {}, COLS.map(([h, t, c]) => el('th', { title: h === 'Dots' ? IL.pt.texts.dotsCol : t, class: c.includes(' r') ? 'r' : null, scope: 'col' }, IL.unitText(h))))),
             el('tbody', {}, types.length ? types.map((t) => padTypeRow(Object.assign({ retired: !!fam.retired }, t), stats[t.typeKey], prof))
               : [el('tr', {}, el('td', { colspan: String(COLS.length), class: 'muted', text: 'No types yet' }))]))));
       }
-      if (!out.length) out.push(el('div', { class: 'card ws-note' }, el('p', { class: 'muted', text: 'No pad types match.' })));
+      if (!out.length) out.push(el('div', { class: 'card ws-note' }, el('p', { class: 'muted', text: PT.filter === 'needs' ? 'No existing pad type is involved: the sizes above need new ones.' : 'No pad types match.' })));
       return out;
     });
     // selection highlight (no rebuild)
@@ -628,8 +631,8 @@
       title: 'Set up, validate, history, pad rule, retire', 'aria-label': 'More about ' + t.name }, 'More', IL.icon('i-chev'));
     edit.addEventListener('click', () => openPadType(typeByKey(t.typeKey)));
     more.addEventListener('click', () => IL.go('#profile/pad-types/' + t.typeKey));
-    const dots = t.dotsPerPad ? IL.plural(t.dotsPerPad, 'dot') : '—';
-    const dotTitle = 'Each pad gets ' + dots + ' of the profile' + (prof ? ' “' + prof.name + '”' : '') + ' (' + IL.fmt(t.rotationPerDotDeg, 2) + '° net per dot).'
+    const dots = IL.pt.texts.dotsCell(t, prof);
+    const dotTitle = IL.pt.texts.dotTitle(t, prof)
       + (t.rule ? ' Pad rule v' + t.rule.version + (t.rule.largestSingleDotPadMm2 ? ': above ' + IL.fmt(t.rule.largestSingleDotPadMm2, 2) + ' mm² a grid' : '') + '.' : '')
       + ' A stencil of t ' + IL.fmt(t.tMm, 2) + ' mm and k ' + IL.fmt(t.k, 2) + ' would print ' + IL.fmt(t.targetMassMg, 3) + ' mg (information).';
     const plan = st ? el('span', { class: st.blocked ? 'pt-blocked' : null, title: st.pads + ' pads, ' + st.dots + ' dots in the plan shown' + (st.blocked ? '; ' + st.blocked + ' cannot be dispensed (below the gate)' : '') },
@@ -683,6 +686,7 @@
           ptField('pt-status', 'Status', null, el('select', { class: 'input', id: 'pt-status' })),
           ptField('pt-t', 'Paste thickness', 'mm', num('pt-t', '0.005', { min: '0', value: '0.10' }), 'Like a stencil’s.'),
           ptField('pt-k', 'Area share k', '0 to 1', num('pt-k', '0.05', { min: '0', max: '1', value: '1.0' }), 'Less than 1 for QFN centre pads.')),
+        IL.pt.editorExtras.map((x) => x.build()),
         ptField('pt-pattern', 'Package names', 'regular expression, matched against OpenPnP package ids', txt('pt-pattern', { placeholder: 'e.g. 0603|1608Metric' })),
         el('div', { class: 'pt-derived', id: 'pt-derived' }),
         ptField('pt-notes', 'Notes', null, el('textarea', { class: 'input', id: 'pt-notes', rows: '2' })),
@@ -748,6 +752,7 @@
     $('pt-error').replaceChildren();
     for (const n of $('padtype-form').querySelectorAll('.input--invalid')) n.classList.remove('input--invalid');
     IL.setText($('pt-save'), t ? 'Save version ' + (t.version + 1) : 'Save');
+    for (const x of IL.pt.editorExtras) x.open(t, srvProfile(S.status));
     PT.dlg = IL.dialog.showNative($('dlg-padtype'), { initialFocus: '#pt-name', onClose: () => { PT.dlg = null; } });
     ptDerived();
     loadPackages().then(() => ptDerived());
@@ -797,6 +802,7 @@
     if (v.t !== undefined && !(v.t > 0)) e['pt-t'] = 'Above 0 mm.';
     if (v.k !== undefined && !(v.k > 0 && v.k <= 1)) e['pt-k'] = 'Above 0, at most 1.';
     if (v.pattern) { try { new RegExp(v.pattern, 'i'); } catch (x) { e['pt-pattern'] = 'Not a valid regular expression.'; } }
+    for (const x of IL.pt.editorExtras) if (x.check) x.check(e);
     return e;
   }
   /** Live preview: pads to scale, area, stencil-equivalent volume, matched packages; field errors after a save try. */
@@ -882,6 +888,7 @@
       pitchMm: v.pitch === undefined ? null : v.pitch, tMm: v.t, k: v.k, status: v.status, packagePattern: v.pattern || null, notes: v.notes || null };
     const editKey = PT.editKey;
     if (!editKey && v.typeKey) body.typeKey = v.typeKey;
+    for (const x of IL.pt.editorExtras) if (x.body) x.body(body);
     await IL.act(btn, async () => {
       const r = editKey ? await IL.api('PUT', '/api/pad-types/' + encodeURIComponent(editKey), body) : await IL.api('POST', '/api/pad-types', body);
       if (PT.dlg) PT.dlg.close('saved');
@@ -1006,7 +1013,7 @@
     const gate = gateStatus(s);
     const types = allTypes().filter((t) => !t.retired);
     const pass = types.filter((t) => t.dispensable);
-    const stats = planStats();
+    const stats = IL.pt.planStats();
     const blocked = Object.entries(stats).filter(([, v]) => v.blocked);
     IL.keyed($('pt-ov-gate'), JSON.stringify([gate, PT.ver, S.plan ? S.plan.planId : '', blocked.length]), () => {
       const gi = STATUS_ORDER.indexOf(gate);
@@ -1026,10 +1033,10 @@
         const t = typeByKey(k);
         const btn = el('button', { type: 'button', class: 'pt-plan__i', 'data-focus-key': 'plan:' + k },
           t ? pcr.badge(t.status, t.retired) : IL.glyph('block', 'xs'),
-          el('span', { class: 'pt-plan__n', text: t ? t.name : k }),
+          el('span', { class: 'pt-plan__n', text: t ? t.name : v.label || k }),
           el('span', { class: 'pt-plan__v' + (v.blocked ? ' pt-blocked' : ''), text: IL.plural(v.pads, 'pad') + (v.blocked ? ' · ' + v.blocked + ' blocked' : '') }),
           IL.icon('i-chev'));
-        btn.addEventListener('click', () => (t ? IL.go('#profile/pad-types/' + k) : IL.go('#profile/new-pad-type/' + ([...v.packages][0] || ''))));
+        btn.addEventListener('click', () => (t ? IL.go('#profile/pad-types/' + k) : IL.go(v.href || '#profile/new-pad-type/' + ([...v.packages][0] || ''))));
         if (!t) btn.title = 'No pad type matches these packages (' + [...v.packages].join(', ') + '): make one';
         return el('li', {}, btn);
       }));
@@ -1061,7 +1068,7 @@
     IL.setText($('pt-ph-n'), t.name);
     IL.setText($('pt-ph-e'), 'v' + t.version + ' · ' + t.family);
     IL.keyed($('pt-ph-b'), t.status + t.retired, () => pcr.badge(t.status, t.retired));
-    const st = planStats()[t.typeKey];
+    const st = IL.pt.planStats()[t.typeKey];
     const m = matchedPackages(t.packagePattern);
     if (t.packagePattern && !PT.pkgs) loadPackages();
     const rule = t.rule || {};
@@ -1077,7 +1084,7 @@
         el('dl', { class: 'kv kv--wrap' },
           [['Pad', pcr.fmtPad(t.padWMm) + ' × ' + pcr.fmtPad(t.padHMm) + ' mm' + (t.padRoundness ? ' · ' + IL.fmt(t.padRoundness, 0) + ' % round' : '') + ' · ' + IL.fmt(area, 3) + ' mm²'],
             ['Layout', (LAYOUTS[t.layout] || t.layout) + (t.pitchMm ? ' · pitch ' + pcr.fmtPad(t.pitchMm) + ' mm' : '')],
-            ['Dot plan', IL.plural(t.dotsPerPad, 'dot') + ' of the profile per pad (' + IL.fmt(t.rotationPerDotDeg, 2) + '° each)'],
+            ['Dot plan', IL.pt.texts.dotPlan(t, srvProfile(s))],
             ['Stencil equivalent', 't ' + IL.fmt(t.tMm, 2) + ' mm · k ' + IL.fmt(t.k, 2) + ' → ' + IL.fmt(t.targetMassMg, 3) + ' mg (information)'],
             ['In this plan', st ? IL.plural(st.pads, 'pad') + ', ' + IL.plural(st.dots, 'dot') + (st.blocked ? ', ' + st.blocked + ' blocked' : '') : S.plan ? 'not used' : 'no plan shown'],
             ['Versions', t.versions + ' · this one ' + IL.fmtDateTime(t.createdAtMs - S.skewMs) + (t.operator ? ' by ' + t.operator : '')],
@@ -1085,7 +1092,7 @@
           ].flatMap(([k, v]) => [el('dt', { text: k }), el('dd', { text: IL.nb(v) })])),
         t.notes ? el('p', { class: 'panel__lead', text: t.notes }) : null,
         el('div', { class: 'section-k' }, el('span', { text: 'Calibrate this size' }), el('span', { class: 'rule' })),
-        el('div', { class: 'btn-row' }, setUp, validate),
+        el('div', { class: 'btn-row' }, setUp, validate, IL.pt.sidePanelExtras.map((f) => f(t, s))),
         el('div', { class: 'section-k' }, el('span', { text: 'Packages it matches' }), el('span', { class: 'rule' })),
         el('div', { class: 'pt-pkgs' }, !t.packagePattern ? el('span', { class: 'muted', text: 'No package pattern: assigned only by the engine’s own rules (e.g. QFN centre pads).' })
           : el('div', {}, el('code', { class: 'pt-pat', text: t.packagePattern }),
@@ -1151,6 +1158,24 @@
     if (IL.active() === 'profile') IL.panel.reset();
   }
 
+  // ================================================================================== hooks (padprofile.js)
+  /**
+   * What padprofile.js may change or add (PROFILE_CALIBRATION_DESIGN.md §13.3, hook H-P3): profile.js calls these
+   * through IL.pt; without padprofile.js they are profile.js's own.
+   */
+  IL.pt = { PT, route: null, panel: null, planStats, newForPackage, openPadType, selectType, filters: {}, sectionExtras: [], renderExtras: [],
+    sidePanelExtras: [], editorExtras: [], navSubs: [],
+    texts: {
+      meta: 'One recipe for every dot. Plans made before a change are refused: plan again.',
+      dotsCol: 'Dots per pad, each one dot of the dispense profile',
+      hint: (prof) => 'Every dot is one dot of the dispense profile' + (prof ? ' “' + prof.name + '” (' + IL.turnLabel(prof.netStepsPerDot, prof.stepsPerRev) + ')' : '') + '.',
+      dotsCell: (t) => (t.dotsPerPad ? IL.plural(t.dotsPerPad, 'dot') : '—'),
+      dotTitle: (t, prof) => 'Each pad gets ' + (t.dotsPerPad ? IL.plural(t.dotsPerPad, 'dot') : '—') + ' of the profile' + (prof ? ' “' + prof.name + '”' : '')
+        + ' (' + IL.fmt(t.rotationPerDotDeg, 2) + '° net per dot).',
+      dotPlan: (t) => IL.plural(t.dotsPerPad, 'dot') + ' of the profile per pad (' + IL.fmt(t.rotationPerDotDeg, 2) + '° each)',
+    } };
+  if (IL.padProfile) IL.padProfile.profileHooks(IL.pt);
+
   // ================================================================================== workspace
   let root = null;
   IL.workspace('profile', {
@@ -1162,7 +1187,7 @@
           el('div', { class: 'page-head__text' },
             el('div', { class: 'eyebrow', text: 'Profile · dispense recipe and pad types' }),
             el('h1', {}, 'Profile', el('span', { class: 'h1-sub', id: 'pf-h1-sub' })),
-            el('div', { class: 'meta pf-meta' }, el('span', { id: 'pf-recipe' }), el('span', { text: 'One recipe for every dot. Plans made before a change are refused: plan again.' })))),
+            el('div', { class: 'meta pf-meta' }, el('span', { id: 'pf-recipe' }), el('span', { text: IL.pt.texts.meta })))),
         buildProfileCard(),
         buildAngleCard(),
         buildPadTypesSection(),
@@ -1172,9 +1197,10 @@
     },
     show() { loadPadTypes(); },
     route(r) {
+      if (IL.pt.route && IL.pt.route(r)) return;
       if (r.section === 'new-pad-type') {
         selectType(null);
-        newForPackage(r.id);
+        IL.pt.newForPackage(r.id);
         setTimeout(() => IL.go('#profile/pad-types', { replace: true }), 0);   // a reload must not reopen it
         return;
       }
@@ -1205,8 +1231,10 @@
       if (PT.watchKey !== null && wk !== PT.watchKey && PT.data) loadPadTypes();
       PT.watchKey = wk;
       renderPadTypes(s);
+      for (const f of IL.pt.renderExtras) f(s);
     },
     panel(parts, s, first) {
+      if (IL.pt.panel && IL.pt.panel(parts, s, first)) return;
       if (!first && PT.panelSel !== PT.sel) { IL.panel.reset(); return; }
       if (first) PT.panelSel = PT.sel;
       if (PT.sel) renderTypePanel(parts, s, first);
@@ -1217,6 +1245,7 @@
       if (PF.dirty.size) return { sub: 'Unsaved changes', kind: 'need', dirty: true, title: 'Unsaved profile changes: they stay here until you save or discard them' };
       if (p.partialTurn && p.startAngleNeedsConfirm) return { sub: 'Confirm angle', kind: 'need' };
       if (p.partialTurn && !p.startAngleSetAtMs) return { sub: 'Measure angle', kind: 'block' };
+      for (const f of IL.pt.navSubs) { const x = f(s); if (x) return x; }
       return { sub: p.name || '' };
     },
   });
