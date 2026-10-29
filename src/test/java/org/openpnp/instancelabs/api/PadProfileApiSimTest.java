@@ -546,11 +546,24 @@ public class PadProfileApiSimTest {
             assertEquals(outcome.get(str(x, "packageId")), str(x, "outcome"), x.toString());
         }
 
-        // the openings of the upload are the fixture's (R/nano.pads.json, top side) within 0.001 mm
-        Fixture f = pads("nano");
+        // the openings of the upload are the fixture's (R/*.pads.json, top side) within 0.001 mm
+        assertEquals(55, sameOpenings(pv, pads("nano")));
+        assertEquals(160, sameOpenings(preview(kicad("ftp.kicad_pcb.gz"), "ftp.kicad_pcb"), pads("ftp")));
+        assertEquals(261, sameOpenings(ok(send("POST", "/api/boards/import?file=mobo.kicad_pcb&pasteDnp=1",
+                kicad("mobo.kicad_pcb.gz"), "application/octet-stream")), pads("mobo")));
+    }
+
+    /** Every opening of the preview's placements equals the fixture's (board frame, size, roundness); their count. */
+    static int sameOpenings(JsonObject pv, Fixture f) {
         Map<String, JsonObject> pkgs = new TreeMap<>();
         for (JsonElement e : pv.getAsJsonArray("packages")) {
             pkgs.put(str(e.getAsJsonObject(), "id"), e.getAsJsonObject());
+        }
+        Map<String, FPad> byId = new TreeMap<>();
+        for (FPad fp : f.pads) {
+            if (fp.side.equals("top")) {
+                byId.put(fp.ref + "." + fp.padName, fp);
+            }
         }
         int compared = 0;
         for (JsonElement e : pv.getAsJsonArray("placements")) {
@@ -563,24 +576,23 @@ public class PadProfileApiSimTest {
             double s = Math.sin(Math.toRadians(x.get("rotation").getAsDouble()));
             for (JsonElement pe : pk.getAsJsonArray("pads")) {
                 JsonObject pad = pe.getAsJsonObject();
-                FPad fixturePad = null;
-                for (FPad fp : f.pads) {
-                    if (fp.side.equals("top") && fp.ref.equals(str(x, "ref")) && fp.padName.equals(str(pad, "name"))) {
-                        fixturePad = fp;
-                    }
-                }
-                assertNotNull(fixturePad, x + " " + pad);
+                FPad fp = byId.get(str(x, "ref") + "." + str(pad, "name"));
+                assertNotNull(fp, x + " " + pad);
                 double px = pad.get("x").getAsDouble();
                 double py = pad.get("y").getAsDouble();
-                assertEquals(fixturePad.x, x.get("x").getAsDouble() + px * c - py * s, 0.001, fixturePad.padId);
-                assertEquals(fixturePad.y, x.get("y").getAsDouble() + px * s + py * c, 0.001, fixturePad.padId);
-                assertEquals(fixturePad.wMm, pad.get("w").getAsDouble(), 0.001, fixturePad.padId);
-                assertEquals(fixturePad.hMm, pad.get("h").getAsDouble(), 0.001, fixturePad.padId);
-                assertEquals(fixturePad.roundness, pad.get("roundness").getAsDouble(), 0.001, fixturePad.padId);
+                assertEquals(fp.x, x.get("x").getAsDouble() + px * c - py * s, 0.001, fp.padId);
+                assertEquals(fp.y, x.get("y").getAsDouble() + px * s + py * c, 0.001, fp.padId);
+                // mobo J5's two paste polygons carry a 0.12 mm outline: K/ counts it (the plotted window), the
+                // fixture's extractor does not (R/README.md)
+                double stroke = fp.padId.equals("J5.6~1") || fp.padId.equals("J5.7~1") ? 0.12 : 0;
+                assertEquals(fp.wMm + stroke, pad.get("w").getAsDouble(), 0.001, fp.padId);
+                assertEquals(fp.hMm + stroke, pad.get("h").getAsDouble(), 0.001, fp.padId);
+                assertEquals(stroke > 0 ? 100 * 0.06 / ((fp.wMm + stroke) / 2) : fp.roundness,
+                        pad.get("roundness").getAsDouble(), 0.001, fp.padId);
                 compared++;
             }
         }
-        assertEquals(55, compared);
+        return compared;
     }
 
     // ------------------------------------------------------------------------------------------

@@ -166,7 +166,13 @@ final class PadProfileEndpoints {
                         + "the suggestion as a new provisional pad type, then calibrate it"));
             }
             else {
-                changes.add(change(db, cfg, g, s, operator));
+                Change x = change(db, cfg, g, s, operator);
+                if (x == null) {
+                    skipped.add(Views.map("group", g.group, "why", s.name + " already has this plan: calibrate it"));
+                }
+                else {
+                    changes.add(x);
+                }
             }
         }
         for (Change x : changes) {
@@ -212,6 +218,7 @@ final class PadProfileEndpoints {
         Integer version;
     }
 
+    /** The writes of one suggestion; null when a calibrate-existing type already carries its plan. */
     private static Change change(DispenseDb db, DispenseConfig cfg, ProfileCheck.Group g, Suggestion s,
             String operator) throws Exception {
         Change x = new Change();
@@ -262,9 +269,11 @@ final class PadProfileEndpoints {
             if (!"your plan".equals(s.planFrom)) {
                 t.origin = PadType.ORIGIN_SUGGESTED;
             }
-            boolean unchanged = !planChanged && cur.status == t.status && Objects.equals(cur.calAreaMm2, t.calAreaMm2);
+            if (!planChanged && cur.status == t.status && Objects.equals(cur.calAreaMm2, t.calAreaMm2)) {
+                return null;
+            }
             t.operator = operator;
-            x.type = unchanged ? null : t;
+            x.type = t;
         }
         return x;
     }
