@@ -66,6 +66,8 @@ public class GcodeStreamBuilder {
     private boolean pumpOn, valveOn, armed;
     private final boolean keepalive;
     private double t;
+    /** Estimated time when the last dot's XY move ended (per-dot times of board programs). */
+    private double lastDotArriveT;
     private double pumpOnT = -1;
     private double accel = Double.NaN;
     /** M201 B sent at session start (caps the screw acceleration). */
@@ -179,6 +181,8 @@ public class GcodeStreamBuilder {
         b.pressurize();
         b.purge(purge);
         double workT0 = b.t;
+        double[] arrive = new double[dots.size()];
+        double[] end = new double[dots.size()];
         for (int i = 0; i < dots.size(); i++) {
             if (i == 0) {
                 b.travelTo(dots.get(0).x, dots.get(0).y);
@@ -186,7 +190,11 @@ public class GcodeStreamBuilder {
             }
             // whole steps from the profile (not the plan's degrees: a changed bStepsPerDeg would drift)
             b.dot(dots.get(i), cfg.profile.netStepsPerDot);
+            arrive[i] = b.lastDotArriveT;
+            end[i] = b.t;
         }
+        b.prog.dotArriveSeconds = arrive;
+        b.prog.dotEndSeconds = end;
         // From the cross after the purge to the last dot's lift: what the bench's DPH counts.
         b.prog.estimatedWorkSeconds = b.t - workT0;
         b.endSession();
@@ -375,6 +383,7 @@ public class GcodeStreamBuilder {
         pendingRot = d.rotationDeg;
         double x = trimX(d.x), y = trimY(d.y);
         moveNozzle(x, y, nozzle[2], cfg.travelFeedMmS, "G0");
+        lastDotArriveT = t;
         moveNozzle(x, y, d.dispenseZ, cfg.zDownFeedMmS, "G1");
         long suck = profile.suckBackSteps(cfg);
         setAccel(profile.screwAccelDegS2);
