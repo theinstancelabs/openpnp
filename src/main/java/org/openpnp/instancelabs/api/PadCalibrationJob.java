@@ -13,6 +13,7 @@ import java.util.TreeMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import org.openpnp.instancelabs.dispense.Balance;
 import org.openpnp.instancelabs.dispense.CalibrationArea;
@@ -101,6 +102,8 @@ final class PadCalibrationJob {
     static final long READ_TIMEOUT_MS = 30_000;
     /** The hop of a dose no group gives one for (mm): the ladder's widest pitch. */
     static final double DEFAULT_HOP_MM = PadLadder.MAX_PITCH_MM;
+    /** The blank step touches this far inside the area's free band, and no closer to its used band (mm). */
+    static final double BLANK_INSET_MM = 1.0;
 
     /** What the operator asked for (POST body, or the preview's query). */
     static final class Request {
@@ -223,6 +226,8 @@ final class PadCalibrationJob {
 
     // the run
     private final Object lock = new Object();
+    /** How long the job waits for one engine step before it stops the engine and fails (ms). */
+    long stepWaitMs = ApiContext.MAX_WAIT_MS * 3;
     /**
      * The engine's stop epoch when the job was prepared: a STOP after it (also one pressed while the start
      * saved the suggestions, before this job was the current one) halts the job before its next engine step.
@@ -522,8 +527,12 @@ final class PadCalibrationJob {
         return e == null || !e.opticalFresh || !e.opticalPass || e.hops < minHops;
     }
 
-    /** Step 1: the area's surface is missing, older than the last home or connect, or does not cover the area. */
+    /**
+     * Step 1: the area's surface is missing, older than the last home or connect, or does not cover the area's free
+     * band (where the ladder goes: below it lie the dots of earlier ladders, which N1 must not touch).
+     */
     private void planBlank(DispenseConfig c) {
+        CalibrationArea free = freeBand(area);
         DispenseConfig.SurfaceMap m = c.surface(area.surfaceName);
         SurfacePlane plane = svc.surfacePlane(area.surfaceName);
         HomeTracker.Plan hp = svc.homePlan();
@@ -542,7 +551,8 @@ final class PadCalibrationJob {
             blankWhy = "the '" + area.surfaceName + "' surface was probed before the controller last connected";
         }
         else {
-            for (double[] p : areaCorners(area, 0)) {
+            // where the probe below touches: a surface it made covers the area for the next job
+            for (double[] p : areaCorners(free, BLANK_INSET_MM)) {
                 if (plane.distanceOutside(p[0], p[1]) > 1.0 + 1e-9) {
                     blankWhy = "the '" + area.surfaceName + "' surface does not reach the calibration area's corners";
                     break;
@@ -563,12 +573,30 @@ final class PadCalibrationJob {
             catch (Exception e) {
                 // the area's own points below
             }
-            blankTargets.addAll(areaCorners(area, 1.0));
-            blankTargets.add(new double[] {area.x0Mm + area.widthMm / 2, area.y0Mm + area.heightMm / 2});
+            blankTargets.addAll(areaCorners(free, BLANK_INSET_MM));
+            blankTargets.add(new double[] {free.x0Mm + free.widthMm / 2, free.y0Mm + free.heightMm / 2});
+            // the purge row's targets past the blank place lie in the area too
+            blankTargets.removeIf(p -> inUsedBand(area, p));
             while (blankTargets.size() > 20) {
                 blankTargets.remove(0);
             }
         }
+    }
+
+    /** The part of the area no ladder has used since the blank was wiped: from the used line up. */
+    private static CalibrationArea freeBand(CalibrationArea a) {
+        CalibrationArea f = a.copy();
+        f.y0Mm = a.y0Mm + a.usedMm;
+        f.heightMm = Math.max(0, a.heightMm() - a.usedMm);
+        f.usedMm = 0;
+        return f;
+    }
+
+    /** Within {@link #BLANK_INSET_MM} of the band of the area earlier ladders laid their dots in. */
+    private static boolean inUsedBand(CalibrationArea a, double[] p) {
+        double m = BLANK_INSET_MM - 1e-9;
+        return a.usedMm > 0 && p[0] > a.x0Mm - m && p[0] < a.x0Mm + a.widthMm + m && p[1] > a.y0Mm - m
+                && p[1] < a.y0Mm + a.usedMm + m;
     }
 
     private static List<double[]> areaCorners(CalibrationArea a, double inset) {
@@ -767,6 +795,11 @@ final class PadCalibrationJob {
         if (req.pasteLifeAtMs == null || now - req.pasteLifeAtMs > ATTEST_MS || req.pasteLifeAtMs > now + SKEW_MS) {
             return "Confirm the paste is within its working life first (Run › Checks).";
         }
+        // PUT /api/config keeps a value already below its floor: the machine never calibrates on the SIM's statistics
+        List<String> floors = svc.isSimulatorConfirmed() ? new ArrayList<>() : c.padCalibration.realMachineProblems();
+        if (!floors.isEmpty()) {
+            return String.join("; ", floors) + ": set them back to calibrate on this machine";
+        }
         if (!ladderDoses.isEmpty()) {
             if (area == null) {
                 return "Set the blank place first (Setup › Places › " + c.blankLocationName + "): the calibration area "
@@ -803,6 +836,11 @@ final class PadCalibrationJob {
             if (why != null) {
                 return why;
             }
+        }
+        if (!coupons.isEmpty() && DispenseConfig.HOME_ALWAYS.equals(c.homeBeforeRun)) {
+            // the weigh step would home after the coupon step, and the engine refuses coupon Z from before a home
+            return "homeBeforeRun is 'always': every step homes first, so the coupons' Z would be from before the weigh "
+                    + "step's home: set homeBeforeRun to 'whenNeeded' to weigh coupons";
         }
         DispenseConfig.PurgeRow row = c.purgeRow;
         if (purgeNeed > 0 && (!row.isDefined() || row.spotsLeft() < purgeNeed)) {
@@ -1015,7 +1053,16 @@ final class PadCalibrationJob {
             ctx.tracker.expect("pad calibration");
             f = submit.submit();
         }
-        T res = f.get(ApiContext.MAX_WAIT_MS * 3, TimeUnit.MILLISECONDS);
+        T res;
+        try {
+            res = f.get(stepWaitMs, TimeUnit.MILLISECONDS);
+        }
+        catch (TimeoutException e) {
+            // a step the job gives up on must not lay its dots later (still queued) or go on alone: stopped as by STOP
+            engine.abort("the pad calibration gave up waiting for its " + stepWords() + " step");
+            throw new IllegalStateException("the " + stepWords() + " step did not end within " + stepWaitMs / 60000
+                    + " min: the engine was stopped", e);
+        }
         RunResult r = run.apply(res);
         if (r != null) {
             runs.add(r.runId);
