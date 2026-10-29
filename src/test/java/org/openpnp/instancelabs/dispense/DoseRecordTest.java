@@ -139,7 +139,7 @@ public class DoseRecordTest {
         assertEquals("made with another paste (sac305-t4; the paste now is gc50-t5)", r.whyStale(NOW, c, MACHINE));
         r.pasteKey = c.paste.key;
         c.paste.loadedAtMs = NOW - H / 2;
-        assertEquals("made before the paste was loaded", r.whyStale(NOW, c, MACHINE));
+        assertEquals("made before the new paste was loaded", r.whyStale(NOW, c, MACHINE));
     }
 
     /** Decision 9: doseRecordMaxAgeH, default 8 h, a setting. */

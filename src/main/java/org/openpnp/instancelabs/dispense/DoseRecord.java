@@ -126,11 +126,11 @@ public class DoseRecord {
         if (cfg.needleChangedAtMs != null && at < cfg.needleChangedAtMs) {
             return "made before the needle was changed";
         }
-        if (pasteKey == null || !pasteKey.equals(cfg.paste.key)) {
+        if (!cfg.paste.key.equals(pasteKey)) {
             return "made with another paste (" + pasteKey + "; the paste now is " + cfg.paste.key + ")";
         }
         if (cfg.paste.loadedAtMs != null && at < cfg.paste.loadedAtMs) {
-            return "made before the paste was loaded";
+            return "made before the new paste was loaded";
         }
         double maxAgeH = cfg.padCalibration.doseRecordMaxAgeH;
         if (nowMs - at > maxAgeH * 3600e3) {

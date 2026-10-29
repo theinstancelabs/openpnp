@@ -96,15 +96,21 @@ public class DispenseDb implements AutoCloseable {
         this.file = url.startsWith("jdbc:sqlite:") && !url.contains(":memory:")
                 ? new File(url.substring("jdbc:sqlite:".length())) : null;
         this.conn = DriverManager.getConnection(url);
-        try (Statement st = conn.createStatement()) {
-            st.execute("PRAGMA foreign_keys=ON");
-            if (!url.contains(":memory:")) {
-                st.execute("PRAGMA journal_mode=WAL");
+        try {
+            try (Statement st = conn.createStatement()) {
+                st.execute("PRAGMA foreign_keys=ON");
+                if (!url.contains(":memory:")) {
+                    st.execute("PRAGMA journal_mode=WAL");
+                }
             }
+            createSchema();
+            migrate();
+            seedIfEmpty();
         }
-        createSchema();
-        migrate();
-        seedIfEmpty();
+        catch (SQLException | RuntimeException e) {
+            conn.close(); // a failed open (e.g. no room for the backup) leaves nothing open
+            throw e;
+        }
     }
 
     public String getUrl() {
