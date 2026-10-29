@@ -115,9 +115,9 @@ final class PlanStore {
     }
 
     /**
-     * A plan restricted to some pads and/or the first {@code maxDots} dots in path order. The path
-     * order of the full plan is kept and dots are re-indexed from 0. Returns the plan itself if
-     * nothing is excluded.
+     * A plan restricted to some pads and/or the first {@code maxDots} dots in path order, cut before
+     * the pad that would be split (a pad's dose is all its dots: R5, R6). The path order of the full
+     * plan is kept and dots are re-indexed from 0. Returns the plan itself if nothing is excluded.
      */
     static DispensePlan subset(DispensePlan p, List<String> padIds, Integer maxDots) {
         Set<String> wanted = padIds == null || padIds.isEmpty() ? null : new HashSet<>(padIds);
@@ -141,13 +141,26 @@ final class PlanStore {
         }
         List<DispensePlan.PlannedDot> dots = new ArrayList<>();
         for (DispensePlan.PlannedDot d : p.dots) {
-            if (wanted != null && !wanted.contains(d.padId)) {
-                continue;
+            if (wanted == null || wanted.contains(d.padId)) {
+                dots.add(d);
             }
-            if (maxDots != null && dots.size() >= maxDots) {
-                break;
+        }
+        boolean cut = false;
+        if (maxDots != null && dots.size() > maxDots) {
+            int n = maxDots;
+            while (n > 0 && samePad(dots.get(n - 1), dots.get(n))) {
+                n--;
             }
-            dots.add(d);
+            if (n == 0) {
+                int first = 1;
+                while (first < dots.size() && samePad(dots.get(0), dots.get(first))) {
+                    first++;
+                }
+                throw new IllegalArgumentException("a test run lays whole pads: the first pad, " + dots.get(0).padId
+                        + ", has " + first + " dots, so ask for at least " + first);
+            }
+            cut = n < maxDots;
+            dots = new ArrayList<>(dots.subList(0, n));
         }
         if (dots.size() == p.dots.size()) {
             return p;
@@ -211,7 +224,14 @@ final class PlanStore {
         }
         s.warnings.addAll(p.warnings);
         s.warnings.add("subset of plan " + p.planId + ": " + dots.size() + " of " + p.dots.size() + " dots on "
-                + s.pads.size() + " of " + p.pads.size() + " pads (path order kept)");
+                + s.pads.size() + " of " + p.pads.size() + " pads (path order kept" + (cut ? "; whole pads, so "
+                        + dots.size() + " of the " + maxDots + " dots asked for" : "") + ")");
         return s;
+    }
+
+    /** Consecutive dots of one pad: the plan's pad index, else the pad id (a plan made without the index). */
+    private static boolean samePad(DispensePlan.PlannedDot a, DispensePlan.PlannedDot b) {
+        return a.padIndex >= 0 || b.padIndex >= 0 ? a.padIndex == b.padIndex : java.util.Objects.equals(a.padId,
+                b.padId);
     }
 }
