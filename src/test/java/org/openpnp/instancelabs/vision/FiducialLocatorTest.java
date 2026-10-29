@@ -241,7 +241,7 @@ public class FiducialLocatorTest {
      * 6.8 mm from its expected position, more than a frame's usable half height (4.6 mm), and the
      * similarity of FID1 and FID3 picks the frame that holds it first. A re-seat past the radius is
      * not found however good the prediction: moved (-5, -3) and turned 6 deg, FID3 lies 12.3 mm
-     * from its expected position, 6.8 mm from its prediction and inside its first frame.
+     * from its expected position, 6.8 mm from its prediction, and its frames tile only the radius.
      */
     @Test
     public void predictionsFollowTheFirstFinds() throws Exception {

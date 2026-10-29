@@ -420,11 +420,11 @@ public final class FiducialLocator {
     }
 
     /**
-     * Frame centres, as offsets from the prediction, that cover the search circle: a grid of the
-     * usable half-frame hx = W mmPerPxX / 2 - margin, hy = H mmPerPxY / 2 - margin (margin = the
-     * largest 2r ring radius, so every mark in a tile can be scored), keeping the tiles that
-     * reach into the circle, nearest first (ties counter-clockwise from +x), at most
-     * {@link #MAX_SEARCH_FRAMES}. The first is always (0, 0).
+     * Frame centres, as offsets from the search circle's centre (a fiducial's expected position),
+     * that cover the circle: a grid of the usable half-frame hx = W mmPerPxX / 2 - margin,
+     * hy = H mmPerPxY / 2 - margin (margin = the largest 2r ring radius, so every mark in a tile
+     * can be scored), keeping the tiles that reach into the circle, nearest first (ties
+     * counter-clockwise from +x), at most {@link #MAX_SEARCH_FRAMES}. The first is always (0, 0).
      */
     public static List<double[]> searchTiles(int w, int h, double mmPerPxX, double mmPerPxY,
             double marginMm, double searchRadiusMm) {
