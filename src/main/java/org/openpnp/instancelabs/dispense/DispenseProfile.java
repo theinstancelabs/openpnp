@@ -2,12 +2,10 @@ package org.openpnp.instancelabs.dispense;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
-import java.util.Set;
+
+import org.openpnp.instancelabs.padprofile.Texts;
 
 /**
  * The dispense recipe: one per pressure session, the same for the purge row and the work (bench,
@@ -164,38 +162,11 @@ public class DispenseProfile {
 
     /**
      * What differs between two fingerprints in words, e.g. {@code "dwell 250 -> 300, gap 0.1 -> 0.12"}
-     * (keys only one side has are listed with "none"); empty when equal.
+     * (keys only one side has are listed with "none"); empty when equal. The one recipe formatter of
+     * the dose records and the profile check ({@link Texts#recipeDiff}).
      */
     public static String fingerprintDiff(String was, String now) {
-        Map<String, String> a = fingerprintValues(was), b = fingerprintValues(now);
-        Set<String> keys = new LinkedHashSet<>(a.keySet());
-        keys.addAll(b.keySet());
-        List<String> l = new ArrayList<>();
-        for (String k : keys) {
-            String x = a.getOrDefault(k, "none"), y = b.getOrDefault(k, "none");
-            if (!x.equals(y)) {
-                l.add(k + " " + x + " -> " + y);
-            }
-        }
-        return String.join(", ", l);
-    }
-
-    private static Map<String, String> fingerprintValues(String fp) {
-        Map<String, String> m = new LinkedHashMap<>();
-        for (String t : (fp == null ? "" : fp).trim().split("\\s+")) {
-            int i = t.indexOf('=');
-            if (i > 0) {
-                String v = t.substring(i + 1);
-                try {
-                    v = plain(Double.parseDouble(v));
-                }
-                catch (NumberFormatException e) {
-                    // not a number: as written
-                }
-                m.put(t.substring(0, i), v);
-            }
-        }
-        return m;
+        return Texts.recipeDiff(was, now);
     }
 
     /** A number without trailing zeros (18.000 -> "18", 0.1000 -> "0.1"). */

@@ -55,6 +55,8 @@ public final class ProfileCheck {
     public static final String TIP_NO_PLAN = "no-plan";
     /** Decision 14: some pads of a group are too close to a neighbour for the plan the others keep. */
     public static final String TIP_NEAR = "near";
+    /** Decision 14: why a part held whole by a {@link #TIP_NEAR} pad gets no paste ({@code otherPads}). */
+    static final String NEAR_PART = "too close to a neighbour";
 
     public static final String OUTSIDE_INTERLOCK = "interlock";
     public static final String OUTSIDE_RECIPE = "recipe";
@@ -84,6 +86,8 @@ public final class ProfileCheck {
         public TipView tip;
         public List<Anchor> anchors = new ArrayList<>();
         public List<Group> groups = new ArrayList<>();
+        /** Every pad's numbers (listed groups or not), by pad id: what the plan view shows per pad (§12.5). */
+        public Map<String, PadInfo> pads = new LinkedHashMap<>();
 
         /** The group with this id, or null. */
         public Group group(String id) {
@@ -94,6 +98,15 @@ public final class ProfileCheck {
             }
             return null;
         }
+    }
+
+    /** A pad's group, the amount its opening should get and its clearance under its group's plan. */
+    public static final class PadInfo {
+        public String group;
+        /** κ·A·k of the opening (capped at fine pitch for families without an anchor), mg. */
+        public double anchorMassMg;
+        /** Smallest dot gap or copper gap of the pad's dots under its group's plan (mm); null without a plan. */
+        public Double clearanceMm;
     }
 
     public static final class TipView {
@@ -301,7 +314,28 @@ public final class ProfileCheck {
         for (Group g : r.groups) {
             r.ok &= !g.blocking;
         }
+        for (Group g : c.groups) {
+            padInfo(c, g, r.pads);
+        }
         return r;
+    }
+
+    /** §12.5: each pad of a group, listed or not, with its group's amount and its clearance under the group's plan. */
+    private static void padInfo(Ctx c, Group g, Map<String, PadInfo> out) {
+        Suggester.Candidate x = g.typePlan != null ? g.typePlan : g.plan;
+        for (PadInstance p : g.members) {
+            PadInfo i = new PadInfo();
+            i.group = g.group;
+            i.anchorMassMg = Suggester.r3(g.target);
+            Integer at = c.index.get(p);
+            if (x != null && at != null && x.local.containsKey(at)) {
+                Neighbours.Eval e = c.nb.evaluate(new int[] {at}, Collections.singletonMap(at, x.local.get(at)),
+                        x.view.dGap / 2, x.view.dOverhang / 2);
+                double gap = Math.min(e.dotGap, e.copperGap);
+                i.clearanceMm = Double.isInfinite(gap) ? null : Suggester.r3(gap);
+            }
+            out.put(p.padId, i);
+        }
     }
 
     /** Groups, the tip test, the neighbours' dots, the plan search (two passes) and the reasons. */
@@ -500,7 +534,7 @@ public final class ProfileCheck {
                 }
                 Group w = keep.isEmpty() ? g : rebuild(c, g, whole, sub(g.split, PART));
                 w.partial = true;
-                w.otherPads = "too close to a neighbour";
+                w.otherPads = NEAR_PART;
                 if (!keep.isEmpty()) {
                     replace(c, g, Arrays.asList(rebuild(c, g, keep, g.split), w));
                 }
@@ -791,7 +825,8 @@ public final class ProfileCheck {
                 break;
             case PART:
                 g.shortText = "not pasted: other pads of the part cannot be dispensed";
-                g.reasonText = Texts.part(g.packageIds.get(0), tip.name, g.otherPads);
+                g.reasonText = NEAR_PART.equals(g.otherPads) ? Texts.nearPart(g.packageIds.get(0))
+                        : Texts.part(g.packageIds.get(0), tip.name, g.otherPads);
                 break;
             case NO_PAD_SIZE:
                 g.shortText = "no pad size";
@@ -850,7 +885,8 @@ public final class ProfileCheck {
                 break;
             case OUTSIDE_RECIPE:
                 g.shortText = "calibrated with another recipe";
-                g.reasonText = Texts.outsideRecipe(typeName, Texts.recipeDiff(t.doseFp, c.in.doseFingerprint));
+                String diff = Texts.recipeDiff(t.doseFp, c.in.doseFingerprint);
+                g.reasonText = Texts.outsideRecipe(typeName, diff.isEmpty() ? "another fingerprint" : diff);
                 break;
             case OUTSIDE_AREA:
                 double ratio = g.area / t.calArea() - 1;

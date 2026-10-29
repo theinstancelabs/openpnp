@@ -95,6 +95,19 @@ public final class Suggester {
         return v;
     }
 
+    /**
+     * Mass per dot of a dose as the suggestions count it: weighed, else another dose's weighed mass
+     * per step, else the model (for the plan view's predicted mass per pad, §12.5).
+     */
+    public static double mgPerDot(Map<Integer, DoseEvidence> evidence, int steps) {
+        return view(evidence, steps).mgPerDot;
+    }
+
+    /** A dose's dot size as the suggestions show it: measured mean and d95, else the model's band (mm). */
+    public static double[] dotDiameterMm(Map<Integer, DoseEvidence> evidence, int steps) {
+        return view(evidence, steps).dShown.clone();
+    }
+
     /** A dot plan on a group's openings, evaluated. */
     static final class Candidate {
         int steps;

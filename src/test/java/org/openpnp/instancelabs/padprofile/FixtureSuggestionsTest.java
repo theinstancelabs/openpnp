@@ -321,8 +321,10 @@ public class FixtureSuggestionsTest {
         assertTrue(near.blocking);
         ProfileCheck.Group part = c.get("part");
         assertEquals(Arrays.asList("C3.2", "C4.2"), part.padIds);
-        assertTrue(part.reasonText.startsWith("The other pads of C_0603_1608Metric (too close to a neighbour) cannot "
-                + "be dispensed with the 22G tip, so none of this part's pads are pasted"), part.reasonText);
+        assertEquals("Another pad of this part is too close to a neighbour and gets no paste, so none of this part's pads "
+                + "are pasted: a part whose pins are soldered by hand gets no paste on its other pads either. To paste "
+                + "these pads anyway, choose “Paste the dispensable pads of this part” for C_0603_1608Metric.",
+                part.reasonText);
         assertFalse(c.get("no-type").partial, "a pad's own neighbour holds back its part, not the package");
         int[] n = count(r);
         assertEquals(70, n[0] + n[1] + n[2]);
