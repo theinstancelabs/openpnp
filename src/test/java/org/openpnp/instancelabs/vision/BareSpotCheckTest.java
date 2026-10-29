@@ -35,11 +35,11 @@ public class BareSpotCheckTest {
     static Result print(String label, Result r) {
         Settings s = new Settings();
         System.out.println(String.format(Locale.ROOT,
-                "[bare-spot] %-46s share %5.1f %% (limit %.1f %%, x%.2f; raw %5.1f %%)  spread"
-                        + " %5.1f (limit %.0f, x%.2f)  threshold %5.1f  %s",
+                "[bare-spot] %-46s share %5.1f %% (limit %.1f %%, x%.2f; raw %5.1f %%, wide"
+                        + " %5.1f %%)  spread %5.1f (limit %.0f, x%.2f)  threshold %5.1f  %s",
                 label, 100 * r.foreignShare, 100 * s.maxForeignShare,
-                r.foreignShare / s.maxForeignShare, 100 * r.rawShare, r.ringSpread,
-                s.maxRingSpread, r.ringSpread / s.maxRingSpread, r.threshold,
+                r.foreignShare / s.maxForeignShare, 100 * r.rawShare, 100 * r.wideShare,
+                r.ringSpread, s.maxRingSpread, r.ringSpread / s.maxRingSpread, r.threshold,
                 r.bare ? "bare" : "NOT BARE"));
         return r;
     }
@@ -165,6 +165,118 @@ public class BareSpotCheckTest {
             assertFalse(r.bare, n + ": " + r);
             assertTrue(r.foreignShare >= 6 * s.maxForeignShare, n + ": " + r);
             assertTrue(r.reason.contains("paste, a part or print"), r.reason);
+        }
+    }
+
+    /**
+     * Board 3's texture laid over a real frame: the frame plus (rough - its mean over +-0.5 mm), per
+     * channel. Both are real/ cuts of the bench camera.
+     */
+    static BufferedImage roughen(String name, String rough) throws Exception {
+        BufferedImage base = FidScene.resource(REAL + name + ".jpg");
+        BufferedImage tex = FidScene.resource(REAL + rough + ".jpg");
+        int w = base.getWidth();
+        int h = base.getHeight();
+        int r = (int) Math.round(0.5 / SX);
+        long[][] sum = new long[3][(w + 1) * (h + 1)];
+        for (int j = 0; j < h; j++) {
+            for (int i = 0; i < w; i++) {
+                int p = tex.getRGB(i, j);
+                int q = (j + 1) * (w + 1) + i + 1;
+                for (int c = 0; c < 3; c++) {
+                    sum[c][q] = ((p >> (8 * c)) & 0xff) + sum[c][q - 1] + sum[c][q - w - 1]
+                            - sum[c][q - w - 2];
+                }
+            }
+        }
+        BufferedImage out = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+        for (int j = 0; j < h; j++) {
+            for (int i = 0; i < w; i++) {
+                int x0 = Math.max(0, i - r);
+                int x1 = Math.min(w - 1, i + r);
+                int y0 = Math.max(0, j - r);
+                int y1 = Math.min(h - 1, j + r);
+                double n = (x1 - x0 + 1) * (double) (y1 - y0 + 1);
+                int pb = base.getRGB(i, j);
+                int pt = tex.getRGB(i, j);
+                int o = 0;
+                for (int c = 0; c < 3; c++) {
+                    long m = sum[c][(y1 + 1) * (w + 1) + x1 + 1] - sum[c][y0 * (w + 1) + x1 + 1]
+                            - sum[c][(y1 + 1) * (w + 1) + x0] + sum[c][y0 * (w + 1) + x0];
+                    double v = ((pb >> (8 * c)) & 0xff) + ((pt >> (8 * c)) & 0xff) - m / n;
+                    o |= Math.max(0, Math.min(255, (int) Math.round(v))) << (8 * c);
+                }
+                out.setRGB(i, j, o);
+            }
+        }
+        return out;
+    }
+
+    /** A dot of diameter d mm at (0.1, 0.1) mm, offset by contrast along SIM paste - SIM mask. */
+    static BufferedImage withDot(String name, double d, double contrast) throws Exception {
+        BufferedImage img = FidScene.resource(REAL + name + ".jpg");
+        int w = img.getWidth();
+        int h = img.getHeight();
+        double[] dir = {18, 4, 13}; // PASTE - MASK, BGR
+        double n = Math.sqrt(18 * 18 + 4 * 4 + 13 * 13);
+        BufferedImage out = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+        for (int j = 0; j < h; j++) {
+            for (int i = 0; i < w; i++) {
+                int p = img.getRGB(i, j);
+                double x = (i - w / 2.0) * SX - 0.1;
+                double y = (h / 2.0 - j) * SY - 0.1;
+                if (x * x + y * y <= d * d / 4) {
+                    int o = 0;
+                    for (int c = 0; c < 3; c++) {
+                        double v = ((p >> (8 * c)) & 0xff) + dir[c] / n * contrast;
+                        o |= Math.max(0, Math.min(255, (int) Math.round(v))) << (8 * c);
+                    }
+                    p = o;
+                }
+                out.setRGB(i, j, p);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * On a surface as rough as board 3's the threshold for small patches rises to 30 .. 88; the
+     * wide patches still see paste, a hole's ring and an edge there. Board 3's texture
+     * (b3_mask_37_37, b3_R1) laid over the real paste, hole and edge frames: paste and the hole
+     * keep 2.5x the share limit, the edge only 1.2x. The same texture over bare frames stays bare
+     * with 3x margin. A 0.7 mm dot 40 from the mask (paste's rim on the blank reads 40 .. 100) on
+     * board 3's own rough spots keeps 2x, a 1.0 mm dot 4x. Without the wide patches the look
+     * called all of these dots, the edge and the paste frames c3 and c4 bare.
+     */
+    @Test
+    public void roughSurfaceKeepsPasteHolesAndEdges() throws Exception {
+        Settings s = new Settings();
+        for (String rough : new String[] {"b3_mask_37_37", "b3_R1_37.5_42.5"}) {
+            for (String n : new String[] {"centre_c1_304.11_238.9", "centre_c2_314.54_239.47",
+                    "centre_c3_297.62_234.34", "centre_c4_301.94_238.44", "b3_mask_8_8"}) {
+                Result r = print(n + " + " + rough, BareSpotCheck.check(roughen(n, rough), SX, SY,
+                        null));
+                assertFalse(r.bare, n + " + " + rough + ": " + r);
+                assertTrue(r.threshold > 30, r.toString());
+                assertTrue(r.wideShare >= 2.5 * s.maxForeignShare, n + " + " + rough + ": " + r);
+            }
+            Result edge = print("b3_mask_67_8 + " + rough, BareSpotCheck.check(
+                    roughen("b3_mask_67_8", rough), SX, SY, null));
+            assertFalse(edge.bare, edge.toString());
+            assertTrue(edge.foreignShare >= 1.2 * s.maxForeignShare, edge.toString());
+            for (String n : new String[] {"b3_mask_67_67", "b3_mask_8_67", "blank_310_247",
+                    "blank_328_245.5", "paste_298.647_240.218"}) {
+                Result r = print(n + " + " + rough, BareSpotCheck.check(roughen(n, rough), SX, SY,
+                        null));
+                assertTrue(r.bare, n + " + " + rough + ": " + r);
+                assertTrue(r.foreignShare <= s.maxForeignShare / 3, n + " + " + rough + ": " + r);
+            }
+            for (double d : new double[] {0.7, 1.0}) {
+                Result r = print(String.format(Locale.ROOT, "%.1f mm dot +40 on %s", d, rough),
+                        BareSpotCheck.check(withDot(rough, d, 40), SX, SY, null));
+                assertFalse(r.bare, r.toString());
+                assertTrue(r.wideShare >= (d < 1 ? 2 : 4) * s.maxForeignShare, r.toString());
+            }
         }
     }
 

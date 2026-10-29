@@ -58,6 +58,8 @@ public final class VacuumProber {
         public double foreignShare, ringSpread;
         /** Share of the spot over the threshold before the solid-patch rule, and that threshold (the record). */
         public double rawShare, threshold;
+        /** Share of the spot in wide patches, whatever the texture (the record). */
+        public double wideShare;
         public String reason;
     }
 

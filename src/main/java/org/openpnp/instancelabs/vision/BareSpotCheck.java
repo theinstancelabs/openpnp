@@ -23,6 +23,10 @@ import java.util.Locale;
  * <li>foreign pixels = differing pixels in solid patches: a 3 x 3 majority vote, then an opening
  * with a disc of radius solidRadiusMm. Texture, scratches and thin print strokes drop out; a paste
  * dot (0.4 mm and up), a part, a hole's copper ring or the far side of an edge stay;</li>
+ * <li>plus the pixels beyond wideDelta, whatever the texture, in wide patches (majority vote, then
+ * an opening with a disc of radius wideRadiusMm). Texture does not form patches 0.4 mm across at
+ * that distance (board 3's scratched mask reads 0 %), paste, a part or a hole's ring do: a rough
+ * surface raises the threshold for small patches only, not for a paste dot of 0.5 mm and up;</li>
  * <li>not bare if the foreign share of the disc of radius 1.0 mm (tip radius 0.35 + N1 offset
  * error 0.4 + 0.25 margin) is above maxForeignShare, or the ring spread (the median BGR distance
  * of the ring from its median colour) is above maxRingSpread: an edge, the blank's border,
@@ -36,9 +40,11 @@ import java.util.Locale;
  * in the dark zone between the light's reflections (the whole disc ~22 from the ring: 89 .. 97 %
  * foreign) and board 3's scratched mask (54 .. 60 %). Now every bare bench and real spot reads
  * 0 .. 1.3 %; paste, parts, a hole's copper ring and board edges read 25 .. 87 %, the FID1
- * lettering 14 % and the SIM's 0.5 mm paste dot 6.1 %. BareSpotCheckTest records each margin. The
- * price: on a mask as rough as board 3's at (37, 37) the threshold is 57, so paste there counts
- * only where it stands that far out (its rim and highlight, not a flat smear).
+ * lettering 14 % and the SIM's 0.5 mm paste dot 6.1 %. BareSpotCheckTest records each margin. On
+ * a mask as rough as board 3's at (37, 37) the threshold is 57: there only the wide patches see
+ * paste that stands less far out (a 0.7 mm dot 40 from the mask reads 12 %, the real paste and
+ * hole frames with board 3's texture laid over them 15 .. 70 %, the board edge only 6 %), and
+ * print strokes, specks under 0.4 mm across and anything within 22 of the mask are not seen.
  *
  * Pure: no camera, no OpenCV. Offsets follow {@link DotInspector}: mm from the image centre
  * (pixel index - size/2), +x right, +y up.
@@ -74,6 +80,18 @@ public final class BareSpotCheck {
          * scratches and print strokes under 0.2 mm wide drop out, a 0.4 mm paste dot stays.
          */
         public double solidRadiusMm = 0.10;
+        /**
+         * Pixels beyond wideDelta also count, whatever the texture, in patches that hold a disc of
+         * this radius, mm: board 3's scratched mask forms none, paste dots of 0.4 mm and up, a
+         * part, a hole's ring and the far side of an edge do.
+         */
+        public double wideRadiusMm = 0.20;
+        /**
+         * The BGR distance from the fitted field for the wide patches: board 3's bare mask strays
+         * up to 19 over patches that wide (the dark zone at R1), paste's rim on the blank reads
+         * 40 .. 100, a board edge 42.
+         */
+        public double wideDelta = 22;
         /** Not bare above this foreign share of the disc, 0..1 (a 0.45 mm dot is 5 %). */
         public double maxForeignShare = 0.05;
         /**
@@ -99,6 +117,12 @@ public final class BareSpotCheck {
                 throw new IllegalArgumentException("need textureFactor >= 0 and 0 <= solidRadiusMm"
                         + " < discRadiusMm, got " + textureFactor + ", " + solidRadiusMm + " mm");
             }
+            if (!(wideRadiusMm >= solidRadiusMm) || !(wideRadiusMm < discRadiusMm)
+                    || !(wideDelta >= 0) || Double.isInfinite(wideDelta)) {
+                throw new IllegalArgumentException("need solidRadiusMm <= wideRadiusMm"
+                        + " < discRadiusMm and wideDelta >= 0, got " + wideRadiusMm + " mm, "
+                        + wideDelta);
+            }
             if (!(maxForeignShare >= 0 && maxForeignShare <= 1)) {
                 throw new IllegalArgumentException(
                         "maxForeignShare must be 0..1, got " + maxForeignShare);
@@ -109,10 +133,12 @@ public final class BareSpotCheck {
     /** One look. */
     public static final class Result {
         public final boolean bare;
-        /** Foreign pixels (differing, in solid patches) / disc pixels, 0..1. */
+        /** Foreign pixels (in solid or wide patches) / disc pixels, 0..1. */
         public final double foreignShare;
         /** Disc pixels that differ before the solid-patch rule / disc pixels, 0..1. */
         public final double rawShare;
+        /** Disc pixels beyond wideDelta in wide patches / disc pixels, 0..1. */
+        public final double wideShare;
         /** Median BGR distance of the ring pixels from their median colour. */
         public final double ringSpread;
         /** Median distance of the ring's nearest half from the fitted surface. */
@@ -125,10 +151,12 @@ public final class BareSpotCheck {
         public final double refB, refG, refR;
         public final int discPx, ringPx;
 
-        Result(double foreignShare, double rawShare, double ringSpread, double texture,
-                double threshold, double[] ref, int discPx, int ringPx, Settings s) {
+        Result(double foreignShare, double rawShare, double wideShare, double ringSpread,
+                double texture, double threshold, double[] ref, int discPx, int ringPx,
+                Settings s) {
             this.foreignShare = foreignShare;
             this.rawShare = rawShare;
+            this.wideShare = wideShare;
             this.ringSpread = ringSpread;
             this.texture = texture;
             this.threshold = threshold;
@@ -156,10 +184,10 @@ public final class BareSpotCheck {
         @Override
         public String toString() {
             return String.format(Locale.ROOT,
-                    "BareSpot[%s, foreign=%.4f raw=%.4f (%d px disc) spread=%.2f texture=%.2f"
-                            + " threshold=%.1f (%d px ring) ref=%.0f,%.0f,%.0f%s]",
-                    bare ? "bare" : "not bare", foreignShare, rawShare, discPx, ringSpread,
-                    texture, threshold, ringPx, refB, refG, refR,
+                    "BareSpot[%s, foreign=%.4f raw=%.4f wide=%.4f (%d px disc) spread=%.2f"
+                            + " texture=%.2f threshold=%.1f (%d px ring) ref=%.0f,%.0f,%.0f%s]",
+                    bare ? "bare" : "not bare", foreignShare, rawShare, wideShare, discPx,
+                    ringSpread, texture, threshold, ringPx, refB, refG, refR,
                     reason == null ? "" : " " + reason);
         }
     }
@@ -251,12 +279,15 @@ public final class BareSpotCheck {
         double texture = quantile(ringDist, 0.25);
         double threshold = Math.max(s.colourDelta, s.textureFactor * texture);
         boolean[] differs = new boolean[bw * bh];
+        boolean[] beyond = new boolean[bw * bh];
         int raw = 0;
         for (int j = 0; j < bh; j++) {
             for (int i = 0; i < bw; i++) {
                 int k = j * bw + i;
                 double[] f = surface(field, xs[i], ys[j]);
-                differs[k] = distance(bgr, k, f[0], f[1], f[2]) > threshold;
+                double d = distance(bgr, k, f[0], f[1], f[2]);
+                differs[k] = d > threshold;
+                beyond[k] = d > s.wideDelta;
                 if (differs[k] && zone[k] == 1) {
                     raw++;
                 }
@@ -264,14 +295,23 @@ public final class BareSpotCheck {
         }
         boolean[] solid = open(majority(differs, bw, bh), bw, bh, s.solidRadiusMm, mmPerPxX,
                 mmPerPxY);
+        boolean[] wide = open(majority(beyond, bw, bh), bw, bh, s.wideRadiusMm, mmPerPxX,
+                mmPerPxY);
         int foreign = 0;
+        int wideN = 0;
         for (int k = 0; k < zone.length; k++) {
-            if (zone[k] == 1 && solid[k]) {
-                foreign++;
+            if (zone[k] == 1) {
+                if (solid[k] || wide[k]) {
+                    foreign++;
+                }
+                if (wide[k]) {
+                    wideN++;
+                }
             }
         }
-        return new Result(foreign / (double) discPx, raw / (double) discPx, spread, texture,
-                threshold, surface(field, 0, 0), discPx, ringPx, s);
+        return new Result(foreign / (double) discPx, raw / (double) discPx,
+                wideN / (double) discPx, spread, texture, threshold, surface(field, 0, 0), discPx,
+                ringPx, s);
     }
 
     /**
