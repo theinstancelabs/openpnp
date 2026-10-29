@@ -72,11 +72,11 @@
       this.toggleBtn.addEventListener('click', () => (this.playing ? this.pause() : this.play()));
       this.scrub = el('input', { type: 'range', id: 'pv-scrub', class: 'pv-preview__scrub', min: '0', max: '0', step: '1', value: '0',
         'aria-label': 'Preview position: dots done' });
-      this.scrub.addEventListener('input', () => { this.pause(true); this.seek(Number(this.scrub.value)); });
+      this.scrub.addEventListener('input', () => { this.pause(); this.seek(Number(this.scrub.value)); });
       this.scrub.addEventListener('keydown', (e) => {
         if (e.key !== 'PageUp' && e.key !== 'PageDown') return;
         e.preventDefault();
-        this.pause(true);
+        this.pause();
         this.seek(this.v + (e.key === 'PageUp' ? 10 : -10));
       });
       this.speedSeg = el('div', { class: 'seg', id: 'pv-speed', role: 'group', 'aria-label': 'Preview speed' },

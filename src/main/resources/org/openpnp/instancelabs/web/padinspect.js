@@ -138,7 +138,8 @@
     if (!p || !M.sel) return;
     const list = partsOf(p);
     const i = list.findIndex((x) => x.ref === M.sel.ref);
-    const next = list[(i + dir + list.length) % list.length];
+    // from a drawn-only part (not in the plan's list): next is the first part, previous the last
+    const next = i < 0 ? list[dir > 0 ? 0 : list.length - 1] : list[(i + dir + list.length) % list.length];
     if (next) open({ ref: next.ref });
   }
 

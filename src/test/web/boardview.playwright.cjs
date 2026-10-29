@@ -18,7 +18,8 @@
  * ResizeObserver; plus thumbnails, the pad inspector (a dot's outer edge is its real size, path numbers that never overlap
  * on a 48-pin QFP, one pad type said once), the Records map, the preview row's layout at 1440, 1280 and 1024 px with the
  * readout never cut, no reference label on a pad-less footprint, the mask as painted in Quiet, the scale bar's size, keyboard focus
- * in the inspector table and after Clear, no rebuild when a render repeats the selection, the dirty layer's casing, no
+ * in the inspector table and after Clear, no rebuild when a render repeats the selection, polls that never touch the
+ * drawing (a re-plan only moves it), the dirty layer's casing, no
  * JavaScript errors, no native dialogs. Screenshots (1440 and
  * 1280 px, light and dark) of the Run hero (Full and Quiet), the path preview mid-play, the pad inspector and the
  * Records map go to SHOTS_DIR.
@@ -236,8 +237,11 @@ async function glueRecords(page) {
     // ---- (4) path preview clock -------------------------------------------------------------------------------------
     await page.click('#pv-play');
     check('#pv-play expands #run-preview', await page.isVisible('#run-preview'));
-    await page.click('#pv-play');   // pause
+    // scrubbing while it plays pauses the play, and onChange hears of that pause (its contract: every start, pause, end)
+    const was = await page.evaluate(() => { window.__ppEv = []; window.__pp.o.onChange = (s) => window.__ppEv.push(s.playing); return window.__pp.state.playing; });
     await page.fill('#pv-scrub', '80');
+    const sp = await page.evaluate(() => { const r = { events: window.__ppEv, playing: window.__pp.state.playing }; window.__pp.o.onChange = null; return r; });
+    check('scrubbing while it plays pauses it and tells onChange', was && !sp.playing && sp.events.includes(false), Object.assign({ was }, sp));
     const c80 = await page.evaluate(() => ({ pre: document.querySelectorAll('#plan-svg circle.dot.pv-pre').length,
       text: document.getElementById('pv-readout').textContent, preview: IL.run.bv.svg.classList.contains('pv--preview'),
       ghost: document.querySelector('#plan-svg .pv-ghost').getAttribute('visibility'), n: IL.S.plan.dots.length }));
@@ -342,6 +346,19 @@ async function glueRecords(page) {
     await sleep(300);
     const back = await page.evaluate(() => ({ pushed: IL.panel.isPushed(), sel: document.querySelectorAll('#plan-svg .pv-l-sel .pv-sel').length }));
     check('Esc goes back; the hero selection is cleared', !back.pushed && back.sel === 0, back);
+    // a drawn-only part (a mounting hole) opens the same view with its reason; previous goes to the last part in path order
+    await page.evaluate(() => IL.padInspect.open({ ref: 'H1' }, { bv: IL.run.bv }));
+    await page.waitForFunction(() => { const w = document.getElementById('pad-insp-why'); return w && !w.hidden; }, null, { timeout: 10000 }).catch(() => {});
+    const hp = await page.evaluate(() => ({ title: document.getElementById('panel-bar-title').textContent, why: document.getElementById('pad-insp-why').textContent,
+      table: document.getElementById('pad-insp-pads').hidden, hero: document.querySelectorAll('#plan-svg .pv-l-sel .pv-sel').length,
+      last: IL.padInspect.partsOf(IL.S.plan).slice(-1)[0].ref }));
+    await page.click('#pad-insp-prev');
+    await sleep(300);
+    hp.prev = await page.evaluate(() => IL.padInspect.current().ref);
+    check('a drawn-only part: "Part H1", its reason, no pads table, outlined on the hero; previous goes to the last part',
+      hp.title === 'Part H1' && /^Through-hole or drawn-only part: not dispensed\.$/.test(hp.why) && hp.table && hp.hero >= 1 && hp.prev === hp.last, hp);
+    await page.keyboard.press('Escape');
+    await sleep(300);
 
     // ---- art-only mode (the upload preview, the hero before planning) ---------------------------------------------------
     const ao = await page.evaluate(async () => {
@@ -511,6 +528,38 @@ async function glueRecords(page) {
     });
     check('the same selection, path numbers and drawing again (a poll) rebuild nothing', ch.kept, ch);
     check('dirty layer hidden: the dirty rings\' casing is hidden too', ch.rings > 0 && ch.shown === 0, ch);
+
+    // ---- polls never touch the drawing; a re-plan of the same board moves it and rebuilds nothing of it (§5.5) ------------
+    const rp = await page.evaluate(async () => {
+      const host = document.createElement('div');
+      host.style.cssText = 'position:fixed;left:0;top:0;width:400px;height:300px;opacity:0;pointer-events:none';
+      document.body.appendChild(host);
+      const v = IL.boardview.create(host, {});
+      const p = IL.S.plan, n = p.dots.length;
+      v.setPlan(p, {});
+      v.setArt(await IL.boardart.get(p.board.art.id));
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));   // the first layout has run
+      const root = v.artSvg.querySelector('g.pv-l-art'), pad0 = v.svg.querySelector('rect.pad'), t0 = root.getAttribute('transform');
+      const mo = new MutationObserver(() => {});
+      mo.observe(v.artSvg, { subtree: true, childList: true, attributes: true, characterData: true });
+      for (let i = 0; i < 12; i++) {   // what the hero does on every poll: the same plan, then the overlay state
+        v.setPlan(p, {});
+        v.update({ done: new Set(Array.from({ length: (i * 7) % n }, (_, j) => j)), next: (i * 7) % n,
+          dirty: new Map(i % 3 ? [] : [[p.pads[i].padId, 0.3]]), check: i % 4 ? null : { index: i, label: 'In progress' } });
+      }
+      const artMuts = mo.takeRecords().length;
+      mo.disconnect();
+      const kept = v.svg.querySelector('rect.pad') === pad0;
+      const m = p.board.toMachine;
+      v.setPlan(Object.assign({}, p, { planId: p.planId + '-re', board: Object.assign({}, p.board, { toMachine: [m[0], m[1], m[2], m[3], m[4] + 1, m[5] + 2] }) }), {});
+      const out = { artMuts, kept, sameRoot: v.artSvg.querySelector('g.pv-l-art') === root, moved: root.getAttribute('transform') !== t0,
+        shown: !v.artSvg.hasAttribute('hidden') };
+      v.destroy();
+      host.remove();
+      return out;
+    });
+    check('polls (the same plan, then update()) never touch the drawing and rebuild no pad; a re-plan only moves the drawing',
+      rp.artMuts === 0 && rp.kept && rp.sameRoot && rp.moved && rp.shown, rp);
 
     // ---- path numbers on a fine-pitch row, labels of pad-less footprints ----------------------------------------------
     const fp = await page.evaluate(() => {
