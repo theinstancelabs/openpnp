@@ -630,6 +630,46 @@ public class DispenseServiceSimTest {
         assertEquals(3, shots.dotsDone);
     }
 
+    /**
+     * Review 1 (machine safety), the pressure hold: a hold that went on after a task's API checks meets the
+     * task on the machine thread, where every engine task looks at it again. Prime and the test dot (shots at
+     * the waste pad), scale shots, the dot ladder, the touch-off and the clean-pad check refuse there, as runs
+     * and the probes do: nothing is sent, the camera does not move, and the engine is not left busy.
+     */
+    @Test
+    public void everyTaskRefusesOnTheMachineThreadWhileThePressureIsHeld() throws Exception {
+        boolean[] held = {true}; // the hold went on after the API's checks, before the task's start
+        svc.setPressureHoldCheck(() -> held[0]);
+        svc.setLocation("cup", 150, 40, 5.0);
+        DispensePlan plan = plan();
+        DotLadderCalibration.Request lr = new DotLadderCalibration.Request();
+        lr.rotationsDeg = new double[] {30};
+        lr.repeats = 1;
+        sim.server.mark();
+        List<RunResult> runs = new ArrayList<>();
+        runs.add(svc.runShots("waste", 90, 1, true).get(60, TimeUnit.SECONDS));
+        runs.add(svc.runShots("cup", 360, 3, false).get(60, TimeUnit.SECONDS));
+        runs.add(svc.runDotLadder(lr).get(60, TimeUnit.SECONDS).run);
+        runs.add(svc.runNeedleTouchOff(new NeedleTouchOff.Request(), true).get(60, TimeUnit.SECONDS).run);
+        PadCleanReport rep = svc.checkCleanPads(plan).get(60, TimeUnit.SECONDS);
+        runs.add(svc.getLastRun());
+        for (RunResult r : runs) {
+            assertEquals(RunResult.Status.REFUSED, r.status, r.toString());
+            assertEquals("the pressure hold is on: Pressure off first", r.message);
+        }
+        assertTrue(rep.pads.isEmpty() && !rep.ok, "no pad looked at");
+        assertEquals(0, imager.captures, "the camera never moved");
+        for (String l : sim.server.sinceMark()) {
+            assertFalse(l.startsWith("M106") || l.startsWith("G0") || l.startsWith("G1"), "nothing pressurised or moved: "
+                    + l);
+        }
+        assertFalse(svc.isBusy());
+        // the hold off: they run
+        held[0] = false;
+        assertEquals(RunResult.Status.OK, svc.runShots("waste", 90, 1, true).get(60, TimeUnit.SECONDS).status);
+        assertTrue(svc.checkCleanPads(plan).get(60, TimeUnit.SECONDS).ok);
+    }
+
     static double primeRawZ(List<String> sent) {
         // the first Z down after the first valve ON is the prime at the waste pad
         int v = sent.indexOf("M106 P3 S255");

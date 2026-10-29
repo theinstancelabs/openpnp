@@ -939,7 +939,6 @@ public final class DispenseService {
                 r.message = "the dispense profile changed since this plan was made: plan the board again";
                 return r;
             }
-            refuseWhilePressureHeld();
             Session s = new Session(c, r);
             r.profile = c.profile.copy();
             db.event(r.runId, "INFO", "PROFILE", new com.google.gson.Gson().toJson(r.profile));
@@ -1810,7 +1809,6 @@ public final class DispenseService {
         }
 
         Session start(DispenseConfig c) throws Exception {
-            refuseWhilePressureHeld();
             s = new Session(c, r);
             if (cameraTourAbort) {
                 s.exec.requestAbort("STOP before the start");
@@ -2436,7 +2434,6 @@ public final class DispenseService {
         RunResult r = newRun("z-check", null, "z check", 0, 0);
         return submit(r, () -> {
             DispenseConfig c = cfg;
-            refuseWhilePressureHeld();
             Session s = new Session(c, r);
             r.interlocks = Interlocks.checkBasic(interlockInputs(c, null, 0, null, false, false));
             if (!r.interlocks.ok()) {
@@ -3410,6 +3407,7 @@ public final class DispenseService {
                 try {
                     refuseIfStoppedSince(epoch);
                     refuseUnlessStarted();
+                    refuseWhilePressureHeld();
                     return body.call();
                 }
                 catch (Exception e) {
@@ -3451,6 +3449,7 @@ public final class DispenseService {
                 try {
                     refuseIfStoppedSince(epoch);
                     refuseUnlessStarted();
+                    refuseWhilePressureHeld();
                     body.run();
                 }
                 catch (Exception e) {
@@ -3512,7 +3511,11 @@ public final class DispenseService {
         }
     }
 
-    /** On the machine thread, where the pressure hold's start is serialised with the engine's tasks. */
+    /**
+     * On the machine thread, where the pressure hold's start is serialised with the engine's tasks: every
+     * task refuses at its start while the hold is on (prime, the test dot and the clean-pad check as well as
+     * runs, the probes and the calibrations), not only at the API's check before it was queued.
+     */
     private void refuseWhilePressureHeld() throws RunRefusedException {
         if (pressureHoldActive.getAsBoolean()) {
             throw refused("the pressure hold is on: Pressure off first");
