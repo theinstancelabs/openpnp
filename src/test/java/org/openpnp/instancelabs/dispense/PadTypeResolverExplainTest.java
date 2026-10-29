@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 import org.junit.jupiter.api.Test;
 
@@ -104,21 +105,66 @@ public class PadTypeResolverExplainTest {
         }
     }
 
+    /** PadTypeResolver.resolve as it was before explain (the oracle for "identical behaviour"). */
+    static PadType resolveBefore(List<PadType> types, Map<String, String> packageMap, String packageId, double padX,
+            double padY, double padAreaMm2) {
+        if (packageId == null) {
+            return null;
+        }
+        String mapped = packageMap.get(packageId);
+        if (mapped != null) {
+            return byKey(types, mapped);
+        }
+        PadType byPattern = null;
+        for (int i = types.size() - 1; i >= 0; i--) {
+            PadType t = types.get(i);
+            if (t.packagePattern != null && !t.packagePattern.isEmpty()
+                    && Pattern.compile(t.packagePattern, Pattern.CASE_INSENSITIVE).matcher(packageId).find()) {
+                byPattern = t;
+                break;
+            }
+        }
+        if (byPattern != null && "qfn-dfn-perimeter".equals(byPattern.typeKey)
+                && !Double.isNaN(padX) && Math.hypot(padX, padY) < 0.05 && padAreaMm2 >= 1.0) {
+            PadType centre = byKey(types, "qfn-centre");
+            if (centre != null) {
+                return centre;
+            }
+        }
+        return byPattern;
+    }
+
+    static PadType byKey(List<PadType> types, String key) {
+        for (PadType t : types) {
+            if (t.typeKey.equals(key)) {
+                return t;
+            }
+        }
+        return null;
+    }
+
     @Test
-    public void resolveIsExplainsType() {
+    public void resolveIsExplainsTypeAndUnchanged() {
         List<PadType> types = seeds();
         String[] ids = {"R_0402_1005Metric", "R_0603_1608Metric", "R_0603_1608Metric~2", "LED_0603_1608Metric",
             "C_0805_2012Metric", "R_1206_3216Metric", "D_SOD-123", "SOT-23", "SOT-23-5", "SOT-23~2",
             "SOIC-8_3.9x4.9mm_P1.27mm", "TSSOP-20", "MSOP-10", "LQFP-48", "QFN-16_3x3mm", "DFN-8", "WSON-8",
-            "Fiducial_1mm_Mask3mm", "custom", ""};
+            "Fiducial_1mm_Mask3mm", "custom", "", null};
         double[][] pads = {{Double.NaN, Double.NaN, Double.NaN}, {0, 0, 2.89}, {0, 0, 0.5}, {-1.45, 0.75, 0.2},
             {0.01, 0.01, 1.0}};
-        Map<String, String> map = Collections.singletonMap("SOT-23-5", "sot-23");
-        for (PadTypeResolver r : new PadTypeResolver[] {new PadTypeResolver(types, null),
-            new PadTypeResolver(types, map)}) {
-            for (String id : ids) {
-                for (double[] p : pads) {
-                    assertSame(r.resolve(id, p[0], p[1], p[2]), r.explain(id, p[0], p[1], p[2]).type, id);
+        List<Map<String, String>> maps = List.of(Collections.emptyMap(), Collections.singletonMap("SOT-23-5", "sot-23"),
+                Collections.singletonMap("QFN-16_3x3mm", "qfn-dfn-perimeter"));
+        List<PadType> withoutCentre = new ArrayList<>(types);
+        withoutCentre.removeIf(t -> t.typeKey.equals("qfn-centre"));
+        for (List<PadType> ts : List.of(types, withoutCentre)) {
+            for (Map<String, String> map : maps) {
+                PadTypeResolver r = new PadTypeResolver(ts, map);
+                for (String id : ids) {
+                    for (double[] p : pads) {
+                        PadType before = resolveBefore(ts, map, id, p[0], p[1], p[2]);
+                        assertSame(before, r.resolve(id, p[0], p[1], p[2]), id);
+                        assertSame(before, r.explain(id, p[0], p[1], p[2]).type, id);
+                    }
                 }
             }
         }

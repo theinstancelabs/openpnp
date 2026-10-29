@@ -20,7 +20,7 @@ public class DispensePlan {
         public PadTypeStatus typeStatus;
         public PadGeometry.Source source;
         public double xMm, yMm, rotationDeg, wMm, hMm, surfaceZMm;
-        /** Footprint pad name (null for a pad-type pad without a footprint); OpenPnP part id. */
+        /** Pad name within the part ("1", "2", ...; null when the whole placement is one unresolved pad); part id. */
         public String padName, partId;
         /** How the pad type was chosen ({@link PadTypeResolver.Resolution}: rule, detail, matched text). */
         public String typeRule, typeRuleDetail, typeRuleMatched;

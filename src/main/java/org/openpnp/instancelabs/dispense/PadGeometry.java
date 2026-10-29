@@ -31,7 +31,7 @@ public class PadGeometry {
     public PadType padType;
     /** OpenPnP part id of the placement (null if the placement has no part). */
     public String partId;
-    /** How the pad type was chosen ({@link PadTypeResolver.Resolution}); null when not resolved. */
+    /** How the pad type was chosen ({@link PadTypeResolver.Resolution}); null if no resolver was asked. */
     public String typeRule;
     public String typeRuleDetail;
     public String typeRuleMatched;
