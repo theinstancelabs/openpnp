@@ -336,6 +336,75 @@ public final class ArtPath {
             return new Shape(POLY, polys);
         }
 
+        /** True when (x, y) lies in the shape (on its edge included, within 1e-6 mm). */
+        boolean contains(double x, double y) {
+            double e = 1e-6;
+            switch (kind) {
+                case RECT: {
+                    double a = Math.toRadians(angle);
+                    double dx = x - cx;
+                    double dy = y - cy;
+                    double u = Math.abs(dx * Math.cos(a) + dy * Math.sin(a));
+                    double v = Math.abs(-dx * Math.sin(a) + dy * Math.cos(a));
+                    if (u > w / 2 + e || v > h / 2 + e) {
+                        return false;
+                    }
+                    double ou = u - (w / 2 - r);
+                    double ov = v - (h / 2 - r);
+                    return ou <= 0 || ov <= 0 || Math.hypot(ou, ov) <= r + e;
+                }
+                case CIRCLE:
+                    return Math.hypot(x - cx, y - cy) <= r + e;
+                default:
+                    for (double[] q : polys) {
+                        if (KGeom.pointInPolygon(x, y, q)) {
+                            return true;
+                        }
+                    }
+                    return false;
+            }
+        }
+
+        /**
+         * Points around the shape (x0 y0 x1 y1 …) that enclose it: a rectangle's corners, 16 points on a circle's
+         * circumscribed polygon, a polygon's vertices.
+         */
+        double[] around() {
+            switch (kind) {
+                case RECT: {
+                    double a = Math.toRadians(angle);
+                    double c = Math.cos(a);
+                    double s = Math.sin(a);
+                    double[] p = new double[8];
+                    for (int i = 0; i < 4; i++) {
+                        double u = (i == 0 || i == 3 ? -1 : 1) * w / 2;
+                        double v = (i < 2 ? -1 : 1) * h / 2;
+                        p[2 * i] = cx + u * c - v * s;
+                        p[2 * i + 1] = cy + u * s + v * c;
+                    }
+                    return p;
+                }
+                case CIRCLE: {
+                    double[] p = new double[32];
+                    double rr = r / Math.cos(Math.PI / 16);
+                    for (int i = 0; i < 16; i++) {
+                        p[2 * i] = cx + rr * Math.cos(Math.PI * i / 8);
+                        p[2 * i + 1] = cy + rr * Math.sin(Math.PI * i / 8);
+                    }
+                    return p;
+                }
+                default: {
+                    KGeom.Pts p = new KGeom.Pts();
+                    for (double[] q : polys) {
+                        for (int i = 0; i + 1 < q.length; i += 2) {
+                            p.add(q[i], q[i + 1]);
+                        }
+                    }
+                    return p.toArray();
+                }
+            }
+        }
+
         /** Draws the shape into p; returns the points written. */
         long emit(ArtPath p) {
             long before = p.points();

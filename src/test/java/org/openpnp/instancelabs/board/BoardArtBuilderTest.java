@@ -199,16 +199,20 @@ public class BoardArtBuilderTest {
             ArtFixtures.Drawn d = DRAWN.get(n);
             BoardArt a = d.art();
             int checked = 0;
+            int drawnOpen = 0;
             for (ImportProposal.PlacementP pl : d.proposal.placements) {
                 Footprint fp = d.pcb.footprints.get(pl.footprintIndex);
                 for (Pad p : fp.pads) {
                     boolean bareHole = "np_thru_hole".equals(p.type) && p.w <= p.drillW + 0.01; // no copper
-                    if (!p.onFrontCopper() || !p.onFrontMask() || bareHole) {
-                        continue;
-                    }
                     double t = Math.toRadians(p.angle - fp.angle);
                     double[] at = d.frame.localToBoard(fp, p.x + p.offX * Math.cos(t) + p.offY * Math.sin(t),
                             p.y - p.offX * Math.sin(t) + p.offY * Math.cos(t));
+                    // a pad without a mask opening of its own counts when a drawn F.Mask shape opens its centre
+                    boolean opened = p.onFrontMask() || ArtFixtures.inside(a.layers.mask.open, at[0], at[1]);
+                    if (!p.onFrontCopper() || !opened || bareHole) {
+                        continue;
+                    }
+                    drawnOpen += p.onFrontMask() ? 0 : 1;
                     String what = n + " " + pl.id + "." + p.name;
                     assertTrue(ArtFixtures.inside(a.layers.exposed.fill, at[0], at[1]), what);
                     assertTrue(ArtFixtures.inside(a.layers.cu.fill, at[0], at[1]), what);
@@ -220,6 +224,8 @@ public class BoardArtBuilderTest {
                 assertTrue(ArtFixtures.inside(a.layers.exposed.fill, f.bx, f.by), n + " " + f.name);
             }
             assertTrue(checked > 0 || n.equals(ArtFixtures.SECONDARY), n);
+            // nano IC3's centre pad 33 is on F.Cu only; a polygon drawn on F.Mask opens it
+            assertEquals(n.equals(ArtFixtures.NANO) ? 1 : 0, drawnOpen, n);
         }
     }
 
@@ -380,6 +386,30 @@ public class BoardArtBuilderTest {
         assertEquals("info", d.result.warnings.get(0).level);
         assertTrue(ArtFixtures.inside(d.art().layers.cu.fill, 15, 5));
         assertFalse(ArtFixtures.inside(d.art().layers.cu.fill, 5, 5));
+    }
+
+    @Test
+    public void aDrawnMaskOpeningExposesTheCopperUnderIt() throws Exception {
+        // pads on F.Cu only: under a larger drawn opening (pad 1), around a smaller one (pad 2), half under one (3)
+        String items = "(gr_rect (start 0 -10) (end 20 0) (layer \"Edge.Cuts\") (width 0.1))\n"
+                + "(footprint \"Lib:Drawn\" (layer \"F.Cu\") (at 10 -5)\n"
+                + "  (pad \"1\" smd rect (at -5 0) (size 1 1) (layers \"F.Cu\"))\n"
+                + "  (fp_rect (start -6 -1) (end -4 1) (layer \"F.Mask\") (width 0) (fill solid))\n"
+                + "  (pad \"2\" smd rect (at 0 0) (size 3 3) (layers \"F.Cu\"))\n"
+                + "  (fp_circle (center 0 0) (end 0.5 0) (layer \"F.Mask\") (width 0) (fill solid))\n"
+                + "  (pad \"3\" smd rect (at 5 0) (size 1 1) (layers \"F.Cu\"))\n"
+                + "  (fp_rect (start 5 -1) (end 7 1) (layer \"F.Mask\") (width 0) (fill solid))\n"
+                + ")\n";
+        BoardArt a = ArtFixtures.draw("drawn", ArtFixtures.board(20240108, items), new BoardArtBuilder()).art();
+        // pad 1 at board (5, 5): its whole 1 × 1 copper is exposed, not the 2 × 2 opening
+        assertTrue(ArtFixtures.inside(a.layers.exposed.fill, 5.45, 5.45));
+        assertFalse(ArtFixtures.inside(a.layers.exposed.fill, 5.8, 5));
+        // pad 2 at (10, 5): only the 1 mm opening inside it
+        assertTrue(ArtFixtures.inside(a.layers.exposed.fill, 10.4, 5));
+        assertFalse(ArtFixtures.inside(a.layers.exposed.fill, 11, 5));
+        // pad 3 at (15, 5), half under its opening: left covered
+        assertFalse(ArtFixtures.inside(a.layers.exposed.fill, 15.3, 5));
+        assertEquals(2, ArtPath.parse(a.layers.exposed.fill).size());
     }
 
     @Test

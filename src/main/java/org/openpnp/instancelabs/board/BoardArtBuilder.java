@@ -99,6 +99,8 @@ public final class BoardArtBuilder {
         final ArtPath via = new ArtPath();
         final List<Shape> thumbMask = new ArrayList<>();
         final List<Shape> thumbExposed = new ArrayList<>();
+        /** The current footprint's top copper pads without a mask opening of their own (a drawn one may open them). */
+        final List<Shape> covered = new ArrayList<>();
         long finePoints;
 
         // the coarse layers, kept unsimplified so each tolerance starts from the same points
@@ -279,6 +281,7 @@ public final class BoardArtBuilder {
         // ---- footprints ----------------------------------------------------------------------------------------
 
         void footprint(Footprint fp, int index) throws SExprException {
+            covered.clear();
             for (Pad p : fp.pads) {
                 pad(fp, p);
             }
@@ -298,6 +301,9 @@ public final class BoardArtBuilder {
             Shape copper = cu ? padShape(fp, p, 0) : null;
             if (copper != null) {
                 finePoints += copper.emit(cuPads);
+                if (!mask) {
+                    covered.add(copper);
+                }
             }
             if (mask) {
                 double m = PasteRules.maskMargin(pcb, fp, p);
@@ -523,6 +529,9 @@ public final class BoardArtBuilder {
                     Shape s = Shape.poly(b);
                     finePoints += s.emit(maskOpen);
                     thumbMask.add(s);
+                    if (fp != null) {
+                        exposeDrawnOpening(b);
+                    }
                     break;
                 }
                 case "F.Paste":
@@ -552,6 +561,31 @@ public final class BoardArtBuilder {
                     break;
                 default:
                     break;
+            }
+        }
+
+        /**
+         * A footprint's drawn mask opening over one of its pads that has no opening of its own (nano IC3's centre
+         * pad): the copper it uncovers is exposed. An opening inside the pad exposes the opening, a pad inside the
+         * opening exposes the pad; a partial overlap is left covered.
+         */
+        void exposeDrawnOpening(List<double[]> openings) {
+            for (double[] q : openings) {
+                for (int i = 0; i < covered.size(); i++) {
+                    Shape c = covered.get(i);
+                    Shape ex = null;
+                    if (allInside(q, c)) {
+                        ex = Shape.poly(Collections.singletonList(q));
+                    }
+                    else if (allInside(c.around(), Shape.poly(Collections.singletonList(q)))) {
+                        ex = c;
+                        covered.remove(i--); // exposed once
+                    }
+                    if (ex != null) {
+                        finePoints += ex.emit(exposed);
+                        thumbExposed.add(ex);
+                    }
+                }
             }
         }
 
@@ -1154,6 +1188,16 @@ public final class BoardArtBuilder {
         double dy = by - ay;
         double l = Math.hypot(dx, dy);
         return l < 1e-12 ? new double[] {0, 0} : new double[] {dy / l, -dx / l};
+    }
+
+    /** True when every point (x0 y0 x1 y1 …) lies in the shape. */
+    static boolean allInside(double[] pts, Shape s) {
+        for (int i = 0; i + 1 < pts.length; i += 2) {
+            if (!s.contains(pts[i], pts[i + 1])) {
+                return false;
+            }
+        }
+        return pts.length >= 2;
     }
 
     /** {cx, cy, r} when every point of the loop lies within 0.01 mm of one circle (8 points or more), else null. */
