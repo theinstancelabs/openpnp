@@ -20,11 +20,14 @@ same board (1.0016 / 0.9935). The second Register saw the same seat (fiducials m
   the ring light's reflections (the whole disc ~22 from the ring's median: 89–97 % "foreign", `blank_probe1.json`
   refused all 3 spots at X 320–324, Y 245.5) and board 3's scratched mask (54–60 %). It still refused every paste
   dot, the mounting-hole ring and the board edge.
-  - Fixed: the look compares the spot with a smooth colour field fitted to the ring, raises its threshold on a rough
-    surface, and counts only solid patches. All 20 real frames are test fixtures (`src/test/resources/…/vision/real/`):
-    bare spots read 0–1.3 %, paste, holes and edges 31–87 %.
+  - Fixed: the look compares the spot with a smooth colour field fitted to the ring, raises its threshold for small
+    patches on a rough surface, and counts only solid patches; wide patches (0.4 mm across) 22 or more from the field
+    count whatever the texture, so board 3's rough mask cannot hide paste, a hole or an edge. All 20 real frames are
+    test fixtures (`src/test/resources/…/vision/real/`): bare spots read 0–1.3 %, paste, holes and edges 31–87 %.
+  - Not seen on a mask as rough as board 3's at (37, 37): paste within ~35 of the mask (a 0.7 mm dot 40 out reads
+    12 %), and an edge across the spot only just (6 %, board 3's texture laid over the edge frame).
   - On the machine: probe the blank at X 322–328, Y 245.5 again, and register board 3 with a probe. Each PROBE
-    record's look now also holds `rawShare` and `threshold`; send any wrong call with its frame.
+    record's look now also holds `rawShare`, `threshold` and `wideShare`; send any wrong call with its frame.
 - **F2, the board probe chose corner targets on a mounting hole.** The plan had no dots (`dots: []`), so the
   corners came from the outline 2 mm in. Target (2, 2) and its alternates (4, 2) and (3, 3.73), 2 mm apart, all saw
   ftp's corner mounting hole (`looks/b3reg_corner_2_2_alt_openpnp.png`: a 5.6 mm copper ring around about (5.0, 4.5)).
