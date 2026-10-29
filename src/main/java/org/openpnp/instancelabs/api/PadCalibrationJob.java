@@ -13,6 +13,7 @@ import java.util.TreeMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import org.openpnp.instancelabs.dispense.Balance;
 import org.openpnp.instancelabs.dispense.CalibrationArea;
@@ -225,6 +226,8 @@ final class PadCalibrationJob {
 
     // the run
     private final Object lock = new Object();
+    /** How long the job waits for one engine step before it stops the engine and fails (ms). */
+    long stepWaitMs = ApiContext.MAX_WAIT_MS * 3;
     /**
      * The engine's stop epoch when the job was prepared: a STOP after it (also one pressed while the start
      * saved the suggestions, before this job was the current one) halts the job before its next engine step.
@@ -1050,7 +1053,16 @@ final class PadCalibrationJob {
             ctx.tracker.expect("pad calibration");
             f = submit.submit();
         }
-        T res = f.get(ApiContext.MAX_WAIT_MS * 3, TimeUnit.MILLISECONDS);
+        T res;
+        try {
+            res = f.get(stepWaitMs, TimeUnit.MILLISECONDS);
+        }
+        catch (TimeoutException e) {
+            // a step the job gives up on must not lay its dots later (still queued) or go on alone: stopped as by STOP
+            engine.abort("the pad calibration gave up waiting for its " + stepWords() + " step");
+            throw new IllegalStateException("the " + stepWords() + " step did not end within " + stepWaitMs / 60000
+                    + " min: the engine was stopped", e);
+        }
         RunResult r = run.apply(res);
         if (r != null) {
             runs.add(r.runId);

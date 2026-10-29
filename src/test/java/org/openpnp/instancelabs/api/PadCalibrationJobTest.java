@@ -527,6 +527,29 @@ public class PadCalibrationJobTest {
         assertTrue(engine.calls.isEmpty(), "no engine step after the STOP: " + engine.calls);
     }
 
+    /**
+     * Review 2: a step the job gives up waiting for (here it never ends; on the machine its task can wait behind a busy
+     * machine thread) is stopped as by STOP: it must not lay its dots later, when no job records them, nor go on alone.
+     */
+    @Test
+    public void aStepThatNeverEndsIsStoppedWhenTheJobGivesUpOnIt() throws Exception {
+        plan();
+        engine.holdAt = 1;
+        DispenseEndpoints dispense = new DispenseEndpoints(ctx, new MachineEndpoints(ctx));
+        PadProfileEndpoints profile = new PadProfileEndpoints(ctx, dispense);
+        PadCalibrationJob job = PadCalibrationJob.prepare(ctx, profile, dispense, svc, PadCalibrationEndpoints.request(
+                new JsonParser().parse(body(group, attest())).getAsJsonObject()));
+        assertEquals(null, job.refusal, job.refusal);
+        job.stepWaitMs = 300;
+        job.save();
+        ctx.padCalJobs.start(job);
+        JsonObject j = awaitState("failed");
+        assertEquals("the coupons step did not end within 0 min: the engine was stopped", str(j.getAsJsonObject(
+                "result"), "refusal"), j.toString());
+        assertEquals("the pad calibration gave up waiting for its coupons step", engine.aborted);
+        assertEquals(List.of("probe coupon1"), engine.calls, "no step after it");
+    }
+
     @Test
     public void theEngineWritesCharacterizedOnlyWithEveryCheckAndNeverValidated() throws Exception {
         org.openpnp.instancelabs.dispense.PadType t = svc.getDb().currentPadType("chip-0805").copy();
