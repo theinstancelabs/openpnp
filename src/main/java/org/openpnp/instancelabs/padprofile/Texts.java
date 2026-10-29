@@ -159,6 +159,14 @@ public final class Texts {
                 + "for " + pkg + ".";
     }
 
+    /** Decisions 4 and 14: a part held whole because another of its pads is too close to a neighbour. */
+    public static String nearPart(String packageId) {
+        return "Another pad of this part is too close to a neighbour and gets no paste, so none of this part's pads "
+                + "are pasted: a part whose pins are soldered by hand gets no paste on its other pads either. To paste "
+                + "these pads anyway, choose “Paste the dispensable pads of this part” for "
+                + GroupKey.basePackage(packageId) + ".";
+    }
+
     /**
      * Decision 14: {@code k} of a group's {@code of} pads whose own neighbour breaks the plan the others
      * keep; {@code gap} is to the neighbour's dot ({@code byDot}) or copper, null when there is no plan.
@@ -250,35 +258,40 @@ public final class Texts {
     }
 
     /**
-     * The recipe fields that differ between two dose fingerprints ("psi=18.000 suck=10.000 …"):
-     * "psi 18.000 then, 16.000 now".
+     * The one recipe formatter (decision 18; D/DispenseProfile.fingerprintDiff is this): what differs
+     * between two fingerprints ("psi=18.000 suck=10.000 …") in words, e.g. {@code "dwell 250 -> 300,
+     * gap 0.1 -> 0.12"}, numbers without trailing zeros, keys only one side has with "none"; empty when
+     * equal.
      */
-    public static String recipeDiff(String then, String now) {
-        Map<String, String> a = fields(then);
+    public static String recipeDiff(String was, String now) {
+        Map<String, String> a = fields(was);
         Map<String, String> b = fields(now);
-        StringBuilder s = new StringBuilder();
         Set<String> keys = new LinkedHashSet<>(a.keySet());
         keys.addAll(b.keySet());
+        StringBuilder s = new StringBuilder();
         for (String k : keys) {
-            String x = a.get(k);
-            String y = b.get(k);
-            if (x == null ? y != null : !x.equals(y)) {
-                s.append(s.length() == 0 ? "" : ", ").append(k).append(' ').append(x == null ? "–" : x)
-                        .append(" then, ").append(y == null ? "–" : y).append(" now");
+            String x = a.getOrDefault(k, "none");
+            String y = b.getOrDefault(k, "none");
+            if (!x.equals(y)) {
+                s.append(s.length() == 0 ? "" : ", ").append(k).append(' ').append(x).append(" -> ").append(y);
             }
         }
-        return s.length() == 0 ? "another fingerprint" : s.toString();
+        return s.toString();
     }
 
     private static Map<String, String> fields(String fp) {
         Map<String, String> m = new LinkedHashMap<>();
-        if (fp == null) {
-            return m;
-        }
-        for (String t : fp.trim().split("\\s+")) {
+        for (String t : (fp == null ? "" : fp).trim().split("\\s+")) {
             int i = t.indexOf('=');
             if (i > 0) {
-                m.put(t.substring(0, i), t.substring(i + 1));
+                String v = t.substring(i + 1);
+                try {
+                    v = BigDecimal.valueOf(Double.parseDouble(v)).stripTrailingZeros().toPlainString();
+                }
+                catch (NumberFormatException e) {
+                    // not a number: as written
+                }
+                m.put(t.substring(0, i), v);
             }
         }
         return m;

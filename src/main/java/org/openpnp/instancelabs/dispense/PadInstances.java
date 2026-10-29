@@ -1,5 +1,6 @@
 package org.openpnp.instancelabs.dispense;
 
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -10,6 +11,7 @@ import java.util.Map;
 import java.util.TreeMap;
 
 import org.openpnp.instancelabs.padprofile.CheckInputs;
+import org.openpnp.instancelabs.padprofile.DoseEvidence;
 import org.openpnp.instancelabs.padprofile.DotGeometry;
 import org.openpnp.instancelabs.padprofile.Limits;
 import org.openpnp.instancelabs.padprofile.PadInstance;
@@ -166,6 +168,33 @@ public final class PadInstances {
         }
         in.nowMs = System.currentTimeMillis();
         return in;
+    }
+
+    /**
+     * The check's inputs from the engine as it is now (§3.1): the current pad types and their rules, the
+     * configuration, the packages pasted partly and the dose evidence of the fresh records.
+     */
+    public static CheckInputs inputs(DispenseService svc, List<PadInstance> pads, boolean planned)
+            throws SQLException {
+        DispenseConfig cfg = svc.getConfig();
+        DispenseDb db = svc.getDb();
+        CheckInputs in = inputs(pads, db.currentPadTypes(), db.currentPadRules(), cfg, db.pastePartialPackages(),
+                planned);
+        long since = in.nowMs - (long) (cfg.padCalibration.doseRecordMaxAgeH * 3600e3); // older ones are stale
+        in.evidence = evidence(db.doseRecords(null, since), cfg, new DoseRecord.Epochs(
+                svc.getControllerConnectedAtMs(), svc.isSimulatorConfirmed()), in.nowMs);
+        return in;
+    }
+
+    /**
+     * The fresh dose records of the current setup (§1.7) per dose, pooled as the pad calibration pools
+     * them ({@link DoseRecords#evidence}): the camera statistics recomputed on every fresh record's dots
+     * (a later pass does not erase an earlier failure) and a mass confirmed by any two fresh readings
+     * that agree (§7.5).
+     */
+    public static Map<Integer, DoseEvidence> evidence(List<DoseRecord> records, DispenseConfig cfg,
+            DoseRecord.Epochs epochs, long nowMs) {
+        return DoseRecords.evidence(records, cfg, epochs, nowMs);
     }
 
     /**
