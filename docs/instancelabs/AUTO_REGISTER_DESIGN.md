@@ -318,14 +318,21 @@ These keep their `MACHINE: machine is not homed` refusal: nothing else homes sil
   - Fix: `ApiContext.requireMachineIdle()` refuses 409 `OpenPnP is busy (homing or moving): wait for it to finish`
     when `m.isBusy()`.
   - It is called by `POST /api/run`, `/api/plan/{id}/register`, `/api/surfaces/{name}/probe` and
-    `/api/machine/z-check`.
+    `/api/machine/z-check`, and (review 1) by every other engine endpoint: `/api/prime`, `/api/test-dot`,
+    `/api/plan/{id}/clean-check`, `/api/calibrations/shots-run`, `/api/calibrations/dot-ladder` and
+    `/api/calibrations/touch-off`.
+  - `POST /api/machine/home` returns its failure from its machine task instead of throwing it (and is queued with
+    ignoreEnabled, checking "started" itself), so a STOP or a failure during the web home cannot drop an engine
+    task queued behind it.
 - **Pressure hold against a starting task.**
   - Today `/api/run` checks the hold and `/api/pressure/start` checks "engine idle", each on its own API thread
     (A/DispenseEndpoints.java:243-250, 694-697). Both then queue on the machine thread, and `PressureHold.doStart`
     never checks the engine (A/PressureHold.java:165-181).
   - Fix, on the machine thread where the two are serialised:
     - `registerBoard`, `probeSurface`, `runPlan` and the Z check refuse at task start when the hold is active (a
-      `BooleanSupplier` from `ApiContext`);
+      `BooleanSupplier` from `ApiContext`). As built (review 1) every engine task does, in `submit` /
+      `submitResult`: prime, the test dot and scale shots (`runShots`), the dot ladder, the touch-off, the clean-pad
+      check and the dose blocks too;
     - `PressureHold.doStart` refuses when `svc.isBusy()`. The busy flag is set before the engine task is queued
       (D/DispenseService.java:1098, 1133).
   - So nothing homes or probes with the barrel pressurised: paste would ooze over the board (PT/lessons.md:4).
