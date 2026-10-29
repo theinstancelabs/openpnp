@@ -325,4 +325,31 @@ public class GcodeBlocksTest {
             assertTrue(b.demandMgS > 0);
         }
     }
+
+    /**
+     * The screw angle the plan gives each pad is the one the program dispenses it at (the step
+     * count before the pad's first dot), for any count and either screw direction.
+     */
+    @Test
+    public void everyPadStartsAtThePlannedAngle() throws Exception {
+        for (int sign : new int[] {1, -1}) {
+            for (long count : new long[] {0, 1234, -777}) {
+                DispenseConfig c = cfg();
+                c.bExtrudeSign = sign;
+                DispensePlan plan = PlannerDoseTest.threeDosePlan(c);
+                GcodeProgram p = GcodeStreamBuilder.forPlan(c, GcodeStreamTest.mapper(), plan,
+                        DispenseService.purgeSpecs(c, plan), false, false, count);
+                assertEquals(Collections.emptyList(), GcodeStreamValidator.validate(p, c, "B"));
+                java.util.Set<String> seen = new java.util.HashSet<>();
+                for (DispensePlan.PlannedDot d : plan.dots) {
+                    if (seen.add(d.padId)) {
+                        assertEquals(plan.pads.get(d.padIndex).startPhase,
+                                Math.floorMod(p.dotStartCount[d.index], 1600L),
+                                "pad " + d.padId + ", sign " + sign + ", count " + count);
+                    }
+                }
+                assertEquals(10, seen.size());
+            }
+        }
+    }
 }

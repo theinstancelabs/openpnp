@@ -209,8 +209,11 @@ public class BoardPlanningTest {
         assertTrue(x1.isBlocked());
         assertEquals(0.5 * 1.7 * 1.7 * 0.1, centre.targetVolumeMm3, 1e-12);
         assertEquals(1, centre.dotCount, "no pad rule: one dot even on the QFN centre pad");
-        // 10 dispensable pads -> 10 dots, each cites the pad and has Z = surface + offset + gap (+hop)
-        assertEquals(10, plan.dots.size());
+        // the perimeter pad itself is never pasted (decision 4: only the part's dispensable pads)
+        DispensePlan.PlannedPad perimeter = plan.pads.stream().filter(p -> p.padId.equals("U1.1")).findFirst().get();
+        assertEquals(java.util.Collections.singletonList("PART_NOT_DISPENSABLE"), perimeter.flagNames());
+        // 9 dispensable pads -> 9 dots, each cites the pad and has Z = surface + offset + gap (+hop)
+        assertEquals(9, plan.dots.size());
         Set<String> pads = new HashSet<>();
         for (int i = 0; i < plan.dots.size(); i++) {
             DispensePlan.PlannedDot d = plan.dots.get(i);
@@ -220,8 +223,8 @@ public class BoardPlanningTest {
             assertEquals(d.dispenseZMm + 1.0, d.hopZMm, 1e-12);
             assertEquals(cfg.profile.netDeg(cfg), d.rotationDeg, 0);
         }
-        assertEquals(10, pads.size());
-        assertEquals(10 * 800 / 4.44, plan.totalRotationDeg(), 1e-9);
+        assertEquals(9, pads.size());
+        assertEquals(9 * 800 / 4.44, plan.totalRotationDeg(), 1e-9);
         assertTrue(plan.pathLengthMm <= plan.pathLengthNearestNeighbourMm + 1e-9);
         // first dot is the one nearest the start point (100, 50): R1.1 at (109.175, 60)
         assertEquals("R1.1", plan.dots.get(0).padId);
