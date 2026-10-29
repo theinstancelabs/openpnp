@@ -1,6 +1,7 @@
 package org.openpnp.instancelabs.sim;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.awt.Color;
@@ -160,6 +161,17 @@ public class SimBoardRendererTest {
         double d = SimBoards.PAD_X / Math.sqrt(2);
         assertColour(SimBoardRenderer.PAD_COPPER, look(s, b, pads, s.toMachine(20 + d, 15 + d)), 12, "C1.2");
         assertColour(SimBoardRenderer.PAD_COPPER, look(s, b, pads, s.toMachine(20 - d, 15 - d)), 12, "C1.1");
+    }
+
+    /** A scene without board.size: the mask outline comes from the board's dimensions. */
+    @Test
+    public void outlineFromTheBoardWhenTheSceneHasNoSize() {
+        Board b = SimBoards.ftpLike();
+        SimScene s = new SimScene();
+        s.seat = SimScene.seat(296.2, 114.1, -1.6, 1.002, 0.997, 0.1);
+        assertFalse(s.hasBoardSize());
+        assertColour(SimBoardRenderer.MASK, look(s, b, List.of(), s.toMachine(10, 37.5)), 12, "mask");
+        assertEquals(75, s.boardWidthMm, 0);
     }
 
     @Test

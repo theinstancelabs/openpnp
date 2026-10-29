@@ -66,11 +66,14 @@ public final class SimBoardRenderer {
     }
 
     /**
+     * A board size the scene does not give is filled from the board ({@link SimScene#withBoardSize}).
+     *
      * @param boardPads pads in board mm ({@link #boardPads})
      * @return a TYPE_3BYTE_BGR frame
      */
     public static BufferedImage render(SimScene sc, Board board, List<PadGeometry> boardPads, double camX,
             double camY, int w, int h, double uppX, double uppY) {
+        sc.withBoardSize(board);
         BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_3BYTE_BGR);
         Graphics2D g = img.createGraphics();
         try {
@@ -89,7 +92,7 @@ public final class SimBoardRenderer {
                     fill(g, machine, disk(d[0], d[1], PASTE_DOT_MM), PASTE);
                 }
             }
-            if (sc.boardWidthMm > 0 && sc.boardHeightMm > 0) {
+            if (sc.hasBoardSize()) {
                 fill(g, boardTx, new Rectangle2D.Double(0, 0, sc.boardWidthMm, sc.boardHeightMm), MASK);
             }
             for (PadGeometry p : boardPads) {

@@ -19,6 +19,10 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.junit.jupiter.api.Test;
+import org.openpnp.model.Board;
+import org.openpnp.model.Configuration;
+import org.openpnp.model.LengthUnit;
+import org.openpnp.model.Location;
 
 /**
  * The simulated N1 vacuum sensor on a fake clock: the reply format, the I2C state, settling, seals,
@@ -369,10 +373,54 @@ public class SimVacuumTest {
         assertNull(v.onLine("M261 A109 B3 S1", h[0], h[1], 8), "no scene: not answered");
     }
 
-    /** As il_sim_scene.py write(): a temp file renamed over the scene. */
+    /** A scene without board.size: the outline comes from the board once it is loaded (boards load on demand). */
+    @Test
+    public void boardSizeComesFromTheBoardOnceItIsLoaded() throws Exception {
+        File f = SimGuard.sceneFile(Files.createTempDirectory("sim-scene").toFile());
+        write(f, 5.00, false);
+        long[] nowMs = {1000};
+        Board[] loaded = {null};
+        SimScene.Source src = new SimScene.Source(f, () -> nowMs[0], (sc) -> loaded[0]);
+        SimVacuum v = new SimVacuum(src, () -> nowNs[0]);
+        double[] h = head(src.get(), 37, 37);
+        vacuumOn(v, h, 8);
+        assertEquals(-1_550_000, read(v, h, 4.99), "board not loaded yet: no outline, no seal");
+        Board b = new Board();
+        b.setDimensions(new Location(LengthUnit.Millimeters, 75, 75, 0, 0));
+        loaded[0] = b;
+        nowMs[0] += 300;
+        assertEquals(-1_850_000, read(v, h, 4.99), "loaded after the first read: its outline is used");
+        assertEquals(75, src.get().boardWidthMm, 0);
+    }
+
+    /** new SimVacuum(scene) with no board size: the configuration's matching board gives the outline. */
+    @Test
+    public void fixedSceneTakesTheBoardSizeFromTheConfiguration() throws Exception {
+        File dir = Files.createTempDirectory("sim-config").toFile();
+        Configuration.initialize(dir);
+        Configuration.get().load();
+        SimScene s = scene();
+        s.boardWidthMm = 0;
+        s.boardHeightMm = 0;
+        SimVacuum v = new SimVacuum(s);
+        double[] h = head(s, 37, 37);
+        double contact = s.boardContactZ(37, 37);
+        vacuumOn(v, h, 8);
+        assertEquals(-1_550_000, read(v, h, contact - 0.01), "no such board in the configuration: no outline");
+        Board b = Configuration.get().getBoard(new File(dir, "toy.board.xml"));
+        b.setDimensions(new Location(LengthUnit.Millimeters, 75, 75, 0, 0));
+        assertEquals(-1_850_000, read(v, h, contact - 0.01));
+        assertEquals(75, s.boardHeightMm, 0);
+    }
+
     static void write(File f, double z0) throws Exception {
+        write(f, z0, true);
+    }
+
+    /** As il_sim_scene.py write(): a temp file renamed over the scene. */
+    static void write(File f, double z0, boolean size) throws Exception {
         f.getParentFile().mkdirs();
-        String json = "{\"version\": 1, \"board\": {\"file\": \"toy.board.xml\", \"size\": [75, 75],"
+        String json = "{\"version\": 1, \"board\": {\"file\": \"toy.board.xml\"," + (size ? " \"size\": [75, 75]," : "")
                 + " \"seat\": {\"x\": 300, \"y\": 115, \"rotationDeg\": 1.5},"
                 + " \"surface\": {\"z0\": " + z0 + ", \"slopeX\": 0, \"slopeY\": 0}},"
                 + " \"vacuum\": {\"noise\": 0, \"tauS\": 0, \"sealTauS\": 0, \"releaseTauS\": 0, \"sealDrops\": [300000]}}";

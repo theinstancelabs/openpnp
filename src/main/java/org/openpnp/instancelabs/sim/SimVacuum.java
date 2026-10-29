@@ -63,9 +63,13 @@ public final class SimVacuum {
     private double[] head, arriving;
     private long arrivesAtNs;
 
-    /** A fixed scene and the wall clock (tests). */
+    /**
+     * A fixed scene and the wall clock (tests). A board size the scene does not give comes from the
+     * configuration's matching board, once it is loaded.
+     */
     public SimVacuum(SimScene scene) {
-        this(() -> scene, System::nanoTime);
+        this(() -> scene.hasBoardSize() ? scene : scene.withBoardSize(scene.findBoard(Configuration.get())),
+                System::nanoTime);
     }
 
     public SimVacuum(Supplier<SimScene> scenes, LongSupplier clockNs) {

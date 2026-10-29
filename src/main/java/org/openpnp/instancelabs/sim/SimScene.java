@@ -11,6 +11,7 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.ConcurrentModificationException;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
@@ -120,7 +121,10 @@ public final class SimScene {
 
     /** Matched against the end of each board path of the configuration. */
     public String boardFile;
-    /** Board width/height (mm); 0 when the scene does not say (then taken from the board, see {@link #withBoardSize}). */
+    /**
+     * Board width/height (mm); 0 when the scene does not say (then taken from the board, see
+     * {@link #withBoardSize}). While unknown, nothing lies on the board: no seal, no mask.
+     */
     public double boardWidthMm, boardHeightMm;
     /** The true board→machine transform; the board origin lands at its translation. */
     public AffineTransform seat;
@@ -388,7 +392,14 @@ public final class SimScene {
             return null;
         }
         String want = boardFile.replace('\\', '/');
-        for (Board b : c.getBoards()) {
+        List<Board> boards;
+        try {
+            boards = c.getBoards();
+        }
+        catch (ConcurrentModificationException e) {
+            return null; // a board is being loaded right now: the next call sees it
+        }
+        for (Board b : boards) {
             File f = b.getFile();
             if (f == null) {
                 continue;
@@ -401,9 +412,14 @@ public final class SimScene {
         return null;
     }
 
+    /** True once the board outline is known (the scene's board.size, or filled from the board). */
+    public boolean hasBoardSize() {
+        return boardWidthMm > 0 && boardHeightMm > 0;
+    }
+
     /** Fills a missing board size from the board's dimensions (the board file's {@code <dimensions>}). */
     public SimScene withBoardSize(Board board) {
-        if ((boardWidthMm <= 0 || boardHeightMm <= 0) && board != null) {
+        if (!hasBoardSize() && board != null) {
             Location d = board.getDimensions().convertToUnits(LengthUnit.Millimeters);
             boardWidthMm = d.getX();
             boardHeightMm = d.getY();
@@ -597,6 +613,9 @@ public final class SimScene {
                 return null;
             }
             if (scene != null && st.equals(stamp)) {
+                if (!scene.hasBoardSize()) {
+                    scene.withBoardSize(boardOf.apply(scene)); // boards load on demand, maybe after the first read
+                }
                 return scene;
             }
             try {
