@@ -1356,6 +1356,11 @@ public final class DispenseService {
          */
         public ZCheck.Reference reference;
         public ZCheck.Result last;
+        /**
+         * N1 touches the check makes when the spots are bare: one per Z frame (home period) of the stale data,
+         * so 2 when, e.g., the board was probed under a later home than the needle frame (0 when not needed).
+         */
+        public int touches;
     }
 
     /**
@@ -1364,16 +1369,30 @@ public final class DispenseService {
      */
     public ZCheckPlan zCheckPlan(DispensePlan plan, boolean homeFirst) {
         DispenseConfig c = cfg;
+        return zCheckPlan(c, plan == null ? needleTasksScope(c) : boardScope(c, plan),
+                plan == null ? null : plan.boardRegistration, homeFirst);
+    }
+
+    /**
+     * The Z check of a board run of a plan that may run now: tied to the board surface's registration (I4 refuses
+     * any other), on the board and the blank (its purge row). For the status before a plan is chosen.
+     */
+    public ZCheckPlan boardRunZCheckPlan(boolean homeFirst) {
+        DispenseConfig c = cfg;
+        DispenseConfig.SurfaceMap board = c.surface(c.boardSurfaceName);
+        return zCheckPlan(c, needleTasksScope(c), board == null ? null : board.boardFingerprint, homeFirst);
+    }
+
+    private ZCheckPlan zCheckPlan(DispenseConfig c, Interlocks.Scope sc, String planRegistration, boolean homeFirst) {
         ZCheckPlan p = new ZCheckPlan();
         p.last = homeTracker.getZCheck();
         p.homeAtMs = homeTracker.getLastHomeAtMs();
-        Interlocks.Scope sc = plan == null ? needleTasksScope(c) : boardScope(c, plan);
         p.stale = ZCheck.stale(c, sc, homeFirst ? Long.valueOf(Long.MAX_VALUE) : p.homeAtMs);
         List<ZCheck.Stale> open = homeFirst ? p.stale : ZCheck.unchecked(p.last, p.homeAtMs, p.stale);
         p.needed = !open.isEmpty();
-        List<ZCheck.Reference> refs = ZCheck.references(c, plan == null ? null : plan.boardRegistration,
-                homeFirst ? null : p.homeAtMs);
+        List<ZCheck.Reference> refs = ZCheck.references(c, planRegistration, homeFirst ? null : p.homeAtMs);
         p.reference = ZCheck.unreachable(refs, open).isEmpty() ? ZCheck.first(refs, open) : null;
+        p.touches = p.needed && p.reference != null ? ZCheck.touches(refs, open) : 0;
         return p;
     }
 
@@ -1916,7 +1935,8 @@ public final class DispenseService {
         t.stage = "fiducials";
         Board board = req.nominal.getBoard();
         boolean job = req.boardKey != null && req.boardKey.startsWith("job:");
-        BoardFeatures f = BoardFeatures.of(board, new PadTypeResolver(db.currentPadTypes(), db.packageMappings()));
+        BoardFeatures f = BoardFeatures.of(board, new PadTypeResolver(db.currentPadTypes(), db.packageMappings()),
+                req.fiducialHints);
         String few = fewFiducials(f, c.fiducialCheck.minFiducials);
         if (few != null) {
             throw refused(few);
@@ -2146,7 +2166,7 @@ public final class DispenseService {
         t.stage = "probe";
         t.points.clear();
         List<VacuumProber.Target> targets = ProbeTargets.map(ProbeTargets.forBoard(f, ProbeTargets.dotsBoard(req.plan,
-                req.planToBoard), c), reg.transform());
+                req.planToBoard), c, req.keepOuts), reg.transform());
         t.stepsPlanned = t.stepsDone + targets.size() + 1;
         t.secondsLeft = targets.size() * PROBE_POINT_ESTIMATE_S;
         for (VacuumProber.Target x : targets) {

@@ -17,13 +17,26 @@ Scenarios (plan §4.4, §4.5, §8.1; bench recipe 2026-10-28):
               160 work dots of 800 net steps; raw XY/Z of every dot vs OpenPnP's own N2 move to that pad;
               M204 discipline, no M400 / extra G4 in the dots; the kinematic real-machine time / DPH
               estimate (tools/instancelabs/dph_estimate.py) of the streamed program
+  register    Register board through the SIM top camera and the SIM vacuum (AUTO_REGISTER_DESIGN.md §10.4): the
+              board truly sits moved, turned, scaled and sheared from where it is planned; the fit, the probe, the
+              dots on the true pads, 20 dots run; moved again (re-seated); the same seat registered again (3 touches);
+              STOP during a probe, then a run that raises N1, homes, checks Z and dispenses; refusals (a hidden
+              fiducial, holes, paste, no nozzle tip, Z moved after a home)
+  import      KiCad upload of ftp.kicad_pcb (BOARD_IMPORT_DESIGN.md §6.7): preview, save, plan (pads vs the bench
+              board file), 20 dots run, attach, a restart keeps it; then the imported board registered on a moved
+              seat and run
 
-    il_sim_acceptance.py [--out DIR] all | load | stop | board | bench | dph --stream FILE
+    il_sim_acceptance.py [--out DIR] all | load | stop | board | register | import | bench | dph --stream FILE
 
 Sim-only changes on top of the patched copy (reported in results.json):
   * machine.xml copy (uinav --xml-set; not in the load scenario): head visual-homing-method=None (the
     simulated camera has no homing fiducial); B axis limits raised to the engine's M203/M201 B (2400 deg/s,
     20000 deg/s^2) so OpenPnP's simulated controller does not time the screw at machine.xml's 100 deg/s;
+    the Top camera is the SIM top camera (SimBoardCamera, 1920 x 1080), which draws the board where the SIM scene
+    says it truly sits;
+  * the SIM scene (instancelabs/sim-scene.json in the copy, il_sim_scene.py; not in the load scenario): the board's
+    true seat (BOARD_LOC itself, except in register and import), its N1 contact plane and the bench blank, read by
+    the SIM top camera and the SIM vacuum sensor of OpenPnP's simulated controller;
   * through the web API, in the session copy only: needle Z frame (N1 5.5, bench relation K 65.59) and
     its offset confirmed (I4), board and blank surfaces from the bench N1 probes (I4), the bench purge row
     (I9), screw start angle confirmed after connect (I11), the clean-pad guard off (I10: the simulated
@@ -40,7 +53,9 @@ import socket
 import subprocess
 import sys
 import time
+import traceback
 import urllib.error
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 
@@ -49,6 +64,9 @@ REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 sys.path.insert(0, os.path.join(REPO, "tools", "instancelabs"))
 import dph_estimate  # noqa: E402
 import make_machine_patch as patch  # noqa: E402
+
+sys.path.insert(0, HERE)
+import il_sim_scene as scn  # noqa: E402
 
 UINAV_DIR = os.environ.get("UINAV_DIR", "/home/lumen/instancelabs/openpnp-uinav")
 sys.path.insert(0, os.path.join(UINAV_DIR, "python"))
@@ -91,7 +109,11 @@ NEEDLE_OFFSET = -2.59
 Z2_SUM = 63.0  # machine.xml ReferenceMappedAxis: raw z1 = 63 - z2
 SIM_XML_SETS = [".//head@visual-homing-method=None",
                 ".//axis[@letter='B']/feedrate-per-second@value=2400.0",
-                ".//axis[@letter='B']/acceleration-per-second-2@value=20000.0"]
+                ".//axis[@letter='B']/acceleration-per-second-2@value=20000.0"] + scn.CAMERA_XML_SETS
+# N1 contact plane of the board in the SIM scene (board mm from its origin): the bench's r7 probes (§9.2).
+BOARD_PLANE = scn.plane(5.43, -0.0006, 0.0009)
+# The KiCad source of the bench board (BOARD_IMPORT_DESIGN.md §6.1).
+KICAD_FTP = os.path.join(REPO, "src", "test", "resources", "kicad", "ftp.kicad_pcb.gz")
 SIM_CONFIG = {"cleanPadCheck": {"enabled": False}, "purgeRow": PURGE_ROW, "valveSettleMs": 3000}
 DISABLE_SEQ = list(patch.DISABLE_LINES)
 # The engine's own abort / Stop lines (ControllerCommands.STOP_SEQUENCE) are the same F9 sequence.
@@ -153,8 +175,14 @@ def java_round(x):
 
 # --------------------------------------------------------------------------- staging / session
 
-def stage(a, name):
-    """Config copy: live dir (read only) + patched machine.xml + engine config + test script + board."""
+def nominal_seat():
+    """BOARD_LOC as an affine (board mm -> machine mm): where the plans put the board."""
+    return scn.seat(BOARD_LOC["x"], BOARD_LOC["y"], BOARD_LOC["rotation"])
+
+
+def stage(a, name, scene=None):
+    """Config copy: live dir (read only) + patched machine.xml + engine config + test script + board, and the SIM
+    scene: scene(board_copy, stage_dir) -> dict, None for the board truly at BOARD_LOC, False for no scene."""
     st = os.path.join(a.out, "stage-" + name)
     if os.path.exists(st):
         shutil.rmtree(st)
@@ -167,13 +195,17 @@ def stage(a, name):
     shutil.copy2(a.board, board_copy)
     with open(os.path.join(st, "boards.xml"), "w") as f:
         f.write("<openpnp-boards>\n   <board>%s</board>\n</openpnp-boards>\n" % board_copy)
+    if scene is not False:
+        scn.write(st, scene(board_copy, st) if scene else scn.scene(board_copy, nominal_seat(), BOARD_PLANE,
+                                                                    config_dir=st))
     return st
 
 
 class Session:
-    def __init__(self, a, name, xml_sets=SIM_XML_SETS):
+    def __init__(self, a, name, xml_sets=SIM_XML_SETS, scene=None, stage_dir=None):
+        """stage_dir: launch on this config dir (e.g. an earlier session's copy) instead of a new stage."""
         self.a, self.name = a, a.prefix + name
-        self.stage = stage(a, name)
+        self.stage = stage_dir or stage(a, name, scene)
         self.port = free_port()
         env = dict(os.environ, OPENPNP_IL_API_PORT=str(self.port))
         cmd = [UINAV, "--session", self.name, "launch", "--config", self.stage, "--openpnp-jar", a.jar]
@@ -312,10 +344,12 @@ def board_surface_points():
     return [[round(gx, 3), round(gy, 3), z] for (bx, by, z) in BOARD_PROBES_R7 for gx, gy in [to_global(bx, by)]]
 
 
-def plan_board(s):
-    """Plan, tie the board surface to that plan's board registration (I4), then plan on the surface."""
+def plan_board(s, board_file=None):
+    """Plan, tie the board surface to that plan's board registration (I4), then plan on the surface. board_file:
+    a board file of the session (default: the session's copy of the bench board)."""
     board = os.path.join(s.cfg, "uinav-boards")
-    files = [os.path.join(board, f) for f in sorted(os.listdir(board)) if f.endswith(os.path.basename(s.a.board))]
+    files = [board_file] if board_file else [os.path.join(board, f) for f in sorted(os.listdir(board))
+                                             if f.endswith(os.path.basename(s.a.board))]
     body = dict(BOARD_LOC, source="file", file=files[0])
     first = s.api("POST", "/api/plan", body, timeout=120)
     surf = s.api("PUT", "/api/surfaces/board", {"points": board_surface_points(), "planId": first["planId"],
@@ -337,7 +371,7 @@ def run_and_wait(s, plan_id, timeout_s=1800):
 
 def scenario_load(a):
     """Patched machine.xml with NO sim-only XML change: loads, connect/home/Stop G-code, save on exit."""
-    s = Session(a, "load", xml_sets=[])
+    s = Session(a, "load", xml_sets=[], scene=False)
     res = {"session": s.name, "cameras_replaced": s.info["cameras_replaced"]}
     try:
         olog = os.path.join(s.cfg, "log", "OpenPnP.log")
@@ -887,6 +921,499 @@ def scenario_board(a):
     return res
 
 
+# --------------------------------------------------------------------------- scenario: register
+
+LEFT_VALVE_ON, LEFT_VALVE_OFF, LEFT_PUMP_OFF = "M106 P1 S180", "M107 P1", "M107 P0"
+DISPENSER_ON = ("M106 P2 S255", "M106 P3 S255")
+# What Register board may send (moves, waits, the N1 pump and valve, the VAC1 sensor over I2C, the capability query).
+PROBE_ALLOWED = {"G0", "G1", "G4", "M106", "M107", "M114", "M115", "M204", "M260", "M261", "M400"}
+
+
+def commands(lines):
+    """The G-code of captured lines, comments and blanks dropped."""
+    return [c for c in (strip(l) for l in lines) if c]
+
+
+def driver_start(s):
+    """The driver coordinates now (the modal start of a captured stream)."""
+    m = s.api("GET", "/api/machine")
+    ax = {x["letter"]: x["driverCoordinate"] for x in m["axes"] if x.get("letter")}
+    return {k: float(ax.get(k, 0.0)) for k in ("X", "Y", "Z", "B")}
+
+
+def session_board(s, name=None):
+    """The session's copy of a board file (uinav copies the listed boards into uinav-boards)."""
+    d = os.path.join(s.cfg, "uinav-boards")
+    want = os.path.basename(name or s.a.board)
+    return [os.path.join(d, f) for f in sorted(os.listdir(d)) if f.endswith(want)][0]
+
+
+def pad_error(plan, seat_affine, pads_b):
+    """Largest distance (mm) of the plan's pads and dots from the true pad centres seat(board pad), and the pad ids
+    the board pads do not know."""
+    worst, missing = 0.0, []
+    for k in ("pads", "dots"):
+        for p in plan[k]:
+            b = pads_b.get(p["padId"])
+            if b is None:
+                missing.append(p["padId"])
+                continue
+            tx, ty = scn.apply(seat_affine, *b)
+            worst = max(worst, math.hypot(p["x"] - tx, p["y"] - ty))
+    return round(worst, 5), missing
+
+
+def min_shift(points, a, b):
+    return min(math.hypot(*(u - v for u, v in zip(scn.apply(a, *p), scn.apply(b, *p)))) for p in points)
+
+
+def board_z(plane_, bx, by):
+    return plane_["z0"] + plane_["slopeX"] * bx + plane_["slopeY"] * by
+
+
+def probe_z_error(result, seat_affine, plane_):
+    """Largest |contact Z - the scene's plane under it| over the probe's points (machine X/Y -> board mm)."""
+    inv = scn.invert(seat_affine)
+    errs = []
+    for pt in (result.get("probe") or {}).get("points") or []:
+        if pt.get("state") != "contact":
+            return None
+        bx, by = scn.apply(inv, pt["x"], pt["y"])
+        errs.append(abs(pt["z"] - board_z(plane_, bx, by)))
+    return round(max(errs), 4) if errs else None
+
+
+def gcode_safety(cmds, floor_z):
+    """The N1 probe's G-code (§10.4 step 4): VAC1 set up, every valve on switched off again and the pump after it,
+    no dispenser output, every Z-only move between the probe floor and the travel Z."""
+    on, off = cmds.count(LEFT_VALVE_ON), cmds.count(LEFT_VALVE_OFF)
+    z = [float(m.group(1)) for c in cmds for m in [re.match(r"^G0?1 Z(-?\d+(?:\.\d*)?)(?: F\d+(?:\.\d*)?)?$", c)]
+         if m]
+    last_on = max((i for i, c in enumerate(cmds) if c == LEFT_VALVE_ON), default=-1)
+    out = {"vac1_init_lines": sum(1 for c in cmds if c.startswith("M260 A109")), "valve_on": on, "valve_off": off,
+           "pump_off_after_last_valve_on": max((i for i, c in enumerate(cmds) if c == LEFT_PUMP_OFF), default=-1)
+           > last_on,
+           "dispenser_on_lines": sum(1 for c in cmds if c in DISPENSER_ON),
+           "z_only_moves": len(z), "z_min": min(z) if z else None, "z_max": max(z) if z else None,
+           "floor_z": floor_z, "commands": sorted({c.split()[0] for c in cmds})}
+    out["only_allowed_commands"] = set(out["commands"]) <= PROBE_ALLOWED
+    out["ok"] = (out["only_allowed_commands"] and out["vac1_init_lines"] >= 1 and on >= 3 and off >= on
+                 and out["pump_off_after_last_valve_on"]
+                 and out["dispenser_on_lines"] == 0 and bool(z) and min(z) >= floor_z - 1e-6 and max(z) <= 31.5 + 1e-6)
+    return out
+
+
+def register(s, plan_id, body=None, timeout=900):
+    """POST /api/plan/{id}/register with wait (the server answers at the latest after 600 s), then the result."""
+    r = s.api("POST", "/api/plan/%s/register" % plan_id, dict(body or {}, wait=True), timeout=timeout)
+    if r.get("finished"):
+        return r["result"]
+    s.wait_status(lambda x: x.get("run") and not x["run"]["running"], timeout, "registration finished")
+    return s.api("GET", "/api/plan/" + plan_id)["registrationRun"]
+
+
+def reg_summary(r):
+    keep = ("status", "message", "seat", "movedMm", "registrationId", "newPlanId", "stoppedStage", "simulated",
+            "warnings")
+    out = {k: r.get(k) for k in keep}
+    out["fiducials"] = [{k: f.get(k) for k in ("name", "state", "found", "iterations", "frames")}
+                        for f in r.get("fiducials") or []]
+    pr = r.get("probe") or {}
+    out["probe"] = {k: pr.get(k) for k in ("needed", "why", "saved", "window")}
+    out["probe"]["points"] = [{k: p.get(k) for k in ("n", "state", "x", "y", "z", "alternate", "failure")}
+                              for p in pr.get("points") or []]
+    if r.get("sameSeat"):
+        out["sameSeat"] = r["sameSeat"]
+    return out
+
+
+def run_dots(s, plan_id, cfg, max_dots=20, ok=(200, 202)):
+    """Runs the first max_dots dots of a plan (wait). Each streamed feed's raw X/Y minus its plan dot's X/Y is
+    constant over the feeds and equals -(the dispense nozzle's head offset) - needleXyTrim (§10.4 step 6).
+    Returns (summary, captured lines)."""
+    s.api("POST", "/api/purge-row/reset", {})  # the SIM blank is clean: 15 spots, 8 purge dots per run
+    start = driver_start(s)
+    n0 = s.mark()
+    acc = s.api("POST", "/api/run", {"planId": plan_id, "maxDots": max_dots, "wait": True}, timeout=900, ok=ok)
+    if "error" in acc:
+        return {"http": "refused", "reason": acc.get("reason"), "error": acc.get("error")}, s.sent_since(n0)
+    if not acc.get("finished"):
+        s.wait_status(lambda x: not x["dispense"]["busy"], 1800, "engine idle after the run")
+    last = s.api("GET", "/api/runs/last")["run"]
+    view = acc.get("result") or last
+    out = {"accepted": {k: acc.get(k) for k in ("planId", "dots", "homeFirst", "homeWhyCode", "zCheckFirst")},
+           "status": view.get("status"), "message": view.get("message"), "dotsDone": view.get("dotsDone"),
+           "homedFirst": view.get("homedFirst"), "zCheck": view.get("zCheck"),
+           "cleanCheckOk": (view.get("cleanCheck") or {}).get("ok")}
+    captured = s.sent_since(n0)
+    streamed = last.get("streamedLines") or []
+    if out["status"] == "OK" and streamed:
+        dots = sorted(s.api("GET", "/api/plan/" + acc["planId"])["dots"], key=lambda d: d["index"])
+        feeds = engine_dots(streamed, start)
+        work = feeds[(last.get("purgeDots") or 0):]
+        off = [(f["x"] - d["x"], f["y"] - d["y"]) for f, d in zip(work, dots)]
+        n2, _ = scn.needle_offsets(s.cfg)
+        trim = cfg.get("needleXyTrim") or {}
+        exp = (-n2[0] - (trim.get("dxMm") or 0.0), -n2[1] - (trim.get("dyMm") or 0.0))
+        out["feeds"] = len(work)
+        out["raw_minus_plan_spread_mm"] = round(max(max(o[0] for o in off) - min(o[0] for o in off),
+                                                    max(o[1] for o in off) - min(o[1] for o in off)), 5)
+        out["raw_minus_plan_vs_head_offset_mm"] = round(max(math.hypot(o[0] - exp[0], o[1] - exp[1]) for o in off), 5)
+        out["expected_raw_minus_plan"] = exp
+    out["ok"] = (out["status"] == "OK" and out.get("feeds") == max_dots and out.get("raw_minus_plan_spread_mm", 1) <= 0.01
+                 and out.get("raw_minus_plan_vs_head_offset_mm", 1) <= 0.01)
+    return out, captured
+
+
+def refusal(r, text):
+    return r.get("status") == "REFUSED" and text in (r.get("message") or "")
+
+
+def scenario_register(a):
+    """AUTO_REGISTER_DESIGN.md §10.4 on a copy of ~/Desktop/ftp.board.xml."""
+    s0 = nominal_seat()
+    s1 = scn.reseat(scn.seat(BOARD_LOC["x"], BOARD_LOC["y"], BOARD_LOC["rotation"], 1.002, 0.997, 0.1),
+                    0.60, -0.45, 0.20)
+    s2 = scn.reseat(s1, 0.8, 0.5, -0.4)
+    plane1 = scn.plane(5.43, 0.0015, -0.0010)
+    plane2 = scn.plane(5.40, 0.004, 0.0)  # 0.3 mm across the 75 mm board
+    camera = {"uppError": [0.0, 0.03]}  # the bench's 3 % Y scale gap: the centring loop absorbs it
+
+    s = Session(a, "register", scene=lambda board, st: scn.scene(board, s1, plane1, camera=camera, config_dir=st))
+    res = {"session": s.name, "board_location": BOARD_LOC, "seat_s1": s1, "seat_s2": s2, "plane_s1": plane1,
+           "plane_s2": plane2}
+    ok = {}
+    try:
+        cfg = setup_machine(s)
+        res["needle_anchor_response"] = cfg.pop("_anchor_response")
+        s.api("PUT", "/api/config", {"cleanPadCheck": {"enabled": True}})  # the SIM camera draws the pads now
+        board = session_board(s)
+        pads_b = pads_from_board(board)
+        fids_b = [(f["bx"], f["by"]) for f in scn.fiducials(board, s.cfg)]
+        res["min_pad_shift_nominal_to_s1_mm"] = round(min_shift(pads_b.values(), s0, s1), 4)
+        ok["sensitive"] = res["min_pad_shift_nominal_to_s1_mm"] >= 0.7
+
+        # 3-5: plan at the nominal seat, register (bench probe timings), the dots on the true pads
+        body = dict(BOARD_LOC, source="file", file=board)
+        p0 = s.api("POST", "/api/plan", body, timeout=120)
+        n0 = s.mark()
+        t0 = time.time()
+        r1 = register(s, p0["planId"])
+        res["register_s1_seconds"] = round(time.time() - t0, 1)
+        res["register_s1"] = reg_summary(r1)
+        floor = ((r1.get("probe") or {}).get("window") or {}).get("floorZ")
+        res["register_s1_gcode"] = gcode_safety(commands(s.sent_since(n0)), floor if floor is not None else 99)
+        p1 = s.api("GET", "/api/plan/" + r1["newPlanId"]) if r1.get("newPlanId") else None
+        res["s1_pad_error_mm"], miss = pad_error(p1, s1, pads_b) if p1 else (None, ["no plan"])
+        res["s1_probe_z_error_mm"] = probe_z_error(r1, s1, plane1)
+        surf = s.api("GET", "/api/surfaces")["surfaces"].get("board") or {}
+        res["s1_surface"] = {k: surf.get(k) for k in ("boundToBoard", "simulated", "setAtMs", "points")}
+        ok["register_s1"] = (r1.get("status") == "OK" and r1.get("seat") == "first" and not miss
+                             and res["s1_pad_error_mm"] <= 0.02 and res["s1_probe_z_error_mm"] is not None
+                             and res["s1_probe_z_error_mm"] <= 0.03 and bool(surf.get("boundToBoard"))
+                             and res["register_s1_gcode"]["ok"])
+
+        # the simulator's probe timings from here on (and the sensor time constants that go with them)
+        s.api("PUT", "/api/config", scn.FAST_TIMINGS)
+
+        def write_scene(seat_affine, plane_, **kw):
+            sc = scn.scene(board, seat_affine, plane_, camera=camera, config_dir=s.cfg,
+                           vacuum=dict(scn.FAST_VACUUM, **kw.pop("vacuum", {})), **kw)
+            scn.write(s.cfg, sc)
+            time.sleep(0.6)  # the session reloads it on its stamp (checked every 250 ms)
+
+        write_scene(s1, plane1)
+
+        # 6: 20 dots; the needle went to the plan dots, which lie on the true pads
+        res["run_s1"], _ = run_dots(s, p1["planId"], cfg)
+        ok["run_s1"] = res["run_s1"]["ok"] and res["run_s1"]["cleanCheckOk"] is True
+
+        # 7: the board moved (S2, tilted 0.3 mm): the old plan's clean check sees mask, not copper; register finds
+        #    it re-seated, probes it again; its dots run on S2's pads
+        write_scene(s2, plane2)
+        old, old_lines = run_dots(s, p1["planId"], cfg, ok=(200, 202, 409))
+        res["run_old_plan_after_move"] = old
+        ok["old_plan_refused"] = (old.get("status") == "REFUSED" or old.get("http") == "refused") and not any(
+            c in DISPENSER_ON for c in commands(old_lines))
+        r2 = register(s, p1["planId"])
+        res["register_s2"] = reg_summary(r2)
+        res["s2_moved_expected_mm"] = round(max(math.hypot(*(u - v for u, v in zip(scn.apply(s2, *f),
+                                                                                    scn.apply(s1, *f))))
+                                                for f in fids_b), 4)
+        p2 = s.api("GET", "/api/plan/" + r2["newPlanId"]) if r2.get("newPlanId") else None
+        res["s2_pad_error_mm"], miss2 = pad_error(p2, s2, pads_b) if p2 else (None, ["no plan"])
+        res["s2_probe_z_error_mm"] = probe_z_error(r2, s2, plane2)
+        ok["register_s2"] = (r2.get("status") == "OK" and r2.get("seat") == "reseated" and not miss2
+                             and abs((r2.get("movedMm") or 0) - res["s2_moved_expected_mm"]) <= 0.03
+                             and (r2.get("probe") or {}).get("saved") is True
+                             and res["s2_pad_error_mm"] <= 0.02 and res["s2_probe_z_error_mm"] is not None
+                             and res["s2_probe_z_error_mm"] <= 0.03)
+        res["run_s2"], _ = run_dots(s, p2["planId"], cfg)
+        ok["run_s2"] = res["run_s2"]["ok"] and res["run_s2"]["cleanCheckOk"] is True
+
+        # the same seat again: the record kept, 3 stored points touched again, the surface and the plan kept
+        surface_at = s.api("GET", "/api/surfaces")["surfaces"]["board"]["setAtMs"]
+        n0 = s.mark()
+        r3 = register(s, p2["planId"])
+        res["register_same_seat"] = reg_summary(r3)
+        touches = commands(s.sent_since(n0)).count(LEFT_VALVE_ON)
+        res["same_seat_touches"] = touches
+        ok["same_seat"] = (r3.get("status") == "OK" and r3.get("seat") == "same"
+                           and r3.get("registrationId") == r2.get("registrationId")
+                           and (r3.get("sameSeat") or {}).get("pass") is True and touches == 3
+                           and r3.get("newPlanId") == p2["planId"]
+                           and s.api("GET", "/api/surfaces")["surfaces"]["board"]["setAtMs"] == surface_at)
+
+        # 8: STOP while N1 is down at a probe step: ABORTED, the F9 lines, no new surface; then the run raises
+        #    N1 (Z only), homes, checks Z with one touch, and dispenses
+        n0 = s.mark()
+        s.api("POST", "/api/plan/%s/register" % p2["planId"], {"probe": "always"})
+
+        def n1_down(x):
+            d = (x.get("run") or {}).get("detail") or {}
+            return d.get("stage") == "probe" and any(p.get("state") == "now" and p.get("lastZ") is not None
+                                                     for p in d.get("probes") or [])
+        s.wait_status(n1_down, 300, "N1 down at a probe step")
+        s.api("POST", "/api/stop", {})
+        st = s.wait_status(lambda x: x.get("run") and not x["run"]["running"], 60, "registration stopped")
+        stop_lines = commands(s.sent_since(n0))
+        # the engine's abort and OpenPnP's DISABLE_COMMAND both send the F9 lines; they may interleave
+        f9 = find_subseq(stop_lines, ENGINE_I1, max((i for i, c in enumerate(stop_lines) if c == LEFT_VALVE_ON),
+                                                      default=0))
+        i_stop = f9[0] if f9 else -1
+        rr = s.api("GET", "/api/plan/" + p2["planId"])["registrationRun"]
+        res["stop_during_probe"] = {"status": st["run"].get("status"), "stoppedStage": rr.get("stoppedStage"),
+                                    "probe_saved": (rr.get("probe") or {}).get("saved"),
+                                    "f9_sequence_at": i_stop, "lines_from_the_last_touch": stop_lines[
+                                        max((i for i, c in enumerate(stop_lines) if c == LEFT_VALVE_ON), default=0):][:40],
+                                    "z_moves_after_f9": [c for c in stop_lines[i_stop:] if c.startswith("G1 Z")]
+                                    if i_stop >= 0 else None,
+                                    "n1_low": st["machine"]["home"].get("n1Low"),
+                                    "enabled_after": st["machine"]["enabled"]}
+        ok["stop_during_probe"] = (st["run"].get("status") == "ABORTED" and rr.get("stoppedStage") == "probe"
+                                   and not (rr.get("probe") or {}).get("saved") and i_stop >= 0
+                                   and not res["stop_during_probe"]["z_moves_after_f9"]
+                                   and s.api("GET", "/api/surfaces")["surfaces"]["board"]["setAtMs"] == surface_at)
+        s.api("POST", "/api/machine/enable")
+        s.wait_status(lambda x: x["machine"]["enabled"], 30, "enabled")
+        s.api("POST", "/api/screw/start-angle", {"note": "sim acceptance: confirmed after connect"})
+        run_stop, lines = run_dots(s, p2["planId"], cfg)
+        cmds = commands(lines)
+        g28 = next((i for i, c in enumerate(cmds) if c.startswith("G28")), -1)
+        raise_ = next((i for i, c in enumerate(cmds) if re.match(r"^G0?1 Z31\.5", c)), -1)
+        first_dot = next((i for i, c in enumerate(cmds) if c == "M106 P2 S255"), -1)
+        touches = [i for i, c in enumerate(cmds) if c == LEFT_VALVE_ON and (first_dot < 0 or i < first_dot)]
+        run_stop.update({"raise_line": raise_, "g28_line": g28, "z_check_touches": len(touches),
+                         "first_dot_line": first_dot})
+        res["run_after_stop"] = run_stop
+        acc = run_stop["accepted"]
+        ok["run_after_stop"] = (run_stop["ok"] and acc.get("homeFirst") is True and acc.get("zCheckFirst") is True
+                                and run_stop.get("homedFirst") is True and (run_stop.get("zCheck") or {}).get("pass")
+                                is True and 0 <= raise_ < g28 and len(touches) == 1 and g28 < touches[0] < first_dot)
+
+        # 9: refusals, each on a scene rewrite
+        fails = res["refusals"] = {}
+        write_scene(s2, plane2, hide=["FID2"])
+        n0 = s.mark()
+        r = register(s, p2["planId"])
+        fails["fid2_hidden"] = {"status": r.get("status"), "message": r.get("message"),
+                                "n1_lines": commands(s.sent_since(n0)).count(LEFT_VALVE_ON)}
+        ok["fid2_hidden"] = refusal(r, "FID2 not found") and fails["fid2_hidden"]["n1_lines"] == 0
+        t1 = s.api("GET", "/api/plan/%s/registration-targets" % p2["planId"])["probes"][0]
+        spots = [(t1["bx"], t1["by"])] + [(x["bx"], x["by"]) for x in t1["alternates"]]
+        write_scene(s2, plane2, leaky=[(x, y, 0.6) for x, y in spots])
+        r = register(s, p2["planId"], {"probe": "always"})
+        st = s.api("GET", "/api/status")
+        fails["holes_at_point_1"] = {"status": r.get("status"), "message": r.get("message"),
+                                     "n1_low": st["machine"]["home"].get("n1Low"), "homed": st["machine"]["homed"]}
+        ok["holes_at_point_1"] = (refusal(r, "hole or via") and st["machine"]["home"].get("n1Low") is False
+                                  and st["machine"]["homed"] is True)
+        write_scene(s2, plane2, dirty_spots=spots)
+        r = register(s, p2["planId"], {"probe": "always"})
+        fails["paste_at_point_1"] = {"status": r.get("status"), "message": r.get("message")}
+        ok["paste_at_point_1"] = refusal(r, "something on the surface")
+        write_scene(s2, plane2, vacuum={"tip": "missing"})
+        r = register(s, p2["planId"], {"probe": "always"})
+        fails["tip_missing"] = {"status": r.get("status"), "message": r.get("message")}
+        ok["tip_missing"] = refusal(r, "no nozzle tip")
+        write_scene(s2, plane2)
+        s.api("POST", "/api/machine/home", {"wait": True}, timeout=180)
+        low = dict(plane2, z0=plane2["z0"] - 0.70)
+        blank = json.loads(json.dumps(scn.DEFAULT_BLANK))
+        blank["surface"]["z0"] -= 0.70
+        write_scene(s2, low, blank=blank)
+        zr, _ = run_dots(s, p2["planId"], cfg, ok=(200, 202, 409))
+        fails["z_moved_after_home"] = {k: zr.get(k) for k in ("status", "message", "accepted")}
+        # the stored Z data lie within a probe step of the scene's planes: -0.70 within 0.05 mm
+        ok["z_moved_after_home"] = (zr.get("status") == "REFUSED"
+                                    and re.search(r"Z moved -0\.(6[5-9]|7[0-5]) mm", zr.get("message") or "") is not None)
+        write_scene(s2, plane2)
+    except Exception:
+        res["error"] = traceback.format_exc()
+        log("register:", res["error"])
+    finally:
+        res["checks"] = ok
+        res["pass"] = bool(ok) and all(ok.values()) and len(ok) == 14 and "error" not in res
+        s.stop()
+    return res
+
+
+# --------------------------------------------------------------------------- scenario: import
+
+def upload(s, path, data, timeout=120):
+    """POST raw bytes (application/octet-stream) to the session's API; the JSON answer."""
+    req = urllib.request.Request(s.base + path, data=data, method="POST")
+    req.add_header("Content-Type", "application/octet-stream")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        raise RuntimeError("POST %s -> %d %s" % (path, e.code, e.read()[:800]))
+
+
+def import_kicad(s, data, file_name, name, replace=False):
+    """Preview, then save: (preview, saved)."""
+    q = urllib.parse.quote
+    pv = upload(s, "/api/boards/import?file=" + q(file_name), data)
+    saved = upload(s, "/api/boards/import/save?file=%s&name=%s&replace=%d&sha256=%s&decisions=%s"
+                   % (q(file_name), q(name), 1 if replace else 0, pv["file"]["sha256"], q(pv["decisions"])), data)
+    return pv, saved
+
+
+def plan_pads(plan):
+    return {p["padId"]: (p["x"], p["y"]) for p in plan["pads"]}
+
+
+def scenario_import(a):
+    """BOARD_IMPORT_DESIGN.md §6.7, then the imported board registered on a moved seat (AR §10.4 on it)."""
+    import gzip
+    s = Session(a, "import")
+    res = {"session": s.name, "board_location": BOARD_LOC}
+    ok = {}
+    s2 = None
+    try:
+        cfg = setup_machine(s)
+        cfg.pop("_anchor_response")
+        data = gzip.open(KICAD_FTP).read()
+        bench = session_board(s)
+
+        # 2-3: preview and save as ftp-kicad
+        pv, saved = import_kicad(s, data, "ftp.kicad_pcb", "ftp-kicad")
+        codes = {w["code"] for w in pv.get("warnings") or []}
+        res["preview"] = {"counts": pv.get("counts"), "packages": [{k: p.get(k) for k in ("id", "state",
+                                                                                           "usesPadTypesOf")}
+                                                                    for p in pv.get("packages") or []],
+                          "warning_codes": sorted(codes), "attach": pv.get("attach")}
+        att = (pv.get("attach") or [{}])[0] if isinstance(pv.get("attach"), list) else {}
+        ok["preview"] = (pv["counts"]["placements"] == 80 and pv["counts"]["fiducials"] == 3
+                         and "PACKAGE_SUFFIXED" in codes
+                         and {p["state"] for p in pv["packages"]} == {"suffixed"}
+                         and os.path.basename(att.get("file") or "") == os.path.basename(bench)
+                         and abs((att.get("maxOffsetMm") or 0) - 0.3136) <= 0.0005)
+        board = saved["file"]
+        slug_dir = os.path.dirname(board)
+        files = sorted(os.listdir(slug_dir))
+        xml = {f: open(os.path.join(s.cfg, f)).read() for f in ("packages.xml", "parts.xml", "boards.xml")}
+        new_ids = [p["id"] for p in pv["packages"]]
+        res["saved"] = {"file": board, "files": files, "art": saved.get("art"),
+                        "index": os.path.exists(os.path.join(s.cfg, "instancelabs", "boards", "index.json"))}
+        ok["save"] = (files == ["ftp-kicad.art.json", "ftp-kicad.board.xml", "ftp-kicad.kicad_pcb"]
+                      and res["saved"]["index"] and all(('id="%s"' % i) in xml["packages.xml"] for i in new_ids)
+                      and board in xml["boards.xml"])
+
+        # 4: plan at BOARD_LOC with the surface tied: R pads equal the bench file's within 0.01 mm, LEDs 0.04
+        def tied_plan(file_):
+            body = dict(BOARD_LOC, source="file", file=file_)
+            first = s.api("POST", "/api/plan", body, timeout=120)
+            s.api("PUT", "/api/surfaces/board", {"points": board_surface_points(), "planId": first["planId"],
+                                                 "note": "sim: runs/zprobe_r7.json at the board location"})
+            return s.api("POST", "/api/plan", body, timeout=120)
+
+        plan = tied_plan(board)
+        bench_pads = pads_from_board(bench)
+        dr, dl = [], []
+        for pid, (x, y) in plan_pads(plan).items():
+            gx, gy = to_global(*bench_pads[pid])
+            (dr if pid.startswith("R") else dl).append(math.hypot(x - gx, y - gy))
+        fid = {f["id"]: f for f in plan["board"]["fiducials"]}
+        bench_fid = {f["name"]: f for f in scn.fiducials(bench)}
+        fid_off = {n: round(math.hypot(fid[n]["x"] - to_global(bench_fid[n]["bx"], bench_fid[n]["by"])[0],
+                                       fid[n]["y"] - to_global(bench_fid[n]["bx"], bench_fid[n]["by"])[1]), 4)
+                   for n in fid}
+        res["plan"] = {"pads": len(plan["pads"]), "sources": sorted({p.get("source") for p in plan["pads"]}),
+                       "max_r_pad_vs_bench_mm": round(max(dr), 5), "max_led_pad_vs_bench_mm": round(max(dl), 5),
+                       "fiducial_vs_bench_mm": fid_off, "art": plan["board"].get("art")}
+        ok["plan"] = (len(plan["pads"]) == 160 and res["plan"]["sources"] == ["FOOTPRINT"] and max(dr) <= 0.01
+                      and max(dl) <= 0.04 and fid_off["FID2"] <= 0.001 and fid_off["FID3"] <= 0.001
+                      and abs(fid_off["FID1"] - 0.3136) <= 0.0005)
+
+        # 5: 20 dots; the engine's dots are the plan's
+        res["run"], _ = run_dots(s, plan["planId"], cfg)
+        ok["run"] = res["run"]["ok"]
+
+        # 6: attach the drawing to the bench board file: its plan's pads unchanged
+        before = plan_pads(tied_plan(bench))
+        pv2 = upload(s, "/api/boards/import?file=ftp.kicad_pcb", data)
+        att2 = upload(s, "/api/boards/import/attach?file=ftp.kicad_pcb&board=%s&sha256=%s"
+                      % (urllib.parse.quote(bench), pv2["file"]["sha256"]), data)
+        after = plan_pads(tied_plan(bench))
+        listed = {f["file"]: f for f in s.api("GET", "/api/boards").get("files") or []}
+        res["attach"] = {"answer": {k: att2.get(k) for k in ("file", "art")},
+                         "bench_art": (listed.get(bench) or {}).get("art"),
+                         "pads_unchanged": before == after}
+        ok["attach"] = before == after and ((listed.get(bench) or {}).get("art") or {}).get("kind") == "kicad"
+
+        # 7: restart on the same configuration: the import and the drawing are still there
+        s.stop()
+        restart_stage = os.path.join(a.out, "stage-import-restart")
+        if os.path.exists(restart_stage):
+            shutil.rmtree(restart_stage)
+        shutil.copytree(s.cfg, restart_stage, symlinks=True, ignore=shutil.ignore_patterns("backups", "log"))
+        s = Session(a, "import-restart", stage_dir=restart_stage)
+        cfg = setup_machine(s)
+        cfg.pop("_anchor_response")
+        listed = s.api("GET", "/api/boards").get("files") or []
+        kicad = [f for f in listed if f.get("file", "").endswith("ftp-kicad.board.xml")]
+        bench2 = [f for f in listed if f.get("file", "").endswith("ftp.board.xml")
+                  and not f["file"].endswith("ftp-kicad.board.xml")]
+        board = kicad[0]["file"] if kicad else board
+        plan2 = s.api("POST", "/api/plan", dict(BOARD_LOC, source="file", file=board), timeout=120)
+        res["restart"] = {"imported": [{k: f.get(k) for k in ("file", "art")} for f in kicad],
+                          "bench": [{k: f.get(k) for k in ("file", "art")} for f in bench2],
+                          "plan_pads": len(plan2["pads"]),
+                          "plan_sources": sorted({p.get("source") for p in plan2["pads"]})}
+        ok["restart"] = (len(kicad) == 1 and kicad[0]["art"]["kind"] == "kicad" and bool(bench2)
+                         and all((f.get("art") or {}).get("kind") == "kicad" for f in bench2)
+                         and len(plan2["pads"]) == 160 and res["restart"]["plan_sources"] == ["FOOTPRINT"])
+
+        # 8: the imported board truly sits moved, turned and scaled: Register board, then 20 dots on its pads
+        s2 = scn.reseat(scn.seat(BOARD_LOC["x"], BOARD_LOC["y"], BOARD_LOC["rotation"], 1.002, 0.997, 0.1),
+                        0.60, -0.45, 0.20)
+        plane_ = scn.plane(5.43, 0.0015, -0.0010)
+        scn.write(s.cfg, scn.scene(board, s2, plane_, config_dir=s.cfg, vacuum=scn.FAST_VACUUM))
+        s.api("PUT", "/api/config", dict(scn.FAST_TIMINGS, cleanPadCheck={"enabled": True}))
+        time.sleep(0.6)
+        pads_b = scn.pads(board, s.cfg)
+        r = register(s, plan2["planId"])
+        res["register"] = reg_summary(r)
+        p3 = s.api("GET", "/api/plan/" + r["newPlanId"]) if r.get("newPlanId") else None
+        res["register_pad_error_mm"], miss = pad_error(p3, s2, pads_b) if p3 else (None, ["no plan"])
+        res["register_probe_z_error_mm"] = probe_z_error(r, s2, plane_)
+        ok["register"] = (r.get("status") == "OK" and not miss and res["register_pad_error_mm"] <= 0.02
+                          and res["register_probe_z_error_mm"] is not None
+                          and res["register_probe_z_error_mm"] <= 0.03)
+        res["register_run"], _ = run_dots(s, p3["planId"], cfg)
+        ok["register_run"] = res["register_run"]["ok"] and res["register_run"]["cleanCheckOk"] is True
+    except Exception:
+        res["error"] = traceback.format_exc()
+        log("import:", res["error"])
+    finally:
+        res["checks"] = ok
+        res["pass"] = bool(ok) and all(ok.values()) and len(ok) == 8 and "error" not in res
+        s.stop()
+    return res
+
+
 # --------------------------------------------------------------------------- DPH estimate
 
 def stream_tags(streamed, n_purge):
@@ -1021,7 +1548,7 @@ def bench_validation():
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("what", choices=["all", "load", "stop", "board", "bench", "dph"])
+    ap.add_argument("what", choices=["all", "load", "stop", "board", "register", "import", "bench", "dph"])
     ap.add_argument("--stream", help="dph: a saved board-run-streamed.gcode")
     ap.add_argument("--purge-dots", type=int, default=8, help="dph: purge dots at the start of --stream")
     for k, v in DEF.items():
@@ -1049,7 +1576,14 @@ def main(argv=None):
                                     "screw start angle confirmed after connect (web API; I11)",
                                     "cleanPadCheck.enabled=false (web API; I10: static simulated top camera)",
                                     "valveSettleMs=3000, the bench's (web API; the dist file is schema 2 with 1500)",
-                                    "chip-0603 status characterized (web API; §5.7 rule)"],
+                                    "chip-0603 status characterized (web API; §5.7 rule)",
+                                    "the Top camera is the SIM top camera, 1920 x 1080 (uinav --xml-set; not in the "
+                                    "load scenario)",
+                                    "the SIM scene (instancelabs/sim-scene.json in the copy; not in the load scenario): "
+                                    "the board truly at BOARD_LOC; register and import move it (their results name "
+                                    "the seats)",
+                                    "register, import: cleanPadCheck on (the SIM camera draws the pads), the "
+                                    "simulator's probe timings %s after the first registration" % scn.FAST_TIMINGS],
                "started": time.strftime("%Y-%m-%d %H:%M:%S")}
     rpath = os.path.join(a.out, "results.json")
 
@@ -1067,6 +1601,14 @@ def main(argv=None):
     if a.what in ("all", "board"):
         results["board"] = scenario_board(a)
         log("board", "PASS" if results["board"]["pass"] else "FAIL")
+        save()
+    if a.what in ("all", "register"):
+        results["register"] = scenario_register(a)
+        log("register", "PASS" if results["register"]["pass"] else "FAIL")
+        save()
+    if a.what in ("all", "import"):
+        results["import"] = scenario_import(a)
+        log("import", "PASS" if results["import"]["pass"] else "FAIL")
         save()
     if a.what in ("all", "board", "bench"):
         results["dph_model_bench_validation"] = bench_validation()

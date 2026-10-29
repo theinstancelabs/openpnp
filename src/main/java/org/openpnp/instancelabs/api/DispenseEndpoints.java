@@ -934,7 +934,7 @@ final class DispenseEndpoints {
                 "homeWhyCode", home.whyCode, "homeWhy", home.why, "homeSinceMs", home.sinceMs, "homeEstimateS",
                 home.estimateS, "zCheckFirst", zCheckFirst, "zCheckReference", zc.reference == null ? null
                         : Views.map("name", zc.reference.name, "x", zc.reference.x, "y", zc.reference.y, "z",
-                                zc.reference.z));
+                                zc.reference.z), "zCheckTouches", zc.touches);
         return ApiContext.awaitIf(Json.bool(b, "wait", false), f, rr -> Views.run(rr, false), accepted);
     }
 

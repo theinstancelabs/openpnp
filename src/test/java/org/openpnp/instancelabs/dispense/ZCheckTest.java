@@ -295,6 +295,26 @@ public class ZCheckTest {
         assertEquals(java.util.Arrays.asList("the 'board' surface", "the needle frame"), whats(anchor.covers));
     }
 
+    /**
+     * The touches a check makes (what Run and Check Z announce): one per Z frame of the open data, none when a datum
+     * has no point of its frame left.
+     */
+    @Test
+    public void oneTouchPerZFrame() {
+        DispenseConfig c = cfg();
+        List<ZCheck.Stale> open = ZCheck.stale(c, boardScope(c), HOME_AT);
+        assertEquals(1, ZCheck.touches(ZCheck.references(c, ZFrameTest.SEAT, HOME_AT), open), "one frame");
+        // the board probed under a later home than the needle frame, the touch-off and the blank: two frames
+        c.surfaces.get("board").homeAtMs = BLANK_AT + 60_000;
+        open = ZCheck.stale(c, boardScope(c), HOME_AT);
+        assertEquals(2, ZCheck.touches(ZCheck.references(c, ZFrameTest.SEAT, HOME_AT), open));
+        // without the blank and the anchor X/Y nothing in the needle frame's home is left to touch
+        c.surfaces.remove("blank");
+        c.needleAnchor.xMm = null;
+        open = ZCheck.stale(c, boardScope(c), HOME_AT);
+        assertEquals(0, ZCheck.touches(ZCheck.references(c, ZFrameTest.SEAT, HOME_AT), open));
+    }
+
     /** A pass moves what it vouched for to the frame of its home: after the next home one touch is enough again. */
     @Test
     public void aPassMovesTheDataItVouchedForToItsHome() {
