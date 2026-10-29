@@ -440,7 +440,7 @@ final class RegistrationEndpoints {
     // Check Z, new seat
     // ------------------------------------------------------------------------------------------
 
-    /** POST /api/machine/z-check {"wait"?}: one N1 touch at a stored point after a home (§5.8). */
+    /** POST /api/machine/z-check {"wait"?}: N1 touches stored points after a home, one per Z frame (§5.8). */
     Object zCheck(ApiServer.Request r) throws Exception {
         JsonObject b = r.json();
         DispenseService svc = ctx.availableSvc();
@@ -453,7 +453,7 @@ final class RegistrationEndpoints {
         return ApiContext.awaitIf(Json.bool(b, "wait", false), f, rr -> Views.run(rr, false), Views.map("kind",
                 "z check", "needed", zp.needed, "reference", zp.reference == null ? null : Views.map("name",
                         zp.reference.name, "x", zp.reference.x, "y", zp.reference.y, "z", zp.reference.z),
-                "estimatedSeconds", zp.needed ? DispenseService.PROBE_POINT_ESTIMATE_S : 0));
+                "touches", zp.touches, "estimatedSeconds", zp.touches * DispenseService.PROBE_POINT_ESTIMATE_S));
     }
 
     /** POST /api/board/new-seat {"newSeat": true | false}: the engine's new-seat flag (§3.6). */

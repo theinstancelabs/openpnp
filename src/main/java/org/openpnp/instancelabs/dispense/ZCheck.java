@@ -280,6 +280,26 @@ public final class ZCheck {
         return false;
     }
 
+    /**
+     * How many N1 touches the check makes when every spot it looks at is bare and every touch passes: the
+     * first reference of each Z frame of {@code open}, in order, until each datum is vouched for (as the
+     * task's loop). 0 when some datum has no reference left.
+     */
+    public static int touches(List<Reference> refs, List<Stale> open) {
+        List<Stale> left = new ArrayList<>(open);
+        int n = 0;
+        for (Reference ref : refs) {
+            if (left.isEmpty()) {
+                break;
+            }
+            if (vouchesForAny(ref, left)) {
+                n++;
+                left.removeIf(d -> vouches(ref, d));
+            }
+        }
+        return left.isEmpty() ? n : 0;
+    }
+
     /** The data of {@code open} no reference vouches for: nothing measured in their frame is left to touch. */
     public static List<Stale> unreachable(List<Reference> refs, List<Stale> open) {
         List<Stale> l = new ArrayList<>();

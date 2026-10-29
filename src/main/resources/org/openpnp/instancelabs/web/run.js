@@ -444,7 +444,8 @@
     gate: (s) => IL.lockReason(s, { connected: true, engine: true }),
     run: () => IL.api('POST', '/api/machine/z-check', {}),
     ok: (r) => (r && r.needed === false ? 'Z needs no check: nothing was measured before the last home.'
-      : 'Checking Z: one N1 touch' + (r && r.reference ? ' on the ' + r.reference.name + ' at X ' + IL.fmt(r.reference.x, 1) + ', Y ' + IL.fmt(r.reference.y, 1) : '')
+      : 'Checking Z: ' + IL.zTouches(r && r.touches) + (r && r.reference ? (r.touches > 1 ? ', the first' : '') + ' on the ' + r.reference.name + ' at X '
+        + IL.fmt(r.reference.x, 1) + ', Y ' + IL.fmt(r.reference.y, 1) : '')
         + (r && isNum(r.estimatedSeconds) ? ', ≈ ' + IL.fmtSecs(r.estimatedSeconds) : '') + '.'),
   });
   // I7 on-time: a test run of the first N dots that fits the limit (90 % of it, after settle and purge)
@@ -658,7 +659,7 @@
         text = 'Dispensing · ' + (d ? 'next ' + d.padId : run.dotsDone + ' of ' + run.dotsPlanned);
       } else if (run.phase === 'dispensing') text = 'Pressure on · purge dots';
       else if (run.detail && run.detail.stage === 'home') text = 'Homing first · pressure off';
-      else if (run.detail && run.detail.stage === 'z check') text = 'Checking Z · one N1 touch';
+      else if (run.detail && run.detail.stage === 'z check') text = 'Checking Z · N1 touch';
       else text = 'Starting · waiting for OpenPnP motion';
       title = 'Board run in progress (' + (run.phase || '') + ')';
     } else if (regLive(s)) {
@@ -1934,14 +1935,16 @@
     if (mode !== 'idle' || !p || R.byHand) return;
     const same = regSameSeatLikely(s, p);
     const sf = boardSurface(s);
-    const key = JSON.stringify([p.planId, !!t, t && t.probes.length, !!same, sf && sf.setAtMs]);
+    const alts = t ? Math.max(0, ...t.probes.map((q) => (q.alternates || []).length)) : 0;
+    const key = JSON.stringify([p.planId, !!t, t && t.probes.length, alts, !!same, sf && sf.setAtMs]);
     IL.keyed(box, key + (t && t.error ? 'e' : ''), () => {
       if (!t) return el('div', { class: 'notebox', text: 'This plan has no registration preview (an older plan): plan again.' });
       if (t.error || !t.probes.length) return null;   // the reason is under the button
       return el('div', { class: 'reg-expect' }, el('span', {}, same
         ? ['Same seat as ', el('b', { text: IL.fmtTime(same.atMs - S.skewMs) }), ' if every fiducial moved at most 0.10 mm: N1 re-touches 3 points of that surface. Else it probes ',
           el('b', { text: IL.plural(t.probes.length, 'spot') }), '.']
-        : ['N1 probes ', el('b', { text: IL.plural(t.probes.length, 'bare spot') }), ' (numbered on the board), with up to 2 nearby spots each when one is not bare.']));
+        : ['N1 probes ', el('b', { text: IL.plural(t.probes.length, 'bare spot') }), ' (numbered on the board)', alts
+          ? ', with up to ' + IL.plural(alts, 'nearby spot') + ' each when one is not bare.' : '.']));
     });
   }
   /** Running: the phases (§8.1 state 2) from status.run.detail. */
@@ -2521,7 +2524,7 @@
     if (rd.stage === 'z check' || rd.zCheck) {
       const z = rd.zCheck;
       ph.push({ st: rd.stage === 'z check' ? 'now' : 'done', t: 'Z check',
-        d: z && isNum(z.z) ? 'N1 touched Z ' + IL.fmt(z.z, 3) + ' mm, ' + IL.fmtSigned(z.deltaMm, 3) + ' mm from ' + IL.fmt(z.refZ, 3) : 'one N1 touch at a stored point', v: '' });
+        d: z && isNum(z.z) ? 'N1 touched Z ' + IL.fmt(z.z, 3) + ' mm, ' + IL.fmtSigned(z.deltaMm, 3) + ' mm from ' + IL.fmt(z.refZ, 3) : 'N1 touches a stored point', v: '' });
     }
     if (camKey || inCam || (cleanEnabled(s) && !disp)) {
       const n = run.dotsPlanned;
@@ -2852,13 +2855,15 @@
     const d = (s && s.dispense) || {};
     const zData = !!(d.needle && d.needle.anchor) || Object.keys(d.surfaces || {}).length > 0;
     const zS = zc && isNum(zc.estimateS) ? zc.estimateS : 20;
+    const zN = zc && zc.touchesAfterHome > 1 ? zc.touchesAfterHome : 1;
     if (h && h.needed) {
       const why = h.whyCode === 'always' ? 'setting: always' : isNum(h.sinceMs) && h.whyCode !== 'not-homed' ? 'stopped at ' + IL.fmtTime(h.sinceMs - S.skewMs) : 'not homed';
       return { home: true, z: zData, text: 'Homes first (' + why + '), ≈ ' + IL.fmtSecs(h.estimateS) + ': the head goes to its home corner and the top camera finds the homing fiducial. '
-        + 'The pressure stays off until homing is done.' + (zData ? ' Then one N1 touch checks Z (≈ ' + IL.fmtSecs(zS) + ').' : '') };
+        + 'The pressure stays off until homing is done.' + (zData ? ' Then ' + IL.zTouches(zN) + (zN > 1 ? ' check' : ' checks') + ' Z (≈ ' + IL.fmtSecs(zS * zN) + ').' : '') };
     }
     if (zc && zc.needed && zc.reference) {
-      return { home: false, z: true, text: 'Checks Z first: one N1 touch on the ' + zc.reference.name + ' (≈ ' + IL.fmtSecs(zS) + '), because the N1 heights predate the home at '
+      return { home: false, z: true, text: 'Checks Z first: ' + IL.zTouches(zc.touches) + (zc.touches > 1 ? ', the first' : '') + ' on the ' + zc.reference.name
+        + ' (≈ ' + IL.fmtSecs(zS * Math.max(1, zc.touches || 0)) + '), because the N1 heights predate the home at '
         + IL.fmtTime((zc.homeAtMs || Date.now() + S.skewMs) - S.skewMs) + '.' };
     }
     return null;

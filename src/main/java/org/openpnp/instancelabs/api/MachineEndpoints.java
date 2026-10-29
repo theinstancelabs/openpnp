@@ -257,6 +257,8 @@ final class MachineEndpoints {
             home.put("n1Low", n1 != null && n1[1] > 0);
             s.put("home", home);
             DispenseService.ZCheckPlan zc = svc.zCheckPlan(null, false);
+            // the check after the next home (Run and Register home first when needed): every height predates it
+            DispenseService.ZCheckPlan za = svc.zCheckPlan(null, true);
             List<Map<String, Object>> stale = new ArrayList<>();
             for (org.openpnp.instancelabs.dispense.ZCheck.Stale x : zc.stale) {
                 stale.add(Views.map("what", x.what, "atMs", x.atMs));
@@ -264,7 +266,7 @@ final class MachineEndpoints {
             s.put("zCheck", Views.map("needed", zc.needed, "stale", stale, "homeAtMs", zc.homeAtMs, "reference",
                     zc.reference == null ? null : Views.map("name", zc.reference.name, "x", zc.reference.x, "y",
                             zc.reference.y, "z", zc.reference.z), "last", zc.last, "estimateS",
-                    DispenseService.PROBE_POINT_ESTIMATE_S));
+                    DispenseService.PROBE_POINT_ESTIMATE_S, "touches", zc.touches, "touchesAfterHome", za.touches));
         }
         List<Map<String, Object>> drivers = new ArrayList<>();
         for (Driver d : m.getDrivers()) {

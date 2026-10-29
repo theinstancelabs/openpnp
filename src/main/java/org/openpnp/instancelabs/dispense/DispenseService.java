@@ -1341,6 +1341,11 @@ public final class DispenseService {
          */
         public ZCheck.Reference reference;
         public ZCheck.Result last;
+        /**
+         * N1 touches the check makes when the spots are bare: one per Z frame (home period) of the stale data,
+         * so 2 when, e.g., the board was probed under a later home than the needle frame (0 when not needed).
+         */
+        public int touches;
     }
 
     /**
@@ -1359,6 +1364,7 @@ public final class DispenseService {
         List<ZCheck.Reference> refs = ZCheck.references(c, plan == null ? null : plan.boardRegistration,
                 homeFirst ? null : p.homeAtMs);
         p.reference = ZCheck.unreachable(refs, open).isEmpty() ? ZCheck.first(refs, open) : null;
+        p.touches = p.needed && p.reference != null ? ZCheck.touches(refs, open) : 0;
         return p;
     }
 

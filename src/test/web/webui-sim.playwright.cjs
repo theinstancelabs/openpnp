@@ -1056,7 +1056,8 @@ async function runFirstDots(page, n) {
       });
       await page.waitForSelector('#dlg-run', { timeout: 10000 });
       const hf = await textOf(page, 'run-confirm-home').catch(() => '');
-      check('run confirm: #run-confirm-home says it homes first, then checks Z', /^Homes first/.test(hf) && /checks Z/.test(hf), hf);
+      check('run confirm: #run-confirm-home says it homes first, then 2 N1 touches check Z (the board\'s Z frame and the blank\'s)',
+        /^Homes first/.test(hf) && /2 N1 touches .*check Z/.test(hf), hf);
       await page.screenshot({ path: path.join(OUT, 'run-confirm-home-first.png') });
       g1 = gcodeNext();
       for (const t of ['#run-tick-gauge', '#run-tick-paste', '#run-tick-hands']) if (!(await page.isChecked(t))) await page.check(t);
