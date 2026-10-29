@@ -64,6 +64,8 @@ public class RunResult {
     /** Board runs: whether the run homed first (homeBeforeRun), and its Z check after the home. */
     public Boolean homedFirst;
     public ZCheck.Result zCheck;
+    /** Board runs: pads the operator chose to skip for this run (pad ids), shown in Records. */
+    public final List<String> skippedPads = new ArrayList<>();
 
     /** Seconds from the first dot's start to the last dot's end. */
     public Double motionSeconds() {
