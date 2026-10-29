@@ -259,8 +259,7 @@
       [el('div', { class: 'fgrid' },
         pcr.field('wd-type', 'Pad type', null, el('select', { class: 'input', id: 'wd-type' }, el('option', { value: '', text: 'Loading…' }))),
         pcr.field('wd-steps', 'Turn per dot', null, steps),
-        pcr.field('wd-count', 'Dots', '30 to 200', pcr.numInput('wd-count', null, '1', { min: '30', max: '200' }), 'A whole number of screw turns in total: the angle ripple cancels.'),
-        pcr.field('wd-place', 'Coupon', null, placeSel('wd-place'))),
+        pcr.field('wd-count', 'Dots per coupon', '30 to 200', pcr.numInput('wd-count', null, '1', { min: '30', max: '200' }), 'A whole number of screw turns in total: the angle ripple cancels.', 'span2')),
       el('div', { class: 'cal-gaps', id: 'wd-plan' }),
       sub('Before it runs'), el('div', { id: 'wd-pre' })],
       [run, reasonEl('wd-reason')]);
@@ -755,6 +754,8 @@
   }
   function renderWeigh(s) {
     const sel = $('wd-type');
+    // the pad types (Profile reads them; this card may be the first to need them)
+    if (!(IL.pcr.padTypes && IL.pcr.padTypes()) && !C.ptAsked && IL.pcr.loadPadTypes) { C.ptAsked = true; IL.pcr.loadPadTypes(); }
     const types = (IL.pcr.padTypes && IL.pcr.padTypes() ? IL.pcr.padTypes().families.filter((f) => !f.retired).flatMap((f) => f.types) : []);
     const tkey = types.map((t) => t.typeKey).join('|');
     if (sel.dataset.key !== tkey) {
@@ -766,17 +767,18 @@
     if (C.wdType && types.some((t) => t.typeKey === C.wdType)) { sel.value = C.wdType; C.wdType = null; }
     const cfg = S.config || {};
     const places = ((cfg.padCalibration || {}).couponPlaces) || ['coupon1', 'coupon2'];
-    const ps = $('wd-place');
-    const pk = places.join('|');
-    if (ps.dataset.key !== pk) { ps.dataset.key = pk; ps.replaceChildren(...places.map((n) => el('option', { value: n, text: n }))); }
     const req = weighRequest();
     const e = req.typeKeys[0] && IL.padProfile ? IL.padProfile.estimate(Object.assign({}, req, { weighDots: undefined })) : null;
     const pv = e && e.s;
-    const k0 = pv && (pv.coupons || [])[0];
+    const ks = (pv && pv.coupons) || [];
+    const k0 = ks[0];
     if (k0) prefill('wd-count', String(k0.dots));
     const n = IL.num('wd-count');
-    IL.setText($('wd-plan'), req.typeKeys[0] ? (Number.isInteger(n) ? IL.plural(n, IL.padProfile.turnAdj(req.doseSteps) + ' dot') : 'The count from the target') + ' of ' + req.typeKeys[0]
-      + (k0 ? ' on ' + k0.place + ', about ' + Math.round(n > 0 ? k0.expectedMg * n / k0.dots : k0.expectedMg) + ' mg.' : '.') : 'Choose the pad type.');
+    // the job lays the dots on every coupon place (a second weighing confirms the mass, §7.5)
+    const t = types.find((x) => x.typeKey === req.typeKeys[0]);
+    const on = ks.length ? (ks.length === 1 ? ' on ' + k0.place : ' on each of ' + ks.map((k) => k.place).join(' and ')) : '';
+    IL.setText($('wd-plan'), req.typeKeys[0] ? (Number.isInteger(n) ? IL.plural(n, IL.padProfile.turnAdj(req.doseSteps) + ' dot') : 'The count from the target') + ' of ' + (t ? t.name : req.typeKeys[0])
+      + on + (k0 ? ', about ' + Math.round(n > 0 ? k0.expectedMg * n / k0.dots : k0.expectedMg) + ' mg' + (ks.length > 1 ? ' each.' : '.') : '.') : 'Choose the pad type.');
     const d = s.dispense || {};
     const rows = prereqs(s, { machine: true, engine: true, frame: true, pressure: true });
     for (const pl of places) rows.push(d.locations && d.locations[pl] ? { kind: 'ok', title: 'Coupon place “' + pl + '”', value: 'X ' + IL.fmt(d.locations[pl].x, 1) + ' · Y ' + IL.fmt(d.locations[pl].y, 1) }
@@ -885,7 +887,9 @@
       const kind = running ? 'live' : nc ? 'need' : pcr.statusKind(run.status);
       const word = (pcr.TASK[run.label] || run.label) + (nc ? ' · no contact found' : '');
       const pct = run.dotsPlanned ? Math.round(100 * run.dotsDone / run.dotsPlanned) : 0;
-      const phases = (run.phases || []).slice(-6);
+      // "pad calibration: dispensing" under the title "Pad calibration": the phase without the run's own name
+      const own = new RegExp('^' + String(run.label || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ':\\s*', 'i');
+      const phases = (run.phases || []).slice(-6).map((ph) => IL.cap(String(ph).replace(own, '')));
       const sig = JSON.stringify([run.runId, kind, run.dotsDone, run.phase, Math.floor(run.elapsedS || 0), run.message]);
       if (now.dataset.sig !== sig) {
         now.dataset.sig = sig;

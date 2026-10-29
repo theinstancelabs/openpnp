@@ -78,17 +78,30 @@ async function shoot(page, name, prep) {
   await page.setViewportSize({ width: 1440, height: 900 });
   await sleep(200);
 }
-/** Scrolls the main column so that sel starts 16 px below the status strip (nothing half under it). */
-const toTop = (page, sel) => page.evaluate((x) => {
+/**
+ * Scrolls the main column so that sel starts its own margin below the status strip: what comes before it ends just under
+ * the strip (no line cut in half above it). When the page ends before sel can get there, the section around it
+ * (fallback) starts there instead.
+ */
+const toTop = (page, sel, fallback) => page.evaluate(([x, fb]) => {
+  const place = (n) => {
+    let sc = n.parentElement;
+    while (sc && sc !== document.body && !(sc.scrollHeight > sc.clientHeight + 1 && /(auto|scroll)/.test(getComputedStyle(sc).overflowY))) sc = sc.parentElement;
+    const win = !sc || sc === document.body;
+    const top = win ? document.getElementById('strip').getBoundingClientRect().bottom : sc.getBoundingClientRect().top;
+    let a = n;
+    while (a.parentElement && !a.previousElementSibling && a.parentElement !== sc) a = a.parentElement;
+    const prev = a.previousElementSibling;
+    const want = top + (prev ? Math.max(8, n.getBoundingClientRect().top - prev.getBoundingClientRect().bottom) : 16);
+    const dy = n.getBoundingClientRect().top - want;
+    if (win) window.scrollBy(0, dy); else sc.scrollTop += dy;
+    return n.getBoundingClientRect().top - want;
+  };
   const n = document.querySelector(x);
   if (!n) return;
-  let sc = n.parentElement;
-  while (sc && sc !== document.body && !(sc.scrollHeight > sc.clientHeight + 1 && /(auto|scroll)/.test(getComputedStyle(sc).overflowY))) sc = sc.parentElement;
-  const win = !sc || sc === document.body;
-  const top = win ? document.getElementById('strip').getBoundingClientRect().bottom : sc.getBoundingClientRect().top;
-  const dy = n.getBoundingClientRect().top - top - 16;
-  if (win) window.scrollBy(0, dy); else sc.scrollTop += dy;
-}, sel);
+  const f = fb && document.querySelector(fb);
+  if (place(n) > 2 && f) place(f);
+}, [sel, fallback || null]);
 const api = (page, method, p, body) => page.evaluate(([m, x, b]) => IL.api(m, x, b === null ? undefined : b, { timeoutMs: 120000 }), [method, p, body === undefined ? null : body]);
 const status = (page) => page.evaluate(() => IL.api('GET', '/api/status'));
 /** The two presses of a two-press button (§11): the second ≥ 300 ms after the first, once it asks for it. */
@@ -195,7 +208,7 @@ async function weighCoupon(page, place) {
       fs.writeFileSync(SCENE, JSON.stringify(sc, null, 2));
     }
     // the purge row along the blank's lower edge, the calibration area above it; probe hulls stay 2 mm inside the blank
-    const spots = Math.min(28, Math.floor((bx1 - bx0 - 8) / 1.6));
+    const spots = Math.min(60, Math.floor((bx1 - bx0 - 8) / 1.6));   // a job takes about 20 (phase and flush dots)
     const area = { x0Mm: bx0 + 5, y0Mm: by0 + 10, widthMm: Math.min(28, bx1 - bx0 - 10), heightMm: Math.min(16, by1 - by0 - 14) };
     await api(page, 'PUT', '/api/config', { purgeRow: { surfaceName: 'blank', x0Mm: bx0 + 5, y0Mm: by0 + 4, pitchXMm: 1.6, pitchYMm: 0, spots },
       padCalibration: { ladderDotsPerPhase: 3, minLadderDots: 6, minHops: 10, weighTargetMg: 15 } });
@@ -279,7 +292,7 @@ async function weighCoupon(page, place) {
     check('(3) the tip details (collapsed) hold the 2 WSON groups', list.tip.length === 2 && !list.tipOpen && /22G tip/.test(list.tipText), list);
     check('(3) nav sub "Needs 3 profiles"', list.nav === 'Needs 3 profiles', list.nav);
     check('(3) the source is the plan now', /^From the plan of /.test(list.src), list.src);
-    await shoot(page, 'needs-list', () => toTop(page, '#pt-needs'));
+    await shoot(page, 'needs-list', () => toTop(page, '#pt-needs', '#pt-section'));
 
     // ---- (4) the SW suggestion -----------------------------------------------------------------------------------------
     await page.evaluate((g) => IL.go('#profile/needs/' + g), gSW);
@@ -289,7 +302,7 @@ async function weighCoupon(page, place) {
     check('(4) the suggestion: "New pad type SW_SPST_3.9x2.9mm …"', card4.text.startsWith('New pad type SW_SPST_3.9x2.9mm'), card4.text);
     check('(4) 4 suggested dots drawn on J1 (circle.pv-sugg), none as circle.dot', card4.sugg === 4, card4);
     check('(4) the plan\'s dot count unchanged', card4.dots === dots0 || dots0 === 0, [dots0, card4.dots]);
-    await shoot(page, 'suggestion', () => toTop(page, '#pt-needs'));
+    await shoot(page, 'suggestion', () => toTop(page, '#pt-needs', '#pt-section'));
 
     // ---- (5) Use Chip 0603 on TestChip_A --------------------------------------------------------------------------------
     await page.evaluate(() => IL.go('#profile/needs'));
@@ -321,7 +334,7 @@ async function weighCoupon(page, place) {
     await page.waitForFunction(() => !document.getElementById('btn-pcal-start').disabled, null, { timeout: 20000 }).catch(() => null);
     const why7 = await page.textContent('#pcal-why');
     check('(7) Start is not locked', !(await page.isDisabled('#btn-pcal-start')), why7);
-    await shoot(page, 'pcal-before', () => toTop(page, '#pt-needs'));
+    await shoot(page, 'pcal-before', () => toTop(page, '#pt-needs', '#pt-section'));
     // the gate's reasons while the button is armed (a lock between the two presses disarms it: the second press arms again)
     await page.evaluate(() => {
       window.__ppGate = [];
@@ -341,7 +354,7 @@ async function weighCoupon(page, place) {
     check('(7) the phases advance (coupons done, ladder now or done)', ph.some((p) => p[0] === 'coupons' && p[1] === '') && ph.some((p) => p[0] === 'ladder' && p[1] !== 'todo'), ph);
     check('(7) STOP and Cancel are reachable while it runs', await page.isVisible('#btn-stop') && await page.isVisible('#btn-pcal-cancel') && await page.isEnabled('#btn-pcal-cancel'),
       { stop: await page.isVisible('#btn-stop'), cancel: await page.isVisible('#btn-pcal-cancel') });
-    await shoot(page, 'job-running', () => toTop(page, '#pt-needs'));
+    await shoot(page, 'job-running', () => toTop(page, '#pt-needs', '#pt-section'));
 
     // ---- (8) the readings ----------------------------------------------------------------------------------------------------
     const j8 = await waitJob(page, (j) => j.state === 'awaiting-reading' || ['failed', 'stopped', 'done'].includes(j.state), 600000, 'the readings prompt');
@@ -354,7 +367,7 @@ async function weighCoupon(page, place) {
     await page.waitForSelector('#pcal-ask:not([hidden]) #pcal-full-1', { timeout: 20000 });
     const cs = j8.awaiting.coupons;
     check('(8) after a reload the prompt is back with a field pair per coupon', cs.length >= 1 && (await page.$$('#pcal-coupons .pcal-coupon')).length === cs.length, cs.length);
-    await shoot(page, 'readings-prompt', () => toTop(page, '#pt-needs'));
+    await shoot(page, 'readings-prompt', () => toTop(page, '#pt-needs', '#pt-section'));
     for (let i = 0; i < cs.length; i++) {
       const r = await weighCoupon(page, cs[i].place);
       await page.fill('#pcal-full-' + (i + 1), r.full.toFixed(3));
@@ -375,7 +388,7 @@ async function weighCoupon(page, place) {
     check('(9) at least 3 camera crops load', crops >= 3, crops);
     await page.waitForFunction(() => IL.S.plan && IL.S.status.padCalibration.result && IL.S.plan.planId === IL.S.status.padCalibration.result.newPlanId, null, { timeout: 30000 }).catch(() => null);
     check('(9) the plan made again is shown', await page.evaluate(() => IL.S.plan.planId === IL.S.status.padCalibration.result.newPlanId), j9.result && j9.result.newPlanId);
-    await shoot(page, 'result', () => toTop(page, '#pt-needs'));
+    await shoot(page, 'result', () => toTop(page, '#pt-needs', '#pt-section'));
     await closePanels(page);
     await page.evaluate(() => IL.go('#profile/needs'));
     await sleep(1500);
@@ -383,6 +396,7 @@ async function weighCoupon(page, place) {
     check('(9) Needs a profile: Test_Strip left, SW and TestChip_A gone', rows9.length === 1 && /Test_Strip/.test(rows9[0]), rows9);
 
     // ---- (10) by hand on Test_Strip ---------------------------------------------------------------------------------------------
+    await api(page, 'POST', '/api/purge-row/reset', {});   // the operator wiped the purge row after the job
     const strip = await page.evaluateHandle(() => Array.from(document.querySelectorAll('#pt-needs-table tr[data-group]')).find((tr) => /Test_Strip/.test(tr.textContent))
       .querySelector('button[data-action="manual"]'));
     await strip.click();
@@ -414,6 +428,7 @@ async function weighCoupon(page, place) {
     check('(11) Blank wiped (two presses): 0 mm used', area11.usedMm === 0, area11);
 
     // ---- (12) STOP at the readings prompt of the by-hand weighing ----------------------------------------------------------------
+    await api(page, 'POST', '/api/purge-row/reset', {});
     await page.evaluate(() => IL.go('#calibrate/weigh'));
     await page.waitForFunction(() => !document.getElementById('btn-wd-run').disabled, null, { timeout: 20000 }).catch(() => null);
     check('(12) Lay the weigh dots is not locked', !(await page.isDisabled('#btn-wd-run')), await page.textContent('#wd-reason'));
@@ -429,6 +444,24 @@ async function weighCoupon(page, place) {
     await page.waitForSelector('#pcal-result:not([hidden])', { timeout: 15000 });
     const r12 = await page.evaluate(() => ({ t: document.getElementById('pcal-result-t').textContent, weigh: !document.getElementById('btn-pcal-weigh-now').hidden }));
     check('(12) STOP at the prompt: "Stopped … the coupons still need weighing …" and Type the readings', /^Stopped \d\d:\d\d during .*the coupons still need weighing until \d\d:\d\d/.test(r12.t) && r12.weigh, [r12, j12.state]);
+    // the operator connects again (a simulator's records count while it is connected) and types the readings of the
+    // stopped job's coupons (POST /api/coupons/{id}/reading each)
+    if (!(await status(page)).machine.enabled) await api(page, 'POST', '/api/machine/enable');
+    await page.waitForSelector('#btn-pcal-weigh-now:enabled', { timeout: 30000 });
+    await page.click('#btn-pcal-weigh-now');
+    await page.waitForSelector('#pcal-pending:not([hidden]) .pcal-coupon--pending', { timeout: 15000 });
+    const pend = await page.evaluate(() => Array.from(document.querySelectorAll('#pcal-pending button[data-record]')).map((b) => b.dataset.record));
+    const places = (j12.coupons || []).filter((k) => k.recordId).map((k) => [String(k.recordId), k.place]);
+    check('(12) Type the readings lists the stopped job\'s coupons', pend.length === places.length && places.every(([id]) => pend.includes(id)), { pend, places });
+    for (const [id, place] of places) {
+      const r = await weighCoupon(page, place);
+      await page.fill('#pcal-pf-' + id, r.full.toFixed(3));
+      await page.fill('#pcal-pe-' + id, r.empty.toFixed(3));
+      const saved = page.waitForResponse((x) => x.url().endsWith('/api/coupons/' + id + '/reading'), { timeout: 20000 }).catch(() => null);
+      await page.click('#pcal-pending button[data-record="' + id + '"]');
+      const rr = await saved;
+      check('(12) ' + place + ': its readings saved (' + Math.round((r.full - r.empty) * 1000) + ' mg)', !!rr && rr.status() === 200, rr ? [rr.status(), (await rr.text()).slice(0, 300)] : 'no request');
+    }
   } catch (e) {
     check('no exception', false, String(e && e.stack || e));
   } finally {

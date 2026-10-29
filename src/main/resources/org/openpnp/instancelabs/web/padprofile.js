@@ -243,6 +243,8 @@
 
   // ================================================================================== fix-its
   const idle = (s) => IL.lockReason(s, {}) || jobLockText(s);
+  /** A calibration starts only when no other one is active (one waiting for its readings included). */
+  const calIdle = (s) => idle(s) || (jobActive(s) ? 'A pad calibration is waiting for its readings: finish or cancel it first' : null);
   IL.fix('profile-use', {
     gate: idle,
     run: async (btn, arg) => {
@@ -430,10 +432,11 @@
       IL.setText(autoAll, 'Calibrate all automatically… · ' + na.length + ' sizes' + estText(e));
     }
     IL.show($('pt-needs').querySelector('.pt-needs__foot'), nu > 1 || na.length > 1);
-    const why = idle(s);
+    const why = idle(s), calWhy = calIdle(s);
     IL.gate(useAll, why, $('needs-why'));
-    for (const b of sec.querySelectorAll('button[data-action=use], button[data-action=manual], button[data-action=auto]')) IL.gate(b, why);
-    IL.gate(autoAll, why);
+    for (const b of sec.querySelectorAll('button[data-action=use]')) IL.gate(b, why);
+    for (const b of sec.querySelectorAll('button[data-action=manual], button[data-action=auto]')) IL.gate(b, calWhy);
+    IL.gate(autoAll, calWhy, nu > 1 ? null : $('needs-why'));
   }
 
   // ================================================================================== the suggestion card (Profile side panel)
@@ -480,7 +483,7 @@
     IL.setText($('pt-sugg-e'), 'Needs a profile · ' + IL.plural(g.pads, 'pad'));
     IL.keyed($('pt-sugg-b'), g.reason + g.short, () => el('span', { class: 'pp-badge', 'data-reason': g.reason }, IL.glyph(reasonKind(g), 'xs'), el('span', { text: g.short })));
     IL.keyed($('pt-sugg-reason'), g.reasonText, () => el('div', { class: 'notebox notebox--' + reasonKind(g) }, IL.glyph(reasonKind(g), 'xs'), el('span', { text: g.reasonText })));
-    IL.setText($('pt-sugg-text'), sg.sentence || '');
+    IL.setText($('pt-sugg-text'), IL.nb(sg.sentence || ''));
     IL.show($('pt-sugg-text'), !none);
     IL.show($('pt-sugg-kv'), !none);
     IL.show($('pt-sugg-tip'), none);
@@ -517,10 +520,10 @@
     IL.show(man, calibrates(g) && fixable);
     IL.show(edit, calibrates(g) && fixable && sg.kind === 'new');
     if (calibrates(g) && fixable) IL.setText(auto, 'Calibrate automatically…' + estText(estimate(calRequest(c, [g]))));
-    const why = idle(s);
+    const why = idle(s), calWhy = calIdle(s);
     IL.gate(use, why, $('pt-sugg-why'));
-    IL.gate(man, why);
-    IL.gate(auto, why, why && use.hidden ? $('pt-sugg-why') : null);
+    IL.gate(man, calWhy);
+    IL.gate(auto, calWhy, use.hidden ? $('pt-sugg-why') : null);
   }
   /** The part of the group's first ref, its pads, the suggested dots at their upper diameter (g.pv-l-sugg). */
   function drawSuggPreview(c, g) {
@@ -862,6 +865,7 @@
     C.req = null;
     C.mode = 'job';
     C.readings = {};
+    C.pending = false;
     IL.panel.reset();
     // saving the suggestions as provisional types planned the board again (§7.2 step 0): show that plan, the one the
     // job plans again from at its end (status.padCalibration.planId), so the plan it makes then is loaded here too
@@ -893,7 +897,7 @@
 
   // ---------------------------------------------------------------- before start (§7.9)
   function buildBefore(parts) {
-    const start = el('button', { type: 'button', class: 'btn btn--hold btn--lg btn--block', id: 'btn-pcal-start' }, IL.icon('i-play'), el('span', { id: 'pcal-start-l', text: 'Calibrate' }));
+    const start = el('button', { type: 'button', class: 'btn btn--primary btn--lg btn--block', id: 'btn-pcal-start' }, IL.icon('i-play'), el('span', { id: 'pcal-start-l', text: 'Calibrate' }));
     const refusal = el('div', { id: 'pcal-refusal' });
     IL.press2(start, 'calibrate', () => startCal(), { ok: () => 'Pad calibration started: STOP stops it at once (F9).', refusalIn: refusal });
     parts.body.append(el('div', { class: 'pcal', 'data-refusals': '' },
@@ -912,8 +916,8 @@
   function renderBefore(s) {
     const e = estimate(C.req);
     const pv = e && e.s;
-    IL.setText($('pcal-note'), pv ? pv.sentence : e && e.error ? 'Could not read the summary: ' + e.error : 'Reading the summary…');
-    IL.setText($('pcal-needs'), pv && pv.needsText ? pv.needsText : '');
+    IL.setText($('pcal-note'), pv ? IL.nb(pv.sentence) : e && e.error ? 'Could not read the summary: ' + e.error : 'Reading the summary…');
+    IL.setText($('pcal-needs'), pv && pv.needsText ? IL.nb(pv.needsText) : '');
     IL.show($('pcal-needs'), !!(pv && pv.needsText));
     IL.keyed($('pcal-plan').tBodies[0], JSON.stringify(pv ? [pv.steps, pv.home, pv.zCheck] : null), () => {
       if (!pv) return null;
@@ -1021,6 +1025,7 @@
     // the pinned foot: Save the readings while they are asked for (always in view); Cancel while the job is active (an
     // engine step is aborted; the coupons laid keep waiting for their readings); the next step after it ended
     parts.foot.append(el('div', { class: 'btn-row pcal__foot', 'data-refusals': '' }, save, plan, weighNow, finish, again, man, cancel),
+      el('div', { class: 'reason', id: 'pcal-foot-why', hidden: true }),
       el('p', { class: 'pcal-stop', id: 'pcal-stopline', text: 'STOP stops it at once (F9).' }));
   }
   function again2(finish) {
@@ -1111,14 +1116,19 @@
       : [el('tr', {}, el('td', { colspan: '7', class: 'muted', text: 'No test dots yet.' }))]));
     // foot
     const ended = !active;
-    IL.show($('btn-pcal-plan'), ended && !!(res && res.newPlanId));
-    IL.show($('btn-pcal-weigh-now'), ended && pend.length > 0 && !C.pending);
-    IL.show($('btn-pcal-finish'), ended && !!(res && res.finishable) && !pend.length);
-    IL.show($('btn-pcal-again'), ended && !!res && res.outcome !== 'characterized');
-    // one clear next action: Checks after a characterization, else calibrating again
+    // the coupons of a stopped job: listed once they can be weighed (a simulator's records count while it is connected)
+    const offline = !(s.machine && s.machine.enabled);
+    const weighNow = ended && !C.pending && (pend.length > 0 || (!!res && !!res.pendingCoupons && offline));
+    const finishNow = ended && !!(res && res.finishable) && !weighNow;
     const good = !!res && (res.outcome === 'characterized' || res.outcome === 'measured');
-    IL.setClass($('btn-pcal-plan'), 'btn' + (good ? ' btn--primary' : ''));
-    IL.setClass($('btn-pcal-again'), 'btn' + (good ? '' : ' btn--primary'));
+    IL.show($('btn-pcal-plan'), ended && !!(res && res.newPlanId));
+    IL.show($('btn-pcal-weigh-now'), weighNow);
+    IL.show($('btn-pcal-finish'), finishNow);
+    IL.show($('btn-pcal-again'), ended && !!res && res.outcome !== 'characterized');
+    // one clear next action: the readings still to type, else finishing, else Checks after a characterization, else again
+    const lead = weighNow ? 'btn-pcal-weigh-now' : finishNow ? 'btn-pcal-finish' : good ? 'btn-pcal-plan' : 'btn-pcal-again';
+    for (const id of ['btn-pcal-weigh-now', 'btn-pcal-finish', 'btn-pcal-plan', 'btn-pcal-again']) IL.setClass($(id), 'btn' + (id === lead ? ' btn--primary' : ''));
+    IL.gate($('btn-pcal-weigh-now'), weighNow && !pend.length ? IL.lockReason(s, { idle: false, pressureOff: false, connected: true }) || 'Reading the coupons…' : null, $('pcal-foot-why'));
     IL.show($('btn-pcal-manual'), ended && !!res && res.outcome !== 'characterized' && !j.manual);
     IL.show($('pcal-stopline'), active && j.state !== 'awaiting-reading');
     IL.show($('btn-pcal-cancel'), active);
@@ -1127,7 +1137,7 @@
   }
   function renderAsk(j, s) {
     const a = j.awaiting;
-    IL.setText($('pcal-ask-text'), a.text);
+    IL.setText($('pcal-ask-text'), IL.nb(a.text));
     const cs = a.coupons || [];
     IL.keyed($('pcal-coupons'), JSON.stringify([j.id, cs.map((k) => [k.place, k.recordId, k.crop && k.crop.after])]), () => cs.map((k, i) => {
       const n = i + 1;
@@ -1381,6 +1391,8 @@
         el('div', {}, el('div', { text: g.reasonText }), s.sentence ? el('div', { class: 'pp-insp__s', text: s.sentence }) : null,
           btns.length ? el('div', { class: 'btn-row' }, btns) : null, el('div', {}, more)));
     });
+    IL.gate($('btn-pad-insp-use'), idle(S.status));
+    for (const id of ['btn-pad-insp-auto', 'btn-pad-insp-manual']) IL.gate($(id), calIdle(S.status));
     return true;
   }
   /** The amount line of the pad inspector: what the plan gives the pad, against the target and a stencil. */
