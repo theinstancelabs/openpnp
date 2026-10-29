@@ -3,6 +3,7 @@ package org.openpnp.instancelabs.dispense;
 import java.awt.geom.AffineTransform;
 import java.awt.geom.Point2D;
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.sql.SQLException;
 import java.util.ArrayList;
@@ -18,6 +19,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 
 import org.openpnp.ConfigurationListener;
+import org.openpnp.instancelabs.board.EdtRunner;
 import org.openpnp.instancelabs.sim.SimGuard;
 import org.openpnp.instancelabs.vision.BareSpotCheck;
 import org.openpnp.instancelabs.vision.Dot;
@@ -504,8 +506,9 @@ public final class DispenseService {
 
     /**
      * Identity of a board location as a plan depends on it: global location, side, fiducial
-     * transform (status and matrix) and every placement (review finding: a board moved, re-checked
-     * or edited after planning was not detected at Run).
+     * transform (status and matrix), every placement (review finding: a board moved, re-checked
+     * or edited after planning was not detected at Run) and the parts, packages and pads behind
+     * them ({@link BoardContentDigest}: a board imported again with other pads).
      */
     public static String boardFingerprint(BoardLocation bl) {
         StringBuilder sb = new StringBuilder();
@@ -518,6 +521,7 @@ public final class DispenseService {
                 sb.append(String.format(java.util.Locale.ROOT, "|%s,%s,%s,%s,%.4f,%.4f,%.4f,%.4f", pl.getId(),
                         pl.getSide(), pl.getType(), pl.isEnabled(), l.getX(), l.getY(), l.getZ(), l.getRotation()));
             }
+            sb.append('|').append(BoardContentDigest.of(bl.getBoard()));
         }
         return digest(sb);
     }
@@ -688,7 +692,11 @@ public final class DispenseService {
 
     /** Loads a board file and plans it at the given board location (top side up). */
     public DispensePlan planBoardFile(File boardFile, Location boardLocation) throws Exception {
-        Board board = configuration.getBoard(boardFile);
+        if (!boardFile.isFile()) {
+            // getBoard would write an empty board file there and list it
+            throw new FileNotFoundException("Board file not found: " + boardFile.getPath());
+        }
+        Board board = EdtRunner.call(() -> configuration.getBoard(boardFile), 10_000);
         BoardLocation bl = new BoardLocation(board);
         bl.setLocation(boardLocation);
         return planBoard(bl);

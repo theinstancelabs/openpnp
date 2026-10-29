@@ -9,11 +9,15 @@ import java.util.concurrent.Future;
 
 import org.openpnp.Main;
 import org.openpnp.gui.MainFrame;
+import org.openpnp.instancelabs.board.BoardArtStore;
+import org.openpnp.instancelabs.board.EdtRunner;
 import org.openpnp.instancelabs.dispense.BoardRegistration;
+import org.openpnp.instancelabs.dispense.Calibration;
 import org.openpnp.instancelabs.dispense.ControllerCommands;
 import org.openpnp.instancelabs.dispense.DispenseConfig;
 import org.openpnp.instancelabs.dispense.DispensePlan;
 import org.openpnp.instancelabs.dispense.DispenseService;
+import org.openpnp.instancelabs.dispense.DotLadder;
 import org.openpnp.instancelabs.dispense.GcodeProgram;
 import org.openpnp.instancelabs.dispense.GcodeStreamBuilder;
 import org.openpnp.instancelabs.dispense.HomeTracker;
@@ -61,6 +65,9 @@ final class DispenseEndpoints {
      */
     static final java.util.Set<String> PROTECTED_NESTED = new java.util.HashSet<>(java.util.Arrays.asList(
             "profile.startAngleSetAtMs", "needleXyTrim.setAtMs", "purgeRow.resetAtMs", "purgeRow.usedSpots"));
+
+    /** How long OpenPnP's thread may take to start a read of its board list (BOARD_IMPORT_DESIGN.md §3.6). */
+    static final long EDT_START_MS = 10_000;
 
     private final ApiContext ctx;
     private final MachineEndpoints machine;
@@ -515,7 +522,12 @@ final class DispenseEndpoints {
     // Boards, packages
     // ------------------------------------------------------------------------------------------
 
-    Object boards() {
+    /** OpenPnP's job boards and board files, read on OpenPnP's thread (an import may be changing the list). */
+    Map<String, Object> boards() throws Exception {
+        return EdtRunner.call(this::boardsNow, EDT_START_MS);
+    }
+
+    private Map<String, Object> boardsNow() {
         DispenseService svc = ctx.svcOrNull();
         Map<String, BoardRegistration> regs = svc == null ? new LinkedHashMap<>() : svc.getConfig().boardRegistrations;
         Map<String, Object> out = new LinkedHashMap<>();
@@ -525,21 +537,25 @@ final class DispenseEndpoints {
             for (BoardLocation bl : j.getBoardLocations()) {
                 Board b = bl.getBoard();
                 Location l = bl.getGlobalLocation().convertToUnits(LengthUnit.Millimeters);
-                job.add(Views.map("boardLocationId", bl.getId(), "name", b == null ? bl.getId() : b.getName(), "file",
-                        b == null || b.getFile() == null ? null : b.getFile().getAbsolutePath(), "x", l.getX(), "y",
-                        l.getY(), "z", l.getZ(), "rotation", l.getRotation(), "side",
+                Map<String, Object> entry = Views.map("boardLocationId", bl.getId(), "name", b == null ? bl.getId()
+                        : b.getName(), "file", b == null || b.getFile() == null ? null : b.getFile().getAbsolutePath(),
+                        "x", l.getX(), "y", l.getY(), "z", l.getZ(), "rotation", l.getRotation(), "side",
                         String.valueOf(bl.getGlobalSide()), "enabled", bl.isEnabled(), "fiducialTransform",
                         String.valueOf(bl.getPlacementsTransformStatus()), "registration",
-                        registrationListed(regs.get(BoardRegistration.jobKey(bl.getId())))));
+                        registrationListed(regs.get(BoardRegistration.jobKey(bl.getId()))));
+                BoardListView.addTo(entry, b);
+                job.add(entry);
             }
         }
         out.put("jobAvailable", j != null);
         out.put("job", job);
         List<Map<String, Object>> files = new ArrayList<>();
         for (Board b : ctx.configuration.getBoards()) {
-            files.add(Views.map("name", b.getName(), "file", b.getFile() == null ? null : b.getFile().getAbsolutePath(),
-                    "placements", b.getPlacements().size(), "registration", b.getFile() == null ? null
-                            : registrationListed(regs.get(BoardRegistration.fileKey(b.getFile())))));
+            Map<String, Object> entry = Views.map("name", b.getName(), "file", b.getFile() == null ? null
+                    : b.getFile().getAbsolutePath(), "placements", b.getPlacements().size(), "registration",
+                    b.getFile() == null ? null : registrationListed(regs.get(BoardRegistration.fileKey(b.getFile()))));
+            BoardListView.addTo(entry, b);
+            files.add(entry);
         }
         out.put("files", files);
         return out;
@@ -598,6 +614,7 @@ final class DispenseEndpoints {
             src = Views.map("source", "job", "boardLocationId", id);
             reg = registrationFor(svc, regMode, src, bl);
             plan = svc.planBoard(bl, reg);
+            artRef(plan, bl);
         }
         else if ("file".equals(source)) {
             String path = Json.str(b, "file", null);
@@ -605,8 +622,11 @@ final class DispenseEndpoints {
                 throw ApiException.badRequest("'file' (a .board.xml path) is required");
             }
             File f = new File(path);
-            if (!f.isAbsolute() || !f.getName().endsWith(".board.xml") || !f.isFile()) {
-                throw ApiException.badRequest("'" + path + "' is not an existing absolute .board.xml file");
+            if (!f.isAbsolute() || !f.getName().endsWith(".board.xml")) {
+                throw ApiException.badRequest("'" + path + "' is not an absolute .board.xml path");
+            }
+            if (!f.isFile()) {
+                throw ApiException.notFound("Board file not found: " + path);
             }
             // z is required: a silent 0 put the needle ~10 mm into the board (review finding)
             double x = Json.reqNum(b, "x"), y = Json.reqNum(b, "y"), z = Json.reqNum(b, "z"),
@@ -615,6 +635,7 @@ final class DispenseEndpoints {
             BoardLocation bl = baseBoardLocation(src);
             reg = registrationFor(svc, regMode, src, bl);
             plan = svc.planBoard(bl, reg);
+            artRef(plan, bl);
         }
         else {
             throw ApiException.badRequest("'source' must be 'job' or 'file'");
@@ -731,10 +752,43 @@ final class DispenseEndpoints {
             e.estimatedSeconds = p.estimatedSeconds;
             e.estimatedPressurisedSeconds = p.estimatedPressurisedSeconds;
             e.estimatedWorkSeconds = p.estimatedWorkSeconds;
+            e.dotArriveS = p.dotArriveSeconds;
+            e.dotEndS = p.dotEndSeconds;
         }
         catch (Exception ex) {
             e.estimateError = MachineEndpoints.rootMessage(ex);
         }
+        e.dotDiameterMm = dotDiameter(svc, e.plan);
+    }
+
+    /** The dot size at the plan's turn from the current calibration's dot ladder, mm; null when not measured there. */
+    static Double dotDiameter(DispenseService svc, DispensePlan plan) {
+        try {
+            Calibration cal = svc.getCurrentCalibration();
+            if (cal == null || plan.dots.isEmpty()) {
+                return null;
+            }
+            return DotLadder.of(svc.getDotLadder(cal.id)).diameterAt(plan.dots.get(0).rotationDeg);
+        }
+        catch (Exception ex) {
+            return null;
+        }
+    }
+
+    /**
+     * The board drawing of the plan, fixed now (a later replace or edit cannot put another drawing under these dots),
+     * read where OpenPnP's lists are read.
+     */
+    private void artRef(DispensePlan plan, BoardLocation bl) throws Exception {
+        Board board = bl.getBoard();
+        if (board == null) {
+            return;
+        }
+        BoardArtStore.ArtRef ref = EdtRunner.call(() -> BoardArtStore.get().refFor(board),
+                EDT_START_MS);
+        plan.boardArtId = ref.id;
+        plan.boardArtKind = ref.kind;
+        plan.boardArtNote = ref.note;
     }
 
     /** Fingerprint of the board the plan came from, as it is now (null if it cannot be found). */
@@ -778,7 +832,12 @@ final class DispenseEndpoints {
         if ("job".equals(src.get("source"))) {
             return findJobBoard((String) src.get("boardLocationId"));
         }
-        Board board = ctx.configuration.getBoard(new File((String) src.get("file")));
+        File f = new File((String) src.get("file"));
+        if (!f.isFile()) {
+            // getBoard would write an empty board file there and list it
+            throw ApiException.notFound("Board file not found: " + f.getPath());
+        }
+        Board board = EdtRunner.call(() -> ctx.configuration.getBoard(f), EDT_START_MS);
         BoardLocation bl = new BoardLocation(board);
         bl.setLocation(new Location(LengthUnit.Millimeters, ((Number) src.get("x")).doubleValue(),
                 ((Number) src.get("y")).doubleValue(), ((Number) src.get("z")).doubleValue(),
