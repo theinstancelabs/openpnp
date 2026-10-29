@@ -162,8 +162,11 @@ final class PadProfileEndpoints {
                 skipped.add(Views.map("group", g.group, "why", g.shortText));
             }
             else if ("use".equals(choice) && !Suggestion.USE.equals(s.kind)) {
-                skipped.add(Views.map("group", g.group, "why", "no pad type of this size passes the gate yet: save "
-                        + "the suggestion as a new provisional pad type, then calibrate it"));
+                skipped.add(Views.map("group", g.group, "why", Suggestion.CALIBRATE_EXISTING.equals(s.kind)
+                        ? s.name + " is not calibrated for these pads yet: save the suggestion as a provisional "
+                                + "version of it, then calibrate it"
+                        : "no pad type of this size passes the gate yet: save the suggestion as a new provisional pad "
+                                + "type, then calibrate it"));
             }
             else {
                 Change x = change(db, cfg, g, s, operator);

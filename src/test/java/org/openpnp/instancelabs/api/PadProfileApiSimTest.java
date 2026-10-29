@@ -719,6 +719,87 @@ public class PadProfileApiSimTest {
         assertFalse(all.get("planStale").getAsBoolean());
     }
 
+    @Test
+    public void nothingIsWrittenUntilEveryIdIsCurrentAndCalibrateExistingSaves() throws Exception {
+        characterize("chip-0603");
+        File board = chipBoard("mixed", new Object[][] {{"TestChip_A", 0.80, 0.95, 1.65, 2},
+            {"R_0805_2012Metric", 1.025, 1.40, 1.825, 2}});
+        JsonObject plan = planOf(board);
+        String planId = str(plan, "planId");
+        String src = "\"planId\":\"" + planId + "\"";
+        JsonObject pc = plan.getAsJsonObject("profileCheck");
+        JsonObject a = group(pc, "TestChip_A");
+        JsonObject r = group(pc, "R_0805_2012Metric");
+        assertEquals("use", str(a.getAsJsonObject("suggestion"), "kind"));
+        assertEquals("below-gate", str(r, "reason"), r.toString());
+        JsonObject cal = r.getAsJsonObject("suggestion");
+        assertEquals("calibrate-existing", str(cal, "kind"), cal.toString());
+        assertEquals("chip-0805", str(cal, "typeKey"));
+        assertEquals("suggested", str(cal, "planFrom"));
+
+        // one of two ids is not current: nothing is written, not even the group whose id is
+        refused(call("POST", "/api/pad-profile/apply", "{" + src + ",\"groups\":[\"" + str(a, "group") + "\",\""
+                + str(r, "group") + "\"],\"choice\":\"save\",\"suggestionIds\":{\"" + str(a, "group") + "\":\""
+                + str(a.getAsJsonObject("suggestion"), "id") + "\",\"" + str(r, "group") + "\":\"s000000000000\"}}"),
+                409, "suggestion-stale");
+        assertEquals(0, get("/api/package-mappings").array().size(), "the use group's mapping is not written");
+        assertEquals(1, ok(get("/api/pad-types/chip-0805")).getAsJsonObject("current").get("version").getAsInt());
+
+        // a pad type added since the check was shown: the plan's check is computed again and the shown id is stale
+        ok(call("POST", "/api/pad-types", "{\"name\":\"Other\",\"family\":\"Custom\",\"padWMm\":3,\"padHMm\":3,"
+                + "\"layout\":\"single\"}"));
+        JsonObject again = check("planId=" + planId);
+        JsonObject r2 = group(again, "R_0805_2012Metric");
+        assertFalse(str(r2.getAsJsonObject("suggestion"), "id").equals(str(cal, "id")), "the types changed");
+        assertFalse(str(group(planCheck(planId), "R_0805_2012Metric").getAsJsonObject("suggestion"), "id")
+                .equals(str(cal, "id")), "the plan view's check is not kept from before the change");
+        refused(call("POST", "/api/pad-profile/apply", applyBody(src, r, "save")), 409, "suggestion-stale");
+
+        // Use on a calibrate-existing suggestion: skipped, with what to do instead
+        JsonObject use = ok(call("POST", "/api/pad-profile/apply", applyBody(src, r2, "use")));
+        assertEquals(0, use.getAsJsonArray("applied").size());
+        assertEquals("0805 is not calibrated for these pads yet: save the suggestion as a provisional version of it, "
+                + "then calibrate it", str(use.getAsJsonArray("skipped").get(0).getAsJsonObject(), "why"));
+
+        // Save: a new provisional version of chip-0805 with the suggested plan; its pad and pattern stay
+        JsonObject saved = ok(call("POST", "/api/pad-profile/apply", applyBody(src, r2, "save")));
+        JsonObject t = saved.getAsJsonArray("applied").get(0).getAsJsonObject();
+        assertEquals("calibrate-existing", str(t, "kind"));
+        assertEquals("chip-0805", str(t, "typeKey"));
+        assertEquals(2, t.get("version").getAsInt());
+        assertTrue(t.get("mapping").isJsonNull(), "the pattern already resolves these pads");
+        JsonObject type = ok(get("/api/pad-types/chip-0805")).getAsJsonObject("current");
+        JsonObject dots = r2.getAsJsonObject("suggestion").getAsJsonObject("dots");
+        assertEquals("provisional", str(type, "status"));
+        assertEquals(dots.get("steps").getAsInt(), type.get("dotSteps").getAsInt());
+        assertEquals(dots.get("perPad").getAsInt(), type.get("dotsPerPad").getAsInt());
+        assertEquals("ad22tta-b", str(type, "tipKey"));
+        assertEquals(r2.getAsJsonObject("suggestion").getAsJsonObject("opening").get("areaMm2").getAsDouble(),
+                type.get("calAreaMm2").getAsDouble(), 1e-9);
+        assertEquals("suggested", str(type, "origin"));
+        assertEquals(1.025, type.get("padWMm").getAsDouble(), 0);
+        assertEquals(1.40, type.get("padHMm").getAsDouble(), 0);
+        assertNotNull(str(type, "packagePattern"));
+        assertEquals(0, get("/api/package-mappings").array().size());
+
+        // planned again with the type's own plan: saving the same plan again writes nothing
+        String next = "\"planId\":\"" + str(saved, "newPlanId") + "\"";
+        JsonObject r3 = group(planCheck(str(saved, "newPlanId")), "R_0805_2012Metric");
+        assertEquals("your plan", str(r3.getAsJsonObject("suggestion"), "planFrom"));
+        JsonObject same = ok(call("POST", "/api/pad-profile/apply", applyBody(next, r3, "save")));
+        assertEquals(0, same.getAsJsonArray("applied").size());
+        assertEquals("0805 already has this plan: calibrate it", str(same.getAsJsonArray("skipped").get(0)
+                .getAsJsonObject(), "why"));
+        assertTrue(same.get("newPlanId").isJsonNull());
+        assertFalse(same.get("planStale").getAsBoolean());
+        assertEquals(2, ok(get("/api/pad-types/chip-0805")).getAsJsonObject("current").get("version").getAsInt());
+    }
+
+    /** The profile check of a plan's view (GET /api/plan/{id}). */
+    JsonObject planCheck(String planId) throws Exception {
+        return ok(get("/api/plan/" + planId)).getAsJsonObject("profileCheck");
+    }
+
     // ------------------------------------------------------------------------------------------
     // Mappings, paste, the calibration area
     // ------------------------------------------------------------------------------------------
@@ -946,9 +1027,18 @@ public class PadProfileApiSimTest {
         assertEquals(48, block.get("dots").getAsInt());
         assertTrue(block.get("demandMgS").getAsDouble() > 0, "filled by the estimate");
 
-        sim.server.delayBeforeOkMs.put("G4", 60L); // a slow run: every dwell waits
+        // a run of some pads (a subset of the plan), slow: every dwell waits
+        JsonArray some = new JsonArray();
+        for (int i = 0; i < 20; i++) {
+            some.add(plan.getAsJsonArray("pads").get(i).getAsJsonObject().get("padId"));
+        }
+        sim.server.delayBeforeOkMs.put("G4", 60L);
+        String subsetId;
         try {
-            assertEquals(202, call("POST", "/api/run", "{\"planId\":\"" + str(plan, "planId") + "\"}").status);
+            JsonObject run = ok(call("POST", "/api/run", "{\"planId\":\"" + str(plan, "planId") + "\",\"padIds\":"
+                    + some + "}"));
+            subsetId = str(run, "planId");
+            assertFalse(subsetId.equals(str(plan, "planId")), run.toString());
             long t0 = System.currentTimeMillis();
             while (!svc.isBusy() && System.currentTimeMillis() - t0 < 10_000) {
                 Thread.sleep(10);
@@ -972,6 +1062,13 @@ public class PadProfileApiSimTest {
             while (svc.isBusy() && System.currentTimeMillis() - t0 < 30_000) {
                 Thread.sleep(20);
             }
+        }
+        // the subset's dots were copied without their dose: the view gives each its pad's (what the stream turned)
+        JsonObject subset = ok(get("/api/plan/" + subsetId));
+        assertEquals(20, subset.getAsJsonArray("dots").size());
+        for (JsonElement e : subset.getAsJsonArray("dots")) {
+            assertEquals(800, e.getAsJsonObject().get("netSteps").getAsInt(), e.toString());
+            assertEquals(1.16, e.getAsJsonObject().get("diameterMm").getAsDouble(), 0.005);
         }
     }
 }

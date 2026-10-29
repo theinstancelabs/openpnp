@@ -159,6 +159,14 @@ public final class Texts {
                 + "for " + pkg + ".";
     }
 
+    /** Decisions 4 and 14: a part held whole because another of its pads is too close to a neighbour. */
+    public static String nearPart(String packageId) {
+        return "Another pad of this part is too close to a neighbour and gets no paste, so none of this part's pads "
+                + "are pasted: a part whose pins are soldered by hand gets no paste on its other pads either. To paste "
+                + "these pads anyway, choose “Paste the dispensable pads of this part” for "
+                + GroupKey.basePackage(packageId) + ".";
+    }
+
     /**
      * Decision 14: {@code k} of a group's {@code of} pads whose own neighbour breaks the plan the others
      * keep; {@code gap} is to the neighbour's dot ({@code byDot}) or copper, null when there is no plan.
