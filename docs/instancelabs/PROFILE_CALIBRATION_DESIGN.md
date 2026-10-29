@@ -1829,3 +1829,45 @@ pc-ladder; pc-integration with the wave-3 integration.
     origin `manual` and clears doseFp / massPerPadMg, so it cannot become a family anchor.
 18. **`R/padcal.kicad_pcb` belongs to pc-web** (with the board-import parser merged it can be checked); one recipe
     formatter (`DispenseProfile.fingerprintDiff`) for both texts (pc-api).
+
+---
+
+## 21. As built (2026-10-29)
+
+- **Merged** on `il/bench-sync-autoreg` (b81d73d21): `pc-model`, `pc-data`, `pc-sim` and `pc-stream` (per-type doses in
+  the planner, the stream, the validator and the interlocks), with review 1's dose-stream fix: one tight instance no
+  longer fails its whole group, and the planner holds back each pad that is too close to a neighbour (decision 14).
+- **Built, not merged yet:** `pc-api` on `il/pc-api` (cd8d54f52, checked; `PadProfileApiSimTest`). The routes are in
+  `WEB_API.md` §3.4.
+- **To come (pc-task):** the calibration job (`runDoseBlocks`, the weighing, the decision, `applyPadCalibration`, the
+  stop epoch), `/api/pad-calibrations…`, `/api/dose-records`, `/api/coupons…`, `status.padCalibration` and the SIM
+  routes of §12.4.
+- **To come (pc-web):** `padprofile.js` and its hooks, Profile › Needs a profile, the suggestion card, the `pad-cal`
+  view and Calibrate › Pad calibration (§13); the PC integration slice then finishes the docs of §16 (UI_DESIGN.md,
+  DEV_NOTES.md) and the `padcal` acceptance. `pc-ladder` (decision 8) follows if there is time.
+
+Where `pc-api` differs from §12, the code is right:
+
+- `GET /api/calibration-area` exists (the area as set, where it is in effect, what is left, the default).
+- `POST /api/package-mappings` also takes `pastePartial` (decision 4's per-package option) and answers it with the
+  mapping; a body needs `typeKey` (null clears) or `pastePartial`.
+- `POST /api/pad-profile/apply` answers `planError` too when planning again failed (the changes stand, `planStale`
+  true). `apply`, the mappings, `POST /api/paste` and the area routes are refused while the engine is busy.
+- `POST /api/pad-types` accepts `origin` (`manual` | `suggested`: an edited suggestion keeps its origin) and a
+  `mapping` `{packageId, padNames?}` written with the type. Decision 17 is enforced on update: a change of the pad or
+  the dose writes origin `manual` and clears `doseFp` and `massPerPadMg`; a change of the dose also stamps the mounted
+  tip's key.
+- `PUT /api/config` off the simulator refuses `padCalibration.ladderDotsPerPhase`, `minLadderDots`, `minHops` and
+  `weighTargetMg` below their real floors (`… below N is allowed in the simulator only`), unless the stored value was
+  already below.
+- The plan view's profile check is memoised per plan entry while its inputs (types, gate, tip, profile steps, dose
+  fingerprint, partial-paste packages, evidence) hold; a check that fails leaves the plan view whole with
+  `profileCheckError`.
+
+Review 1's dose-stream minors, not fixed yet (final fix round): two footprint pads with the same name (or none) get the
+same pad index, and the validator's "a pad's dots are never split" rule can then refuse a plan the planner accepted;
+the purge-row cap (1600 + 89 steps per purge dot) refuses every run of a two-turn profile, which the profile validation
+still accepts; a "Test run with fewer dots" cut in the middle of a multi-dot pad keeps the pad's full dot count, so the
+dose check (R6) does not see the shorter pad.
+
+§15 is in `REAL_MACHINE_TODO.md` (items 38–52).
