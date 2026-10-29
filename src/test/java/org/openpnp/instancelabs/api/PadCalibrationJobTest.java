@@ -616,4 +616,22 @@ public class PadCalibrationJobTest {
         ArrayList<String> all = new ArrayList<>(engine.calls);
         assertEquals(4, all.size());
     }
+
+    /**
+     * Review 2: under homeBeforeRun "always" every engine step homes first, so the weigh step would lay its dots
+     * after a home that came after the coupons were touched; the engine refuses that coupon Z (I4), and the start
+     * says so before the ladder spends paste.
+     */
+    @Test
+    public void homingBeforeEveryStepRefusesAWeighingAtTheStart() throws Exception {
+        plan();
+        ok(call("PUT", "/api/config", "{\"homeBeforeRun\":\"always\"}"));
+        assertEquals("homeBeforeRun is 'always': every step homes first, so the coupons' Z would be from before the "
+                + "weigh step's home: set homeBeforeRun to 'whenNeeded' to weigh coupons", refused(call("POST",
+                        "/api/pad-calibrations", body(group, attest())), "refused"));
+        assertTrue(engine.calls.isEmpty(), "nothing was started: " + engine.calls);
+        ok(call("PUT", "/api/config", "{\"homeBeforeRun\":\"whenNeeded\"}"));
+        ok(call("POST", "/api/pad-calibrations", body(group, attest())));
+        awaitState("awaiting-reading");
+    }
 }

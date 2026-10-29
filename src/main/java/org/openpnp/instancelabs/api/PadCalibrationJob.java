@@ -804,6 +804,11 @@ final class PadCalibrationJob {
                 return why;
             }
         }
+        if (!coupons.isEmpty() && DispenseConfig.HOME_ALWAYS.equals(c.homeBeforeRun)) {
+            // the weigh step would home after the coupon step, and the engine refuses coupon Z from before a home
+            return "homeBeforeRun is 'always': every step homes first, so the coupons' Z would be from before the weigh "
+                    + "step's home: set homeBeforeRun to 'whenNeeded' to weigh coupons";
+        }
         DispenseConfig.PurgeRow row = c.purgeRow;
         if (purgeNeed > 0 && (!row.isDefined() || row.spotsLeft() < purgeNeed)) {
             return !row.isDefined() ? "I9: the purge row is not set (origin, pitch, spots on the blank)"
