@@ -792,6 +792,11 @@ final class PadCalibrationJob {
         if (req.pasteLifeAtMs == null || now - req.pasteLifeAtMs > ATTEST_MS || req.pasteLifeAtMs > now + SKEW_MS) {
             return "Confirm the paste is within its working life first (Run › Checks).";
         }
+        // PUT /api/config keeps a value already below its floor: the machine never calibrates on the SIM's statistics
+        List<String> floors = svc.isSimulatorConfirmed() ? new ArrayList<>() : c.padCalibration.realMachineProblems();
+        if (!floors.isEmpty()) {
+            return String.join("; ", floors) + ": set them back to calibrate on this machine";
+        }
         if (!ladderDoses.isEmpty()) {
             if (area == null) {
                 return "Set the blank place first (Setup › Places › " + c.blankLocationName + "): the calibration area "

@@ -617,6 +617,26 @@ public class PadCalibrationJobTest {
         assertEquals(4, all.size());
     }
 
+    /**
+     * Review 2: the shortened statistics only a SIM test may use are refused when the machine calibrates, not only
+     * when they are saved: PUT /api/config keeps a value that is already below its floor (a configuration carried
+     * over from the simulator), and the job would lay a 4-dot ladder and decide on it.
+     */
+    @Test
+    public void theSimulatorsShortStatisticsAreRefusedOnTheMachine() throws Exception {
+        plan();
+        ok(call("PUT", "/api/config", "{\"padCalibration\":{\"ladderDotsPerPhase\":2,\"minLadderDots\":4}}"));
+        String preview = "/api/pad-calibrations/preview?planId=" + planId + "&groups=all";
+        assertTrue(str(ok(get(preview)), "sentence").contains("Lays 4 test dots on the blank"), "the SIM's ladder");
+        // the same configuration with a controller that is not the simulator
+        SimGuard.noteIdentity(sim.machine, List.of("FIRMWARE_NAME:Marlin 2.1"));
+        assertFalse(svc.isSimulatorConfirmed());
+        assertEquals("padCalibration.ladderDotsPerPhase below 12 is allowed in the simulator only; padCalibration"
+                + ".minLadderDots below 28 is allowed in the simulator only: set them back to calibrate on this machine",
+                refused(call("POST", "/api/pad-calibrations", body(group, attest())), "refused"));
+        assertTrue(engine.calls.isEmpty(), "nothing was started: " + engine.calls);
+    }
+
     /** The blank probe's touches of a preview: [x, y]. */
     static List<double[]> blankProbes(JsonObject pv) {
         List<double[]> l = new ArrayList<>();
