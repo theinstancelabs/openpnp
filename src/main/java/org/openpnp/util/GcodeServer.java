@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.TreeMap;
 
 import org.openpnp.Main;
+import org.openpnp.instancelabs.sim.SimVacuum;
 import org.openpnp.machine.reference.ReferenceMachine;
 import org.openpnp.machine.reference.SimulationModeMachine;
 import org.openpnp.model.AxesLocation;
@@ -40,6 +41,9 @@ public class GcodeServer extends Thread {
     private AxesLocation machineLocation;
 
     private long maxDwellTimeMilliseconds = 20000;
+
+    /** Instance Labs: the simulated N1 vacuum sensor, null unless the configuration has a sim scene. */
+    private SimVacuum vacuum;
 
     static final String firmware = "FIRMWARE_NAME:GcodeServer, FIRMWARE_URL:http%3A//openpnp.org, X-SOURCE_CODE_URL:https%3A//github.com/openpnp/openpnp, FIRMWARE_VERSION:"+Main.getVersion()+", "
             +"X-FIRMWARE_BUILD_DATE:Oct 23 2020 00:00:00";
@@ -84,6 +88,7 @@ public class GcodeServer extends Thread {
     public void setDriver(Driver driver) {
         this.machine = (ReferenceMachine) Configuration.get().getMachine();
         this.driver = driver;
+        this.vacuum = SimVacuum.forConfiguration(Configuration.get());
     }
 
     public AxesLocation getMachineLocation() {
@@ -302,6 +307,15 @@ public class GcodeServer extends Thread {
         }
 
         public void interpretGcode(String input) throws Exception {
+            if (vacuum != null) {
+                // Instance Labs: the vacuum sensor sees every line, with where the planned motion ends and when.
+                double moving = motionPlan.isEmpty() ? 0 : motionPlan.lastKey() - NanosecondTime.getRuntimeSeconds();
+                String reply = vacuum.onLine(input, getMachineLocation(), driver, Math.max(0, moving));
+                if (reply != null) {
+                    write(reply + "\nok");
+                    return;
+                }
+            }
             // Set standard Response.
             setResponse("ok");
             // Try parse the Gcode.

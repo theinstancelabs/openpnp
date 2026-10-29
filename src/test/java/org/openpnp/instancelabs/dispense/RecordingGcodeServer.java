@@ -15,11 +15,13 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.openpnp.instancelabs.sim.SimVacuum;
+
 /**
  * Minimal Marlin-like TCP server on localhost for tests: records every received line, tracks
  * X/Y/Z/A/B from G0/G1/G92, answers M114 with the tracked position (and, like Marlin, the B step
- * count) and M115 with an optional Cap:HOST_WATCHDOG:1, and "ok" to everything. Never touches any
- * device.
+ * count) and M115 with an optional Cap:HOST_WATCHDOG:1, M261 from an optional simulated vacuum
+ * sensor, and "ok" to everything. Never touches any device.
  *
  * <p>B step count as Marlin keeps it: the machine B position is the logical one plus a workspace
  * shift; G92 B sets the logical position and the shift so that the machine position (and the step
@@ -41,6 +43,12 @@ public class RecordingGcodeServer implements AutoCloseable {
      * count part has X/Y/Z only, as OpenPnP's simulator (the engine then takes the count as 0).
      */
     public volatile boolean reportBCount = true;
+    /** The simulated N1 vacuum sensor, fed every line with the tracked X/Y/Z; null = no sensor (plain "ok"). */
+    public volatile SimVacuum vacuum;
+    /** The M115 firmware name; "GcodeServer (RecordingGcodeServer)" makes SimGuard take this for the simulator. */
+    public volatile String firmwareName = "Marlin (RecordingGcodeServer)";
+    /** Wait before the "ok" of lines starting with a prefix, e.g. "G28" -> 3000 (a slow home). */
+    public final Map<String, Long> delayBeforeOkMs = new java.util.concurrent.ConcurrentHashMap<>();
     /** Machine B minus logical B (deg): the G92 workspace shift. */
     private double bShift = 0;
     /** If >= 0, reply "Error: simulated" to the n-th received line (0-based) after mark(). */
@@ -77,18 +85,27 @@ public class RecordingGcodeServer implements AutoCloseable {
                         continue;
                     }
                     int idx;
+                    double x, y, z;
                     synchronized (this) {
                         lines.add(line);
                         times.add(System.nanoTime());
                         idx = lines.size() - 1 - markIndex;
                         track(line);
+                        x = pos.get('X');
+                        y = pos.get('Y');
+                        z = pos.get('Z');
                     }
                     StringBuilder reply = new StringBuilder();
                     if (failAtLine >= 0 && idx == failAtLine) {
                         reply.append("Error: simulated failure\n");
                     }
+                    SimVacuum v = vacuum;
+                    String sensed = v == null ? null : v.onLine(line, x, y, z);
+                    if (sensed != null) {
+                        reply.append(sensed).append('\n');
+                    }
                     if (line.startsWith("M115")) {
-                        reply.append("FIRMWARE_NAME:Marlin (RecordingGcodeServer)\n");
+                        reply.append("FIRMWARE_NAME:").append(firmwareName).append('\n');
                         if (hostWatchdogCapability) {
                             reply.append("Cap:HOST_WATCHDOG:1\n");
                         }
@@ -105,6 +122,11 @@ public class RecordingGcodeServer implements AutoCloseable {
                     }
                     if (realDwell && line.startsWith("G4 P")) {
                         Thread.sleep(Long.parseLong(line.substring(4).trim()));
+                    }
+                    for (Map.Entry<String, Long> d : delayBeforeOkMs.entrySet()) {
+                        if (line.startsWith(d.getKey())) {
+                            Thread.sleep(d.getValue());
+                        }
                     }
                     reply.append("ok\n");
                     out.write(reply.toString().getBytes(StandardCharsets.UTF_8));
