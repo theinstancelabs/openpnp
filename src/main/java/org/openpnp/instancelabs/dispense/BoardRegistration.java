@@ -9,9 +9,12 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.function.BooleanSupplier;
 
+import org.openpnp.model.Abstract2DLocatable.Side;
+import org.openpnp.model.Board;
 import org.openpnp.model.BoardLocation;
 import org.openpnp.model.LengthUnit;
 import org.openpnp.model.Location;
+import org.openpnp.model.Placement;
 
 /**
  * One fiducial registration of a board seat (Register board): the board -> machine affine fitted to
@@ -137,14 +140,53 @@ public class BoardRegistration {
         return c;
     }
 
-    /** Same board key, x/y/z/rotation within 1e-4, same side and the same OpenPnP transform. */
-    public boolean matches(String boardKey, Nominal n) {
+    /**
+     * Same board key, x/y/z/rotation within 1e-4, same side and the same OpenPnP transform, and every
+     * stored fiducial still where the board says ({@link #fiducialsMatch}): a board file replaced or
+     * edited by hand that moved a fiducial must not keep planning with the old affine.
+     *
+     * @param board the board as it is now
+     */
+    public boolean matches(String boardKey, Nominal n, Board board) {
+        return matchesSeat(boardKey, n) && changedFiducial(board) == null;
+    }
+
+    private boolean matchesSeat(String boardKey, Nominal n) {
         if (n == null || nominal == null || !Objects.equals(this.boardKey, boardKey)) {
             return false;
         }
-        return Math.abs(nominal.x - n.x) <= 1e-4 && Math.abs(nominal.y - n.y) <= 1e-4
-                && Math.abs(nominal.z - n.z) <= 1e-4 && Math.abs(nominal.rotation - n.rotation) <= 1e-4
-                && Objects.equals(nominal.side, n.side) && Objects.equals(nominal.openPnpTransform, n.openPnpTransform);
+        return sameSeat(n) && Objects.equals(nominal.openPnpTransform, n.openPnpTransform);
+    }
+
+    /**
+     * Every stored fiducial's board coordinates equal the board's top, enabled Fiducial placement of
+     * the same name within 1e-4 mm.
+     */
+    public boolean fiducialsMatch(Board board) {
+        return changedFiducial(board) == null;
+    }
+
+    /** The first stored fiducial that is gone from the board or sits elsewhere on it now, else null. */
+    private String changedFiducial(Board board) {
+        if (fiducials == null) {
+            return null;
+        }
+        for (Fid f : fiducials) {
+            if (f == null) {
+                continue;
+            }
+            Location l = null;
+            for (Placement p : board == null ? new ArrayList<Placement>() : board.getPlacements()) {
+                if (p.getType() == Placement.Type.Fiducial && p.getSide() == Side.Top && p.isEnabled()
+                        && Objects.equals(p.getId(), f.name)) {
+                    l = p.getLocation().convertToUnits(LengthUnit.Millimeters);
+                }
+            }
+            if (l == null || Math.abs(l.getX() - f.bx) > 1e-4 || Math.abs(l.getY() - f.by) > 1e-4) {
+                return f.name;
+            }
+        }
+        return null;
     }
 
     /** Largest distance between the fiducials found now and here, over common names; NaN if none. */
@@ -171,14 +213,14 @@ public class BoardRegistration {
 
     /**
      * Why this registration may not be applied to the board with this key and nominal seat, or null
-     * if it may: made on the simulator while the machine is not one, another board or position, or a
-     * job board re-checked by OpenPnP since.
+     * if it may: made on the simulator while the machine is not one, another board or position, a
+     * job board re-checked by OpenPnP since, or a fiducial of the board moved or gone since.
      */
-    public String refusal(String boardKey, Nominal n, BooleanSupplier simulatorConfirmed) {
+    public String refusal(String boardKey, Nominal n, Board board, BooleanSupplier simulatorConfirmed) {
         if (simulated && (simulatorConfirmed == null || !simulatorConfirmed.getAsBoolean())) {
             return "REG: registration " + shortId() + " was made on the simulator: register again";
         }
-        if (!matches(boardKey, n)) {
+        if (!matchesSeat(boardKey, n)) {
             boolean onlyOpenPnp = n != null && nominal != null && Objects.equals(this.boardKey, boardKey)
                     && nominal.openPnpTransform != null && !Objects.equals(nominal.openPnpTransform, n.openPnpTransform)
                     && sameSeat(n);
@@ -187,6 +229,11 @@ public class BoardRegistration {
                         + ZCheck.clock(atMs) + "): register again";
             }
             return "REG: registration " + shortId() + " belongs to another board or position";
+        }
+        String moved = changedFiducial(board);
+        if (moved != null) {
+            return "REG: " + moved + " moved or is gone in the board since registration " + shortId() + " ("
+                    + ZCheck.clock(atMs) + "): register again";
         }
         return null;
     }

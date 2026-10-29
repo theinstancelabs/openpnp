@@ -192,6 +192,8 @@ public class DispenseServiceSimTest {
         DispensePlan plan = plan();
         assertEquals(3, plan.dots.size());
         sim.server.setBStepCount(12345); // the screw turned since the controller's power-up
+        // 1 ms per dwell: a warm JVM streams the 3 dots within one clock millisecond otherwise (no DPH motion)
+        sim.server.delayBeforeOkMs.put("G4", 1L);
         sim.server.mark();
         RunResult r = svc.runPlan(plan).get(60, TimeUnit.SECONDS);
         assertEquals(RunResult.Status.OK, r.status, r.toString() + " " + r.interlocks);
@@ -299,6 +301,30 @@ public class DispenseServiceSimTest {
     }
 
     /**
+     * AUTO_REGISTER_DESIGN tasks-api rule: a STOP is told by the executor's flag, not by the exception.
+     * A STOP that surfaces as another call's failure (here the clean-pad camera, as a home's position
+     * read or an OpenPnP move would) still ends the run ABORTED with the STOP's reason, before the
+     * pressure goes on.
+     */
+    @Test
+    public void aStopThatSurfacesAsAnotherFailureEndsAborted() throws Exception {
+        DispensePlan plan = plan();
+        svc.setDotImager(new FakeImager() {
+            @Override
+            public Frame capture(double x, double y) {
+                svc.abort("STOP pressed in the web UI");
+                throw new IllegalStateException("camera: the machine is stopping");
+            }
+        });
+        sim.server.mark();
+        RunResult r = svc.runPlan(plan).get(60, TimeUnit.SECONDS);
+        assertEquals(RunResult.Status.ABORTED, r.status, r.toString());
+        assertEquals("STOP pressed in the web UI", r.message);
+        assertNothingStreamed(sim.server.sinceMark());
+        assertFalse(svc.isBusy());
+    }
+
+    /**
      * I11: the B step count restarts at a controller power-up, so a start angle set before the last
      * connect is refused until it is confirmed (or measured again).
      */
@@ -309,6 +335,11 @@ public class DispenseServiceSimTest {
         sim.machine.setEnabled(false);
         sim.enableAndHome();
         assertTrue(svc.getControllerConnectedAtMs() > svc.getConfig().profile.startAngleSetAtMs);
+        // the home makes the Z data older than it: a run checks Z with one N1 touch at a stored point
+        FlatVacuum.install(sim, FlatVacuum.scene(5.45, new double[] {90, 70, 120, 95}, 5.6));
+        DispenseConfig fast = svc.getConfig();
+        FlatVacuum.fastTimings(fast);
+        svc.updateConfig(fast);
         sim.server.mark();
         RunResult r = svc.runPlan(plan).get(60, TimeUnit.SECONDS);
         assertEquals(RunResult.Status.REFUSED, r.status, r.toString());
@@ -319,6 +350,8 @@ public class DispenseServiceSimTest {
         assertTrue(p.startAngleSetAtMs >= svc.getControllerConnectedAtMs());
         r = svc.runPlan(plan).get(60, TimeUnit.SECONDS);
         assertEquals(RunResult.Status.OK, r.status, r.toString() + " " + r.interlocks);
+        assertTrue(r.zCheck != null && r.zCheck.pass, String.valueOf(r.zCheck));
+        assertFalse(r.homedFirst, "homed by the test: no home of its own");
     }
 
     /** A plan made on another recipe is stale: anything that changes a dot changes its fingerprint. */

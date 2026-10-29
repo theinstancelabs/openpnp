@@ -47,6 +47,32 @@ final class PlanStore {
             return f != null && !f.isDone();
         }
 
+        /**
+         * The last Register board of this plan (POST /api/plan/{id}/register); the plan made at its end
+         * carries the same Future.
+         */
+        volatile java.util.concurrent.Future<org.openpnp.instancelabs.dispense.RegistrationResult> registrationFuture;
+        /** The fiducial registration the plan was made with (source.registrationId), or null. */
+        volatile org.openpnp.instancelabs.dispense.BoardRegistration registrationRecord;
+        /** What Register board would do, computed when the plan was made (GET .../registration-targets: now). */
+        volatile Map<String, Object> registrationTargets;
+
+        /** The finished registration, or null (none, still running or failed). */
+        org.openpnp.instancelabs.dispense.RegistrationResult registration() {
+            java.util.concurrent.Future<org.openpnp.instancelabs.dispense.RegistrationResult> f = registrationFuture;
+            try {
+                return f != null && f.isDone() ? f.get() : null;
+            }
+            catch (Exception e) {
+                return null;
+            }
+        }
+
+        boolean registrationRunning() {
+            java.util.concurrent.Future<?> f = registrationFuture;
+            return f != null && !f.isDone();
+        }
+
         Entry(DispensePlan plan, Map<String, Object> source) {
             this.plan = plan;
             this.source = source;
@@ -137,6 +163,7 @@ final class PlanStore {
         s.surfaceFingerprint = p.surfaceFingerprint;
         s.boardFingerprint = p.boardFingerprint;
         s.boardRegistration = p.boardRegistration;
+        s.boardZMm = p.boardZMm;
         s.padTypesFingerprint = p.padTypesFingerprint;
         double path = 0;
         for (int i = 1; i < dots.size(); i++) {

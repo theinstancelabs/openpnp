@@ -171,7 +171,6 @@ public class GcodeStreamBuilder {
         }
         GcodeStreamBuilder b = new GcodeStreamBuilder(cfg, mapper, bZeroed, keepalive);
         b.bCountAtStart = bCount;
-        b.floorReferenceZ = plan.boardZMm;
         b.prog.floorReferenceZMm = plan.boardZMm;
         b.comment("; instancelabs dispense plan " + plan.planId + " board " + plan.boardName + " profile '"
                 + cfg.profile.name + "' " + cfg.profile.fingerprint());
@@ -184,6 +183,8 @@ public class GcodeStreamBuilder {
         }
         b.pressurize();
         b.purge(purge);
+        // the purge dots lie on the blank (the anchor's floor); only the board dots take the board's reference
+        b.floorReferenceZ = plan.boardZMm;
         double workT0 = b.t;
         for (int i = 0; i < dots.size(); i++) {
             if (i == 0) {

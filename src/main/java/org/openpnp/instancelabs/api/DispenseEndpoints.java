@@ -9,17 +9,20 @@ import java.util.concurrent.Future;
 
 import org.openpnp.Main;
 import org.openpnp.gui.MainFrame;
+import org.openpnp.instancelabs.dispense.BoardRegistration;
 import org.openpnp.instancelabs.dispense.ControllerCommands;
 import org.openpnp.instancelabs.dispense.DispenseConfig;
 import org.openpnp.instancelabs.dispense.DispensePlan;
 import org.openpnp.instancelabs.dispense.DispenseService;
 import org.openpnp.instancelabs.dispense.GcodeProgram;
 import org.openpnp.instancelabs.dispense.GcodeStreamBuilder;
+import org.openpnp.instancelabs.dispense.HomeTracker;
 import org.openpnp.instancelabs.dispense.InterlockReport;
 import org.openpnp.instancelabs.dispense.Interlocks;
 import org.openpnp.instancelabs.dispense.OpenPnpRawMapper;
 import org.openpnp.instancelabs.dispense.PadCleanReport;
 import org.openpnp.instancelabs.dispense.RunResult;
+import org.openpnp.instancelabs.sim.SimGuard;
 import org.openpnp.machine.reference.ReferenceMachine;
 import org.openpnp.model.Board;
 import org.openpnp.model.BoardLocation;
@@ -43,10 +46,13 @@ final class DispenseEndpoints {
     /** Settings that only the needle endpoints may change (they record a needle_touchoff row). */
     static final java.util.Set<String> PROTECTED_SETTINGS = new java.util.HashSet<>(java.util.Arrays.asList(
             "needleZOffsetMm", "needleZOffsetSetAtMs", "needleChangedAtMs", "needleAnchor", "surfaces",
-            "schemaVersion"));
+            "schemaVersion", "boardRegistrations", "newSeatAtMs"));
+    /** Protected settings that Register board and POST /api/board/new-seat stamp (not the needle's). */
+    static final java.util.Set<String> REGISTRATION_SETTINGS = new java.util.HashSet<>(java.util.Arrays.asList(
+            "boardRegistrations", "newSeatAtMs"));
     /** Nested settings PUT /api/config merges one level deep (a partial object keeps the other fields). */
     static final java.util.Set<String> NESTED_SETTINGS = new java.util.HashSet<>(java.util.Arrays.asList(
-            "profile", "purgeRow", "cleanPadCheck", "needleXyTrim"));
+            "profile", "purgeRow", "cleanPadCheck", "needleXyTrim", "fiducialCheck", "vacuumProbe"));
     /**
      * Nested fields only the engine or their own endpoints change: the start angle's set time (I11:
      * POST /api/screw/start-angle, or a changed angle), the times of the trim and the purge reset,
@@ -58,10 +64,13 @@ final class DispenseEndpoints {
 
     private final ApiContext ctx;
     private final MachineEndpoints machine;
+    /** Register board, the surface probe, Check Z and the new-seat flag (and the plan's registration preview). */
+    final RegistrationEndpoints registration;
 
     DispenseEndpoints(ApiContext ctx, MachineEndpoints machine) {
         this.ctx = ctx;
         this.machine = machine;
+        this.registration = new RegistrationEndpoints(ctx, this);
     }
 
     void register(ApiServer s) {
@@ -101,10 +110,12 @@ final class DispenseEndpoints {
 
     Object status(ApiServer s) throws Exception {
         Map<String, Object> out = new LinkedHashMap<>();
-        out.put("server", Views.map("version", Main.getVersion(), "timeMs", System.currentTimeMillis(), "port",
-                s.getPort(), "lanAccess", s.getSettings().lanAccess));
-        out.put("machine", machine.machineStatus());
+        Machine mach = ctx.configuration.getMachine();
         DispenseService svc = ctx.svcOrNull();
+        out.put("server", Views.map("version", Main.getVersion(), "timeMs", System.currentTimeMillis(), "port",
+                s.getPort(), "lanAccess", s.getSettings().lanAccess, "simulated", SimGuard.isLoopbackOnly(mach),
+                "simulatorConfirmed", svc != null ? svc.isSimulatorConfirmed() : SimGuard.isSimulated(mach)));
+        out.put("machine", machine.machineStatus());
         Map<String, Object> d = new LinkedHashMap<>();
         out.put("dispense", d);
         Map<String, Object> pressure = ctx.pressure.snapshot();
@@ -146,6 +157,8 @@ final class DispenseEndpoints {
                 "defaultRotationDeg", defaultTestDotRotation(cfg)));
         d.put("maxContinuousOnTimeS", cfg.maxContinuousOnTimeS);
         d.put("minPadTypeStatus", cfg.minPadTypeStatus);
+        d.put("homeBeforeRun", cfg.homeBeforeRun);
+        d.put("newSeatAtMs", cfg.newSeatAtMs);
         RunResult last = svc.getLastRun();
         out.put("lastRun", Views.run(last, false));
         out.put("interlocks", interlockList(svc, cfg));
@@ -429,6 +442,9 @@ final class DispenseEndpoints {
         catch (IllegalArgumentException e) {
             throw ApiException.badRequest(e.getMessage());
         }
+        if (boardFp != null && r.group(1).equals(svc.getConfig().boardSurfaceName)) {
+            svc.setNewSeat(false); // the re-seated board was probed by hand
+        }
         return Views.surface(r.group(1), svc.getConfig().surface(r.group(1)));
     }
 
@@ -450,7 +466,7 @@ final class DispenseEndpoints {
         }
         JsonObject cur = Json.GSON.toJsonTree(svc.getConfig()).getAsJsonObject();
         for (Map.Entry<String, JsonElement> e : patch.entrySet()) {
-            if (!cur.has(e.getKey())) {
+            if (!cur.has(e.getKey()) && !PROTECTED_SETTINGS.contains(e.getKey())) {
                 throw ApiException.badRequest("unknown setting '" + e.getKey() + "'");
             }
             if (NESTED_SETTINGS.contains(e.getKey())) {
@@ -475,9 +491,13 @@ final class DispenseEndpoints {
                 continue;
             }
             if (PROTECTED_SETTINGS.contains(e.getKey())) {
-                if (!cur.get(e.getKey()).equals(e.getValue())) {
-                    throw ApiException.badRequest("'" + e.getKey() + "' is the needle touch-off state (I4): change it "
-                            + "with the Needle card or a touch-off, which also record it");
+                JsonElement was = cur.has(e.getKey()) ? cur.get(e.getKey()) : com.google.gson.JsonNull.INSTANCE;
+                if (!was.equals(e.getValue())) {
+                    throw ApiException.badRequest(REGISTRATION_SETTINGS.contains(e.getKey())
+                            ? "'" + e.getKey() + "' is stamped by the engine: Register board and the new-seat answer "
+                                    + "set it"
+                            : "'" + e.getKey() + "' is the needle touch-off state (I4): change it with the Needle card "
+                                    + "or a touch-off, which also record it");
                 }
                 continue; // unchanged round-trip from the full settings editor
             }
@@ -496,6 +516,8 @@ final class DispenseEndpoints {
     // ------------------------------------------------------------------------------------------
 
     Object boards() {
+        DispenseService svc = ctx.svcOrNull();
+        Map<String, BoardRegistration> regs = svc == null ? new LinkedHashMap<>() : svc.getConfig().boardRegistrations;
         Map<String, Object> out = new LinkedHashMap<>();
         List<Map<String, Object>> job = new ArrayList<>();
         Job j = currentJob();
@@ -507,7 +529,8 @@ final class DispenseEndpoints {
                         b == null || b.getFile() == null ? null : b.getFile().getAbsolutePath(), "x", l.getX(), "y",
                         l.getY(), "z", l.getZ(), "rotation", l.getRotation(), "side",
                         String.valueOf(bl.getGlobalSide()), "enabled", bl.isEnabled(), "fiducialTransform",
-                        String.valueOf(bl.getPlacementsTransformStatus())));
+                        String.valueOf(bl.getPlacementsTransformStatus()), "registration",
+                        registrationListed(regs.get(BoardRegistration.jobKey(bl.getId())))));
             }
         }
         out.put("jobAvailable", j != null);
@@ -515,10 +538,16 @@ final class DispenseEndpoints {
         List<Map<String, Object>> files = new ArrayList<>();
         for (Board b : ctx.configuration.getBoards()) {
             files.add(Views.map("name", b.getName(), "file", b.getFile() == null ? null : b.getFile().getAbsolutePath(),
-                    "placements", b.getPlacements().size()));
+                    "placements", b.getPlacements().size(), "registration", b.getFile() == null ? null
+                            : registrationListed(regs.get(BoardRegistration.fileKey(b.getFile())))));
         }
         out.put("files", files);
         return out;
+    }
+
+    /** A board's latest registration as GET /api/boards lists it, or null. */
+    private static Map<String, Object> registrationListed(BoardRegistration r) {
+        return r == null ? null : Views.map("id", r.id, "atMs", r.atMs, "nominal", r.nominal);
     }
 
     /** The job open in OpenPnP's window (null when headless). */
@@ -559,13 +588,16 @@ final class DispenseEndpoints {
         JsonObject b = r.json();
         DispenseService svc = ctx.availableSvc();
         String source = Json.str(b, "source", "file");
+        String regMode = Json.str(b, "registration", "auto");
         DispensePlan plan;
         Map<String, Object> src;
+        BoardRegistration reg;
         if ("job".equals(source)) {
             String id = Json.str(b, "boardLocationId", null);
             BoardLocation bl = findJobBoard(id);
-            plan = svc.planBoard(bl);
             src = Views.map("source", "job", "boardLocationId", id);
+            reg = registrationFor(svc, regMode, src, bl);
+            plan = svc.planBoard(bl, reg);
         }
         else if ("file".equals(source)) {
             String path = Json.str(b, "file", null);
@@ -579,22 +611,82 @@ final class DispenseEndpoints {
             // z is required: a silent 0 put the needle ~10 mm into the board (review finding)
             double x = Json.reqNum(b, "x"), y = Json.reqNum(b, "y"), z = Json.reqNum(b, "z"),
                     rot = Json.num(b, "rotation", 0.0);
-            plan = svc.planBoardFile(f, new Location(LengthUnit.Millimeters, x, y, z, rot));
             src = Views.map("source", "file", "file", f.getAbsolutePath(), "x", x, "y", y, "z", z, "rotation", rot);
+            BoardLocation bl = baseBoardLocation(src);
+            reg = registrationFor(svc, regMode, src, bl);
+            plan = svc.planBoard(bl, reg);
         }
         else {
             throw ApiException.badRequest("'source' must be 'job' or 'file'");
         }
+        src.put("registrationId", reg == null ? null : reg.id);
         PlanStore.Entry e = new PlanStore.Entry(plan, src);
+        e.registrationRecord = reg;
         estimate(svc, e);
+        e.registrationTargets = registration.targets(svc, e);
         ctx.plans.put(e);
-        return Views.plan(e, ctx.preflightPlan(svc, plan, nz(e.estimatedPressurisedSeconds)));
+        return Views.plan(e, runPreflight(svc, plan, nz(e.estimatedPressurisedSeconds)), svc.getConfig().newSeatAtMs);
     }
 
     Object getPlan(ApiServer.Request r) throws Exception {
         DispenseService svc = ctx.availableSvc();
         PlanStore.Entry e = requirePlan(r.group(1));
-        return Views.plan(e, ctx.preflightPlan(svc, e.plan, nz(e.estimatedPressurisedSeconds)));
+        return Views.plan(e, runPreflight(svc, e.plan, nz(e.estimatedPressurisedSeconds)), svc.getConfig().newSeatAtMs);
+    }
+
+    /**
+     * The interlocks of a plan as Run faces them: a home Run does by itself (homeBeforeRun), and the Z
+     * check after it, are notes, not violations; a Z check with no point left to touch stays one.
+     */
+    InterlockReport runPreflight(DispenseService svc, DispensePlan plan, double estimatedPressurisedSeconds) {
+        HomeTracker.Plan home = svc.homePlan();
+        DispenseService.ZCheckPlan zc = svc.zCheckPlan(plan, home.needed);
+        boolean noReference = zc.needed && zc.reference == null;
+        InterlockReport r = ctx.preflightPlan(svc, plan, estimatedPressurisedSeconds, home.needed,
+                home.needed || zc.needed);
+        if (noReference) {
+            r.add("I4", DispenseService.noZReference(home.needed, zc.homeAtMs).substring("I4: ".length()));
+        }
+        return r;
+    }
+
+    /**
+     * The registration a plan of this board uses (§7.1): "auto" (default) the stored record of its board
+     * key when it still applies to the board and its nominal seat, "none", or a registration id (409
+     * when it is gone or does not apply).
+     */
+    BoardRegistration registrationFor(DispenseService svc, String mode, Map<String, Object> src, BoardLocation nominal)
+            throws ApiException {
+        if ("none".equals(mode)) {
+            return null;
+        }
+        DispenseConfig cfg = svc.getConfig();
+        String key = boardKey(src);
+        BoardRegistration.Nominal n = BoardRegistration.Nominal.of(nominal, isJob(src));
+        if ("auto".equals(mode)) {
+            BoardRegistration reg = cfg.boardRegistrations.get(key);
+            return reg != null && reg.refusal(key, n, nominal.getBoard(), svc::isSimulatorConfirmed) == null ? reg : null;
+        }
+        BoardRegistration reg = cfg.boardRegistrationById(mode);
+        if (reg == null) {
+            throw ApiException.refused("REG: registration " + (mode.length() > 4 ? mode.substring(0, 4) + "…" : mode)
+                    + " is not stored any more (the board was registered again since): plan again");
+        }
+        String why = reg.refusal(key, n, nominal.getBoard(), svc::isSimulatorConfirmed);
+        if (why != null) {
+            throw ApiException.refused(why);
+        }
+        return reg;
+    }
+
+    /** "file:<path>" or "job:<boardLocationId>" (BoardRegistration's keys). */
+    static String boardKey(Map<String, Object> src) {
+        return isJob(src) ? BoardRegistration.jobKey((String) src.get("boardLocationId"))
+                : BoardRegistration.fileKey(new File((String) src.get("file")));
+    }
+
+    static boolean isJob(Map<String, Object> src) {
+        return "job".equals(src.get("source"));
     }
 
     /**
@@ -613,7 +705,7 @@ final class DispenseEndpoints {
         return l;
     }
 
-    private PlanStore.Entry requirePlan(String id) throws ApiException {
+    PlanStore.Entry requirePlan(String id) throws ApiException {
         PlanStore.Entry e = id == null ? null : ctx.plans.get(id);
         if (e == null) {
             throw ApiException.notFound("plan '" + id + "' is not known (plans are kept for this session only): plan the board again");
@@ -665,8 +757,24 @@ final class DispenseEndpoints {
         }
     }
 
-    private BoardLocation currentBoardLocation(PlanStore.Entry e) throws Exception {
-        Map<String, Object> src = e.source;
+    /**
+     * The plan's board as it is now, with the registration the plan was made with
+     * ({@code source.registrationId}) applied again; refused when that record is gone or no longer
+     * applies (registered again, the board moved, OpenPnP re-checked a job board, a fiducial moved).
+     */
+    BoardLocation currentBoardLocation(PlanStore.Entry e) throws Exception {
+        BoardLocation bl = baseBoardLocation(e.source);
+        String regId = (String) e.source.get("registrationId");
+        if (regId == null) {
+            return bl;
+        }
+        DispenseService svc = ctx.svc();
+        BoardRegistration reg = registrationFor(svc, regId, e.source, bl);
+        return reg.applyTo(bl);
+    }
+
+    /** The plan's board at its nominal seat, without our registration (a job board as OpenPnP has it). */
+    BoardLocation baseBoardLocation(Map<String, Object> src) throws Exception {
         if ("job".equals(src.get("source"))) {
             return findJobBoard((String) src.get("boardLocationId"));
         }
@@ -678,7 +786,7 @@ final class DispenseEndpoints {
         return bl;
     }
 
-    private BoardLocation findJobBoard(String id) throws ApiException {
+    BoardLocation findJobBoard(String id) throws ApiException {
         Job j = currentJob();
         if (j == null) {
             throw ApiException.refused("no OpenPnP job is open (the window is not running): choose a board file instead");
@@ -696,6 +804,7 @@ final class DispenseEndpoints {
         DispenseService svc = ctx.availableSvc();
         ctx.requireEngineIdle(svc);
         ctx.requireNoPressureHold();
+        ctx.requireMachineIdle();
         PlanStore.Entry e = requirePlan(Json.str(b, "planId", null));
         DispenseConfig cfg = svc.getConfig();
         DispensePlan full = e.plan;
@@ -707,6 +816,10 @@ final class DispenseEndpoints {
         // Review finding: a board moved, re-checked (fiducials) or edited after planning was not detected.
         String now = currentBoardFingerprint(svc, e);
         if (full.boardFingerprint != null && !full.boardFingerprint.equals(now)) {
+            if (now.startsWith("unavailable:")) {
+                throw ApiException.refused("the board's registration or position changed since this plan was made ("
+                        + now.substring("unavailable:".length()).trim() + "): plan the board again");
+            }
             throw ApiException.refused("the board's position, fiducial check or placements changed in OpenPnP since this "
                     + "plan was made (its dot positions would be wrong): plan the board again");
         }
@@ -718,13 +831,25 @@ final class DispenseEndpoints {
             estimate(svc, runEntry);
             ctx.plans.put(runEntry);
         }
-        InterlockReport pre = ctx.preflightPlan(svc, p, nz(runEntry.estimatedPressurisedSeconds));
+        // The run homes by itself when a home is needed, and checks Z after it when Z data predate it.
+        HomeTracker.Plan home = svc.homePlan();
+        DispenseService.ZCheckPlan zc = svc.zCheckPlan(p, home.needed);
+        boolean zCheckFirst = home.needed || zc.needed;
+        if (zc.needed && zc.reference == null) {
+            throw ApiException.refused(DispenseService.noZReference(home.needed, zc.homeAtMs));
+        }
+        InterlockReport pre = ctx.preflightPlan(svc, p, nz(runEntry.estimatedPressurisedSeconds), home.needed,
+                zCheckFirst);
         ApiContext.refuseUnlessOk(pre, "Run");
         ctx.tracker.expect("board");
         Future<RunResult> f = svc.runPlan(p);
-        return ApiContext.awaitIf(Json.bool(b, "wait", false), f, rr -> Views.run(rr, false),
-                Views.map("kind", "board", "planId", p.planId, "parentPlanId", p == full ? null : full.planId, "dots",
-                        p.dots.size(), "pads", p.pads.size()));
+        Map<String, Object> accepted = Views.map("kind", "board", "planId", p.planId, "parentPlanId",
+                p == full ? null : full.planId, "dots", p.dots.size(), "pads", p.pads.size(), "homeFirst", home.needed,
+                "homeWhyCode", home.whyCode, "homeWhy", home.why, "homeSinceMs", home.sinceMs, "homeEstimateS",
+                home.estimateS, "zCheckFirst", zCheckFirst, "zCheckReference", zc.reference == null ? null
+                        : Views.map("name", zc.reference.name, "x", zc.reference.x, "y", zc.reference.y, "z",
+                                zc.reference.z));
+        return ApiContext.awaitIf(Json.bool(b, "wait", false), f, rr -> Views.run(rr, false), accepted);
     }
 
     /**

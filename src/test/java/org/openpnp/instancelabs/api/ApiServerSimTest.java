@@ -34,6 +34,7 @@ import org.openpnp.instancelabs.dispense.ControllerCommands;
 import org.openpnp.instancelabs.dispense.DispenseConfig;
 import org.openpnp.instancelabs.dispense.DispenseService;
 import org.openpnp.instancelabs.dispense.DotImager;
+import org.openpnp.instancelabs.dispense.FlatVacuum;
 import org.openpnp.instancelabs.dispense.SimMachine;
 import org.openpnp.instancelabs.vision.Dot;
 import org.openpnp.machine.reference.driver.GcodeDriver;
@@ -60,6 +61,8 @@ public class ApiServerSimTest {
     @BeforeEach
     public void before() throws Exception {
         sim = new SimMachine();
+        // N1 touches 5.5 everywhere, as setPlaces types it in: a run after a home checks Z with one touch
+        FlatVacuum.install(sim, FlatVacuum.scene(5.5, null, 0));
         svc = DispenseService.start(Configuration.get());
         assertTrue(svc.isAvailable(), String.valueOf(svc.getUnavailableReason()));
         ApiSettings s = new ApiSettings();
@@ -154,6 +157,8 @@ public class ApiServerSimTest {
         // probed surfaces: the blank (places and purge row) and the test board's area (origin 100, 80; 20 x 10 mm)
         ok(call("PUT", "/api/surfaces/blank", "{\"points\":[[60,30,5.5],[200,30,5.5],[60,50,5.5],[200,50,5.5]]}"));
         ok(call("PUT", "/api/surfaces/board", "{\"points\":[[98,78,5.5],[130,78,5.5],[98,95,5.5],[130,95,5.5]]}"));
+        // the simulator's probe timings (il_sim_scene.py FAST_TIMINGS): the Z check after a home
+        ok(call("PUT", "/api/config", "{\"vacuumProbe\":{\"vacuumSettleMs\":300,\"readDelayMs\":0}}"));
     }
 
     /**
