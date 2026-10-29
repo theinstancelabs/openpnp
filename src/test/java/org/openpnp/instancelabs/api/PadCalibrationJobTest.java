@@ -76,6 +76,8 @@ public class PadCalibrationJobTest {
         final CountDownLatch held = new CountDownLatch(1);
         final CountDownLatch release = new CountDownLatch(1);
         volatile long epoch;
+        /** The dispense service's own stop epoch (a STOP through the API moves it), added to {@link #epoch}. */
+        volatile java.util.function.LongSupplier base = () -> 0L;
         volatile String aborted;
 
         private <T> Future<T> step(String what, java.util.function.Function<RunResult, T> result) {
@@ -153,7 +155,7 @@ public class PadCalibrationJobTest {
 
         @Override
         public long stopEpoch() {
-            return epoch;
+            return epoch + base.getAsLong();
         }
 
         @Override
@@ -182,6 +184,7 @@ public class PadCalibrationJobTest {
         f.setAccessible(true);
         ctx = (ApiContext) f.get(api);
         engine = new FakeEngine();
+        engine.base = svc::stopEpoch;
         ctx.padCalJobs.engine = engine;
         boardFile = writeBoard();
         ok(call("PUT", "/api/locations/blank", "{\"x\":290,\"y\":240,\"z\":5.5}"));
@@ -503,6 +506,25 @@ public class PadCalibrationJobTest {
         JsonObject j = awaitState("stopped");
         assertTrue(str(j.getAsJsonObject("result"), "sentence").startsWith("Stopped "), j.toString());
         assertEquals(List.of("probe coupon1"), engine.calls, "the job's submit after the STOP does not happen");
+    }
+
+    @Test
+    public void aStopWhileTheStartSavesQueuesNoEngineStep() throws Exception {
+        plan();
+        DispenseEndpoints dispense = new DispenseEndpoints(ctx, new MachineEndpoints(ctx));
+        PadProfileEndpoints profile = new PadProfileEndpoints(ctx, dispense);
+        PadCalibrationJob job = PadCalibrationJob.prepare(ctx, profile, dispense, svc, PadCalibrationEndpoints.request(
+                new JsonParser().parse(body(group, attest())).getAsJsonObject()));
+        assertEquals(null, job.refusal, job.refusal);
+        job.save();
+        // STOP while the start is still saving the suggestions: no job is the current one yet, only the engine's epoch
+        // moves; the job must not queue its first engine step after it
+        ok(call("POST", "/api/stop", null));
+        ctx.padCalJobs.start(job);
+        JsonObject j = awaitState("stopped");
+        assertTrue(str(j.getAsJsonObject("result"), "sentence").matches("Stopped \\d\\d:\\d\\d during coupons: nothing "
+                + "was measured\\."), j.toString());
+        assertTrue(engine.calls.isEmpty(), "no engine step after the STOP: " + engine.calls);
     }
 
     @Test

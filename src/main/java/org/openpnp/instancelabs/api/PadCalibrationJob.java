@@ -87,6 +87,9 @@ final class PadCalibrationJob {
     static final String RUNNING = "running", AWAITING = "awaiting-reading", DECIDING = "deciding",
             PLANNING = "planning", DONE = "done", STOPPED = "stopped", CANCELLED = "cancelled", FAILED = "failed";
     static final String LADDER = "ladder", WEIGH = "weigh";
+    /** The halt of a job whose engine saw a STOP it did not (§7.8). */
+    static final String STOPPED_SINCE_START = "the machine was stopped after this pad calibration was started: nothing "
+            + "more was sent";
     /** The browser's attestations count this long (IL.attest, W/core.js). */
     static final long ATTEST_MS = 8 * 3600 * 1000L;
     /** A client clock this far ahead of the server's is still taken. */
@@ -220,6 +223,11 @@ final class PadCalibrationJob {
 
     // the run
     private final Object lock = new Object();
+    /**
+     * The engine's stop epoch when the job was prepared: a STOP after it (also one pressed while the start
+     * saved the suggestions, before this job was the current one) halts the job before its next engine step.
+     */
+    long startEpoch;
     private volatile boolean stopRequested;
     private volatile boolean cancelRequested;
     private volatile String stopReason;
@@ -262,6 +270,7 @@ final class PadCalibrationJob {
     static PadCalibrationJob prepare(ApiContext ctx, PadProfileEndpoints profile, DispenseEndpoints dispense,
             DispenseService svc, Request req) throws Exception {
         PadCalibrationJob j = new PadCalibrationJob(ctx, profile, dispense, svc, req);
+        j.startEpoch = ctx.padCalJobs.engine(svc).stopEpoch();
         j.plan();
         return j;
     }
@@ -930,10 +939,8 @@ final class PadCalibrationJob {
                 r.blocks.addAll(layout.blocks);
                 r.areaReserveMm = layout.reservedMm;
                 r.parkAfter = coupons.isEmpty();
-                DoseBlocksResult res = engine(() -> {
-                    r.stopEpoch = engine.stopEpoch();
-                    return engine.runDoseBlocks(r);
-                }, x -> x.run, x -> x.ok, x -> x.message);
+                r.stopEpoch = startEpoch;
+                DoseBlocksResult res = engine(() -> engine.runDoseBlocks(r), x -> x.run, x -> x.ok, x -> x.message);
                 results.add(res);
                 List<DoseRecord> written = records(res, DoseRecord.OPTICAL);
                 control(c, written);
@@ -948,10 +955,8 @@ final class PadCalibrationJob {
                 DoseBlocksRequest r = new DoseBlocksRequest();
                 r.kind = DoseBlocksRequest.WEIGH;
                 r.blocks.addAll(weighBlocks(c));
-                DoseBlocksResult res = engine(() -> {
-                    r.stopEpoch = engine.stopEpoch();
-                    return engine.runDoseBlocks(r);
-                }, x -> x.run, x -> x.ok, x -> x.message);
+                r.stopEpoch = startEpoch;
+                DoseBlocksResult res = engine(() -> engine.runDoseBlocks(r), x -> x.run, x -> x.ok, x -> x.message);
                 results.add(res);
                 List<DoseRecord> written = records(res, DoseRecord.COUPON);
                 synchronized (lock) {
@@ -999,6 +1004,11 @@ final class PadCalibrationJob {
             java.util.function.Predicate<T> ok, java.util.function.Function<T, String> message) throws Exception {
         Future<T> f;
         synchronized (lock) {
+            if (!stopRequested && engine.stopEpoch() != startEpoch) {
+                // a STOP the job did not see itself: pressed while the start saved the suggestions, or OpenPnP's Stop
+                stopRequested = true;
+                stopReason = STOPPED_SINCE_START;
+            }
             if (stopRequested) {
                 throw new Halt(stopReason);
             }
@@ -2196,7 +2206,8 @@ final class PadCalibrationJob {
             if (staleAt > 0) {
                 coupon = "; the coupons still need weighing until " + ZCheck.clock(staleAt);
             }
-            sentence = (STOPPED.equals(outcome) ? "Stopped " : "Cancelled ") + clock + " during " + stepWords() + ": "
+            sentence = (STOPPED.equals(outcome) ? "Stopped " : "Cancelled ") + clock + " during " + (step == null
+                    ? "its start" : step) + ": "
                     + kept + coupon + ".";
         }
         Map<String, Object> m = new LinkedHashMap<>();
