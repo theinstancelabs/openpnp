@@ -49,6 +49,12 @@ public class BoardRegistrationTest {
         r.atMs = 1_793_200_000_000L;
         r.fiducials = new ArrayList<>(Arrays.asList(fid("FID1", 358.67, 117.31), fid("FID2", 308.89, 184.30),
                 fid("FID3", 358.94, 184.07)));
+        // the board coordinates of ftp's fiducials (BoardFeaturesTest.ftp)
+        double[][] board = {{62.4465812, 4.69103014}, {12.5, 70.0}, {62.5, 70.0}};
+        for (int i = 0; i < 3; i++) {
+            r.fiducials.get(i).bx = board[i][0];
+            r.fiducials.get(i).by = board[i][1];
+        }
         return r;
     }
 
@@ -110,7 +116,7 @@ public class BoardRegistrationTest {
         assertTrue(b.simulated);
         assertEquals(c.toJson(), back.toJson());
         for (Map.Entry<String, BoardRegistration> e : back.boardRegistrations.entrySet()) {
-            assertTrue(e.getValue().matches(e.getKey(), r.nominal));
+            assertTrue(e.getValue().matches(e.getKey(), r.nominal, BoardFeaturesTest.ftp()));
         }
     }
 
@@ -119,29 +125,30 @@ public class BoardRegistrationTest {
         BoardLocation bl = nominal();
         BoardRegistration file = reg(bl, "file:/a.board.xml", false);
         assertNull(file.nominal.openPnpTransform);
-        assertTrue(file.matches("file:/a.board.xml", BoardRegistration.Nominal.of(bl, false)));
-        assertFalse(file.matches("file:/b.board.xml", BoardRegistration.Nominal.of(bl, false)));
+        assertTrue(file.matches("file:/a.board.xml", BoardRegistration.Nominal.of(bl, false), bl.getBoard()));
+        assertFalse(file.matches("file:/b.board.xml", BoardRegistration.Nominal.of(bl, false), bl.getBoard()));
         BoardLocation moved = new BoardLocation(bl);
         moved.setLocation(new Location(LengthUnit.Millimeters, 296.001, 114.5, 5.5, 0));
-        assertFalse(file.matches("file:/a.board.xml", BoardRegistration.Nominal.of(moved, false)));
+        assertFalse(file.matches("file:/a.board.xml", BoardRegistration.Nominal.of(moved, false), bl.getBoard()));
         BoardLocation z = new BoardLocation(bl);
         z.setLocation(new Location(LengthUnit.Millimeters, 296.0, 114.5, 5.50005, 0));
-        assertTrue(file.matches("file:/a.board.xml", BoardRegistration.Nominal.of(z, false)), "within 1e-4");
+        assertTrue(file.matches("file:/a.board.xml", BoardRegistration.Nominal.of(z, false), bl.getBoard()),
+                "within 1e-4");
         // a job board carries OpenPnP's own transform: OpenPnP's later fiducial check is noticed
         BoardRegistration job = reg(bl, "job:Brd1", true);
         assertTrue(job.nominal.openPnpTransform.startsWith("NotSet;"), job.nominal.openPnpTransform);
-        assertTrue(job.matches("job:Brd1", BoardRegistration.Nominal.of(bl, true)));
+        assertTrue(job.matches("job:Brd1", BoardRegistration.Nominal.of(bl, true), bl.getBoard()));
         BoardLocation checked = new BoardLocation(bl);
         AffineTransform t = checked.getLocalToGlobalTransform();
         t.translate(0.2, 0);
         checked.setLocalToGlobalTransform(t);
-        assertFalse(job.matches("job:Brd1", BoardRegistration.Nominal.of(checked, true)));
-        String why = job.refusal("job:Brd1", BoardRegistration.Nominal.of(checked, true), () -> true);
+        assertFalse(job.matches("job:Brd1", BoardRegistration.Nominal.of(checked, true), bl.getBoard()));
+        String why = job.refusal("job:Brd1", BoardRegistration.Nominal.of(checked, true), bl.getBoard(), () -> true);
         assertEquals("REG: OpenPnP's fiducial check of this job board changed since registration 3f2a… ("
                 + ZCheck.clock(job.atMs) + "): register again", why);
         assertEquals("REG: registration 3f2a… belongs to another board or position",
-                job.refusal("job:Brd1", BoardRegistration.Nominal.of(moved, true), () -> true));
-        assertNull(job.refusal("job:Brd1", BoardRegistration.Nominal.of(bl, true), () -> false));
+                job.refusal("job:Brd1", BoardRegistration.Nominal.of(moved, true), bl.getBoard(), () -> true));
+        assertNull(job.refusal("job:Brd1", BoardRegistration.Nominal.of(bl, true), bl.getBoard(), () -> false));
         // movement over the fiducials both found
         List<BoardRegistration.Fid> now = Arrays.asList(fid("FID1", 358.67 + 0.03, 117.31 - 0.04),
                 fid("FID3", 358.94, 184.07 + 0.02), fid("FID9", 0, 0));
@@ -156,10 +163,59 @@ public class BoardRegistrationTest {
         BoardRegistration.Nominal n = BoardRegistration.Nominal.of(bl, false);
         r.simulated = true;
         assertEquals("REG: registration 3f2a… was made on the simulator: register again",
-                r.refusal("file:/a.board.xml", n, () -> false));
-        assertNull(r.refusal("file:/a.board.xml", n, () -> true));
+                r.refusal("file:/a.board.xml", n, bl.getBoard(), () -> false));
+        assertNull(r.refusal("file:/a.board.xml", n, bl.getBoard(), () -> true));
         r.simulated = false;
-        assertNull(r.refusal("file:/a.board.xml", n, () -> false));
+        assertNull(r.refusal("file:/a.board.xml", n, bl.getBoard(), () -> false));
         assertEquals("3f2a…", r.shortId());
+    }
+
+    /**
+     * Board-import design §10.2 item 1: a board file replaced or edited by hand that moved a fiducial
+     * must not keep the old affine. The record matches only while every stored fiducial is the board's
+     * top, enabled Fiducial placement of the same name within 1e-4 mm.
+     */
+    @Test
+    public void aMovedOrGoneFiducialEndsTheMatch() {
+        BoardLocation bl = nominal();
+        BoardRegistration r = reg(bl, "file:/a.board.xml", false);
+        BoardRegistration.Nominal n = BoardRegistration.Nominal.of(bl, false);
+        org.openpnp.model.Board board = bl.getBoard();
+        assertTrue(r.matches("file:/a.board.xml", n, board));
+        assertTrue(r.fiducialsMatch(board));
+        org.openpnp.model.Placement fid2 = null;
+        for (org.openpnp.model.Placement p : board.getPlacements()) {
+            fid2 = "FID2".equals(p.getId()) ? p : fid2;
+        }
+        Location was = fid2.getLocation();
+        fid2.setLocation(was.add(new Location(LengthUnit.Millimeters, 0.00005, -0.00005, 0, 0)));
+        assertTrue(r.matches("file:/a.board.xml", n, board), "within 1e-4 mm");
+        fid2.setLocation(was.add(new Location(LengthUnit.Millimeters, 0.0002, 0, 0, 0)));
+        assertFalse(r.matches("file:/a.board.xml", n, board), "FID2 moved 0.0002 mm");
+        assertEquals("REG: FID2 moved or is gone in the board since registration 3f2a… (" + ZCheck.clock(r.atMs)
+                + "): register again", r.refusal("file:/a.board.xml", n, board, () -> true));
+        fid2.setLocation(was);
+        assertTrue(r.matches("file:/a.board.xml", n, board));
+        // disabled, turned into a placement, or on the bottom: no longer a top, enabled fiducial
+        fid2.setEnabled(false);
+        assertFalse(r.matches("file:/a.board.xml", n, board));
+        fid2.setEnabled(true);
+        fid2.setType(org.openpnp.model.Placement.Type.Placement);
+        assertFalse(r.matches("file:/a.board.xml", n, board));
+        fid2.setType(org.openpnp.model.Placement.Type.Fiducial);
+        fid2.setSide(org.openpnp.model.Abstract2DLocatable.Side.Bottom);
+        assertFalse(r.matches("file:/a.board.xml", n, board));
+        fid2.setSide(org.openpnp.model.Abstract2DLocatable.Side.Top);
+        // gone from the board (renamed), or no board at all
+        fid2.setId("FID2b");
+        assertFalse(r.matches("file:/a.board.xml", n, board));
+        fid2.setId("FID2");
+        assertFalse(r.matches("file:/a.board.xml", n, null), "no board: nothing vouches for the fiducials");
+        // a fiducial added to the board does not matter: only the stored ones are checked
+        org.openpnp.model.Placement extra = new org.openpnp.model.Placement("FID4");
+        extra.setType(org.openpnp.model.Placement.Type.Fiducial);
+        extra.setLocation(new Location(LengthUnit.Millimeters, 5, 5, 0, 0));
+        board.addPlacement(extra);
+        assertTrue(r.matches("file:/a.board.xml", n, board));
     }
 }
