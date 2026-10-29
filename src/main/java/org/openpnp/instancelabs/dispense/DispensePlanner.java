@@ -287,7 +287,10 @@ public class DispensePlanner {
     /**
      * Decision 4: the pads of parts that have a pad the mounted tip cannot dispense (the profile
      * check before planning, reason "part"): the part is treated whole unless its package is set to
-     * paste the dispensable pads anyway ({@link PadTypeResolver#pastePartial()}).
+     * paste the dispensable pads anyway ({@link PadTypeResolver#pastePartial()}). The pads the tip
+     * cannot dispense (reason "tip") of such a part get no paste either way, also when a pad type
+     * covers them: only its dispensable pads are ever pasted. A part made only of such pads is left
+     * to the gate (§3.3).
      */
     private Set<String> wholePartPads(List<PadGeometry> pads, DispensePlan plan) {
         Set<String> ids = new HashSet<>();
@@ -305,10 +308,14 @@ public class DispensePlanner {
             return ids;
         }
         Set<String> refs = new TreeSet<>(GroupKey.NATURAL);
+        Set<String> tip = new HashSet<>();
         for (ProfileCheck.Group g : r.groups) {
             if (ProfileCheck.PART.equals(g.reason)) {
                 ids.addAll(g.padIds);
                 refs.addAll(g.refs);
+            }
+            else if (ProfileCheck.TIP.equals(g.reason)) {
+                tip.addAll(g.padIds);
             }
         }
         if (!ids.isEmpty()) {
@@ -317,6 +324,28 @@ public class DispensePlanner {
                     + "pad of the part cannot be dispensed with the " + cfg.tip.name + ", and a part soldered by hand "
                     + "gets no paste on its other pads either (PART_NOT_DISPENSABLE). Profile can paste the "
                     + "dispensable pads of a package anyway.");
+        }
+        // the tip's own pads of a part that also has dispensable pads, where a pad type would paste them
+        Set<String> mixed = new HashSet<>();
+        for (PadGeometry g : pads) {
+            if (g.placementId != null && !tip.contains(g.padId)) {
+                mixed.add(g.placementId);
+            }
+        }
+        Set<String> tipIds = new HashSet<>();
+        Set<String> tipRefs = new TreeSet<>(GroupKey.NATURAL);
+        for (PadGeometry g : pads) {
+            if (g.padType != null && tip.contains(g.padId) && mixed.contains(g.placementId)) {
+                tipIds.add(g.padId);
+                tipRefs.add(g.placementId);
+            }
+        }
+        if (!tipIds.isEmpty()) {
+            ids.addAll(tipIds);
+            plan.warnings.add(Texts.plural(tipIds.size(), "pad", "pads") + " of " + Texts.plural(tipRefs.size(),
+                    "part", "parts") + (tipIds.size() == 1 ? " gets" : " get") + " no paste (" + shortList(tipRefs)
+                    + "): the " + cfg.tip.name + " cannot dispense " + (tipIds.size() == 1 ? "it" : "them") + ", also "
+                    + "where the other pads of the part are pasted (PART_NOT_DISPENSABLE).");
         }
         return ids;
     }

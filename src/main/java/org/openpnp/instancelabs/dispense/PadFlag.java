@@ -19,7 +19,7 @@ public enum PadFlag {
     /**
      * Another pad of the part cannot be dispensed with the mounted tip, so the part is treated whole
      * and none of its pads get paste (main-thread decision 4), unless its package is set to paste the
-     * dispensable pads anyway. Blocking.
+     * dispensable pads anyway; the pads the tip cannot dispense of such a part never get paste. Blocking.
      */
     PART_NOT_DISPENSABLE(true);
 

@@ -374,19 +374,54 @@ public class PlannerDoseTest {
         DispensePlan.PlannedPad tab = padOf(p, "J1.3");
         assertTrue(tab.flags.contains(PadFlag.PART_NOT_DISPENSABLE), tab.flagNames().toString());
         assertEquals(0, tab.dotCount);
-        // the pins themselves: their dots would bridge
-        assertTrue(padOf(p, "J1.1").flags.contains(PadFlag.MAY_BRIDGE));
+        // the pins themselves: the tip cannot dispense them, whatever their type says
+        for (String pin : new String[] {"J1.1", "J1.2"}) {
+            assertEquals(Collections.singletonList("PART_NOT_DISPENSABLE"), padOf(p, pin).flagNames());
+            assertEquals(0, padOf(p, pin).dotCount);
+        }
         assertTrue(padOf(p, "R1.1").flags.isEmpty());
         assertTrue(p.warnings.contains("1 pad of 1 part gets no paste (J1): another pad of the part cannot be dispensed "
                 + "with the 22G tip, and a part soldered by hand gets no paste on its other pads either "
                 + "(PART_NOT_DISPENSABLE). Profile can paste the dispensable pads of a package anyway."),
                 p.warnings.toString());
-        // paste the dispensable pads of MIXED anyway: the tab gets its dot
+        assertTrue(p.warnings.contains("2 pads of 1 part get no paste (J1): the 22G tip cannot dispense them, also "
+                + "where the other pads of the part are pasted (PART_NOT_DISPENSABLE)."), p.warnings.toString());
+        assertEquals(2, p.dots.size());
+        // paste the dispensable pads of MIXED anyway: the tab gets its dot, the pins still none
         PadTypeResolver partial = new PadTypeResolver(types, null).withPastePartial(Collections.singleton("MIXED"));
         DispensePlan q = new DispensePlanner(c, partial).plan("mixed", pads, 77.5, 40);
         assertTrue(padOf(q, "J1.3").flags.isEmpty(), padOf(q, "J1.3").flagNames().toString());
         assertEquals(1, padOf(q, "J1.3").dotCount);
+        assertEquals(Collections.singletonList("PART_NOT_DISPENSABLE"), padOf(q, "J1.1").flagNames());
+        assertEquals(3, q.dots.size());
         assertNotEquals(plain.fingerprint(), partial.fingerprint());
         assertEquals(plain.fingerprint(), new PadTypeResolver(types, null).withPastePartial(null).fingerprint());
+    }
+
+    /**
+     * Decision 4 where no dot would bridge: a DO-220AA mapped whole to its tab's type (4 half turns).
+     * The pin is too narrow for any plan (a half-turn dot reaches 0.28 mm past it), so neither the pin
+     * nor the tab gets paste; with the package set to paste partly, only the tab.
+     */
+    @Test
+    public void theUndispensablePinOfAPartIsNeverPasted() {
+        DispenseConfig c = GcodeStreamTest.toyConfig();
+        PadType tab = type("do220-tab", "DO-220AA tab", 2.515, 2.388, 800, 4);
+        List<PadGeometry> pads = new ArrayList<>();
+        pads.add(pad("D1", "DO-220AA", "1", 100, 80, 0, 0.61, 1.118, tab));
+        pads.add(pad("D1", "DO-220AA", "2", 103, 80, 0, 2.515, 2.388, tab));
+        List<PadType> types = Collections.singletonList(tab);
+        DispensePlan p = new DispensePlanner(c, new PadTypeResolver(types, null)).plan("do220", pads, 77.5, 40);
+        assertEquals(Collections.singletonList("PART_NOT_DISPENSABLE"), padOf(p, "D1.1").flagNames());
+        assertEquals(Collections.singletonList("PART_NOT_DISPENSABLE"), padOf(p, "D1.2").flagNames());
+        assertTrue(p.dots.isEmpty());
+        DispensePlan q = new DispensePlanner(c, new PadTypeResolver(types, null)
+                .withPastePartial(Collections.singleton("DO-220AA"))).plan("do220", pads, 77.5, 40);
+        assertEquals(Collections.singletonList("PART_NOT_DISPENSABLE"), padOf(q, "D1.1").flagNames());
+        assertTrue(padOf(q, "D1.2").flags.isEmpty(), padOf(q, "D1.2").flagNames().toString());
+        assertEquals(4, q.dots.size());
+        for (DispensePlan.PlannedDot d : q.dots) {
+            assertEquals("D1.2", d.padId);
+        }
     }
 }
