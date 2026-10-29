@@ -220,6 +220,8 @@ public class BoardImporterTest {
         }
         p.generatorVersion = "9.0";
         assertEquals(9, BoardImporter.kicadMajor(p), "generator_version wins");
+        p.generatorVersion = "99999999999.0";
+        assertEquals(10, BoardImporter.kicadMajor(p), "a number no KiCad has: the file format date");
     }
 
     @Test

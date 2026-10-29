@@ -978,6 +978,7 @@ public final class BoardImporter {
             Board rb = Configuration.createSerializer().read(Board.class, staged);
             List<Placement> l = rb.getPlacements();
             if (l.size() != p.placements.size()) {
+                rb.dispose();
                 throw new IllegalStateException("the board file read back with " + l.size() + " placements instead of "
                         + p.placements.size());
             }
@@ -1284,7 +1285,7 @@ public final class BoardImporter {
 
     /** KiCad's major version: generator_version when the file has it (KiCad 8 on), else the file format date. */
     static int kicadMajor(KicadPcb pcb) {
-        if (pcb.generatorVersion != null && pcb.generatorVersion.matches("\\d+(\\..*)?")) {
+        if (pcb.generatorVersion != null && pcb.generatorVersion.matches("\\d{1,3}(\\..*)?")) {
             return Integer.parseInt(pcb.generatorVersion.replaceFirst("\\..*", ""));
         }
         int v = pcb.version;

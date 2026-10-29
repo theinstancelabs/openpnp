@@ -590,7 +590,12 @@ final class DispenseEndpoints {
         }
     }
 
-    Object packages() {
+    /** OpenPnP's packages, read on OpenPnP's thread (an import may be adding some). */
+    Object packages() throws Exception {
+        return EdtRunner.call(this::packagesNow, EDT_START_MS);
+    }
+
+    private List<Map<String, Object>> packagesNow() {
         List<Map<String, Object>> l = new ArrayList<>();
         for (Package p : ctx.configuration.getPackages()) {
             Footprint fp = p.getFootprint();
@@ -791,7 +796,7 @@ final class DispenseEndpoints {
 
     /**
      * The board drawing of the plan, fixed now (a later replace or edit cannot put another drawing under these dots),
-     * read where OpenPnP's lists are read.
+     * read where OpenPnP's lists are read. Every place that makes a board plan calls it (also Register board's plan).
      */
     void artRef(DispensePlan plan, BoardLocation bl) throws Exception {
         Board board = bl.getBoard();
