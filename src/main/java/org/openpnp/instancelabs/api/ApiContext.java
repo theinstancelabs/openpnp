@@ -73,6 +73,7 @@ final class ApiContext {
         }
         s.addListener(tracker);
         s.addListener(pressure);
+        s.setPressureHoldCheck(pressure::isActive);
         listened = s;
     }
 
@@ -92,6 +93,16 @@ final class ApiContext {
     }
 
     /**
+     * A task queued behind another OpenPnP machine task that fails is dropped and never runs: the
+     * tasks that home or move refuse while OpenPnP is busy.
+     */
+    void requireMachineIdle() throws ApiException {
+        if (machine().isBusy()) {
+            throw ApiException.refused("OpenPnP is busy (homing or moving): wait for it to finish");
+        }
+    }
+
+    /**
      * The engine's pre-flight interlocks for a run without a board plan (no plan rules, no I9),
      * with the run's I4 scope. The engine re-checks, with the exact dots, when it runs.
      */
@@ -101,6 +112,12 @@ final class ApiContext {
 
     InterlockReport preflightPlan(DispenseService s, DispensePlan plan, double estimatedPressurisedSeconds) {
         return s.checkInterlocks(plan, estimatedPressurisedSeconds);
+    }
+
+    /** As above for a run that homes first and / or checks Z itself after the home. */
+    InterlockReport preflightPlan(DispenseService s, DispensePlan plan, double estimatedPressurisedSeconds,
+            boolean homeFirst, boolean zCheckFirst) {
+        return s.checkInterlocks(plan, estimatedPressurisedSeconds, homeFirst, zCheckFirst);
     }
 
     static void refuseUnlessOk(InterlockReport r, String what) throws ApiException {

@@ -235,4 +235,75 @@ public class ReviewSafetySimTest {
         assertEquals(java.util.Arrays.asList("M107 P3"), sim.server.sinceMark());
         assertTrue(note != null && note.contains("simulated failure"), String.valueOf(note));
     }
+
+    /**
+     * AUTO_REGISTER_DESIGN §2.7: nothing homes or touches with N1 while the barrel is held under
+     * pressure (paste would ooze over the board): every task that homes or probes is refused before
+     * any G28 or N1 line.
+     */
+    @Test
+    public void tasksThatHomeOrProbeAreRefusedWhileThePressureIsHeld() throws Exception {
+        assertEquals("on", ok("POST", "/api/pressure/start", null).get("state").getAsString());
+        sim.server.mark();
+        String[][] tasks = {{"/api/run", "{\"planId\":\"x\"}"}, {"/api/plan/x/register", "{}"},
+                {"/api/surfaces/blank/probe", "{}"}, {"/api/machine/z-check", "{}"}, {"/api/machine/home", "{}"}};
+        for (String[] t : tasks) {
+            JsonObject r = call("POST", t[0], t[1]);
+            assertEquals(409, lastStatus, t[0] + " " + r);
+            assertTrue(r.toString().contains("pressure is being held on"), t[0] + " " + r);
+        }
+        for (String l : sim.server.sinceMark()) {
+            assertFalse(l.startsWith("G28") || l.startsWith("M106 P1") || l.startsWith("M260"), l);
+        }
+        ok("POST", "/api/pressure/stop", null);
+    }
+
+    /**
+     * AUTO_REGISTER_DESIGN §2.7 / §10.2 case 24: the pressure hold and an engine task that both passed
+     * their API checks are serialised on the machine thread, where each re-checks the other: exactly
+     * one of them runs. The engine task is queued while the hold's start waits behind other machine
+     * work; the engine task queued while the hold is on is refused there and does not stay busy.
+     */
+    @Test
+    public void thePressureHoldAndAStartingTaskNeverBothRun() throws Exception {
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        sim.machine.submit(() -> {
+            release.await();
+            return null;
+        });
+        JsonObject[] held = new JsonObject[1];
+        Thread hold = new Thread(() -> {
+            try {
+                held[0] = call("POST", "/api/pressure/start", null);
+            }
+            catch (Exception e) {
+                held[0] = new JsonObject();
+            }
+        });
+        hold.start();
+        long t0 = System.currentTimeMillis();
+        while (!"starting".equals(pressure().get("state").getAsString())) {
+            assertTrue(System.currentTimeMillis() - t0 < 10000, "the hold's start is queued");
+            Thread.sleep(10);
+        }
+        // the engine task passed its API checks before the hold's start set STARTING: queued behind it
+        sim.server.mark();
+        java.util.concurrent.Future<org.openpnp.instancelabs.dispense.RunResult> task = svc.checkZ();
+        release.countDown();
+        hold.join(30000);
+        org.openpnp.instancelabs.dispense.RunResult r = task.get(30, java.util.concurrent.TimeUnit.SECONDS);
+        assertEquals("off", pressure().get("state").getAsString(), "the hold refused on the machine thread: " + held[0]);
+        assertTrue(held[0].toString().contains("a dispense task is starting or running"), held[0].toString());
+        assertEquals(org.openpnp.instancelabs.dispense.RunResult.Status.OK, r.status, r.toString());
+        assertFalse(sim.server.sinceMark().contains(ControllerCommands.PUMP_ON), "the pump never went on");
+
+        // the other order: the hold is on when the engine task reaches the machine thread
+        assertEquals("on", ok("POST", "/api/pressure/start", null).get("state").getAsString());
+        r = svc.checkZ().get(30, java.util.concurrent.TimeUnit.SECONDS);
+        assertEquals(org.openpnp.instancelabs.dispense.RunResult.Status.REFUSED, r.status, r.toString());
+        assertEquals("the pressure hold is on: Pressure off first", r.message);
+        assertFalse(svc.isBusy());
+        assertEquals("on", pressure().get("state").getAsString(), "the hold is untouched");
+        ok("POST", "/api/pressure/stop", null);
+    }
 }

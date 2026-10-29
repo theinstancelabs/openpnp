@@ -20,6 +20,7 @@ import javax.imageio.ImageIO;
 import org.openpnp.instancelabs.dispense.ControllerCommands;
 import org.openpnp.instancelabs.dispense.DispenseConfig;
 import org.openpnp.instancelabs.dispense.DispenseService;
+import org.openpnp.instancelabs.dispense.HomeReport;
 import org.openpnp.machine.reference.driver.GcodeDriver;
 import org.openpnp.model.LengthUnit;
 import org.openpnp.model.Location;
@@ -187,20 +188,27 @@ final class MachineEndpoints {
         }
         ctx.requireNoPressureHold();
         boolean wait = Json.bool(r.json(), "wait", false);
-        Future<Object> f = m.submit(() -> {
+        // With the engine: N1 raised first when a STOP left it low, and a STOP during the home stops the
+        // head for good (the drivers are disconnected), as the engine's own homes (§2.3).
+        boolean safe = svc != null && svc.isAvailable();
+        Future<HomeReport> f = m.submit(() -> {
+            if (safe) {
+                return svc.homeSafely();
+            }
             m.home();
             return null;
         });
         if (!wait) {
             return ApiServer.Response.json(202, Views.map("started", true, "homing", true));
         }
+        HomeReport rep;
         try {
-            f.get(5, TimeUnit.MINUTES);
+            rep = f.get(5, TimeUnit.MINUTES);
         }
         catch (ExecutionException e) {
             throw ApiException.refused("homing failed: " + rootMessage(e));
         }
-        return Views.map("homed", m.isHomed());
+        return Views.map("homed", m.isHomed(), "n1RaisedFromZ", rep == null ? null : rep.n1RaisedFromZ);
     }
 
     static String rootMessage(Throwable t) {
@@ -226,6 +234,23 @@ final class MachineEndpoints {
         s.put("connected", m.isEnabled());
         s.put("homed", m.isHomed());
         s.put("busy", m.isBusy());
+        DispenseService svc = ctx.svcOrNull();
+        if (svc != null) {
+            Map<String, Object> home = Views.home(svc.homePlan());
+            double[] n1 = svc.probeNozzleZ();
+            home.put("n1Z", n1 == null ? null : n1[0]);
+            home.put("n1Low", n1 != null && n1[1] > 0);
+            s.put("home", home);
+            DispenseService.ZCheckPlan zc = svc.zCheckPlan(null, false);
+            List<Map<String, Object>> stale = new ArrayList<>();
+            for (org.openpnp.instancelabs.dispense.ZCheck.Stale x : zc.stale) {
+                stale.add(Views.map("what", x.what, "atMs", x.atMs));
+            }
+            s.put("zCheck", Views.map("needed", zc.needed, "stale", stale, "homeAtMs", zc.homeAtMs, "reference",
+                    zc.reference == null ? null : Views.map("name", zc.reference.name, "x", zc.reference.x, "y",
+                            zc.reference.y, "z", zc.reference.z), "last", zc.last, "estimateS",
+                    DispenseService.PROBE_POINT_ESTIMATE_S));
+        }
         List<Map<String, Object>> drivers = new ArrayList<>();
         for (Driver d : m.getDrivers()) {
             Map<String, Object> dm = new LinkedHashMap<>();
