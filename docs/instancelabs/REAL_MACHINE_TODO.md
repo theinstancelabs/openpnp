@@ -5,6 +5,49 @@ dots, F9 Stop), and the simulator acceptance passes on it
 (`/home/lumen/instancelabs/sim-acceptance/bench-sync-20261028-003315/results.json`). The simulator cannot show the
 items below. Each one says why, and how to check it on the machine. Do them roughly in this order.
 
+## Automatic-registration session (2026-10-29 00:00–00:22, board 3 and the blank)
+
+Branch `il/bench-sync-autoreg` (37fe1af46) in real mode. Data: `~/instancelabs/runs/sw_session2/`:
+`register_b3_1.json`, `register_b3_2.json`, `blank_probe1.json`, `probe_300.32_245.5.json`, `looks/` with
+`looks/labels.json`, `OpenPnP_session2.log`. (`dispense_session2.db` there is the main file without its WAL: it has
+no tables, so the PROBE records are only in the JSON results.) Fixes F1, F2 and F4 are on `il/fix-real1`.
+
+**What worked.** Home when needed (stopped/reconnected, homed in 23 s). Fiducial registration of board 3: 3
+fiducials, 1–2 frames each, centred to 0.2–2.4 px. The fit's scale 1.0014 / 0.9940 matches the bench's fit of the
+same board (1.0016 / 0.9935). The second Register saw the same seat (fiducials moved 0.003–0.03 mm).
+
+- **F1, the camera look refused bare spots.** It refused 4 of 12 bare spots: glossy blank in the dark zone between
+  the ring light's reflections (the whole disc ~22 from the ring's median: 89–97 % "foreign", `blank_probe1.json`
+  refused all 3 spots at X 320–324, Y 245.5) and board 3's scratched mask (54–60 %). It still refused every paste
+  dot, the mounting-hole ring and the board edge.
+  - Fixed: the look compares the spot with a smooth colour field fitted to the ring, raises its threshold for small
+    patches on a rough surface, and counts only solid patches; wide patches (0.4 mm across) 22 or more from the field
+    count whatever the texture, so board 3's rough mask cannot hide paste, a hole or an edge. All 20 real frames are
+    test fixtures (`src/test/resources/…/vision/real/`): bare spots read 0–1.3 %, paste, holes and edges 31–87 %.
+  - Not seen on a mask as rough as board 3's at (37, 37): paste within ~35 of the mask (a 0.7 mm dot 40 out reads
+    12 %), and an edge across the spot only just (6 %, board 3's texture laid over the edge frame).
+  - On the machine: probe the blank at X 322–328, Y 245.5 again, and register board 3 with a probe. Each PROBE
+    record's look now also holds `rawShare`, `threshold` and `wideShare`; send any wrong call with its frame.
+- **F2, the board probe chose corner targets on a mounting hole.** The plan had no dots (`dots: []`), so the
+  corners came from the outline 2 mm in. Target (2, 2) and its alternates (4, 2) and (3, 3.73), 2 mm apart, all saw
+  ftp's corner mounting hole (`looks/b3reg_corner_2_2_alt_openpnp.png`: a 5.6 mm copper ring around about (5.0, 4.5)).
+  The bench's spots (8, 8) … (67, 67) worked.
+  - Fixed: without dots the corners sit 8 mm in; without board art a mounting hole is assumed in each corner; the
+    alternates step 5 mm and spread in direction (2 mm only where 5 mm is not free), 4 by default.
+  - On the machine: a saved `dispense-config.json` keeps its `vacuumProbe.alternates` (the session ran with 2): set
+    it to 4. With 2, the two alternates leave in opposite directions.
+- **F3, the loose, bowed blank.** At X 300.32, Y 245.5 N1 sealed slowly from Z 6.5 and did not let go at 6.0. The
+  probe refused (“N1 did not let go of the surface within 1.5 s”, `probe_300.32_245.5.json`): correct. Hold the
+  blank down (clamp or tape at its edges, clear of the purge row) before probing or dispensing on it again.
+- **F4, FID1 was accepted 9.24 mm from its expected position with `searchRadiusMm` 8.** The board had moved
+  (turned 3.9°). Visited from home, FID2 and FID3 came first, and the radius was measured from FID1's prediction (the
+  similarity of FID2 and FID3), 8.7 mm from its expected position; the mark sat 0.53 mm from that prediction.
+  - Fixed: the radius bounds the distance from the expected position. A board seated farther than that off its
+    nominal now stops with “FID1 not found within 8.0 mm of X …”: correct the board X/Y, or widen
+    `fiducialCheck.searchRadiusMm` (up to 12). AUTO_REGISTER_DESIGN §3.3 and §3.7 still say “from the prediction”.
+- **F5, the needle anchor was typed, not measured.** `POST /api/needle/anchor` at 00:13:19 took a typed value.
+  Before dispensing, touch off on the blank and record the anchor from the measured contact (item 7).
+
 ## First real-machine session (2026-10-28 02:20–03:05, copper blank only)
 
 The fork ran in real mode on a **copy** of the config (`~/instancelabs/realcfg-sw-20261028`, with the patched

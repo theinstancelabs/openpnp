@@ -56,6 +56,10 @@ public final class VacuumProber {
     public static final class Look {
         public boolean bare;
         public double foreignShare, ringSpread;
+        /** Share of the spot over the threshold before the solid-patch rule, and that threshold (the record). */
+        public double rawShare, threshold;
+        /** Share of the spot in wide patches, whatever the texture (the record). */
+        public double wideShare;
         public String reason;
     }
 
@@ -89,7 +93,7 @@ public final class VacuumProber {
         public double floorBelowMm = 1.5;
         public int openAirMinCounts = -1900000;
         public int openAirMaxCounts = -1200000;
-        public int alternates = 2;
+        public int alternates = 4;
         public int vacuumSettleMs = 1500;
         public int readDelayMs = 70;
         // code constants (bench probe.py and its log)
@@ -220,7 +224,7 @@ public final class VacuumProber {
         public Double bx, by;
         /** Check touches (same seat, Z check): the stored contact Z; the window is built around it. */
         public Double storedZ;
-        /** Machine X/Y of the alternates, nearest first; and the same in board mm (board targets). */
+        /** Machine X/Y of the alternates, in the order to try them; and the same in board mm (board targets). */
         public List<double[]> alternates = new ArrayList<>();
         public List<double[]> alternatesBoard = new ArrayList<>();
     }
