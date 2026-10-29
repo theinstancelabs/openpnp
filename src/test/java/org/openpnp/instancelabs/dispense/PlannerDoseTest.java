@@ -444,6 +444,29 @@ public class PlannerDoseTest {
     }
 
     /**
+     * Decision 14: a pad too close to a neighbour is held back also when every pad of its part is: R2
+     * sits 0.85 mm from R1 and R3 (the tip's smallest dot would land on their copper), while R4, far
+     * off, keeps its dots.
+     */
+    @Test
+    public void aPartMadeOnlyOfPadsTooCloseToANeighbourIsHeldBack() {
+        DispenseConfig c = GcodeStreamTest.toyConfig();
+        PadType chip = chip0603();
+        List<PadGeometry> pads = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            pads.addAll(part("R" + (i + 1), "R_0603_1608Metric", 100 + 2.5 * i, 80, 1.65, 0.8, 0.95, chip));
+        }
+        pads.addAll(part("R4", "R_0603_1608Metric", 115, 80, 1.65, 0.8, 0.95, chip));
+        DispensePlan p = new DispensePlanner(c, new PadTypeResolver(Collections.singletonList(chip), null))
+                .plan("row", pads, 77.5, 40);
+        for (String id : new String[] {"R1.1", "R1.2", "R2.1", "R2.2", "R3.1", "R3.2"}) {
+            assertEquals(Collections.singletonList("PART_NOT_DISPENSABLE"), padOf(p, id).flagNames(), id);
+        }
+        assertEquals(2, p.dots.size());
+        assertTrue(padOf(p, "R4.1").flags.isEmpty());
+    }
+
+    /**
      * Decision 4 where no dot would bridge: a DO-220AA mapped whole to its tab's type (4 half turns).
      * The pin is too narrow for any plan (a half-turn dot reaches 0.28 mm past it), so neither the pin
      * nor the tab gets paste; with the package set to paste partly, only the tab.
