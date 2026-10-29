@@ -75,6 +75,34 @@ public final class WeighPlan {
      * {@code outMm} beyond its outer dots, then its centre (last).
      */
     public static List<double[]> looks(List<double[]> grid, double outMm) {
+        double[] b = box(grid);
+        List<double[]> l = new ArrayList<>();
+        l.add(new double[] {b[0] - outMm, b[1] - outMm});
+        l.add(new double[] {b[2] + outMm, b[1] - outMm});
+        l.add(new double[] {b[2] + outMm, b[3] + outMm});
+        l.add(new double[] {b[0] - outMm, b[3] + outMm});
+        l.add(new double[] {(b[0] + b[2]) / 2, (b[1] + b[3]) / 2});
+        return l;
+    }
+
+    /**
+     * A grid whose dots, each {@code insetMm} inside the coupon's edges, stay inside what another grid and its inset
+     * cover: the coupon step checked the margin around that grid (§7.2 step 2), so it holds for this one too. False
+     * for no grid (the dots do not fit the coupon).
+     */
+    public static boolean within(List<double[]> grid, double insetMm, List<double[]> checked, double checkedInsetMm) {
+        if (grid == null || grid.isEmpty() || checked == null || checked.isEmpty()) {
+            return false;
+        }
+        double[] g = box(grid);
+        double[] c = box(checked);
+        double e = 1e-9;
+        return g[0] - insetMm >= c[0] - checkedInsetMm - e && g[1] - insetMm >= c[1] - checkedInsetMm - e
+                && g[2] + insetMm <= c[2] + checkedInsetMm + e && g[3] + insetMm <= c[3] + checkedInsetMm + e;
+    }
+
+    /** {minX, minY, maxX, maxY} of the dots. */
+    private static double[] box(List<double[]> grid) {
         double minX = Double.MAX_VALUE, minY = Double.MAX_VALUE, maxX = -Double.MAX_VALUE, maxY = -Double.MAX_VALUE;
         for (double[] p : grid) {
             minX = Math.min(minX, p[0]);
@@ -82,13 +110,7 @@ public final class WeighPlan {
             maxX = Math.max(maxX, p[0]);
             maxY = Math.max(maxY, p[1]);
         }
-        List<double[]> l = new ArrayList<>();
-        l.add(new double[] {minX - outMm, minY - outMm});
-        l.add(new double[] {maxX + outMm, minY - outMm});
-        l.add(new double[] {maxX + outMm, maxY + outMm});
-        l.add(new double[] {minX - outMm, maxY + outMm});
-        l.add(new double[] {(minX + maxX) / 2, (minY + maxY) / 2});
-        return l;
+        return new double[] {minX, minY, maxX, maxY};
     }
 
     /** The N1 touches on a coupon: 6 mm inside three of its corners (§7.2 step 2). */

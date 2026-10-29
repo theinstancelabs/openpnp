@@ -672,6 +672,15 @@ public class PadCalibrationJobTest {
                 refused(call("POST", "/api/pad-calibrations", body(group, attest())), "refused"));
         ok(call("PUT", "/api/config", "{\"padCalibration\":{\"couponPlaces\":[\"coupon1\",\"coupon2\"]},"
                 + "\"purgeRow\":{\"spots\":20}}"));
+        // review 2: a coupon on the purge row (its dots and the needle's Z are the blank's) or on the board
+        ok(call("PUT", "/api/locations/coupon1", "{\"x\":255,\"y\":215,\"z\":5.80}"));
+        assertEquals("The weigh coupon place coupon1 overlaps the purge row: move it (Setup › Places › coupon1).",
+                refused(call("POST", "/api/pad-calibrations", body(group, attest())), "refused"));
+        ok(call("PUT", "/api/locations/coupon1", "{\"x\":165,\"y\":108,\"z\":5.80}"));
+        assertEquals("The weigh coupon place coupon1 overlaps the pads of padcal-job.board.xml (3 mm around them): "
+                + "move it (Setup › Places › coupon1).", refused(call("POST", "/api/pad-calibrations", body(group,
+                        attest())), "refused"));
+        ok(call("PUT", "/api/locations/coupon1", "{\"x\":350,\"y\":55,\"z\":5.80}"));
         // 8 + 0 for the ladder's one dose; 8 + 5 for the weigh dots (a switch between the two coupons)
         assertEquals("I9: only 20 unused purge spot(s) left, 21 needed: wipe the purge row and reset it",
                 refused(call("POST", "/api/pad-calibrations", body(group, attest())), "refused"));
@@ -770,6 +779,16 @@ public class PadCalibrationJobTest {
     public void homingBeforeEveryStepRefusesAWeighingAtTheStart() throws Exception {
         plan();
         ok(call("PUT", "/api/config", "{\"homeBeforeRun\":\"always\"}"));
+        // review 2: the estimate counts a home before every engine step (the blank, two coupons, ladder, weighing)
+        JsonObject pv = ok(get("/api/pad-calibrations/preview?planId=" + planId + "&groups=" + str(group, "group")));
+        assertTrue(str(pv, "sentence").startsWith("Homes before each of its 5 steps (the setting is: always home "
+                + "first; ≈ "), str(pv, "sentence"));
+        long steps = 0;
+        for (JsonElement e : pv.getAsJsonArray("steps")) {
+            steps += e.getAsJsonObject().get("estimatedSeconds").getAsLong();
+        }
+        assertEquals(steps + 5 * pv.getAsJsonObject("home").get("estimateS").getAsDouble() + pv.getAsJsonObject(
+                "zCheck").get("estimateS").getAsDouble(), pv.get("estimatedSeconds").getAsDouble(), 3, pv.toString());
         assertEquals("homeBeforeRun is 'always': every step homes first, so the coupons' Z would be from before the "
                 + "weigh step's home: set homeBeforeRun to 'whenNeeded' to weigh coupons", refused(call("POST",
                         "/api/pad-calibrations", body(group, attest())), "refused"));
