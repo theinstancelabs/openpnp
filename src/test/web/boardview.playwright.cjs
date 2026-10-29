@@ -1,0 +1,598 @@
+/*
+ * Board render harness (docs/instancelabs/BOARD_IMPORT_DESIGN.md §6.6 a): the board drawing under the job overlay, the
+ * path preview, the pad inspector and the Records map, on a seeded SIM session through devproxy.py --fixtures (which
+ * answers GET /api/board-art/<id> from src/test/web/fixtures and adds the plan's board block, per-dot times and the dot
+ * size). Run by run-boardview-test.sh. Nothing here moves a real machine: the session is a simulator.
+ *
+ * The page glue that boardflow.js (web-flow slice, hooks H1–H5) will own is emulated here with the public APIs:
+ * IL.boardart.get → bv.setArt + bv.picture on the hero (H3) and on the Records map (H4), IL.pathPreview.create in the
+ * hero stage, IL.padInspect.open for a pad. Pads get the plan fields of §4.5 the server does not send yet (typeRule,
+ * padName) through a route, so the inspector's sentences are exercised.
+ *
+ * Checks: (1) structure: two stacked SVGs, no clip path, pad and dot counts equal the plan's; (2) the matrix sign at
+ * 30°: R1 pad 1 and every fiducial of the drawing land within 0.5 px of the overlay's pad and the plan's fiducials, on
+ * drawn copper; (3) contrast of the overlay marks and casing over both themes × 8 mask palettes × Full and Quiet, legend
+ * swatches on the marks' colours; (4) the preview clock (scrub, readout, 16× play, Clear); (5) picture modes; (6)
+ * reference labels (size buckets, never mirrored); (7) a performance gate at 4× CPU throttling with the largest drawing
+ * in the fixtures; (8) 20 create/destroy cycles leave no ResizeObserver; plus thumbnails, the pad inspector, the Records
+ * map, the preview row's layout at 1280 and 1024 px, no JavaScript errors, no native dialogs. Screenshots (1440 and
+ * 1280 px, light and dark) of the Run hero (Full and Quiet), the path preview mid-play, the pad inspector and the
+ * Records map go to SHOTS_DIR.
+ *
+ * Env: IL_BASE (devproxy URL, trailing /), IL_FIXTURES (fixtures dir), PLAYWRIGHT_DIR, OUT_DIR, SHOTS_DIR.
+ */
+'use strict';
+const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
+const { chromium } = require(path.join(process.env.PLAYWRIGHT_DIR, 'node_modules', 'playwright'));
+
+const BASE = process.env.IL_BASE;
+const OUT = process.env.OUT_DIR;
+const SHOTS = process.env.SHOTS_DIR || OUT;
+const FIX = process.env.IL_FIXTURES;
+fs.mkdirSync(OUT, { recursive: true });
+fs.mkdirSync(SHOTS, { recursive: true });
+
+const results = [];
+function check(name, cond, detail) {
+  results.push({ name, ok: !!cond, detail: detail === undefined ? null : detail });
+  console.log((cond ? 'ok   ' : 'FAIL ') + name + (detail !== undefined && !cond ? '  ' + JSON.stringify(detail) : ''));
+}
+const shots = [];
+async function shot(page, name, clip) {
+  const file = path.join(SHOTS, name + '.png');
+  await page.screenshot(clip ? { path: file, clip } : { path: file });
+  shots.push(file);
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** The largest drawing among the fixtures (the performance gate draws it): {id, bytes, file}. */
+function largestArt() {
+  const files = fs.readdirSync(FIX).filter((f) => f.endsWith('.art.json')).map((f) => path.join(FIX, f));
+  const artDir = path.join(FIX, 'art');
+  if (fs.existsSync(artDir)) for (const f of fs.readdirSync(artDir)) if (f.endsWith('.json')) files.push(path.join(artDir, f));
+  return files.map((f) => {
+    const b = fs.readFileSync(f);
+    return { id: crypto.createHash('sha256').update(b).digest('hex').slice(0, 16), bytes: b.length, file: path.basename(f) };
+  }).sort((a, b) => b.bytes - a.bytes)[0];
+}
+
+/** Waits until the hero shows a plan with a board drawing reference (a plan made through devproxy --fixtures); rot: its seat's rotation. */
+async function waitPlan(page, rot) {
+  await page.waitForFunction((r) => {
+    const p = window.IL && IL.S && IL.S.plan;
+    return !!(p && p.board && p.board.art && IL.run && IL.run.bv && IL.run.bv.plan === p
+      && (r === null || Math.abs(Number(p.source && p.source.rotation) - r) < 1e-6));
+  }, rot === undefined ? null : rot, { timeout: 60000 });
+}
+
+/** What boardflow.hero (H3) will do: the drawing under the hero, the picture, the path preview row and #pv-play. */
+async function glueHero(page, picture) {
+  return page.evaluate(async (pic) => {
+    const bv = IL.run.bv;
+    const p = IL.S.plan;
+    const art = await IL.boardart.get(p.board.art.id);
+    bv.setArt(art);
+    bv.picture(pic);
+    document.getElementById('run-hero').classList.add('hero--art');
+    if (!window.__pp) {
+      const stage = document.querySelector('#run-hero .hero__stage');
+      const bar = stage.querySelector('.stage-bar');
+      window.__pp = IL.pathPreview.create({ host: stage, before: document.getElementById('run-timeline'), bv });
+      bar.insertBefore(window.__pp.button, bar.querySelector('.seg'));
+    }
+    window.__pp.setPlan(p);
+    window.__pp.allow((IL.run.mode === 'idle' || IL.run.mode === 'result') && !IL.taskRunning(IL.S.status));
+    return { art: !!art, parts: art ? art.parts.length : 0 };
+  }, picture);
+}
+
+/** What boardflow.recordsMap (H4) will do: the plan's drawing under the done-dot map, Quiet. */
+async function glueRecords(page) {
+  return page.evaluate(async () => {
+    const host = document.querySelector('.rec-mapbox');
+    const bv = IL.boardview.of(host);
+    if (!bv || !bv.plan || !bv.plan.board) return { ok: false };
+    bv.setArt(await IL.boardart.get(bv.plan.board.art.id));
+    bv.picture('quiet');
+    host.scrollIntoView({ block: 'center' });
+    return { ok: true };
+  });
+}
+
+(async () => {
+  const browser = await chromium.launch({ headless: true, args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] });
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  const jsErrors = [];
+  page.on('pageerror', (e) => jsErrors.push(String(e)));
+  page.on('console', (m) => { if (m.type() === 'error') jsErrors.push(m.text()); });
+  const dialogs = [];
+  page.on('dialog', (d) => { dialogs.push(d.message()); d.dismiss(); });
+  // §4.5 pad fields the server adds with the import work (until then: the rule that chose the pad type, the pad name)
+  await page.route(/\/api\/plan(\/[^/?]+)?(\?.*)?$/, async (route) => {
+    const r = await route.fetch();
+    let body = await r.text();
+    try {
+      const j = JSON.parse(body);
+      for (const pad of (j && j.pads) || []) {
+        if (pad.typeRule !== undefined) continue;
+        const m = /0402|0603|0805|1206/.exec(pad.packageId || '');
+        pad.padName = String(pad.padId).split('.').slice(1).join('.');
+        pad.typeRule = pad.typeKey && m ? { kind: 'pattern', detail: '(^|[^0-9])' + m[0] + '([^0-9]|$)', matched: m[0] } : { kind: 'none' };
+      }
+      body = JSON.stringify(j);
+    } catch (e) { /* not JSON: as it came */ }
+    await route.fulfill({ response: r, body });
+  });
+  try {
+    const resp = await page.goto(BASE + '#run');
+    check('UI served through devproxy', resp.ok(), resp.status());
+    await waitPlan(page);
+    const g0 = await glueHero(page, 'full');
+    check('the plan names a board drawing and the drawing loads', g0.art && g0.parts > 0, g0);
+
+    // ---- (1) structure -------------------------------------------------------------------------------------------
+    const st = await page.evaluate(() => {
+      const bv = IL.run.bv, p = IL.S.plan;
+      const host = bv.svg.parentNode;
+      const svgs = Array.from(host.children).filter((n) => n.tagName === 'svg');
+      return {
+        order: svgs.map((s) => s.getAttribute('class') + (s.id ? '#' + s.id : '')),
+        art: !!document.querySelector('.pv-art g.pv-l-art'), edge: !!document.querySelector('.pv-art .pv-a-edge'),
+        exposed: !!document.querySelector('.pv-art .pv-a-exposed'), clip: document.querySelectorAll('#run-hero clipPath').length,
+        pads: document.querySelectorAll('#plan-svg rect.pad').length, dots: document.querySelectorAll('#plan-svg circle.dot').length,
+        planPads: p.pads.length, planDots: p.dots.length, artPadClass: document.querySelectorAll('.pv-art .pad, .pv-art .dot').length,
+        vbSame: bv.svg.getAttribute('viewBox') === bv.artSvg.getAttribute('viewBox'), overlayArt: bv.svg.classList.contains('pv--art'),
+        hiddenBoard: getComputedStyle(bv.svg.querySelector('.pv-l-board')).display === 'none',
+        artPointer: getComputedStyle(bv.artSvg).pointerEvents, parts: document.querySelectorAll('#plan-svg .pv-l-parts rect.pv-part').length,
+      };
+    });
+    check('two stacked SVGs: the drawing under #plan-svg', st.order.length === 2 && /pv-art/.test(st.order[0]) && /#plan-svg$/.test(st.order[1]), st.order);
+    check('drawing has g.pv-l-art, .pv-a-edge, .pv-a-exposed; no clip path', st.art && st.edge && st.exposed && st.clip === 0, st);
+    check('#plan-svg rect.pad and circle.dot equal the plan (no art node uses pad or dot)', st.pads === st.planPads && st.dots === st.planDots
+      && st.artPadClass === 0, st);
+    check('same viewBox on both SVGs, .pv--art on the overlay, its substrate hidden, the drawing takes no pointer events',
+      st.vbSame && st.overlayArt && st.hiddenBoard && st.artPointer === 'none', st);
+    check('part hit rects from the drawing', st.parts > 80, st.parts);
+
+    // ---- screenshots (bench seat of the session's plan, idle) ---------------------------------------------------------
+    for (const [w, h] of [[1440, 900], [1280, 800]]) {
+      await page.setViewportSize({ width: w, height: h });
+      for (const theme of ['light', 'dark']) {
+        await page.evaluate((t) => IL.setTheme(t), theme);
+        await glueHero(page, 'full');
+        await page.evaluate(() => { IL.run.bv.setView('dots'); IL.render(); });
+        await sleep(500);
+        await shot(page, 'run-hero-full-' + w + '-' + theme);
+        await glueHero(page, 'quiet');
+        await sleep(300);
+        await shot(page, 'run-hero-quiet-' + w + '-' + theme);
+        // path preview mid-play (16×, paused half way)
+        await page.evaluate(() => { const pp = window.__pp; pp.setSpeed(16); pp.seek(64); pp.play(); });
+        await page.waitForFunction(() => window.__pp.state.v >= 80, null, { timeout: 15000 });
+        await page.evaluate(() => window.__pp.pause());
+        await sleep(200);
+        await shot(page, 'path-preview-' + w + '-' + theme);
+        await page.evaluate(() => window.__pp.clear());
+        // pad inspector open on R1 pad 1
+        await page.evaluate(() => IL.padInspect.open({ padId: 'R1.1' }, { bv: IL.run.bv }));
+        await page.waitForSelector('#panel[data-view=pad] #pad-insp-svg svg.pv-art:not([hidden])', { timeout: 10000 });
+        await sleep(500);
+        await shot(page, 'pad-inspector-' + w + '-' + theme);
+        await page.evaluate(() => IL.panel.close());
+      }
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.evaluate(() => IL.setTheme('light'));
+    await glueHero(page, 'full');
+
+    // ---- (5) picture modes ------------------------------------------------------------------------------------------
+    const pm = await page.evaluate(() => {
+      const bv = IL.run.bv;
+      const cs = (sel) => getComputedStyle(bv.artSvg.querySelector(sel));
+      bv.picture('quiet');
+      const q = { quiet: bv.artSvg.classList.contains('pv-art--quiet'), silk: cs('.pv-a-silklines').display, cu: cs('.pv-a-cu').display,
+        exposed: cs('.pv-a-exposed').display, bare: cs('.pv-a-exposed').fill, holes: cs('.pv-a-hole--pth').display, edge: cs('.pv-a-edge').display };
+      bv.picture('off');
+      const o = { hidden: bv.artSvg.hasAttribute('hidden'), display: getComputedStyle(bv.artSvg).display, art: bv.svg.classList.contains('pv--art'),
+        board: getComputedStyle(bv.svg.querySelector('.pv-l-board')).display };
+      bv.picture('full');
+      const f = { silk: cs('.pv-a-silklines').display, art: bv.svg.classList.contains('pv--art'), shown: !bv.artSvg.hasAttribute('hidden') };
+      return { q, o, f };
+    });
+    check('Quiet: .pv-art--quiet, silkscreen and copper under the mask hidden, finish, holes and edge kept', pm.q.quiet && pm.q.silk === 'none'
+      && pm.q.cu === 'none' && pm.q.exposed !== 'none' && pm.q.bare === 'rgb(221, 213, 193)' && pm.q.holes !== 'none' && pm.q.edge !== 'none', pm.q);
+    check('Off: the drawing hidden, no .pv--art, today\'s substrate back', pm.o.hidden && pm.o.display === 'none' && !pm.o.art && pm.o.board !== 'none', pm.o);
+    check('Full: everything back', pm.f.silk !== 'none' && pm.f.art && pm.f.shown, pm.f);
+
+    // ---- (6) reference labels ---------------------------------------------------------------------------------------
+    const lb = await page.evaluate(() => {
+      const bv = IL.run.bv;
+      bv.setView('board');
+      const whole = { lb1: Array.from(bv.artSvg.querySelectorAll('.pv-lb1')).map((n) => getComputedStyle(n).display), k: bv.k };
+      while (bv.zoomBy(1)) { /* to the maximum zoom */ }
+      const r = bv.svg.getBoundingClientRect();
+      const vis = Array.from(bv.artSvg.querySelectorAll('.pv-a-refs text')).filter((n) => {
+        if (getComputedStyle(n).display === 'none') return false;
+        const b = n.getBoundingClientRect();
+        return b.width > 0 && b.left >= r.left && b.right <= r.right && b.top >= r.top && b.bottom <= r.bottom;
+      });
+      const m = vis.length ? vis[0].getScreenCTM() : null;
+      const det = m ? m.a * m.d - m.b * m.c : null;
+      const px = vis.length ? vis[0].getBoundingClientRect().height : null;
+      while (bv.zoomBy(-1)) { /* back */ }
+      bv.setView('dots');
+      return { whole, visible: vis.length, det, px, text: vis.length ? vis[0].textContent : null };
+    });
+    check('whole board: the smallest labels (.pv-lb1) are hidden', lb.whole.lb1.length > 0 && lb.whole.lb1.every((d) => d === 'none'), lb.whole);
+    check('maximum zoom: references show, read the right way round (positive screen determinant), >= 9 px', lb.visible > 0 && lb.det > 0 && lb.px >= 9, lb);
+
+    // ---- (4) path preview clock -------------------------------------------------------------------------------------
+    await page.click('#pv-play');
+    check('#pv-play expands #run-preview', await page.isVisible('#run-preview'));
+    await page.click('#pv-play');   // pause
+    await page.fill('#pv-scrub', '80');
+    const c80 = await page.evaluate(() => ({ pre: document.querySelectorAll('#plan-svg circle.dot.pv-pre').length,
+      text: document.getElementById('pv-readout').textContent, preview: IL.run.bv.svg.classList.contains('pv--preview'),
+      ghost: document.querySelector('#plan-svg .pv-ghost').getAttribute('visibility'), n: IL.S.plan.dots.length }));
+    check('scrub to 80: 80 dots .pv-pre, ghost shown', c80.pre === 80 && c80.preview && c80.ghost === 'visible', c80);
+    check('readout names dot 81', new RegExp('^Dot 81 of ' + c80.n + ' · \\S+ · .+ · Z \\d+\\.\\d+ mm · \\d+:\\d\\d of \\d+:\\d\\d').test(c80.text), c80.text);
+    await page.fill('#pv-scrub', String(c80.n));
+    check('scrub to the end: "All N dots"', new RegExp('^All ' + c80.n + ' dots').test(await page.textContent('#pv-readout')), await page.textContent('#pv-readout'));
+    await page.fill('#pv-scrub', '0');
+    await page.click('#pv-speed button[data-speed="16"]');
+    await page.click('#pv-play');
+    const grew = await page.waitForFunction(() => document.querySelectorAll('#plan-svg circle.dot.pv-pre').length >= 5, null, { timeout: 5000 }).then(() => true, () => false);
+    check('16× play: the dots appear', grew);
+    await page.click('#pv-reset');
+    const cl = await page.evaluate(() => ({ pre: document.querySelectorAll('#plan-svg circle.dot.pv-pre').length, row: document.getElementById('run-preview').hidden,
+      preview: IL.run.bv.svg.classList.contains('pv--preview') }));
+    check('Clear: no .pv-pre, the row collapsed', cl.pre === 0 && cl.row && !cl.preview, cl);
+    // the row fits at 1280 and 1024 px
+    // (at 1024 × 768 the hero stage is at its 280 px minimum before the row opens, run.css: only the overflow is checked)
+    for (const [w, h] of [[1280, 800], [1024, 768]]) {
+      await page.setViewportSize({ width: w, height: h });
+      await page.evaluate(() => { window.__pp.seek(40); });
+      await sleep(400);
+      const lay = await page.evaluate(() => {
+        const r = document.getElementById('run-preview'), bar = document.querySelector('#run-hero .stage-bar');
+        const hh = (n) => Math.round(n.getBoundingClientRect().height);
+        return { sw: r.scrollWidth, cw: r.clientWidth, barSw: bar.scrollWidth, barCw: bar.clientWidth, svgH: hh(document.getElementById('plan-svg')),
+          stage: hh(document.querySelector('#run-hero .hero__stage')), row: hh(r) };
+      });
+      await shot(page, 'layout-preview-row-' + w);
+      check('#run-preview and the stage bar fit at ' + w + ' px' + (w > 1024 ? ', #plan-svg >= 280 px tall' : ''),
+        lay.sw <= lay.cw + 1 && lay.barSw <= lay.barCw + 1 && (w <= 1024 || lay.svgH >= 280), lay);
+      await page.evaluate(() => window.__pp.clear());
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    // ---- pad inspector ----------------------------------------------------------------------------------------------
+    await page.evaluate(() => IL.padInspect.open({ padId: 'R1.1' }, { bv: IL.run.bv }));
+    await page.waitForSelector('#panel[data-view=pad] #pad-insp-svg svg.pv-art:not([hidden])', { timeout: 10000 });
+    await page.waitForFunction(() => /Chip|chip/.test(document.getElementById('pad-insp-kv').textContent), null, { timeout: 10000 });
+    const pi = await page.evaluate(() => {
+      const pad = IL.S.plan.pads.find((x) => x.padId === 'R1.1');
+      return { title: document.getElementById('panel-bar-title').textContent, rule: document.getElementById('pad-insp-rule').textContent,
+        dots: document.querySelectorAll('#pad-insp-dots tbody tr').length, dotCount: pad.dotCount,
+        rows: Array.from(document.querySelectorAll('#pad-insp-pads tr[data-pad]')).map((r) => r.dataset.pad + ':' + r.getAttribute('aria-selected')),
+        sel: document.querySelectorAll('#pad-insp-svg svg rect.pad.sel').length, labels: document.querySelectorAll('#pad-insp-svg .pv-dotlabel').length,
+        hero: document.querySelectorAll('#plan-svg .pv-l-sel .pv-sel').length, edit: document.getElementById('pad-insp-edit').textContent,
+        kv: document.getElementById('pad-insp-kv').textContent, part: document.getElementById('pad-insp-part').textContent };
+    });
+    check('inspector: panel "Pad R1.1", pads of R1 with R1.1 selected', pi.title === 'Pad R1.1' && pi.rows.includes('R1.1:true') && pi.rows.includes('R1.2:false'), pi);
+    check('inspector: one sentence on the rule', /^Chosen because the package name contains “0603” \(pad type Chip 0603, v\d+, \w+\)\./.test(pi.rule), pi.rule);
+    check('inspector: dots table = the pad\'s dot count, the selected pad .sel, path numbers drawn', pi.dots === pi.dotCount && pi.sel === 1 && pi.labels >= 2, pi);
+    check('inspector: the stencil-equivalent amount and the edit link', /A 0\.10 mm stencil would print 0\.076 mm³ \(0\.28 mg\) here\./.test(pi.kv.replace(/\u00a0/g, ' '))
+      && /^Edit pad type Chip 0603$/.test(pi.edit), { kv: pi.kv, edit: pi.edit });
+    check('hero marks the part while the inspector is open', pi.hero >= 1, pi.hero);
+    await page.click('#pad-insp-svg rect.pad[data-pad="R1.2"]');
+    await page.waitForFunction(() => document.getElementById('panel-bar-title').textContent === 'Pad R1.2', null, { timeout: 5000 }).catch(() => {});
+    check('a pad click in the inspector selects that pad', (await page.textContent('#panel-bar-title')) === 'Pad R1.2', await page.textContent('#panel-bar-title'));
+    const before = await page.textContent('#pad-insp-part');
+    await page.click('#pad-insp-next');
+    await sleep(300);
+    check('next part in path order', (await page.textContent('#pad-insp-part')) !== before, await page.textContent('#pad-insp-part'));
+    await page.click('#pad-insp-cam');
+    await page.waitForFunction(() => /Top camera/.test(document.getElementById('panel-bar-title').textContent), null, { timeout: 5000 }).catch(() => {});
+    check('Top camera opens the camera panel', /Top camera/.test(await page.textContent('#panel-bar-title')), await page.textContent('#panel-bar-title'));
+    await page.keyboard.press('Escape');
+    await sleep(300);
+    const back = await page.evaluate(() => ({ pushed: IL.panel.isPushed(), sel: document.querySelectorAll('#plan-svg .pv-l-sel .pv-sel').length }));
+    check('Esc goes back; the hero selection is cleared', !back.pushed && back.sel === 0, back);
+
+    // ---- art-only mode (the upload preview, the hero before planning) ---------------------------------------------------
+    const ao = await page.evaluate(async () => {
+      const host = document.createElement('div');
+      host.id = 'pw-art-only';
+      host.style.cssText = 'position:fixed;left:24px;top:96px;width:520px;height:360px;z-index:50;background:var(--pv-bg);border:1px solid var(--line);border-radius:12px';
+      document.body.appendChild(host);
+      const v = IL.boardview.create(host, { lite: true, aria: 'Upload preview' });
+      const art = await IL.boardart.get(IL.S.plan.board.art.id);
+      v.setBoard({ art, toMachine: [1, 0, 0, 1, 0, 0] });
+      await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+      const cs = (sel) => getComputedStyle(v.artSvg.querySelector(sel)).display;
+      const a = { board: v.artSvg.classList.contains('pv-art--board'), origin: cs('.pv-a-origin'), paste: cs('.pv-a-paste'), art: v.svg.classList.contains('pv--art'),
+        vb: v.svg.getAttribute('viewBox') };
+      v.setAffine([0, 1, -1, 0, 200, 100]);   // the seat changed: 90° at (200, 100)
+      const t = v.artSvg.querySelector('g.pv-l-art').getAttribute('transform');
+      v.update({ cam: { x: 150, y: 140 } });
+      const cam = { vis: v.svg.querySelector('.pv-cam').getAttribute('visibility'), scale: v.svg.querySelector('.pv-scale').getAttribute('visibility'), vb: v.svg.getAttribute('viewBox') };
+      v.setAffine([1, 0, 0, 1, 0, 0]);
+      v.update({});
+      return { a, t, cam };
+    });
+    check('art-only mode: paste openings and the origin marker shown, the view on the board', ao.a.board && ao.a.origin !== 'none' && ao.a.paste !== 'none'
+      && ao.a.art && /^-3 -78 81 81$/.test(ao.a.vb), ao.a);
+    check('art-only mode: a new seat changes the transform only; the camera crosshair and the 5 mm scale bar show, the view takes the camera in',
+      ao.t === 'matrix(0 -1 -1 0 200 -100)' && ao.cam.vis === 'visible' && ao.cam.scale === 'visible', ao);
+    await sleep(200);
+    await shot(page, 'art-only-preview-1440-light', await page.locator('#pw-art-only').boundingBox());
+    await page.evaluate(() => { const h = document.getElementById('pw-art-only'); IL.boardview.of(h).destroy(); h.remove(); });
+
+    // ---- thumbnails ---------------------------------------------------------------------------------------------------
+    const th = await page.evaluate(async () => {
+      const id = IL.S.plan.board.art.id;
+      const art = await IL.boardart.get(id);
+      const u1 = IL.boardart.thumbUrl(art, { w: 96, h: 64, id });
+      const u2 = IL.boardart.thumbUrl(await IL.boardart.get(id), { w: 96, h: 64, id });
+      const img = new Image();
+      img.src = u1;
+      await img.decode();
+      return { blob: u1.startsWith('blob:'), same: u1 === u2, w: img.naturalWidth, h: img.naturalHeight };
+    });
+    check('thumbnail: a blob: image of 96 × 64 px, rendered once per drawing', th.blob && th.same && th.w === 96 && th.h === 64, th);
+
+    // ---- (3) contrast: both themes × 8 mask palettes × Full and Quiet --------------------------------------------------
+    const ct = await page.evaluate(async () => {
+      const parse = (s) => {
+        s = String(s).trim();
+        let m = /^#([0-9a-f]{6})$/i.exec(s);
+        if (m) return [0, 2, 4].map((i) => parseInt(m[1].slice(i, i + 2), 16));
+        m = /rgba?\(([^)]+)\)/.exec(s);
+        return m ? m[1].split(/[ ,/]+/).filter(Boolean).slice(0, 3).map(Number) : null;
+      };
+      const lum = (c) => { const v = c.map((x) => { x /= 255; return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4); }); return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]; };
+      const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+      const host = document.createElement('div');
+      host.style.cssText = 'position:fixed;left:0;top:0;width:400px;height:300px;opacity:0;pointer-events:none';
+      document.body.appendChild(host);
+      const v = IL.boardview.create(host, { lite: true });
+      v.setPlan(IL.S.plan, {});
+      v.setArt(await IL.boardart.get(IL.S.plan.board.art.id));
+      const d0 = IL.S.plan.dots[0];
+      v.update({ next: 1, check: { index: 2, label: 'x' }, probe: { targets: [{ x: d0.x, y: d0.y }], points: [{ x: d0.x, y: d0.y }, { x: d0.x + 5, y: d0.y }, { x: d0.x, y: d0.y + 5 }], margin: 3.5 } });
+      v.preview({ n: 3, ghost: { x: d0.x, y: d0.y } });
+      const legend = document.createElement('div');
+      legend.className = 'hero--art';
+      legend.innerHTML = '<i class="lg lg-dot"></i><i class="lg lg-done"></i><i class="lg lg-next"></i><i class="lg lg-dirty"></i><i class="lg lg-pad"></i>';
+      host.appendChild(legend);
+      const pad = v.svg.querySelector('rect.pad'), dot = v.svg.querySelector('circle.dot');
+      const cs = (n) => getComputedStyle(n);
+      const stateCol = (cls, prop) => { pad.classList.add(cls); const c = parse(cs(pad)[prop]); pad.classList.remove(cls); return c; };
+      const cased = ['.pv-next', '.pv-check', '.pv-first', '.pv-path', '.pv-hull', '.pv-path--pre', '.pv-sel'];
+      v.select({ padIds: [pad.dataset.pad], refs: [IL.S.plan.pads[0].placementId] });
+      const fails = [];
+      let worstIn = Infinity, worstCase = Infinity;
+      const MASKS = ['slate', 'green', 'red', 'blue', 'purple', 'black', 'white', 'yellow'];
+      for (const theme of ['light', 'dark']) {
+        IL.setTheme(theme);
+        for (const mask of MASKS) {
+          v.artSvg.dataset.mask = mask;
+          for (const pic of ['full', 'quiet']) {
+            v.picture(pic);
+            const a = cs(v.artSvg);
+            const bare = parse(a.getPropertyValue('--pv-a-bare')), sub = parse(a.getPropertyValue('--pv-a-sub'));
+            const mk = parse(a.getPropertyValue('--pv-a-mask')), op = Number(a.getPropertyValue('--pv-a-mask-op'));
+            const comp = mk.map((x, i) => Math.round(x * op + sub[i] * (1 - op)));
+            // rule 1: marks inside a pad, on the finish
+            const inPad = { aperture: parse(cs(pad).stroke), blocked: stateCol('blocked', 'stroke'), pasted: stateCol('pasted', 'stroke'),
+              check: stateCol('check', 'stroke'), dirty: stateCol('dirty', 'fill'), dot: parse(cs(dot).stroke) };
+            dot.classList.add('done'); inPad.done = parse(cs(dot).fill); dot.classList.remove('done');
+            for (const [k, c] of Object.entries(inPad)) {
+              const r = ratio(c, bare);
+              worstIn = Math.min(worstIn, r);
+              if (r < 3) fails.push([theme, mask, pic, k, r.toFixed(2)]);
+            }
+            // rule 2: cased marks, the better casing tone against the finish and the mask composite
+            for (const sel of cased) {
+              const core = v.svg.querySelector(sel);
+              const g = core && core.closest('.pv-cased');
+              const l = g && g.querySelector('.pv-case--l'), d = g && g.querySelector('.pv-case--d');
+              if (!l || !d) { fails.push([sel, 'no casing']); continue; }
+              const cl = parse(cs(l).stroke), cd = parse(cs(d).stroke);
+              for (const bg of [bare, comp]) {
+                const r = Math.max(ratio(cl, bg), ratio(cd, bg));
+                worstCase = Math.min(worstCase, r);
+                if (r < 3) fails.push([theme, mask, pic, sel, r.toFixed(2)]);
+              }
+            }
+            for (const sel of ['.pv-ghost', '.pv-probe', '.pv-callout']) {
+              const g = v.svg.querySelector(sel);
+              if (g && !(g.querySelector('.pv-case--l') && g.querySelector('.pv-case--d'))) fails.push([sel, 'no casing']);
+            }
+            // rule 4: legend swatches on the marks' colours
+            const sw = (cls, prop) => parse(cs(legend.querySelector('.' + cls))[prop]);
+            dot.classList.add('done'); const doneFill = parse(cs(dot).fill); dot.classList.remove('done');
+            const same = (a1, b1) => a1 && b1 && a1.every((x, i) => Math.abs(x - b1[i]) <= 1);
+            if (!same(sw('lg-dot', 'borderTopColor'), parse(cs(dot).stroke))) fails.push([theme, 'lg-dot']);
+            if (!same(sw('lg-done', 'backgroundColor'), doneFill)) fails.push([theme, 'lg-done']);
+            if (!same(sw('lg-next', 'borderTopColor'), parse(cs(v.svg.querySelector('.pv-next')).stroke))) fails.push([theme, 'lg-next']);
+            if (!same(sw('lg-dirty', 'backgroundColor'), stateCol('dirty', 'fill'))) fails.push([theme, 'lg-dirty']);
+          }
+        }
+      }
+      IL.setTheme('light');
+      v.destroy();
+      host.remove();
+      return { fails: fails.slice(0, 20), nFails: fails.length, worstIn: worstIn.toFixed(2), worstCase: worstCase.toFixed(2) };
+    });
+    check('contrast: in-pad marks >= 3:1 on the finish, the better casing tone >= 3:1 on the finish and every mask composite (2 themes × 8 palettes × Full/Quiet), legend swatches = marks',
+      ct.nFails === 0, ct);
+
+    // ---- (8) destroy: no ResizeObserver left after 20 create/destroy cycles ---------------------------------------------
+    const ds = await page.evaluate(async () => {
+      const RO = window.ResizeObserver;
+      let active = 0;
+      window.ResizeObserver = class extends RO {
+        observe(t, o) { if (!this.on) { this.on = true; active++; } return super.observe(t, o); }
+        disconnect() { if (this.on) { this.on = false; active--; } return super.disconnect(); }
+      };
+      const host = document.createElement('div');
+      host.style.cssText = 'position:fixed;left:-3000px;top:0;width:300px;height:200px';
+      document.body.appendChild(host);
+      const art = await IL.boardart.get(IL.S.plan.board.art.id);
+      for (let i = 0; i < 20; i++) {
+        const v = IL.boardview.create(host, { lite: true });
+        v.setPlan(IL.S.plan, {});
+        v.setArt(art);
+        v.preview({ n: 3, ghost: null });
+        v.destroy();
+      }
+      const out = { active, svgs: host.querySelectorAll('svg').length, of: IL.boardview.of(host) };
+      window.ResizeObserver = RO;
+      host.remove();
+      return out;
+    });
+    check('20 create/destroy cycles leave no ResizeObserver and no SVG', ds.active === 0 && ds.svgs === 0 && ds.of === null, ds);
+
+    // ---- Records map (H4): a 20-dot SIM run, then its done-dot map on the drawing ---------------------------------------
+    const planId = await page.evaluate(() => IL.S.plan.planId);
+    const run = await (await page.request.post(BASE + 'api/run', { data: { planId, maxDots: 20, wait: true }, timeout: 600000 })).json();
+    const runId = run && run.result && run.result.runId;
+    check('a 20-dot run on the simulator (for the Records map)', !!runId && run.result.status === 'OK', run && (run.result || run));
+    if (runId) {
+      await page.evaluate((id) => IL.go('#records/boards/' + id), runId);
+      // the map is rebuilt once the run's dot timings arrive (its done dots): glue the drawing after that
+      await page.waitForSelector('.rec-mapbox svg.pv:not(.pv-art) circle.dot.done', { timeout: 30000 });
+      await sleep(300);
+      const gr = await glueRecords(page);
+      const rec = await page.evaluate(() => ({ edge: !!document.querySelector('.rec-mapbox .pv-art .pv-a-edge'),
+        shown: !document.querySelector('.rec-mapbox svg.pv-art').hasAttribute('hidden'),
+        quiet: document.querySelector('.rec-mapbox svg.pv-art').classList.contains('pv-art--quiet'),
+        done: document.querySelectorAll('.rec-mapbox circle.dot.done').length }));
+      check('Records: the map draws the plan\'s board (.rec-mapbox .pv-art .pv-a-edge, Quiet) with its done dots', gr.ok && rec.edge && rec.shown && rec.quiet && rec.done === 20, rec);
+      for (const [w, h] of [[1440, 900], [1280, 800]]) {
+        await page.setViewportSize({ width: w, height: h });
+        for (const theme of ['light', 'dark']) {
+          await page.evaluate((t) => IL.setTheme(t), theme);
+          await glueRecords(page);
+          await sleep(400);
+          await shot(page, 'records-map-' + w + '-' + theme);
+        }
+      }
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.evaluate(() => IL.setTheme('light'));
+    }
+
+    // ---- (2) the matrix sign at 30° ---------------------------------------------------------------------------------
+    await page.evaluate(() => IL.go('#run/board'));
+    await page.waitForFunction(() => [...document.querySelectorAll('#board-select option')].some((o) => /^file:.*ftp\.board\.xml$/.test(o.value)), null, { timeout: 15000 });
+    const opt = await page.$$eval('#board-select option', (os) => os.map((o) => o.value).find((v) => /^file:.*ftp\.board\.xml$/.test(v)));
+    await page.selectOption('#board-select', opt);
+    await page.fill('#board-x', '120');
+    await page.fill('#board-y', '120');
+    await page.fill('#board-z', '10');
+    await page.fill('#board-rot', '30');
+    await page.click('#btn-plan');
+    await waitPlan(page, 30);
+    await glueHero(page, 'full');
+    await sleep(400);
+    const al = await page.evaluate(() => {
+      const bv = IL.run.bv, p = IL.S.plan, art = bv.art;
+      const g = bv.artSvg.querySelector('g.pv-l-art');
+      const ctmA = g.getScreenCTM(), ctmO = bv.svg.getScreenCTM();
+      const exposed = bv.artSvg.querySelector('.pv-a-exposed');
+      const r1 = art.parts.find((x) => x.ref === 'R1');
+      const a = r1.a * Math.PI / 180;
+      // pad 1 of R_0603_1608Metric sits at (−0.825, 0) in the part frame (KiCad's footprint, the pad type's pitch)
+      const bp = { x: r1.x - 0.825 * Math.cos(a), y: r1.y - 0.825 * Math.sin(a) };
+      const sa = new DOMPoint(bp.x, bp.y).matrixTransform(ctmA);
+      const rect = bv.svg.querySelector('rect.pad[data-pad="R1.1"]');
+      const so = new DOMPoint(0, 0).matrixTransform(rect.getScreenCTM());
+      const fids = art.fiducials.map((f) => {
+        const s1 = new DOMPoint(f.bx, f.by).matrixTransform(ctmA);
+        const q = p.board.fiducials.find((x) => x.id === f.name);
+        const s2 = new DOMPoint(q.x, -q.y).matrixTransform(ctmO);
+        return { id: f.name, px: +Math.hypot(s1.x - s2.x, s1.y - s2.y).toFixed(3), copper: exposed.isPointInFill(new DOMPoint(f.bx, f.by)) };
+      });
+      return { rot: p.source.rotation, pad: +Math.hypot(sa.x - so.x, sa.y - so.y).toFixed(3), padCopper: exposed.isPointInFill(new DOMPoint(bp.x, bp.y)),
+        fids, pxPerMm: +(1 / bv.k).toFixed(2) };
+    });
+    check('30°: the drawing\'s R1 pad 1 lies within 0.5 px of rect.pad[data-pad="R1.1"], on drawn copper', al.pad <= 0.5 && al.padCopper, al);
+    check('30°: every fiducial of the drawing within 0.5 px of the plan\'s board.fiducials, on drawn copper',
+      al.fids.length === 3 && al.fids.every((x) => x.px <= 0.5 && x.copper), al.fids);
+    await shot(page, 'run-hero-30deg-1440-light');
+
+    // ---- (7) performance gate at 4× CPU throttling ------------------------------------------------------------------
+    const big = largestArt();
+    const cdp = await context.newCDPSession(page);
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
+    const measure = () => page.evaluate(async (id) => {
+      const bv = IL.run.bv;
+      const frame = () => new Promise((r) => requestAnimationFrame(() => r(performance.now())));
+      const painted = () => new Promise((r) => requestAnimationFrame(() => setTimeout(() => r(performance.now()), 0)));
+      const art = await IL.boardart.get(id);
+      const keep = bv.art;
+      bv.setArt(null);
+      await painted();
+      const t0 = performance.now();
+      bv.setArt(art);
+      const artMs = (await painted()) - t0;
+      bv.setArt(keep);
+      await painted();
+      // 16× preview: frame times over 5 s
+      const pp = window.__pp;
+      pp.setSpeed(16);
+      pp.seek(0);
+      pp.play();
+      const gaps = [];
+      let last = await frame();
+      const end = last + 5000;
+      while (last < end) { const t = await frame(); gaps.push(t - last); last = t; if (!pp.state.playing) { pp.seek(0); pp.play(); } }
+      pp.clear();
+      gaps.sort((a, b) => a - b);
+      const p95 = gaps[Math.floor(gaps.length * 0.95)];
+      // a poll: bv.update() and the paint after it (the wait for the next frame itself excluded)
+      const n = IL.S.plan.dots.length;
+      const polls = [];
+      for (let i = 0; i < 10; i++) {
+        const done = new Set(Array.from({ length: (i * 7) % n }, (_, j) => j));
+        await painted();
+        const a0 = performance.now();
+        bv.update({ done });
+        const a1 = performance.now();
+        const f0 = await frame();
+        const f1 = await new Promise((r) => setTimeout(() => r(performance.now()), 0));
+        polls.push((a1 - a0) + (f1 - f0));
+      }
+      bv.update({ done: [] });
+      polls.sort((a, b) => a - b);
+      return { artMs: +artMs.toFixed(1), p95: +p95.toFixed(1), frames: gaps.length, pollMs: +((polls[4] + polls[5]) / 2).toFixed(1) };
+    }, big.id);
+    let perf = await measure();
+    const okPerf = (x) => x.artMs <= 1000 && x.p95 <= 33 && x.pollMs <= 16;
+    if (!okPerf(perf)) perf = Object.assign(await measure(), { repeated: true });
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+    check('performance at 4× CPU throttling (' + big.file + ', ' + Math.round(big.bytes / 1024) + ' KB): drawing <= 1,000 ms, 16× preview p95 frame <= 33 ms, poll + paint <= 16 ms',
+      okPerf(perf), perf);
+    perf.art = big;
+    fs.writeFileSync(path.join(OUT, 'perf.json'), JSON.stringify(perf, null, 2));
+
+    check('no native dialogs (confirm / alert / prompt)', dialogs.length === 0, dialogs);
+    const real = jsErrors.filter((e) => !/Failed to load resource: the server responded with a status of 4\d\d/.test(e));
+    check('no JavaScript errors', real.length === 0, jsErrors);
+  } catch (e) {
+    check('scenario completed', false, String(e && e.stack || e));
+    await page.screenshot({ path: path.join(OUT, 'failure.png'), fullPage: true }).catch(() => {});
+  } finally {
+    await browser.close();
+    fs.writeFileSync(path.join(OUT, 'results.json'), JSON.stringify({ results, shots }, null, 2));
+    const failed = results.filter((r) => !r.ok).length;
+    console.log(shots.length + ' screenshots in ' + SHOTS);
+    console.log(failed ? failed + ' check(s) FAILED' : 'all ' + results.length + ' checks passed');
+    process.exit(failed ? 1 : 0);
+  }
+})();
