@@ -128,7 +128,7 @@ injectable `LongSupplier clock`:
 |---|---|
 | `connectedAtMs` | `machineEnabled`. Moves the existing `controllerConnectedAtMs` here; `getControllerConnectedAtMs()` delegates, so I11 is unchanged (D/Interlocks.java:334). |
 | `disabledAtMs` | `machineDisabled` |
-| `homeStartedAtMs` | `homeStarted()`, called right before every engine or API home (§2.3). It is cleared at the next `machineHomed(true)`. |
+| `homeStartedAtMs` | `homeStarted()`, called right before every engine or API home (§2.3). It is cleared at the next `machineHomed(true)`, and by `homeEnded()` when that home ends without one (a STOP or a failure; review 1). |
 | `lastHomeAtMs` | every `machineHomed(m, true)`, from any caller: engine, API, OpenPnP's own Home button (ReferenceMachine.java:542). `null` = no home seen since the service started. |
 | `homeUnconfirmed` | at `machineHomed(true)`: true iff `!m.isEnabled()`, or `homeStartedAtMs != null && disabledAtMs > homeStartedAtMs`. Otherwise false, so a later clean home clears it. A home from OpenPnP's window has no known start and counts as confirmed when the machine is enabled. |
 | `lastHomeMs` | `machineHomed(true) − homeStartedAtMs`, for a confirmed home with a known start |
