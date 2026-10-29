@@ -555,7 +555,7 @@ public class BoardRegistration {
   public AffineTransform transform();
   /** A copy of the nominal board location carrying this transform (the original is never changed). */
   public BoardLocation applyTo(BoardLocation nominal) throws NoninvertibleTransformException;
-  public boolean matches(String boardKey, Nominal n);          // key equal, x/y/z/rotation within 1e-4, same side, same openPnpTransform
+  public boolean matches(String boardKey, Nominal n);          // key equal, x/y/rotation within 1e-4 (not z: F8), same side, same openPnpTransform
   public double maxMovedMm(List<Fid> now);                     // max |found now − found here| over common names
 }
 ```
