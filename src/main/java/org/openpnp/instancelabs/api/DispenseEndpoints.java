@@ -578,7 +578,12 @@ final class DispenseEndpoints {
         }
     }
 
-    Object packages() {
+    /** OpenPnP's packages, read on OpenPnP's thread (an import may be adding some). */
+    Object packages() throws Exception {
+        return EdtRunner.call(this::packagesNow, EDT_START_MS);
+    }
+
+    private List<Map<String, Object>> packagesNow() {
         List<Map<String, Object>> l = new ArrayList<>();
         for (Package p : ctx.configuration.getPackages()) {
             Footprint fp = p.getFootprint();
