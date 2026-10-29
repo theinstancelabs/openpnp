@@ -6,6 +6,7 @@ import org.openpnp.instancelabs.vision.CameraCapture;
 import org.openpnp.instancelabs.vision.Dot;
 import org.openpnp.instancelabs.vision.DotInspector;
 import org.openpnp.instancelabs.vision.DotInspectorSettings;
+import org.openpnp.model.Length;
 import org.openpnp.model.LengthUnit;
 import org.openpnp.model.Location;
 import org.openpnp.spi.Camera;
@@ -32,6 +33,17 @@ public class OpenPnpDotImager implements DotImager {
         MovableUtils.moveToLocationAtSafeZ(camera,
                 new Location(LengthUnit.Millimeters, xMm, yMm, cur.getZ(), cur.getRotation()));
         CameraCapture.Capture c = CameraCapture.capture(camera);
+        return new Frame(c.image, c.mmPerPxX, c.mmPerPxY, xMm, yMm);
+    }
+
+    /** The same move, then OpenPnP's light-settle-capture (the light actuator of the camera on). */
+    @Override
+    public Frame captureLit(double xMm, double yMm, Double surfaceZMm) throws Exception {
+        Location cur = camera.getLocation().convertToUnits(LengthUnit.Millimeters);
+        MovableUtils.moveToLocationAtSafeZ(camera,
+                new Location(LengthUnit.Millimeters, xMm, yMm, cur.getZ(), cur.getRotation()));
+        CameraCapture.Capture c = CameraCapture.captureLit(camera,
+                surfaceZMm == null ? null : new Length(surfaceZMm, LengthUnit.Millimeters));
         return new Frame(c.image, c.mmPerPxX, c.mmPerPxY, xMm, yMm);
     }
 

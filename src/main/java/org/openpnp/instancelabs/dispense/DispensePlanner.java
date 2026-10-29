@@ -45,6 +45,7 @@ public class DispensePlanner {
         String name = bl.getBoard() == null ? bl.getId() : bl.getBoard().getName();
         DispensePlan plan = plan(name, r.pads, startX, startY);
         plan.boardLocationId = bl.getId();
+        plan.boardZMm = bl.getGlobalLocation().convertToUnits(org.openpnp.model.LengthUnit.Millimeters).getZ();
         plan.warnings.addAll(0, r.warnings);
         return plan;
     }

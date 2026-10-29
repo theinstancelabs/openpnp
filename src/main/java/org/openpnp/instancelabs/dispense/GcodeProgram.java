@@ -80,6 +80,12 @@ public class GcodeProgram {
     /** Step count and screw angle where the first work dot starts (after the purge), or null. */
     public Long workStartCount;
     public Double workStartAngleDeg;
+    /**
+     * Frame reference of the surface the dots take their Z from when it is not the needle frame (board
+     * programs: the plan's board top Z), else null; the needle floor follows the lower of the two
+     * ({@link DispenseConfig#needleFloorZMm(Double)}).
+     */
+    public Double floorReferenceZMm;
 
     /** All lines (including comments), one per entry. */
     public List<String> text() {

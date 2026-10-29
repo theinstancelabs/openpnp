@@ -1,0 +1,165 @@
+package org.openpnp.instancelabs.dispense;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.awt.geom.AffineTransform;
+import java.awt.geom.Point2D;
+import java.io.File;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+import org.openpnp.model.BoardLocation;
+import org.openpnp.model.LengthUnit;
+import org.openpnp.model.Location;
+import org.openpnp.model.PlacementsHolderLocation.PlacementsTransformStatus;
+import org.openpnp.util.Utils2D;
+
+/** The registration record: applied to a copy only, a stable digest, JSON, identity and movement. */
+public class BoardRegistrationTest {
+    /** The bench's current affine (runs/board_registration.json): scales 1.0011 / 0.9946, a small shear. */
+    static final double[] BENCH = {1.00112, -0.0057, 0.00103, 0.9946, 295.99, 114.52};
+
+    @BeforeAll
+    public static void setup() throws Exception {
+        BoardFeaturesTest.setup();
+    }
+
+    static BoardLocation nominal() {
+        BoardLocation bl = new BoardLocation(BoardFeaturesTest.ftp());
+        bl.setLocation(new Location(LengthUnit.Millimeters, 296.0, 114.5, 5.5, 0));
+        return bl;
+    }
+
+    static BoardRegistration reg(BoardLocation bl, String key, boolean job) {
+        BoardRegistration r = new BoardRegistration();
+        r.id = "3f2a91c0-0000-4000-8000-000000000001";
+        r.boardKey = key;
+        r.boardName = "ftp.board.xml";
+        r.nominal = BoardRegistration.Nominal.of(bl, job);
+        r.affine = BENCH.clone();
+        r.method = "affine-3";
+        r.atMs = 1_793_200_000_000L;
+        r.fiducials = new ArrayList<>(Arrays.asList(fid("FID1", 358.67, 117.31), fid("FID2", 308.89, 184.30),
+                fid("FID3", 358.94, 184.07)));
+        return r;
+    }
+
+    static BoardRegistration.Fid fid(String name, double x, double y) {
+        BoardRegistration.Fid f = new BoardRegistration.Fid();
+        f.name = name;
+        f.x = x;
+        f.y = y;
+        return f;
+    }
+
+    @Test
+    public void appliedToACopyOnly() throws Exception {
+        BoardLocation bl = nominal();
+        AffineTransform before = bl.getLocalToGlobalTransform();
+        BoardRegistration r = reg(bl, BoardRegistration.fileKey(new File("/tmp/ftp.board.xml")), false);
+        BoardLocation c = r.applyTo(bl);
+        assertEquals(PlacementsTransformStatus.LocallySet, c.getPlacementsTransformStatus());
+        assertEquals(PlacementsTransformStatus.NotSet, bl.getPlacementsTransformStatus(), "the source is untouched");
+        assertEquals(before, bl.getLocalToGlobalTransform());
+        assertEquals(r.transform(), c.getLocalToGlobalTransform());
+        assertEquals(5.5, c.getGlobalLocation().convertToUnits(LengthUnit.Millimeters).getZ(), 1e-9,
+                "Z stays the nominal: dot Z comes from the probed plane");
+        // pads follow the affine
+        Location fid1 = Utils2D.calculateBoardPlacementLocation(c, new Location(LengthUnit.Millimeters, 62.4465812,
+                4.69103014, 0, 0));
+        Point2D p = r.transform().transform(new Point2D.Double(62.4465812, 4.69103014), null);
+        assertEquals(p.getX(), fid1.getX(), 1e-9);
+        assertEquals(p.getY(), fid1.getY(), 1e-9);
+        assertTrue(r.isAffineValid());
+    }
+
+    @Test
+    public void theSameRecordGivesTheSameDigest() throws Exception {
+        BoardLocation bl = nominal();
+        BoardRegistration r = reg(bl, "file:/tmp/ftp.board.xml", false);
+        String a = DispenseService.boardRegistration(r.applyTo(bl));
+        r.lastCheckedAtMs = r.atMs + 60_000;
+        r.lastCheckMovedMm = 0.02;
+        assertEquals(a, DispenseService.boardRegistration(r.applyTo(bl)), "the same-seat stamps are not in it");
+        assertNotEquals(a, DispenseService.boardRegistration(bl), "unregistered is another registration");
+        r.affine[4] += 0.01;
+        assertNotEquals(a, DispenseService.boardRegistration(r.applyTo(bl)));
+    }
+
+    @Test
+    public void jsonRoundTrip() {
+        BoardRegistration r = reg(nominal(), "job:Brd1", true);
+        r.simulated = true;
+        r.runId = "run-1";
+        DispenseConfig c = new DispenseConfig();
+        c.putBoardRegistration(r);
+        DispenseConfig back = DispenseConfig.fromJson(c.toJson());
+        BoardRegistration b = back.boardRegistrations.get("job:Brd1");
+        assertEquals(r.id, b.id);
+        assertTrue(Arrays.equals(r.affine, b.affine));
+        assertEquals(r.nominal.openPnpTransform, b.nominal.openPnpTransform);
+        assertEquals("FID3", b.fiducials.get(2).name);
+        assertTrue(b.simulated);
+        assertEquals(c.toJson(), back.toJson());
+        for (Map.Entry<String, BoardRegistration> e : back.boardRegistrations.entrySet()) {
+            assertTrue(e.getValue().matches(e.getKey(), r.nominal));
+        }
+    }
+
+    @Test
+    public void matchesAndMovement() throws Exception {
+        BoardLocation bl = nominal();
+        BoardRegistration file = reg(bl, "file:/a.board.xml", false);
+        assertNull(file.nominal.openPnpTransform);
+        assertTrue(file.matches("file:/a.board.xml", BoardRegistration.Nominal.of(bl, false)));
+        assertFalse(file.matches("file:/b.board.xml", BoardRegistration.Nominal.of(bl, false)));
+        BoardLocation moved = new BoardLocation(bl);
+        moved.setLocation(new Location(LengthUnit.Millimeters, 296.001, 114.5, 5.5, 0));
+        assertFalse(file.matches("file:/a.board.xml", BoardRegistration.Nominal.of(moved, false)));
+        BoardLocation z = new BoardLocation(bl);
+        z.setLocation(new Location(LengthUnit.Millimeters, 296.0, 114.5, 5.50005, 0));
+        assertTrue(file.matches("file:/a.board.xml", BoardRegistration.Nominal.of(z, false)), "within 1e-4");
+        // a job board carries OpenPnP's own transform: OpenPnP's later fiducial check is noticed
+        BoardRegistration job = reg(bl, "job:Brd1", true);
+        assertTrue(job.nominal.openPnpTransform.startsWith("NotSet;"), job.nominal.openPnpTransform);
+        assertTrue(job.matches("job:Brd1", BoardRegistration.Nominal.of(bl, true)));
+        BoardLocation checked = new BoardLocation(bl);
+        AffineTransform t = checked.getLocalToGlobalTransform();
+        t.translate(0.2, 0);
+        checked.setLocalToGlobalTransform(t);
+        assertFalse(job.matches("job:Brd1", BoardRegistration.Nominal.of(checked, true)));
+        String why = job.refusal("job:Brd1", BoardRegistration.Nominal.of(checked, true), () -> true);
+        assertEquals("REG: OpenPnP's fiducial check of this job board changed since registration 3f2a… ("
+                + ZCheck.clock(job.atMs) + "): register again", why);
+        assertEquals("REG: registration 3f2a… belongs to another board or position",
+                job.refusal("job:Brd1", BoardRegistration.Nominal.of(moved, true), () -> true));
+        assertNull(job.refusal("job:Brd1", BoardRegistration.Nominal.of(bl, true), () -> false));
+        // movement over the fiducials both found
+        List<BoardRegistration.Fid> now = Arrays.asList(fid("FID1", 358.67 + 0.03, 117.31 - 0.04),
+                fid("FID3", 358.94, 184.07 + 0.02), fid("FID9", 0, 0));
+        assertEquals(0.05, file.maxMovedMm(now), 1e-9);
+        assertTrue(Double.isNaN(file.maxMovedMm(Arrays.asList(fid("FID9", 0, 0)))));
+    }
+
+    @Test
+    public void aSimulatorRecordIsRefusedUnlessTheGuardSaysSimulator() {
+        BoardLocation bl = nominal();
+        BoardRegistration r = reg(bl, "file:/a.board.xml", false);
+        BoardRegistration.Nominal n = BoardRegistration.Nominal.of(bl, false);
+        r.simulated = true;
+        assertEquals("REG: registration 3f2a… was made on the simulator: register again",
+                r.refusal("file:/a.board.xml", n, () -> false));
+        assertNull(r.refusal("file:/a.board.xml", n, () -> true));
+        r.simulated = false;
+        assertNull(r.refusal("file:/a.board.xml", n, () -> false));
+        assertEquals("3f2a…", r.shortId());
+    }
+}
