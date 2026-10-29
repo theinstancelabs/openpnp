@@ -41,10 +41,10 @@ public final class VacuumProber {
 
         /**
          * The I1 shutdown (M410, the vents, M18 B: {@link DispenseExecutor#shutdown}), sent after a STOP
-         * or when the end lines of a point fail. {@link #gatedIo} implements it.
+         * or when the end lines of a point fail. {@link #gatedIo} implements it. No default: an Io that
+         * cannot vent N1 when its own lift fails must not be possible.
          */
-        default void shutdown() {
-        }
+        void shutdown();
     }
 
     /** The camera look before N1 touches a spot (§ "look before touching"). */
@@ -171,6 +171,14 @@ public final class VacuumProber {
                 throw refused(String.format(Locale.ROOT, "PROBE: %s %.3f puts the probe floor at %.3f, below the "
                         + "lowest N1 Z the probe may use (%.3f): set %s to roughly the N1 contact height", what,
                         nominalZ, w.floorZ, s.absoluteFloorZ, what));
+            }
+            // A board is not checked against the anchor (one frame reference per surface), so a board Z typed
+            // far under it (0) reaches here with a floor taken from the anchor: nothing to descend through.
+            if (w.startZ < w.floorZ - 1e-9) {
+                throw refused(String.format(Locale.ROOT, "PROBE: %s %.3f lies %.3f mm under the needle-frame surface "
+                        + "%.3f: the probe would start at Z %.3f, under its floor %.3f (%.1f mm under the higher of "
+                        + "the two). Set %s to roughly the N1 contact height, or record the needle frame again", what,
+                        nominalZ, w.refZ - nominalZ, w.refZ, w.startZ, w.floorZ, s.floorBelowMm, what));
             }
             return w;
         }
@@ -578,7 +586,8 @@ public final class VacuumProber {
      * (runs/serial.log) its mean was more than drop / 2 below the baseline (median 169 k counts against
      * a ~230 k threshold), and it never comes back to the baseline there. So when it does not let go
      * within the wait, N1 waits once more one coarse step higher, and the fine pass starts below that
-     * step; only a seal that holds there too is refused.</p>
+     * step; only a seal that holds there too is refused. A contact still counts only below the last open
+     * coarse step: a sealed pair at or above it is a fine miss.</p>
      */
     private Double releaseAndFine(Point p, Window w, double zc) throws Exception {
         double zo = p.lastOpenZ;
@@ -605,6 +614,13 @@ public final class VacuumProber {
             }
             boolean sealed = step(p, z, w) < p.threshold;
             if (sealed && prevSealed) {
+                if (prevZ >= p.lastOpenZ - 1e-9) {
+                    // only after the one-step-higher release: the coarse pass read open air at that step, so
+                    // the surface lies below it; a seal there is drift or a brush, not the contact
+                    p.notes.add(String.format(Locale.ROOT, "%s: sealed at Z %.3f, at or above the last open step "
+                            + "%.3f: not a contact", spotName(p), prevZ, p.lastOpenZ));
+                    return null;
+                }
                 p.fine = true;
                 return prevZ;
             }
@@ -1073,10 +1089,12 @@ public final class VacuumProber {
     private String noContactText(Target t, Point p, Window w) {
         double low = p.lowestZ == null ? w.floorZ : p.lowestZ;
         boolean board = t.bx != null;
-        return String.format(Locale.ROOT, "PROBE: no contact at %s%s (N1 went down to Z %.3f, %.2f mm below %s): "
+        // after the first contact the floor may lie above the nominal (the first-contact band)
+        return String.format(Locale.ROOT, "PROBE: no contact at %s%s (N1 went down to Z %.3f, %.2f mm %s %s): "
                 + "probably a hole or via there, or the %s Z is wrong. Probe by hand, or check the %s Z and try "
-                + "again.", where(t), nearby(p.spotsTried, "or"), low, w.nominalZ - low, topWord(t),
-                board ? "board top" : "surface", board ? "board" : "surface");
+                + "again.", where(t), nearby(p.spotsTried, "or"), low, Math.abs(w.nominalZ - low),
+                low <= w.nominalZ + 1e-9 ? "below" : "above", topWord(t), board ? "board top" : "surface",
+                board ? "board" : "surface");
     }
 
     private String notBareText(Target t, Point p) {

@@ -586,6 +586,32 @@ public class VacuumProberTest {
     }
 
     @Test
+    public void afterTheOneStepHigherReleaseASealAboveTheLastOpenStepIsNoContact() throws Exception {
+        // the fallback's fine pass starts above the last open coarse step; a sealed pair up there (a brush,
+        // drift) is a fine miss, never a contact above that step
+        Rig rig = new Rig();
+        int[] brushes = {0};
+        rig.ch.contact = (a, b) -> 4.73;
+        rig.ch.onLine = l -> {
+            if (l.equals(z(4.85, 300)) && brushes[0]++ == 0) {
+                rig.ch.contact = (a, b) -> 4.86;
+            }
+            if (l.startsWith("G1 Z") && l.endsWith("F600")) {
+                rig.ch.contact = (a, b) -> 4.73;
+            }
+        };
+        VacuumProber.Point p = rig.prober().probe(Arrays.asList(example()), window(rig, 4.50, 4.50)).get(0);
+        assertEquals(4.75, p.lastOpenZ, 1e-9);
+        assertEquals(5.00, p.releaseZ, 1e-9);
+        assertTrue(p.retried, "the sealed 4.850 / 4.825 was a fine miss: probed again");
+        assertTrue(p.notes.stream().anyMatch(n -> n.contains("sealed at Z 4.850, at or above the last open step 4.750")),
+                p.notes.toString());
+        assertEquals("contact", p.state);
+        assertEquals(4.725, p.z, 1e-9, "the re-probe's contact, below the last open step");
+        assertSafe(rig.ch.sent, 3.0, 31.5);
+    }
+
+    @Test
     public void didNotReleaseIsRefusedWithTheEndLines() throws Exception {
         Rig rig = new Rig();
         rig.ch.releaseTauMs = 100_000;
@@ -635,6 +661,14 @@ public class VacuumProberTest {
         assertEquals(3.5, lowest, 1e-9);
         assertTrue(pts.get(1).failure.contains("N1 went down to Z 3.500, 1.00 mm below the board top"),
                 pts.get(1).failure);
+        // a board top Z typed low: the first contact's band keeps the next floor above it, and the text says so
+        Rig low = new Rig();
+        low.s.alternates = 0;
+        low.ch.contact = (a, b) -> a < 310 ? 4.52 : Double.NaN;
+        List<VacuumProber.Point> lp = low.prober().probe(ts, window(low, 3.20, 4.50));
+        assertEquals(3.5, lp.get(1).lowestZ, 1e-9);
+        assertTrue(lp.get(1).failure.contains("N1 went down to Z 3.500, 0.30 mm above the board top"),
+                lp.get(1).failure);
         // three targets over holes, no alternates: refused at the third push
         Rig r2 = new Rig();
         r2.s.alternates = 0;
@@ -982,6 +1016,13 @@ public class VacuumProberTest {
                 () -> VacuumProber.Window.of(0.0, null, 31.5, s));
         assertEquals("PROBE: the board top Z 0.000 puts the probe floor at -1.500, below the lowest N1 Z the probe may "
                 + "use (2.000): set the board top Z to roughly the N1 contact height", e.getMessage());
+        // with the needle frame at 5.5 a board top Z typed as 0 leaves nothing to descend through: refused here,
+        // not by the probe's own Z assert after travelling over the spot
+        e = assertThrows(DispenseService.RunRefusedException.class, () -> VacuumProber.Window.of(0.0, 5.5, 31.5, s));
+        assertEquals("PROBE: the board top Z 0.000 lies 5.500 mm under the needle-frame surface 5.500: the probe would "
+                + "start at Z 2.500, under its floor 4.000 (1.5 mm under the higher of the two). Set the board top Z to "
+                + "roughly the N1 contact height, or record the needle frame again", e.getMessage());
+        assertEquals(4.0, VacuumProber.Window.of(1.5, 5.5, 31.5, s).startZ, 1e-9, "a window one step deep still passes");
         assertThrows(DispenseService.RunRefusedException.class, () -> VacuumProber.Window.around(3.0, 31.5, s));
         VacuumProber.Window c = VacuumProber.Window.around(4.5, 31.5, s);
         assertEquals(7.0, c.startZ, 1e-9);
@@ -1020,6 +1061,11 @@ public class VacuumProberTest {
         VacuumProber.Window w = VacuumProber.preflight(cfg, true, "the board top Z", 4.0, 31.5, s, null);
         assertEquals(5.5, w.refZ, 1e-9);
         assertEquals(4.0, w.floorZ, 1e-9);
+        // ... but a board top Z typed as 0 is refused before anything moves (no anchor check catches it now)
+        e = assertThrows(DispenseService.RunRefusedException.class,
+                () -> VacuumProber.preflight(cfg, true, "the board top Z", 0.0, 31.5, s, null));
+        assertTrue(e.getMessage().startsWith("PROBE: the board top Z 0.000 lies 5.500 mm under the needle-frame "
+                + "surface 5.500"), e.getMessage());
         // the blank is checked against the needle frame
         e = assertThrows(DispenseService.RunRefusedException.class,
                 () -> VacuumProber.preflight(cfg, false, "the 'blank' place Z", 4.0, 31.5, s, null));

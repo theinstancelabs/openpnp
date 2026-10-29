@@ -474,7 +474,7 @@ public class DispenseConfig {
             String oldest = null;
             long at = Long.MAX_VALUE;
             for (Map.Entry<String, BoardRegistration> e : boardRegistrations.entrySet()) {
-                if (e.getValue() == null || e.getValue().atMs < at) {
+                if (oldest == null || e.getValue() == null || e.getValue().atMs < at) {
                     oldest = e.getKey();
                     at = e.getValue() == null ? Long.MIN_VALUE : e.getValue().atMs;
                 }
