@@ -101,6 +101,8 @@ final class PadCalibrationJob {
     static final long READ_TIMEOUT_MS = 30_000;
     /** The hop of a dose no group gives one for (mm): the ladder's widest pitch. */
     static final double DEFAULT_HOP_MM = PadLadder.MAX_PITCH_MM;
+    /** The blank step touches this far inside the area's free band, and no closer to its used band (mm). */
+    static final double BLANK_INSET_MM = 1.0;
 
     /** What the operator asked for (POST body, or the preview's query). */
     static final class Request {
@@ -522,8 +524,12 @@ final class PadCalibrationJob {
         return e == null || !e.opticalFresh || !e.opticalPass || e.hops < minHops;
     }
 
-    /** Step 1: the area's surface is missing, older than the last home or connect, or does not cover the area. */
+    /**
+     * Step 1: the area's surface is missing, older than the last home or connect, or does not cover the area's free
+     * band (where the ladder goes: below it lie the dots of earlier ladders, which N1 must not touch).
+     */
     private void planBlank(DispenseConfig c) {
+        CalibrationArea free = freeBand(area);
         DispenseConfig.SurfaceMap m = c.surface(area.surfaceName);
         SurfacePlane plane = svc.surfacePlane(area.surfaceName);
         HomeTracker.Plan hp = svc.homePlan();
@@ -542,7 +548,8 @@ final class PadCalibrationJob {
             blankWhy = "the '" + area.surfaceName + "' surface was probed before the controller last connected";
         }
         else {
-            for (double[] p : areaCorners(area, 0)) {
+            // where the probe below touches: a surface it made covers the area for the next job
+            for (double[] p : areaCorners(free, BLANK_INSET_MM)) {
                 if (plane.distanceOutside(p[0], p[1]) > 1.0 + 1e-9) {
                     blankWhy = "the '" + area.surfaceName + "' surface does not reach the calibration area's corners";
                     break;
@@ -563,12 +570,30 @@ final class PadCalibrationJob {
             catch (Exception e) {
                 // the area's own points below
             }
-            blankTargets.addAll(areaCorners(area, 1.0));
-            blankTargets.add(new double[] {area.x0Mm + area.widthMm / 2, area.y0Mm + area.heightMm / 2});
+            blankTargets.addAll(areaCorners(free, BLANK_INSET_MM));
+            blankTargets.add(new double[] {free.x0Mm + free.widthMm / 2, free.y0Mm + free.heightMm / 2});
+            // the purge row's targets past the blank place lie in the area too
+            blankTargets.removeIf(p -> inUsedBand(area, p));
             while (blankTargets.size() > 20) {
                 blankTargets.remove(0);
             }
         }
+    }
+
+    /** The part of the area no ladder has used since the blank was wiped: from the used line up. */
+    private static CalibrationArea freeBand(CalibrationArea a) {
+        CalibrationArea f = a.copy();
+        f.y0Mm = a.y0Mm + a.usedMm;
+        f.heightMm = Math.max(0, a.heightMm() - a.usedMm);
+        f.usedMm = 0;
+        return f;
+    }
+
+    /** Within {@link #BLANK_INSET_MM} of the band of the area earlier ladders laid their dots in. */
+    private static boolean inUsedBand(CalibrationArea a, double[] p) {
+        double m = BLANK_INSET_MM - 1e-9;
+        return a.usedMm > 0 && p[0] > a.x0Mm - m && p[0] < a.x0Mm + a.widthMm + m && p[1] > a.y0Mm - m
+                && p[1] < a.y0Mm + a.usedMm + m;
     }
 
     private static List<double[]> areaCorners(CalibrationArea a, double inset) {

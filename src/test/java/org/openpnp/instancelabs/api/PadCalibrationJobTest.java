@@ -617,6 +617,58 @@ public class PadCalibrationJobTest {
         assertEquals(4, all.size());
     }
 
+    /** The blank probe's touches of a preview: [x, y]. */
+    static List<double[]> blankProbes(JsonObject pv) {
+        List<double[]> l = new ArrayList<>();
+        for (JsonElement e : pv.getAsJsonArray("probes")) {
+            JsonObject p = e.getAsJsonObject();
+            if ("blank".equals(str(p, "surface"))) {
+                l.add(new double[] {p.get("x").getAsDouble(), p.get("y").getAsDouble()});
+            }
+        }
+        return l;
+    }
+
+    /**
+     * Review 2, the blank step: the surface its own touches make covers the calibration area for the next job (it
+     * touches the area's corners inset 1 mm, √2 mm from the corners themselves), and N1 never touches the band of the
+     * area where earlier ladders left their dots (the area's lower corners and centre, and the purge-row target past
+     * the blank place, lay in it).
+     */
+    @Test
+    public void theBlankProbeCoversTheAreaForTheNextJobAndStaysOffItsUsedBand() throws Exception {
+        plan();
+        ok(call("DELETE", "/api/surfaces/blank", null));
+        JsonObject pv = ok(get("/api/pad-calibrations/preview?planId=" + planId + "&groups=all"));
+        assertTrue(pv.getAsJsonObject("blank").get("probe").getAsBoolean(), pv.getAsJsonObject("blank").toString());
+        StringBuilder pts = new StringBuilder();
+        for (double[] p : blankProbes(pv)) {
+            pts.append(pts.length() == 0 ? "" : ",").append("[").append(p[0]).append(",").append(p[1]).append(",5.5]");
+        }
+        // the surface as that probe leaves it: the next job needs no probe of its own
+        ok(call("PUT", "/api/surfaces/blank", "{\"points\":[" + pts + "]}"));
+        pv = ok(get("/api/pad-calibrations/preview?planId=" + planId + "&groups=all"));
+        assertFalse(pv.getAsJsonObject("blank").get("probe").getAsBoolean(), pv.getAsJsonObject("blank").toString());
+
+        // 11 mm of the area used by earlier ladders (paste), then a reconnect: the probe stays above that band
+        DispenseConfig c = svc.getConfig();
+        c.calibrationArea.usedMm = 11;
+        svc.updateConfig(c);
+        ok(call("DELETE", "/api/surfaces/blank", null));
+        pv = ok(get("/api/pad-calibrations/preview?planId=" + planId + "&groups=all"));
+        JsonObject area = ok(get("/api/calibration-area")).getAsJsonObject("effective");
+        double x0 = area.get("x0Mm").getAsDouble(), x1 = x0 + area.get("widthMm").getAsDouble();
+        double y0 = area.get("y0Mm").getAsDouble(), used = y0 + 11;
+        assertEquals(used, pv.getAsJsonObject("blank").get("y0").getAsDouble(), 1e-6, "the ladder starts above it");
+        List<double[]> touches = blankProbes(pv);
+        assertTrue(touches.size() >= 5, pv.toString());
+        for (double[] p : touches) {
+            assertFalse(p[0] > x0 - 1 && p[0] < x1 + 1 && p[1] > y0 - 1 && p[1] < used + 1, String.format(
+                    java.util.Locale.ROOT, "N1 touches X %.2f, Y %.2f, in the used band Y %.1f..%.1f", p[0], p[1], y0,
+                    used));
+        }
+    }
+
     /**
      * Review 2: under homeBeforeRun "always" every engine step homes first, so the weigh step would lay its dots
      * after a home that came after the coupons were touched; the engine refuses that coupon Z (I4), and the start
