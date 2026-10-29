@@ -196,6 +196,16 @@ public class DispenseConfig {
      */
     public Long newSeatAtMs = null;
 
+    // --- pad calibration (profile calibration design §5.4) ---------------------------------------
+    /** The needle: pad types and dose records name it; its OD sets the same-pad dot pitch. */
+    public TipSpec tip = new TipSpec();
+    /** The paste in the syringe; "New paste loaded" stamps it. */
+    public PasteSpec paste = new PasteSpec();
+    /** Where on the blank the pad calibration lays its test dots (default: 40 x 20 mm at the blank place). */
+    public CalibrationArea calibrationArea = new CalibrationArea();
+    /** Limits and sizes of the pad calibration. */
+    public PadCalibrationSettings padCalibration = new PadCalibrationSettings();
+
     public static final String HOME_WHEN_NEEDED = "whenNeeded";
     public static final String HOME_ALWAYS = "always";
     public static final int MAX_BOARD_REGISTRATIONS = 20;
@@ -547,6 +557,24 @@ public class DispenseConfig {
         if (c.boardRegistrations == null) {
             c.boardRegistrations = new LinkedHashMap<>();
         }
+        if (c.tip == null) {
+            c.tip = new TipSpec();
+        }
+        if (c.paste == null) {
+            c.paste = new PasteSpec();
+        }
+        if (c.calibrationArea == null) {
+            c.calibrationArea = new CalibrationArea();
+        }
+        if (c.padCalibration == null) {
+            c.padCalibration = new PadCalibrationSettings();
+        }
+        if (c.padCalibration.couponPlaces == null) {
+            c.padCalibration.couponPlaces = new PadCalibrationSettings().couponPlaces;
+        }
+        if (c.padCalibration.couponSizeMm == null) {
+            c.padCalibration.couponSizeMm = new PadCalibrationSettings().couponSizeMm;
+        }
         c.migrate();
         return c;
     }
@@ -675,7 +703,20 @@ public class DispenseConfig {
             p.add("paste thickness and density must be > 0");
         }
         validateRegistration(p);
+        validatePadCalibration(p);
         return p;
+    }
+
+    /** The tip, paste, calibration area and pad calibration settings (PUT /api/config may null an object). */
+    private void validatePadCalibration(java.util.List<String> p) {
+        if (tip == null || paste == null || calibrationArea == null || padCalibration == null) {
+            p.add("tip, paste, calibrationArea and padCalibration must be objects");
+            return;
+        }
+        tip.validate(p);
+        paste.validate(p);
+        padCalibration.validate(p);
+        calibrationArea.validate(this, p);
     }
 
     /** Ranges of the registration, probe and homing settings. */

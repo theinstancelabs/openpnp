@@ -1,8 +1,13 @@
 package org.openpnp.instancelabs.dispense;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * The dispense recipe: one per pressure session, the same for the purge row and the work (bench,
@@ -57,6 +62,12 @@ public class DispenseProfile {
      * first one sets the start angle.
      */
     public int purgeDots = 8;
+    /**
+     * Highest paste demand (mg/s) a block of dots may ask of the screw (§1.2 R7): the bench saw 2.56
+     * mg/s sustained at 18 psi (36 one-turn dots at 180 rpm and 250 ms dwell, runs/p18_blank). A
+     * screw asked for more pulls in air. Not part of a dot, so not in the fingerprints.
+     */
+    public double sustainedFeedMgS = 2.6;
     public String notes = "Window is narrow: 16 psi starved the screw, 20 psi drooled. Never run the screw "
             + "faster than the paste feeds it (it pulls in air; 30-50 turns to recover).";
 
@@ -117,7 +128,15 @@ public class DispenseProfile {
      * one revolution more.
      */
     public long phaseSteps(DispenseConfig c, long restCount, int dotsAfter) {
-        long target = startAngleSteps(c) - (long) c.bExtrudeSign * dotsAfter * netStepsPerDot;
+        return phaseSteps(c, restCount, dotsAfter, netStepsPerDot);
+    }
+
+    /**
+     * As {@link #phaseSteps(DispenseConfig, long, int)} for {@code dotsAfter} dots of {@code stepsPerDot}
+     * net steps each: the phase dot of a block switch (the flush dots of the new dose follow it).
+     */
+    public long phaseSteps(DispenseConfig c, long restCount, int dotsAfter, int stepsPerDot) {
+        long target = startAngleSteps(c) - (long) c.bExtrudeSign * dotsAfter * stepsPerDot;
         long n = Math.floorMod(c.bExtrudeSign * (target - restCount), (long) c.bStepsPerRev);
         if (n < Math.round(MIN_PHASE_TURN_DEG / 360.0 * c.bStepsPerRev)) {
             n += c.bStepsPerRev;
@@ -130,6 +149,58 @@ public class DispenseProfile {
         return String.format(Locale.ROOT, "psi=%.3f net=%d suck=%.3f start=%.3f rpm=%.3f acc=%.1f dwell=%d gap=%.4f "
                 + "purge=%d", pressurePsi, netStepsPerDot, suckBackDeg, startAngleDeg, screwRpm, screwAccelDegS2,
                 dwellMs, gapMm, purgeDots);
+    }
+
+    /**
+     * Identity of everything but the turn that sets how much paste a turn lays (pressure, suck-back,
+     * speed, acceleration, dwell, gap): dose records and calibrated pad types carry it (§1.7). The
+     * net turn is the record's own, the start angle has its own rule, purge count and name are no
+     * part of a dot.
+     */
+    public String doseFingerprint() {
+        return String.format(Locale.ROOT, "psi=%.3f suck=%.3f rpm=%.3f acc=%.1f dwell=%d gap=%.4f", pressurePsi,
+                suckBackDeg, screwRpm, screwAccelDegS2, dwellMs, gapMm);
+    }
+
+    /**
+     * What differs between two fingerprints in words, e.g. {@code "dwell 250 -> 300, gap 0.1 -> 0.12"}
+     * (keys only one side has are listed with "none"); empty when equal.
+     */
+    public static String fingerprintDiff(String was, String now) {
+        Map<String, String> a = fingerprintValues(was), b = fingerprintValues(now);
+        Set<String> keys = new LinkedHashSet<>(a.keySet());
+        keys.addAll(b.keySet());
+        List<String> l = new ArrayList<>();
+        for (String k : keys) {
+            String x = a.getOrDefault(k, "none"), y = b.getOrDefault(k, "none");
+            if (!x.equals(y)) {
+                l.add(k + " " + x + " -> " + y);
+            }
+        }
+        return String.join(", ", l);
+    }
+
+    private static Map<String, String> fingerprintValues(String fp) {
+        Map<String, String> m = new LinkedHashMap<>();
+        for (String t : (fp == null ? "" : fp).trim().split("\\s+")) {
+            int i = t.indexOf('=');
+            if (i > 0) {
+                String v = t.substring(i + 1);
+                try {
+                    v = plain(Double.parseDouble(v));
+                }
+                catch (NumberFormatException e) {
+                    // not a number: as written
+                }
+                m.put(t.substring(0, i), v);
+            }
+        }
+        return m;
+    }
+
+    /** A number without trailing zeros (18.000 -> "18", 0.1000 -> "0.1"). */
+    static String plain(double v) {
+        return BigDecimal.valueOf(v).stripTrailingZeros().toPlainString();
     }
 
     /** Problems with this profile (empty if OK). */
@@ -173,6 +244,9 @@ public class DispenseProfile {
             p.add("profile purgeDots must be at least 2 for a partial turn: the first purge dot sets the start angle "
                     + "and at least one normal dot must flush its odd size before the work");
         }
+        if (!(sustainedFeedMgS > 0 && sustainedFeedMgS <= 10)) {
+            p.add("profile sustainedFeedMgS must be > 0 and <= 10 mg/s (the bench saw 2.56 at 18 psi)");
+        }
         return p;
     }
 
@@ -189,6 +263,7 @@ public class DispenseProfile {
         x.dwellMs = dwellMs;
         x.gapMm = gapMm;
         x.purgeDots = purgeDots;
+        x.sustainedFeedMgS = sustainedFeedMgS;
         x.notes = notes;
         return x;
     }
