@@ -392,6 +392,11 @@ public class RegistrationSimTest {
         assertEquals("OK", run.get("status").getAsString(), run.toString());
         String p1Id = run.get("nextPlanId").getAsString();
         assertNotEquals(p0Id, p1Id);
+        // the plan made again carries the board drawing, as the first did (BOARD_IMPORT_DESIGN.md §4.5)
+        JsonObject p1Art = ok(get("/api/plan/" + p1Id)).getAsJsonObject("board").getAsJsonObject("art");
+        assertNotNull(p1Art, "the plan made again has its board drawing");
+        assertEquals(p0.getAsJsonObject("board").getAsJsonObject("art").get("id").getAsString(),
+                p1Art.get("id").getAsString());
         JsonObject res = ok(get("/api/plan/" + p0Id)).getAsJsonObject("registrationRun");
         assertTrue(res.get("ok").getAsBoolean(), res.toString());
         assertEquals("first", res.get("seat").getAsString());
