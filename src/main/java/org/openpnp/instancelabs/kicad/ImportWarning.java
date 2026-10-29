@@ -23,7 +23,7 @@ public final class ImportWarning {
     private static final Map<String, Integer> GROUPS = new HashMap<>();
 
     static {
-        for (String c : new String[] {"NO_PAD_TYPE", "NO_PLACEMENTS", "APERTURE_GONE"}) {
+        for (String c : new String[] {"NO_PAD_TYPE", "NEEDS_PROFILE", "NO_PLACEMENTS", "APERTURE_GONE"}) {
             GROUPS.put(c, 1);
         }
         for (String c : new String[] {"FIDUCIAL_COUNT", "FIDUCIAL_NO_COPPER"}) {

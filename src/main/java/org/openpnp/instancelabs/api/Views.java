@@ -9,6 +9,7 @@ import org.openpnp.instancelabs.dispense.Calibration;
 import org.openpnp.instancelabs.dispense.DispenseConfig;
 import org.openpnp.instancelabs.dispense.DispensePlan;
 import org.openpnp.instancelabs.dispense.DispenseProfile;
+import org.openpnp.instancelabs.dispense.DispenseService;
 import org.openpnp.instancelabs.dispense.BoardRegistration;
 import org.openpnp.instancelabs.dispense.DotLadderRow;
 import org.openpnp.instancelabs.dispense.HomeReport;
@@ -308,6 +309,7 @@ final class Views {
         m.put("registrationRun", registration(e.registration()));
         m.put("registrationRunning", e.registrationRunning());
         BoardPlanView.addTo(m, e);
+        PadProfileViews.addTo(m, e, DispenseService.get());
         return m;
     }
 
@@ -450,6 +452,7 @@ final class Views {
         m.put("notes", t.notes);
         m.put("createdAtMs", t.createdAtMs);
         m.put("operator", t.operator);
+        PadProfileViews.padTypeFields(m, t);
         return m;
     }
 

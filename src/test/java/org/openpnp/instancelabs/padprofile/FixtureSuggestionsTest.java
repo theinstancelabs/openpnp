@@ -300,25 +300,46 @@ public class FixtureSuggestionsTest {
     @Test
     public void theNanoBottomSideBoardWide() {
         // Board-wide (not in the package-level survey): C3 and C4 face each other 1.27 mm apart, so their
-        // half-turn dots would leave 0.11 mm; a group has one plan, so all 14 C_0603 pads have none.
+        // half-turn dots would leave 0.11 mm. Decision 14: the group keeps its plan for the other C_0603 pads;
+        // C3.1 and C4.1 are a sub-group of their own, and decision 4 holds C3 and C4 whole.
         PadFixtures.Fixture f = PadFixtures.load("nano");
         ProfileCheck.Result r = ProfileCheck.of(PadFixtures.inputs(PadFixtures.side(f, "bottom")));
-        ProfileCheck.Group c = null;
+        Map<String, ProfileCheck.Group> c = new java.util.TreeMap<>();
         for (ProfileCheck.Group g : r.groups) {
             if (g.packageIds.get(0).equals("C_0603_1608Metric")) {
-                c = g;
+                c.put(g.reason + (g.tipKind == null ? "" : ":" + g.tipKind), g);
             }
         }
-        assertNotNull(c);
-        assertEquals(ProfileCheck.TIP, c.reason);
-        assertEquals(ProfileCheck.TIP_NO_PLAN, c.tipKind);
-        assertEquals(14, c.pads);
-        assertEquals("Not dispensable with the 22G tip: on these 0.95 × 0.75 mm pads the closest plan (1 half-turn dot "
-                + "per pad) comes within 0.11 mm of the next pad's dot (at least 0.20 mm).", c.reasonText);
+        assertEquals(new TreeSet<>(Arrays.asList("no-type", "part", "tip:near")), c.keySet());
+        assertEquals(10, c.get("no-type").pads);
+        ProfileCheck.Group near = c.get("tip:near");
+        assertEquals(Arrays.asList("C3.1", "C4.1"), near.padIds);
+        assertEquals(Integer.valueOf(14), near.nearOf);
+        assertEquals("2 of 14 pads are too close to a neighbour: their dots would leave 0.11 mm to the dot of C4 pad 1 "
+                + "(at least 0.20 mm), so they get no paste. The other 12 keep the plan.", near.reasonText);
+        assertEquals(Suggestion.NONE, near.suggestion.kind);
+        assertTrue(near.blocking);
+        ProfileCheck.Group part = c.get("part");
+        assertEquals(Arrays.asList("C3.2", "C4.2"), part.padIds);
+        assertEquals("Another pad of this part is too close to a neighbour and gets no paste, so none of this part's pads "
+                + "are pasted: a part whose pins are soldered by hand gets no paste on its other pads either. To paste "
+                + "these pads anyway, choose “Paste the dispensable pads of this part” for C_0603_1608Metric.",
+                part.reasonText);
+        assertFalse(c.get("no-type").partial, "a pad's own neighbour holds back its part, not the package");
         int[] n = count(r);
         assertEquals(70, n[0] + n[1] + n[2]);
-        assertEquals(44 + 1 + 14, n[0]);
-        assertEquals(1, n[1]);
+        assertEquals(44 + 1 + 2, n[0]);
+        assertEquals(1 + 2, n[1]);
+        // the package pasted partly: C3.2 and C4.2 keep the plan
+        CheckInputs in = PadFixtures.inputs(PadFixtures.side(f, "bottom"));
+        in.pastePartialPackages.add("C_0603_1608Metric");
+        int noType = 0;
+        for (ProfileCheck.Group g : ProfileCheck.of(in).groups) {
+            if (g.packageIds.get(0).equals("C_0603_1608Metric") && ProfileCheck.NO_TYPE.equals(g.reason)) {
+                noType += g.pads;
+            }
+        }
+        assertEquals(12, noType);
     }
 
     @Test

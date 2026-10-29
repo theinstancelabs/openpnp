@@ -660,8 +660,10 @@ public final class DispenseService {
     // ------------------------------------------------------------------------------------------
 
     public DispensePlanner newPlanner() throws SQLException {
-        return new DispensePlanner(cfg, new PadTypeResolver(db.currentPadTypes(), db.packageMappings()))
-                .withRules(db.currentPadRules()).withSurface(planeOf(cfg, cfg.boardSurfaceName));
+        DispenseConfig.PurgeRow row = cfg.purgeRow;
+        return new DispensePlanner(cfg, padTypeResolver()).withRules(db.currentPadRules())
+                .withSurface(planeOf(cfg, cfg.boardSurfaceName))
+                .withPurgeSpots(k -> row.isDefined() && k < row.spotsLeft() ? row.spot(row.usedSpots + k) : null);
     }
 
     /** Plans a board location; the path starts at the end of the purge row (or N2's current XY). */
@@ -733,9 +735,25 @@ public final class DispenseService {
      * them (I9 refuses the run then).
      */
     public static List<GcodeStreamBuilder.DotSpec> purgeSpecs(DispenseConfig c) {
+        return purgeSpecs(c, c.profile.purgeDots);
+    }
+
+    /**
+     * The purge-row spots a board run of {@code plan} lays: the initial purge and the phase and flush
+     * dots before every further dose block ({@link DoseBlocks#purgeSpotsNeeded}).
+     */
+    public static List<GcodeStreamBuilder.DotSpec> purgeSpecs(DispenseConfig c, DispensePlan plan) {
+        return purgeSpecs(c, DoseBlocks.purgeSpotsNeeded(plan, c));
+    }
+
+    /**
+     * The next {@code n} unused spots of the purge row as dot specs (their rotation is the profile's;
+     * the builder turns each by its block's dose). Empty if {@code n} is 0 or the row cannot supply
+     * them (I9 refuses the run then).
+     */
+    public static List<GcodeStreamBuilder.DotSpec> purgeSpecs(DispenseConfig c, int n) {
         List<GcodeStreamBuilder.DotSpec> l = new ArrayList<>();
         DispenseConfig.PurgeRow row = c.purgeRow;
-        int n = c.profile.purgeDots;
         SurfacePlane plane = planeOf(c, row.surfaceName);
         if (n <= 0 || !row.isDefined() || row.spotsLeft() < n || plane == null) {
             return l;
@@ -790,9 +808,10 @@ public final class DispenseService {
         }
         sc.checkPlanSurface = true;
         DispenseConfig.PurgeRow row = c.purgeRow;
-        if (c.profile.purgeDots > 0 && row.isDefined()) {
+        int purge = DoseBlocks.purgeSpotsNeeded(plan, c);
+        if (purge > 0 && row.isDefined()) {
             List<double[]> t = new ArrayList<>();
-            for (int i = 0; i < Math.min(c.profile.purgeDots, row.spotsLeft()); i++) {
+            for (int i = 0; i < Math.min(purge, row.spotsLeft()); i++) {
                 t.add(row.spot(row.usedSpots + i));
             }
             sc.moreSurfaces.put(row.surfaceName, t);
@@ -854,7 +873,8 @@ public final class DispenseService {
                 for (PadType t : types) {
                     in.padTypesNow.put(t.typeKey, t);
                 }
-                in.padTypesFingerprintNow = new PadTypeResolver(types, db.packageMappings()).fingerprint();
+                in.padTypesFingerprintNow = new PadTypeResolver(types, db.packageMappings())
+                        .withPastePartial(db.pastePartialPackages()).fingerprint();
             }
             catch (Exception e) {
                 in.padTypesNow = null; // unknown: the version checks are skipped, the gate check still runs
@@ -866,7 +886,7 @@ public final class DispenseService {
         in.scope = scope == null ? new Interlocks.Scope() : scope;
         in.controllerConnectedAtMs = homeTracker.getConnectedAtMs();
         in.boardRun = plan != null;
-        in.purgeDots = plan == null ? 0 : c.profile.purgeDots;
+        in.purgeDots = plan == null ? 0 : DoseBlocks.purgeSpotsNeeded(plan, c);
         in.homeFirst = homeFirst;
         in.zCheckFirst = zCheckFirst;
         in.lastHomeAtMs = homeTracker.getLastHomeAtMs();
@@ -931,11 +951,13 @@ public final class DispenseService {
             if (!r.interlocks.ok()) {
                 return s.refuse(r.interlocks.toString());
             }
-            List<GcodeStreamBuilder.DotSpec> purge = purgeSpecs(c);
+            List<GcodeStreamBuilder.DotSpec> purge = purgeSpecs(c, plan);
             GcodeProgram estimate = GcodeStreamBuilder.forPlan(c, s.mapper, plan, purge, bZeroed.get(), s.keepalive,
                     0L);
-            r.interlocks = Interlocks.check(interlockInputs(c, plan, estimate.estimatedPressurisedSeconds,
-                    boardScope(c, plan), false, false));
+            Interlocks.Inputs withEstimate = interlockInputs(c, plan, estimate.estimatedPressurisedSeconds,
+                    boardScope(c, plan), false, false);
+            withEstimate.programBlocks = estimate.blocks; // I6-feed: every block's paste demand
+            r.interlocks = Interlocks.check(withEstimate);
             if (!r.interlocks.ok()) {
                 return s.refuse(r.interlocks.toString());
             }
@@ -949,9 +971,9 @@ public final class DispenseService {
             }
             GcodeProgram p = s.runSegment(() -> {
                 Long count = s.readBCount();
-                if (count == null && c.profile.isPartialTurn(c)) {
+                if (count == null && DoseBlocks.anyPartial(plan, c)) {
                     throw new RunRefusedException("I11: the controller did not report the B step count (M114 "
-                            + "Count): the start angle of a partial-turn profile cannot be set. Nothing was sent.",
+                            + "Count): the start angle of a partial-turn dose cannot be set. Nothing was sent.",
                             null);
                 }
                 return GcodeStreamBuilder.forPlan(c, s.mapper, plan, purge, bZeroed.get(), s.keepalive, count);
@@ -1353,9 +1375,10 @@ public final class DispenseService {
         return im != null && im.isAvailable();
     }
 
-    /** The pad types and package mappings now (BoardFeatures, plans). */
+    /** The pad types, package mappings and package options now (BoardFeatures, plans). */
     public PadTypeResolver padTypeResolver() throws SQLException {
-        return new PadTypeResolver(db.currentPadTypes(), db.packageMappings());
+        return new PadTypeResolver(db.currentPadTypes(), db.packageMappings())
+                .withPastePartial(db.pastePartialPackages());
     }
 
     /**

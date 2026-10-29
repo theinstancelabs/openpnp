@@ -6,9 +6,10 @@ import java.util.List;
 
 /**
  * Output of the planner: ordered dots in N2 machine coordinates (the coordinates OpenPnP would move
- * the N2 needle tip to), the pads they belong to and the dispense profile they were planned with
- * (every dot is one profile dot). Raw controller coordinates are derived from these at stream time
- * through OpenPnP's transform chain.
+ * the N2 needle tip to), the pads they belong to and the dispense profile they were planned with.
+ * A dot turns the screw by its pad type's own dose or the profile's; dots of one dose are a block
+ * (profile calibration design §1.2 R2, §6.1). Raw controller coordinates are derived from these at
+ * stream time through OpenPnP's transform chain.
  */
 public class DispensePlan {
     public static class PlannedPad {
@@ -36,8 +37,16 @@ public class DispensePlan {
         public double targetVolumeMm3;
         public double targetMassMg;
         public int dotCount;
-        /** Net screw turn per dot (deg of B) from the profile. */
+        /** Net screw turn per dot (deg of B): the pad type's own dose, else the profile's. */
         public Double rotationPerDotDeg;
+        /** Net screw steps per dot (the type's dotSteps, else the profile's); null when the pad has no dot plan. */
+        public Integer dotSteps;
+        /** Dots the pad's plan lays (also when a flag later took them away: then dotCount is 0). */
+        public int dotsPerPad;
+        /** Screw angle where the pad's first dot starts, in steps of the revolution (§6.1). */
+        public int startPhase;
+        /** The tip the pad type was calibrated for ({@link PadType#tipKey}) when planned; null = none. */
+        public String typeTipKey;
         public final EnumSet<PadFlag> flags = EnumSet.noneOf(PadFlag.class);
 
         public boolean isBlocked() {
@@ -70,8 +79,35 @@ public class DispensePlan {
         public double dispenseZMm;
         /** N2 Z between dots on the board = dispense Z + hop height. */
         public double hopZMm;
-        /** Net auger rotation for this dot (deg of B, always positive = extrude): the profile's. */
+        /** Net auger rotation for this dot (deg of B, always positive = extrude): netSteps / bStepsPerDeg. */
         public double rotationDeg;
+        /** Net screw steps of this dot (its dose); 0 on dots made without one (the pad's or the profile's then). */
+        public int netSteps;
+        /** Index of the dose block the dot belongs to ({@link DispensePlan#blocks}). */
+        public int block;
+        /** Index of the dot's pad in {@link DispensePlan#pads}, -1 if none. */
+        public int padIndex = -1;
+    }
+
+    /**
+     * Dots of one dose, laid together (§1.2 R2): the profile's dose first, then descending. Every
+     * block after the first starts on the purge row: a phase dot if its dose is a partial turn, then
+     * the flush dots, then the cross to its first dot.
+     */
+    public static class Block {
+        public int index;
+        public int netSteps;
+        /** "half turn", "one turn", "quarter turn". */
+        public String turn;
+        public int dots;
+        public int pads;
+        public int firstDot;
+        public int lastDot;
+        /** Purge-row dots before the block: whether the first sets the start angle, and how many follow it. */
+        public boolean phaseDot;
+        public int flushDots;
+        /** Paste demand of the block (mg/s) from the program estimate (§1.2 R7), null until estimated. */
+        public Double demandMgS;
     }
 
     public String planId;
@@ -100,6 +136,8 @@ public class DispensePlan {
     public String padTypesFingerprint;
     public final List<PlannedPad> pads = new ArrayList<>();
     public final List<PlannedDot> dots = new ArrayList<>();
+    /** Dose blocks of {@link #dots}, in dispense order. */
+    public final List<Block> blocks = new ArrayList<>();
     public final List<String> warnings = new ArrayList<>();
     public double pathLengthNearestNeighbourMm;
     public double pathLengthMm;
@@ -161,9 +199,17 @@ public class DispensePlan {
     }
 
     public String summary() {
-        return String.format("plan %s board %s: %d pads (%d blocked), %d dots, path %.1f mm (NN %.1f), "
+        String s = String.format("plan %s board %s: %d pads (%d blocked), %d dots, path %.1f mm (NN %.1f), "
                 + "profile '%s' %s", planId, boardName, pads.size(), blockedPads().size(), dots.size(),
                 pathLengthMm, pathLengthNearestNeighbourMm, profile == null ? "-" : profile.name,
                 profileFingerprint);
+        if (blocks.size() > 1) {
+            List<String> l = new ArrayList<>();
+            for (Block b : blocks) {
+                l.add(b.turn + " ×" + b.dots);
+            }
+            s += " · " + blocks.size() + " dot sizes: " + String.join(", ", l);
+        }
+        return s;
     }
 }
