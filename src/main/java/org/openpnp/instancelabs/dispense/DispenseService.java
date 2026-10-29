@@ -484,6 +484,9 @@ public final class DispenseService {
         m.note = note;
         m.boardFingerprint = boardFingerprint;
         m.simulated = simulated;
+        if (name.equals(c.blankLocationName)) {
+            m.replaced = ZCheck.kept(c.surface(name), homeTracker.getLastHomeAtMs());
+        }
         c.surfaces.put(name, m);
         updateConfig(c);
         db.event(null, "INFO", "SURFACE", String.format(java.util.Locale.ROOT,

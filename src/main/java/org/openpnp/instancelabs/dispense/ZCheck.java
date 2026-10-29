@@ -105,8 +105,9 @@ public final class ZCheck {
     /**
      * Stored N1 contacts measured before {@code lastHomeAtMs} (all of them when null), in this order:
      * the points of the board surface when it is tied to the plan's registration (its spots were
-     * chosen bare), the points of the blank surface, the needle anchor's X/Y when they are set. A
-     * surface probed after the home is in the new frame already and is no reference.
+     * chosen bare), the points of the blank surface and those a probe after a home replaced
+     * ({@link #kept}), the needle anchor's X/Y when they are set. A surface probed after the home is
+     * in the new frame already and is no reference.
      */
     public static List<Reference> references(DispenseConfig cfg, String planBoardRegistration, Long lastHomeAtMs) {
         List<Reference> l = new ArrayList<>();
@@ -115,7 +116,9 @@ public final class ZCheck {
             addPoints(l, cfg.boardSurfaceName, board, lastHomeAtMs);
         }
         if (!Objects.equals(cfg.blankLocationName, cfg.boardSurfaceName)) {
-            addPoints(l, cfg.blankLocationName, cfg.surface(cfg.blankLocationName), lastHomeAtMs);
+            DispenseConfig.SurfaceMap blank = cfg.surface(cfg.blankLocationName);
+            addPoints(l, cfg.blankLocationName, blank, lastHomeAtMs);
+            addPoints(l, cfg.blankLocationName, blank == null ? null : blank.replaced, lastHomeAtMs);
         }
         DispenseConfig.NeedleAnchor a = cfg.needleAnchor;
         if (a != null && a.xMm != null && a.yMm != null && before(a.setAtMs, lastHomeAtMs)) {
@@ -148,6 +151,27 @@ public final class ZCheck {
             r.homeAtMs = m.homeAtMs;
             l.add(r);
         }
+    }
+
+    /**
+     * What the blank keeps when it is probed again ({@link DispenseConfig.SurfaceMap#replaced}): the points it
+     * replaces when they were measured before the last home in a known Z frame, so a later check of the older data
+     * of that frame (the needle frame, the touch-off) still has a point to touch (review 1: an automatic blank probe
+     * after a home took the only one); else what those points kept themselves. Null when nothing.
+     */
+    static DispenseConfig.SurfaceMap kept(DispenseConfig.SurfaceMap old, Long lastHomeAtMs) {
+        if (old == null) {
+            return null;
+        }
+        if (lastHomeAtMs != null && old.setAtMs != null && old.setAtMs < lastHomeAtMs && old.homeAtMs != null
+                && old.points != null) {
+            DispenseConfig.SurfaceMap k = new DispenseConfig.SurfaceMap();
+            k.points = new ArrayList<>(old.points);
+            k.setAtMs = old.setAtMs;
+            k.homeAtMs = old.homeAtMs;
+            return k;
+        }
+        return old.replaced;
     }
 
     /** Measured before the home (a datum without a time counts as before). */

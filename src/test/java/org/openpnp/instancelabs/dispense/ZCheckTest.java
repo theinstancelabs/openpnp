@@ -344,6 +344,48 @@ public class ZCheckTest {
     }
 
     /**
+     * Review 1 (machine safety): the blank probed again after a home keeps the points it replaced while they are a
+     * reference of an older Z frame, listed after its own points, so a check of the needle frame and the touch-off
+     * (the anchor has no X/Y here) still has a point; a later probe under the same home carries them on.
+     */
+    @Test
+    public void theBlankProbedAgainAfterAHomeKeepsTheReferenceOfItsFrame() {
+        DispenseConfig c = cfg();
+        c.needleAnchor.xMm = null;
+        DispenseConfig.SurfaceMap old = c.surfaces.get("blank");
+        DispenseConfig.SurfaceMap probed = new DispenseConfig.SurfaceMap();
+        probed.points = ZFrameTest.points(new double[][] {{325.0, 228.0, 5.62}, {358.0, 228.0, 5.60},
+            {340.0, 238.0, 5.61}}, 0);
+        probed.setAtMs = HOME_AT + 60_000;
+        probed.homeAtMs = HOME_AT;
+        probed.replaced = ZCheck.kept(old, HOME_AT);
+        assertEquals(old.points.size(), probed.replaced.points.size());
+        assertEquals(Long.valueOf(BLANK_AT), probed.replaced.setAtMs);
+        assertEquals(Long.valueOf(FRAME_AT), probed.replaced.homeAtMs);
+        c.surfaces.put("blank", probed);
+        List<ZCheck.Reference> refs = ZCheck.references(c, "another-seat", HOME_AT);
+        assertEquals(3, refs.size(), "the kept points only: the new ones were measured after the home");
+        assertEquals("blank", refs.get(0).name);
+        assertEquals(322.0, refs.get(0).x, 1e-9);
+        assertEquals(5.62, refs.get(0).z, 1e-9);
+        List<ZCheck.Stale> open = ZCheck.stale(c, DispenseService.blankScope(c, "blank", false, false, null), HOME_AT);
+        assertEquals(java.util.Arrays.asList("the needle frame", "the touch-off"), whats(open));
+        assertEquals(refs.get(0), ZCheck.first(refs, open));
+        assertEquals(1, ZCheck.touches(refs, open), "one touch vouches for both");
+        // the kept points are no datum of their own: a pass there vouches for the data of their frame only
+        ZCheck.Result pass = ZCheck.vouch(ZCheck.result(refs.get(0), 5.63, HOME_AT + 90_000, HOME_AT), refs.get(0), c,
+                null);
+        assertEquals(java.util.Arrays.asList("the needle frame", "the touch-off", "the 'board' surface"),
+                whats(pass.covers));
+        // probed again under the same home: the kept points carry on; under no known home, or of an unknown frame,
+        // nothing is kept
+        assertEquals(probed.replaced, ZCheck.kept(probed, HOME_AT));
+        assertEquals(null, ZCheck.kept(old, null));
+        old.homeAtMs = null;
+        assertEquals(null, ZCheck.kept(old, HOME_AT));
+    }
+
+    /**
      * Review 1 (machine safety), the way out of "Z moved" without another home: the needle frame recorded again
      * after the home set the offset again, so it replaces the touch-off (which I4 then asks for, and which may run);
      * the blank and the board, not measured again, still refuse until they are; after that a run passes.

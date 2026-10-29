@@ -487,6 +487,38 @@ public class DispenseServiceSimTest {
         assertEquals(1, count(sim.server.sinceMark(), "M106 P2 S255"), "one pressure session");
     }
 
+    /**
+     * Review 1 (machine safety), I4: an automatic probe of the blank after a home (the pad calibration's blank step,
+     * or Probe the blank) replaced the blank's points, which were the only Z-check reference of the older data (the
+     * needle frame has no X/Y here; the board counts only for its plan): Check Z, and so prime, the test dot and the
+     * calibrations, then had no point left and asked for the needle frame again. The replaced points stay a
+     * reference of their Z frame.
+     */
+    @Test
+    public void theBlankProbedAgainAfterAHomeKeepsItsOldPointsAsTheZReference() throws Exception {
+        homeAgain(); // the Z data predate this home; Z did not move
+        FlatVacuum.install(sim, FlatVacuum.scene(5.45, new double[] {90, 70, 120, 95}, 5.6));
+        DispenseConfig fast = svc.getConfig();
+        FlatVacuum.fastTimings(fast);
+        svc.updateConfig(fast);
+        SurfaceProbeRequest req = new SurfaceProbeRequest();
+        req.surfaceName = "blank";
+        req.nominalZ = 5.45;
+        req.targets = Arrays.asList(new double[] {86, 36}, new double[] {129, 36}, new double[] {86, 49},
+            new double[] {129, 49});
+        SurfaceProbeResult probed = svc.probeSurface(req).get(60, TimeUnit.SECONDS);
+        assertTrue(probed.ok, probed.message);
+        assertTrue(svc.getConfig().surface("blank").setAtMs > svc.getHomeTracker().getLastHomeAtMs());
+        DispenseService.ZCheckPlan zp = svc.zCheckPlan(null, false);
+        assertTrue(zp.needed && zp.reference != null, "a point is left to touch: " + zp.reference);
+        assertEquals(85.0, zp.reference.x, 1e-9, "the blank's point from before the home");
+        RunResult z = svc.checkZ().get(60, TimeUnit.SECONDS);
+        assertEquals(RunResult.Status.OK, z.status, z.toString());
+        assertTrue(z.zCheck.pass && z.zCheck.x == 85.0 && z.zCheck.y == 35.0, String.valueOf(z.zCheck));
+        RunResult prime = svc.runShots("waste", 90, 1, true).get(60, TimeUnit.SECONDS);
+        assertEquals(RunResult.Status.OK, prime.status, prime.toString() + " " + prime.interlocks);
+    }
+
     /** A plan made on another recipe is stale: anything that changes a dot changes its fingerprint. */
     @Test
     public void profileChangedAfterPlanningIsRefused() throws Exception {

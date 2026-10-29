@@ -275,6 +275,10 @@ frame now; a home between two older data may have moved Z (the bench's frame vs 
   (`ZCheck.touchOffReplaced`; I4 asks for a new touch-off). After "Z moved" the remedy works under the same home: the
   needle frame, the blank, the touch-off, then the board, each measured again; a datum not measured again keeps the
   refusal.
+- the blank probed again after a home (by hand, or the pad calibration's blank step) keeps the points it replaced
+  (`SurfaceMap.replaced`, `ZCheck.kept`) when they were measured before that home in a known frame: they stay a
+  reference of their frame, listed after the blank's own points, so a check of the needle frame and the touch-off
+  still has a point to touch. One frame is kept; a later probe under the same home carries it on.
 
 ### 2.5 Where homing happens
 
