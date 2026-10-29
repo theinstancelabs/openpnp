@@ -545,6 +545,11 @@ public class PadCalibrationSimTest {
         assertTrue(str(job.getAsJsonObject("awaiting"), "text").startsWith("The dots are laid and the head is parked "
                 + "over the purge row. For each coupon: put it on the balance and type the reading;"), job.toString());
         assertTrue(str(job.getAsJsonObject("awaiting"), "text").contains("Coupon 1 has 68 half-turn dots"));
+        for (JsonElement e : job.getAsJsonObject("awaiting").getAsJsonArray("coupons")) {
+            JsonObject crop = e.getAsJsonObject().getAsJsonObject("crop");
+            assertEquals("median", str(crop, "what"), "a camera snapshot of each coupon's dots: " + e);
+            assertEquals(str(e.getAsJsonObject(), "steps"), str(crop, "steps"));
+        }
         // the coupons were looked at and touched; the ladder and the weigh dots are what §14.3 says
         JsonArray steps = job.getAsJsonArray("steps");
         assertEquals("done", str(steps.get(1).getAsJsonObject(), "state"), steps.toString());

@@ -2032,13 +2032,14 @@ final class PadCalibrationJob {
         if (AWAITING.equals(state)) {
             List<Map<String, Object>> cs = new ArrayList<>();
             long laid = 0;
-            for (CouponPlan k : coupons) {
+            for (int i = 0; i < coupons.size(); i++) {
+                CouponPlan k = coupons.get(i);
                 if (k.record != null && k.mass == null) {
                     int found = k.record.found == null ? k.record.n : k.record.found;
                     cs.add(Views.map("place", k.place, "label", k.label, "steps", k.steps, "turn", DoseModel.turnNoun(
                             k.steps), "dots", k.record.n, "found", found, "expectedMg", Math.round(found
                                     * DoseModel.massMg(k.steps)), "recordId", k.record.id, "laidAtMs",
-                            k.record.createdAtMs, "crop", cropOf(k.steps)));
+                            k.record.createdAtMs, "crop", couponCrop(i)));
                     laid = Math.max(laid, k.record.createdAtMs);
                 }
             }
@@ -2080,13 +2081,15 @@ final class PadCalibrationJob {
         return String.join("; ", l);
     }
 
-    private Map<String, Object> cropOf(int steps) {
+    /** The median crop of a coupon's weigh dots (the weigh step lays one block per coupon, in coupon order). */
+    private Map<String, Object> couponCrop(int coupon) {
+        Map<String, Object> any = null;
         for (Map.Entry<String, DoseBlocksResult.Crop> e : crops.entrySet()) {
-            if (e.getKey().startsWith("w") && cropSteps.get(e.getKey()) == steps) {
-                return cropView(e.getKey(), e.getValue());
+            if (e.getKey().startsWith("w") && e.getValue().block == coupon) {
+                any = any != null && !"median".equals(e.getValue().what) ? any : cropView(e.getKey(), e.getValue());
             }
         }
-        return null;
+        return any;
     }
 
     private Map<String, Object> cropView(String cid, DoseBlocksResult.Crop cr) {

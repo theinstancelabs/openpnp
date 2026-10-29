@@ -187,8 +187,9 @@ final class PadCalibrationEndpoints {
         }
         job.save();
         ctx.padCalJobs.start(job);
-        Map<String, Object> accepted = Views.map("kind", "pad calibration", "id", job.id, "steps", job.preview().get(
-                "steps"), "preview", job.preview());
+        Map<String, Object> preview = job.preview();
+        Map<String, Object> accepted = Views.map("kind", "pad calibration", "id", job.id, "steps", preview.get("steps"),
+                "preview", preview);
         if (!Json.bool(b, "wait", false)) {
             accepted.put("started", true);
             return ApiServer.Response.json(202, accepted);
