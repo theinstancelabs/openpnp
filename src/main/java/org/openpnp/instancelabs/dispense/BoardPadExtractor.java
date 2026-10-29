@@ -72,7 +72,8 @@ public class BoardPadExtractor {
                     double y = fpad.getY() * f;
                     local.add(new double[] {x, y, fpad.getRotation(), w, h, fpad.getRoundness()});
                     names.add(fpad.getName());
-                    types.add(resolver.explain(pkg.getId(), x, y, DotMath.padAreaMm2(w, h, fpad.getRoundness())));
+                    types.add(resolver.explain(pkg.getId(), fpad.getName(), x, y,
+                            DotMath.padAreaMm2(w, h, fpad.getRoundness())));
                 }
             }
             else {
@@ -112,9 +113,13 @@ public class BoardPadExtractor {
                 }
                 int i = 1;
                 for (double[] l : lay) {
+                    // the layout's size; a mapping for some pads of the package may give a pad another type
+                    String name = Integer.toString(i++);
+                    PadTypeResolver.Resolution own = resolver.explain(pkg.getId(), name, Double.NaN, Double.NaN,
+                            Double.NaN);
                     local.add(new double[] {l[0], l[1], 0, t.padWMm, t.padHMm, t.padRoundness});
-                    names.add(Integer.toString(i++));
-                    types.add(how);
+                    names.add(name);
+                    types.add(PadTypeResolver.Resolution.PAD_MAP.equals(own.rule) ? own : how);
                 }
             }
             double rad = Math.toRadians(pl.getRotation());

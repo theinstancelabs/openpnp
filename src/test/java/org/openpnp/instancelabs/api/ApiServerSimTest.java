@@ -874,7 +874,8 @@ public class ApiServerSimTest {
         setUpBoardRuns();
         double[][] pos = new double[30][];
         for (int i = 0; i < pos.length; i++) {
-            pos[i] = new double[] {2 + 2.5 * (i % 10), 2 + 3 * (i / 10), 0};
+            // 4 mm apart: at 2.5 mm two 0603s' facing dots would bridge (MAY_BRIDGE)
+            pos[i] = new double[] {2 + 4.0 * (i % 6), 2 + 3 * (i / 6), 0};
         }
         File board = writeBoard(pos);
         ok(call("PUT", "/api/pad-types/chip-0603", "{\"status\":\"characterized\"}"));
