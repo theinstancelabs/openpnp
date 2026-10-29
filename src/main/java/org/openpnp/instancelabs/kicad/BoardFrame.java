@@ -131,17 +131,20 @@ public final class BoardFrame {
         List<double[]> pieceBoxes = new ArrayList<>();
         List<double[]> loops = new ArrayList<>();
         List<double[]> loopBoxes = new ArrayList<>();
+        long points = 0;
         for (Graphic g : pcb.graphics) {
             if ("Edge.Cuts".equals(g.layer)) {
-                edge(g.kind, g.pts, pieces, pieceBoxes, loops, loopBoxes);
+                points += edge(g.kind, g.pts, pieces, pieceBoxes, loops, loopBoxes);
+                checkPoints(points, g.line);
             }
         }
         for (Footprint fp : pcb.footprints) {
             for (Graphic g : fp.graphics) {
                 if ("Edge.Cuts".equals(g.layer)) {
                     boolean rect = g.kind == Graphic.Kind.RECT; // a rotated footprint turns its rect
-                    edge(rect ? Graphic.Kind.POLY : g.kind, localToKicad(fp, rect ? rectCorners(g.pts) : g.pts),
-                            pieces, pieceBoxes, loops, loopBoxes);
+                    points += edge(rect ? Graphic.Kind.POLY : g.kind,
+                            localToKicad(fp, rect ? rectCorners(g.pts) : g.pts), pieces, pieceBoxes, loops, loopBoxes);
+                    checkPoints(points, g.line);
                 }
             }
         }
@@ -211,28 +214,35 @@ public final class BoardFrame {
         return new BoardFrame(box, OUTLINE_OPEN, ORIGIN_EDGES, outlineK, cutouts, open, warnings);
     }
 
-    /** One Edge.Cuts item (KiCad coordinates): lines, arcs and curves are chained; rects, polygons, circles are loops. */
-    private static void edge(Graphic.Kind kind, double[] p, List<double[]> pieces, List<double[]> pieceBoxes,
+    /**
+     * One Edge.Cuts item (KiCad coordinates): lines, arcs and curves are chained; rects, polygons, circles are loops.
+     * Returns the number of points it added.
+     */
+    private static int edge(Graphic.Kind kind, double[] p, List<double[]> pieces, List<double[]> pieceBoxes,
             List<double[]> loops, List<double[]> loopBoxes) {
         double[] box = KGeom.emptyBox();
+        double[] q;
         switch (kind) {
             case LINE:
                 KGeom.extendPts(box, p);
-                pieces.add(p.clone());
+                q = p.clone();
+                pieces.add(q);
                 pieceBoxes.add(box);
                 break;
             case ARC: {
                 KGeom.Pts out = new KGeom.Pts();
-                if (KGeom.flattenArc(p[0], p[1], p[2], p[3], p[4], p[5], KGeom.CHORD_MM, out, true)) {
-                    pieces.add(out.toArray());
-                    pieceBoxes.add(KGeom.arcExtents(p[0], p[1], p[2], p[3], p[4], p[5]));
+                if (!KGeom.flattenArc(p[0], p[1], p[2], p[3], p[4], p[5], KGeom.CHORD_MM, out, true)) {
+                    return 0;
                 }
+                q = out.toArray();
+                pieces.add(q);
+                pieceBoxes.add(KGeom.arcExtents(p[0], p[1], p[2], p[3], p[4], p[5]));
                 break;
             }
             case BEZIER: {
                 KGeom.Pts out = new KGeom.Pts();
                 KGeom.flattenBezier(p, out, true);
-                double[] q = out.toArray();
+                q = out.toArray();
                 KGeom.extendPts(box, q);
                 pieces.add(q);
                 pieceBoxes.add(box);
@@ -240,24 +250,34 @@ public final class BoardFrame {
             }
             case CIRCLE: {
                 double r = Math.hypot(p[2] - p[0], p[3] - p[1]);
-                loops.add(KGeom.circle(p[0], p[1], r, KGeom.CHORD_MM));
+                q = KGeom.circle(p[0], p[1], r, KGeom.CHORD_MM);
+                loops.add(q);
                 loopBoxes.add(new double[] {p[0] - r, p[1] - r, p[0] + r, p[1] + r});
                 break;
             }
-            case RECT: {
-                double[] q = rectCorners(p);
+            case RECT:
+                q = rectCorners(p);
                 KGeom.extendPts(box, q);
                 loops.add(q);
                 loopBoxes.add(box);
                 break;
-            }
             case POLY:
                 KGeom.extendPts(box, p);
-                loops.add(p.clone());
+                q = p.clone();
+                loops.add(q);
                 loopBoxes.add(box);
                 break;
             default:
-                break;
+                return 0;
+        }
+        return q.length / 2;
+    }
+
+    /** The outline's arcs and circles, drawn as lines, stay within the point budget (KGeom.MAX_FLAT_POINTS). */
+    private static void checkPoints(long points, int line) throws SExprException {
+        if (points > KGeom.MAX_FLAT_POINTS) {
+            throw SExprException.limit(line, String.format(Locale.ROOT, "its outline has more than %,d points once "
+                    + "its arcs and circles are drawn (line %d)", KGeom.MAX_FLAT_POINTS, line));
         }
     }
 

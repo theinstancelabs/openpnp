@@ -54,6 +54,7 @@ public final class KicadParser {
     private final KicadPcb pcb = new KicadPcb();
     private final Set<String> padstackRefs = new LinkedHashSet<>(); // cleaned: they go into the warning text
     private String currentRef = "";
+    private long arcPoints; // made by flattening polygon arcs, against KGeom.MAX_FLAT_POINTS
 
     private KicadParser() {
     }
@@ -179,7 +180,7 @@ public final class KicadParser {
 
     // ---- footprints ----------------------------------------------------------------------------------------------
 
-    private void parseFootprint(SExpr e) {
+    private void parseFootprint(SExpr e) throws SExprException {
         Footprint f = new Footprint();
         f.line = e.line;
         String full = e.atom(0) == null ? "" : e.atom(0);
@@ -204,7 +205,7 @@ public final class KicadParser {
         }
     }
 
-    private void parseFootprintBody(SExpr e, Footprint f) {
+    private void parseFootprintBody(SExpr e, Footprint f) throws SExprException {
         try {
             String layer = e.str("layer");
             f.top = !"B.Cu".equals(layer);
@@ -310,7 +311,7 @@ public final class KicadParser {
         return h > 0 && h <= MAX_MM ? h : 0;
     }
 
-    private Pad parsePad(SExpr e) {
+    private Pad parsePad(SExpr e) throws SExprException {
         Pad p = new Pad();
         p.line = e.line;
         p.name = e.atom(0) == null ? "" : e.atom(0);
@@ -405,7 +406,7 @@ public final class KicadParser {
 
     // ---- graphics ------------------------------------------------------------------------------------------------
 
-    private void addGraphic(List<Graphic> into, SExpr e) {
+    private void addGraphic(List<Graphic> into, SExpr e) throws SExprException {
         try {
             Graphic g = parseGraphic(e);
             if (g != null) {
@@ -417,7 +418,7 @@ public final class KicadParser {
         }
     }
 
-    private Graphic parseGraphic(SExpr e) throws Bad {
+    private Graphic parseGraphic(SExpr e) throws Bad, SExprException {
         String h = e.head == null ? "" : e.head;
         String kind = h.substring(h.indexOf('_') + 1);
         Graphic g = new Graphic();
@@ -500,8 +501,8 @@ public final class KicadParser {
         return g;
     }
 
-    /** (pts (xy x y) … (arc (start) (mid) (end)) …) → flattened points. */
-    private double[] pts(SExpr pts) throws Bad {
+    /** (pts (xy x y) … (arc (start) (mid) (end)) …) → flattened points, the arcs within the file's point budget. */
+    private double[] pts(SExpr pts) throws Bad, SExprException {
         KGeom.Pts out = new KGeom.Pts();
         if (pts == null) {
             return out.toArray();
@@ -516,7 +517,13 @@ public final class KicadParser {
                 checkArc(a);
                 boolean joined = out.size() > 0 && Math.hypot(out.x(out.size() - 1) - a[0],
                         out.y(out.size() - 1) - a[1]) < 1e-9;
+                int before = out.size();
                 KGeom.flattenArc(a[0], a[1], a[2], a[3], a[4], a[5], KGeom.CHORD_MM, out, !joined);
+                arcPoints += out.size() - before;
+                if (arcPoints > KGeom.MAX_FLAT_POINTS) {
+                    throw SExprException.limit(c.line, String.format(Locale.ROOT, "its shapes have more than %,d "
+                            + "points once their arcs are drawn (line %d)", KGeom.MAX_FLAT_POINTS, c.line));
+                }
             }
         }
         double[] p = out.toArray();
@@ -619,7 +626,7 @@ public final class KicadParser {
         pcb.vias.add(v);
     }
 
-    private Zone parseZone(SExpr e) {
+    private Zone parseZone(SExpr e) throws SExprException {
         Zone z = new Zone();
         z.line = e.line;
         String one = e.str("layer");

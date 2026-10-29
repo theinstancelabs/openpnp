@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
@@ -456,6 +457,52 @@ public class KicadSyntheticTest {
         assertTrue(bad.stream().anyMatch(w -> w.refs.equals(List.of("R1"))));
         assertTrue(bad.get(0).text.matches("Line \\d+: a number could not be read or is out of range; that item was "
                 + "skipped\\."));
+    }
+
+    /**
+     * Full circles of 2,000 mm are 360 points each, so a file inside the item limit could make about 50 million points
+     * (gigabytes) in a polygon's arcs or in the outline. Both stop at KGeom.MAX_FLAT_POINTS with a limit.
+     */
+    @Test
+    public void arcsAndCirclesMakeAtMostTwoMillionPoints() {
+        int n = KGeom.MAX_FLAT_POINTS / 360 + 100;
+        StringBuilder poly = new StringBuilder(OUTLINE).append("(gr_poly (pts");
+        StringBuilder circles = new StringBuilder();
+        for (int i = 0; i < n; i++) {
+            poly.append(" (arc (start 2000 0) (mid -2000 1) (end 2000 2))");
+            circles.append("(gr_circle (center 0 0) (end 2000 0) (layer \"Edge.Cuts\"))\n");
+        }
+        poly.append(") (layer \"F.SilkS\") (fill yes))\n");
+        SExprException inShapes = assertThrows(SExprException.class, () -> Fixtures.board(20240108, poly.toString()));
+        assertEquals(SExprException.LIMIT, inShapes.kind);
+        assertTrue(inShapes.getMessage().contains("its shapes have more than 2,000,000 points once their arcs are "
+                + "drawn (line 3)"), inShapes.getMessage());
+        SExprException inOutline = assertThrows(SExprException.class,
+                () -> Fixtures.board(20240108, circles.toString()));
+        assertEquals(SExprException.LIMIT, inOutline.kind);
+        assertTrue(inOutline.getMessage().contains("its outline has more than 2,000,000 points"),
+                inOutline.getMessage());
+    }
+
+    @Test
+    public void aFullListDropsItsLeastImportantWarning() {
+        List<ImportWarning> l = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            ImportWarning.addCapped(l, ImportWarning.of("PASTE_POLY", null, "note " + i), 4);
+        }
+        assertTrue(ImportWarning.addCapped(l, ImportWarning.of("BAD_NUMBER", null, "check"), 4));
+        assertFalse(ImportWarning.addCapped(l, ImportWarning.of("NO_PLACEMENTS", null, "blocks"), 4));
+        assertEquals(List.of("note 0", "note 1", "check", "blocks"), texts(l), "a note goes, not the group 3 warning");
+        assertFalse(ImportWarning.addCapped(l, ImportWarning.of("PASTE_POLY", null, "note 3"), 4));
+        assertEquals(List.of("note 0", "note 1", "check", "blocks"), texts(l), "nothing less important to drop");
+    }
+
+    private static List<String> texts(List<ImportWarning> l) {
+        List<String> t = new ArrayList<>();
+        for (ImportWarning w : l) {
+            t.add(w.text);
+        }
+        return t;
     }
 
     // ---- tenting, colours -----------------------------------------------------------------------------------------

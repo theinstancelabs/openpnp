@@ -78,21 +78,24 @@ public final class ImportWarning {
     }
 
     /**
-     * Adds w to a list kept to max entries. Once full, w replaces the last entry of a less important group (a higher
-     * group number), so a flood of notes cannot push out what blocks dispensing. Returns false when something was
-     * dropped (w or the entry it replaced).
+     * Adds w to a list kept to max entries. Once full, w replaces the last entry of the least important group (the
+     * highest group number) when that group is less important than w's, so a flood of notes cannot push out what
+     * blocks dispensing. Returns false when something was dropped (w or the entry it replaced).
      */
     public static boolean addCapped(List<ImportWarning> list, ImportWarning w, int max) {
         if (list.size() < max) {
             list.add(w);
             return true;
         }
+        int drop = -1;
         for (int i = list.size() - 1; i >= 0; i--) {
-            if (list.get(i).group > w.group) {
-                list.remove(i);
-                list.add(w);
-                return false;
+            if (list.get(i).group > w.group && (drop < 0 || list.get(i).group > list.get(drop).group)) {
+                drop = i;
             }
+        }
+        if (drop >= 0) {
+            list.remove(drop);
+            list.add(w);
         }
         return false;
     }

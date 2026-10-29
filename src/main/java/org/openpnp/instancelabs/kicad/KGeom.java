@@ -19,6 +19,12 @@ public final class KGeom {
     /** ... and at most 45°, so small circles stay round. */
     public static final double MAX_STEP = Math.toRadians(45.0);
     public static final int BEZIER_MAX_SEGMENTS = 64;
+    /**
+     * Points one step may make by drawing arcs, circles and curves as lines (the parser's polygon arcs; the board
+     * frame's Edge.Cuts). The 1° steps bound one arc; this bounds them all: within the item limit, a hostile file
+     * of full circles would otherwise make about 50 million points (gigabytes).
+     */
+    public static final int MAX_FLAT_POINTS = 2_000_000;
 
     private KGeom() {
     }
