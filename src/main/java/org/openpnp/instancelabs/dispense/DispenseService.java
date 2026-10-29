@@ -1544,6 +1544,7 @@ public final class DispenseService {
         }
         finally {
             m.removeListener(cut);
+            homeTracker.homeEnded();
         }
         if (aborted.getAsBoolean() || !m.isEnabled()) {
             m.setHomed(false);

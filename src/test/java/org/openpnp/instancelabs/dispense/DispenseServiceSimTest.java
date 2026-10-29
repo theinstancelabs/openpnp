@@ -4,17 +4,23 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.openpnp.instancelabs.vision.Dot;
+import org.openpnp.machine.reference.driver.GcodeDriver;
 import org.openpnp.model.Configuration;
 import org.openpnp.model.LengthUnit;
 import org.openpnp.model.Location;
@@ -322,6 +328,41 @@ public class DispenseServiceSimTest {
         assertEquals("STOP pressed in the web UI", r.message);
         assertNothingStreamed(sim.server.sinceMark());
         assertFalse(svc.isBusy());
+    }
+
+    /**
+     * Review 1 (machine safety): a STOP during the engine's home (here the web home's) makes OpenPnP's home
+     * throw, and it never reports homed. The home's start is not left behind: the next clean home from
+     * OpenPnP's own Home button is confirmed, so it is not taken for one a stop came during, and nothing
+     * homes again because of it.
+     */
+    @Test
+    public void aStoppedHomeLeavesNoStartForTheNextCleanHome() throws Exception {
+        sim.server.delayBeforeOkMs.put("G28", 2500L);
+        Field infinity = GcodeDriver.class.getDeclaredField("infinityTimeoutMilliseconds");
+        infinity.setAccessible(true);
+        infinity.setInt(sim.driver, 4000); // a G28 whose answer was cut off ends here (60 s otherwise)
+        sim.server.mark();
+        Future<Object> home = sim.machine.submit(() -> svc.homeSafely()); // as POST /api/machine/home
+        long t0 = System.currentTimeMillis();
+        while (sim.server.sinceMark().stream().noneMatch(l -> l.startsWith("G28"))) {
+            assertTrue(System.currentTimeMillis() - t0 < 10000, "the home sends G28");
+            Thread.sleep(10);
+        }
+        svc.abort("STOP pressed in the web UI");
+        sim.machine.setEnabled(false); // the STOP's disable, past the busy machine thread
+        ExecutionException e = assertThrows(ExecutionException.class, () -> home.get(30, TimeUnit.SECONDS));
+        assertTrue(e.getCause() instanceof DispenseExecutor.AbortedException, String.valueOf(e.getCause()));
+        assertFalse(sim.machine.isHomed());
+        assertNull(svc.getHomeTracker().getHomeStartedAtMs(), "the stopped home's start is forgotten");
+        // Start, then OpenPnP's own Home button: a clean home
+        sim.server.delayBeforeOkMs.clear();
+        infinity.setInt(sim.driver, 60000);
+        sim.enableAndHome();
+        HomeTracker.Plan p = svc.homePlan();
+        assertFalse(p.needed, p.whyCode + ": " + p.why);
+        assertEquals("homed", p.whyCode);
+        assertFalse(svc.getHomeTracker().isHomeUnconfirmed());
     }
 
     /**
