@@ -3,6 +3,8 @@ package org.openpnp.instancelabs.dispense;
 import java.util.List;
 import java.util.Locale;
 
+import org.openpnp.instancelabs.padprofile.Texts;
+
 /**
  * Pre-flight interlocks (plan §5.5). Runtime interlocks are enforced elsewhere: I1 (outputs off on
  * error/abort/Stop) and I7 (on-time, at runtime) in {@link DispenseExecutor}; I2 (no B move before
@@ -40,9 +42,20 @@ public final class Interlocks {
         public boolean opticalCheckAvailable;
         /** When OpenPnP last connected to the controller (epoch ms; I11), or null if unknown. */
         public Long controllerConnectedAtMs;
-        /** Purge dots this run lays (I9), and whether it is a board run (I9, I10, I11 apply). */
+        /**
+         * Purge-row spots this run lays (I9): the initial purge and the switch spots of every further
+         * dose block ({@link DoseBlocks#purgeSpotsNeeded}); and whether it is a board run (I9, I10, I11
+         * apply). I9 also applies to calibration blocks that lay purge-row dots.
+         */
         public int purgeDots;
         public boolean boardRun;
+        /**
+         * Some dose block of the run is a partial turn (I11). Null: a board run takes it from its plan's
+         * dots (the profile's dose when it has none), any other run has none.
+         */
+        public Boolean partialTurn;
+        /** The program's dose blocks with their paste demand (I6-feed, §1.2 R7), or null: the plan's blocks. */
+        public List<GcodeProgram.BlockInfo> programBlocks;
         /** What the run touches (I4 Z frame); the default is a generic needle run. */
         public Scope scope = new Scope();
         /** The task homes first ({@link HomeTracker}): "not homed" is a note, not a violation. */
@@ -98,6 +111,7 @@ public final class Interlocks {
         }
         int below = 0;
         int nowPass = 0;
+        int otherTip = 0;
         java.util.Set<String> changed = new java.util.TreeSet<>();
         for (DispensePlan.PlannedPad p : in.plan.pads) {
             if (p.typeKey == null) {
@@ -112,15 +126,24 @@ public final class Interlocks {
             if (p.typeStatus == null) {
                 continue;
             }
+            // decision 5: a type calibrated with another tip than the mounted one is below the gate
+            boolean tipOk = !in.cfg.tip.isOther(p.typeTipKey);
             boolean gated = p.flags.contains(PadFlag.STATUS_BELOW_MIN);
-            if (!gated && !p.isBlocked() && !p.typeStatus.atLeast(gate)) {
+            if (!gated && !p.isBlocked() && !tipOk) {
+                otherTip++;
+            }
+            else if (!gated && !p.isBlocked() && !p.typeStatus.atLeast(gate)) {
                 below++;
             }
-            else if (gated && p.flags.size() == 1 && p.typeStatus.atLeast(gate)) {
+            else if (gated && p.flags.size() == 1 && p.typeStatus.atLeast(gate) && tipOk) {
                 nowPass++;
             }
         }
-        if (below > 0) {
+        if (otherTip > 0) {
+            r.add("PLAN", "the tip changed after planning: " + otherTip + " pad(s) of this plan have pad types "
+                    + "calibrated with another tip than the " + in.cfg.tip.name + "; plan again");
+        }
+        else if (below > 0) {
             r.add("PLAN", "the pad-type gate changed after planning: " + below + " pad(s) of this plan are below '"
                     + gate.dbName + "' now; plan again");
         }
@@ -332,6 +355,76 @@ public final class Interlocks {
         }
     }
 
+    /** I9 refusal: a plan of several doses names the spots each switch takes. */
+    private static String i9Text(Inputs in, List<DoseBlocks.Run> blocks, int left) {
+        DispenseConfig cfg = in.cfg;
+        int flush = cfg.padCalibration.flushDots;
+        if (blocks.size() <= 1) {
+            return String.format(Locale.ROOT, "only %d unused purge spot(s) left, %d needed: wipe the purge row and "
+                    + "reset it (or set a clean new row and reset it)", left, in.purgeDots);
+        }
+        List<String> per = new java.util.ArrayList<>();
+        for (int k = 1; k < blocks.size(); k++) {
+            per.add(Integer.toString(DoseBlocks.switchSpots(blocks.get(k).netSteps, flush, cfg.bStepsPerRev)));
+        }
+        return String.format(Locale.ROOT, "only %d unused purge spot(s) left, %d needed (%d to start and %s for each "
+                + "further dot size): wipe the purge row and reset it", left, in.purgeDots,
+                DoseBlocks.initialPurge(blocks, cfg, flush), String.join(" + ", per));
+    }
+
+    /**
+     * §6.5 PLAN refusals: a pad type whose dots the mounted tip cannot make (R1), or that gives a pad
+     * less than half a screw turn in a row (R6). One line per pad type.
+     */
+    static void checkDoses(Inputs in, InterlockReport r) {
+        DispenseConfig cfg = in.cfg;
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (DispensePlan.PlannedPad p : in.plan.pads) {
+            if (p.isBlocked() || p.dotCount <= 0 || p.dotSteps == null) {
+                continue;
+            }
+            String who = p.typeKey == null ? p.padId : p.typeKey;
+            int padSteps = p.dotSteps * p.dotCount;
+            if (!DoseBlocks.isAllowed(p.dotSteps, cfg)) {
+                if (seen.add(who + " dose")) {
+                    r.add("PLAN", Texts.interlockDose(who, p.typeVersion, p.dotSteps, cfg.tip.name,
+                            cfg.tip.minDotSteps));
+                }
+            }
+            else if (padSteps * 2 < cfg.bStepsPerRev && seen.add(who + " R6")) {
+                r.add("PLAN", Texts.interlockR6(who, p.typeVersion, padSteps));
+            }
+        }
+    }
+
+    /**
+     * I6-feed (§1.2 R7): no block may ask the screw for more paste per second than it was seen to
+     * keep up with (a screw asked for more pulls in air: 30-50 turns to recover).
+     */
+    static void checkFeed(Inputs in, InterlockReport r) {
+        DispenseProfile prof = in.cfg.profile;
+        List<double[]> demand = new java.util.ArrayList<>(); // {netSteps, mg/s}
+        if (in.programBlocks != null) {
+            for (GcodeProgram.BlockInfo b : in.programBlocks) {
+                demand.add(new double[] {b.netSteps, b.dots > 0 ? b.demandMgS : 0});
+            }
+        }
+        else if (in.plan != null) {
+            for (DispensePlan.Block b : in.plan.blocks) {
+                demand.add(new double[] {b.netSteps, b.demandMgS == null ? 0 : b.demandMgS});
+            }
+        }
+        for (int k = 0; k < demand.size(); k++) {
+            double x = demand.get(k)[1];
+            if (x > prof.sustainedFeedMgS + 1e-9) {
+                r.add("I6", String.format(Locale.ROOT, "block %d (%s) asks the screw for %.2f mg/s; the most it was "
+                        + "seen to keep up with at %.1f psi is %.2f mg/s: lengthen the dwell or use more, smaller dots",
+                        k + 1, DoseBlocks.turnName((int) demand.get(k)[0]), x, prof.pressurePsi,
+                        prof.sustainedFeedMgS));
+            }
+        }
+    }
+
     public static InterlockReport check(Inputs in) {
         InterlockReport r = new InterlockReport();
         DispenseConfig cfg = in.cfg;
@@ -381,7 +474,9 @@ public final class Interlocks {
             r.notes.add(String.format(Locale.ROOT, "I6: the screw runs at %.0f rpm, faster than the bench-proven 180: a "
                     + "screw faster than the paste feeds it pulls in air (30-50 turns to recover)", prof.screwRpm));
         }
-        if (in.boardRun) {
+        List<DoseBlocks.Run> blocks = in.plan == null ? java.util.Collections.emptyList()
+                : DoseBlocks.blocksOf(in.plan, cfg);
+        if (in.boardRun || in.purgeDots > 0) {
             // I9: purge row (same recipe as the work, then cross without stopping).
             DispenseConfig.PurgeRow row = cfg.purgeRow;
             if (in.purgeDots > 0) {
@@ -389,14 +484,14 @@ public final class Interlocks {
                     r.add("I9", "the purge row is not set (origin, pitch, spots on the blank)");
                 }
                 else if (row.spotsLeft() < in.purgeDots) {
-                    r.add("I9", String.format(Locale.ROOT, "only %d unused purge spot(s) left, %d needed: wipe the "
-                            + "purge row and reset it (or set a clean new row and reset it)", row.spotsLeft(),
-                            in.purgeDots));
+                    r.add("I9", i9Text(in, blocks, row.spotsLeft()));
                 }
             }
             else {
                 r.notes.add("I9: no purge dots in the profile");
             }
+        }
+        if (in.boardRun) {
             // I10: clean-pad guard needs the top camera.
             if (cfg.cleanPadCheck.enabled && !in.opticalCheckAvailable) {
                 r.add("I10", "clean-pad check enabled but no top camera / dot vision is available");
@@ -404,23 +499,27 @@ public final class Interlocks {
             else if (!cfg.cleanPadCheck.enabled) {
                 r.notes.add("I10: clean-pad check disabled in the configuration");
             }
-            // I11: the start angle of a partial turn is a calibration of the current controller power-up.
-            if (prof.isPartialTurn(cfg)) {
-                if (prof.startAngleSetAtMs == null) {
-                    r.add("I11", "the screw start angle has never been set: set or confirm it (Profiles)");
-                }
-                else if (in.controllerConnectedAtMs != null && prof.startAngleSetAtMs < in.controllerConnectedAtMs) {
-                    r.add("I11", "the controller (re)connected after the screw start angle was set; the B step count "
-                            + "restarts at power-up, so the angle may be lost: confirm it if the controller was not "
-                            + "power-cycled, otherwise measure it again (Profiles)");
-                }
+        }
+        // I11: the start angle of a partial turn is a calibration of the current controller power-up
+        // (board runs and calibration blocks: any block of a partial turn).
+        boolean partial = in.partialTurn != null ? in.partialTurn : in.boardRun && DoseBlocks.anyPartial(blocks, cfg);
+        if (partial) {
+            if (prof.startAngleSetAtMs == null) {
+                r.add("I11", "the screw start angle has never been set: set or confirm it (Profiles)");
+            }
+            else if (in.controllerConnectedAtMs != null && prof.startAngleSetAtMs < in.controllerConnectedAtMs) {
+                r.add("I11", "the controller (re)connected after the screw start angle was set; the B step count "
+                        + "restarts at power-up, so the angle may be lost: confirm it if the controller was not "
+                        + "power-cycled, otherwise measure it again (Profiles)");
             }
         }
+        checkFeed(in, r);
         // Plan rules (§5.6/§5.7).
         if (in.plan != null) {
             if (in.plan.dots.isEmpty()) {
                 r.add("PLAN", "plan has no dots");
             }
+            checkDoses(in, r);
             List<DispensePlan.PlannedPad> blocked = in.plan.blockedPads();
             if (!blocked.isEmpty() && cfg.refuseFlaggedPads) {
                 StringBuilder sb = new StringBuilder();

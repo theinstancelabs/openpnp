@@ -14,6 +14,7 @@ import org.openpnp.instancelabs.dispense.ControllerCommands;
 import org.openpnp.instancelabs.dispense.DispenseConfig;
 import org.openpnp.instancelabs.dispense.DispensePlan;
 import org.openpnp.instancelabs.dispense.DispenseService;
+import org.openpnp.instancelabs.dispense.DoseBlocks;
 import org.openpnp.instancelabs.dispense.GcodeProgram;
 import org.openpnp.instancelabs.dispense.GcodeStreamBuilder;
 import org.openpnp.instancelabs.dispense.HomeTracker;
@@ -726,8 +727,9 @@ final class DispenseEndpoints {
             Machine m = ctx.machine();
             DispenseConfig cfg = svc.getConfig();
             OpenPnpRawMapper mapper = new OpenPnpRawMapper((ReferenceMachine) m, svc.getDispenserNozzle(), cfg.bAxisName);
-            GcodeProgram p = GcodeStreamBuilder.forPlan(cfg, mapper, e.plan, DispenseService.purgeSpecs(cfg),
+            GcodeProgram p = GcodeStreamBuilder.forPlan(cfg, mapper, e.plan, DispenseService.purgeSpecs(cfg, e.plan),
                     svc.isBZeroed(), false, 0L);
+            DoseBlocks.fillDemand(e.plan, p);
             e.estimatedSeconds = p.estimatedSeconds;
             e.estimatedPressurisedSeconds = p.estimatedPressurisedSeconds;
             e.estimatedWorkSeconds = p.estimatedWorkSeconds;
