@@ -1842,17 +1842,12 @@ public final class DispenseService {
         res.probe.mode = req.probe.name().toLowerCase(Locale.ROOT);
         Task t = new Task(r, "home");
         cameraTourAbort = false;
-        return submitResult(r, res, () -> {
-            try {
-                t.run(() -> register(req, res, t));
-            }
-            finally {
-                res.ok = r.status == RunResult.Status.OK || r.status == RunResult.Status.RUNNING;
-                res.stoppedStage = r.status == RunResult.Status.ABORTED ? t.endedIn : null;
-                res.message = res.ok ? registrationSentence(res) : r.message;
-                if (res.ok) {
-                    r.message = res.message;
-                }
+        return submitResult(r, res, () -> t.run(() -> register(req, res, t)), () -> {
+            res.ok = r.status == RunResult.Status.OK || r.status == RunResult.Status.RUNNING;
+            res.stoppedStage = r.status == RunResult.Status.ABORTED ? t.endedIn : null;
+            res.message = res.ok ? registrationSentence(res) : r.message;
+            if (res.ok) {
+                r.message = res.message;
             }
         });
     }
@@ -2265,18 +2260,13 @@ public final class DispenseService {
         res.home = new HomeReport();
         Task t = new Task(r, "home");
         cameraTourAbort = false;
-        return submitResult(r, res, () -> {
-            try {
-                t.run(() -> probeSurfaceBody(req, res, t));
-            }
-            finally {
-                res.ok = r.status == RunResult.Status.OK || r.status == RunResult.Status.RUNNING;
-                res.stoppedStage = r.status == RunResult.Status.ABORTED ? t.endedIn : null;
-                res.message = res.ok ? String.format(Locale.ROOT, "'%s' surface probed: %d points, Z %.3f..%.3f",
-                        req.surfaceName, res.points.size(), res.plane.minZ, res.plane.maxZ) : r.message;
-                if (res.ok) {
-                    r.message = res.message;
-                }
+        return submitResult(r, res, () -> t.run(() -> probeSurfaceBody(req, res, t)), () -> {
+            res.ok = r.status == RunResult.Status.OK || r.status == RunResult.Status.RUNNING;
+            res.stoppedStage = r.status == RunResult.Status.ABORTED ? t.endedIn : null;
+            res.message = res.ok ? String.format(Locale.ROOT, "'%s' surface probed: %d points, Z %.3f..%.3f",
+                    req.surfaceName, res.points.size(), res.plane.minZ, res.plane.maxZ) : r.message;
+            if (res.ok) {
+                r.message = res.message;
             }
         });
     }
@@ -2460,24 +2450,24 @@ public final class DispenseService {
             }
             double[] at = k.looks.get(i);
             DotImager.Frame f = im.captureLit(at[0], at[1], req.nominalZ);
-            BareSpotCheck.Result b = BareSpotCheck.check(f.image, f.mmPerPxX, f.mmPerPxY, corner);
-            if (b.bare) {
-                continue;
-            }
+            // where its edges are: the margin around the weigh grid must lie on the coupon
             double shift = k.rect == null ? Double.NaN : PadLadder.couponEdgeShift(f, k.rect, ref);
-            if (shift > COUPON_SHIFT_MM) {
+            if (shift > k.slackMm + COUPON_SHIFT_MM) {
                 throw refused(String.format(Locale.ROOT, "%s is not at its place: its edge is %.1f mm inside the weigh "
                         + "grid's margin (lay it on %s again, or set the place where it lies: Setup › Places)", k.label,
                         shift, req.surfaceName));
             }
-            throw refused(String.format(Locale.ROOT, "%s is not clean or not flat in the weigh grid's margin at X %.1f, "
-                    + "Y %.1f (%s): wipe it and lay it straight on %s", k.label, at[0], at[1], b.reason,
-                    req.surfaceName));
+            BareSpotCheck.Result b = BareSpotCheck.check(f.image, f.mmPerPxX, f.mmPerPxY, corner);
+            if (!b.bare) {
+                throw refused(String.format(Locale.ROOT, "%s is not clean or not flat in the weigh grid's margin at X "
+                        + "%.1f, Y %.1f (%s): wipe it and lay it straight on %s", k.label, at[0], at[1], b.reason,
+                        req.surfaceName));
+            }
         }
     }
 
-    /** A coupon edge this far inside its nominal place is a coupon off its place (mm). */
-    static final double COUPON_SHIFT_MM = 0.2;
+    /** A coupon edge this much farther inside its nominal place than the grid allows is a coupon off its place (mm). */
+    static final double COUPON_SHIFT_MM = 0.1;
     static final String NO_CAMERA_PCAL = "the pad calibration needs the top camera: it looks at every spot before "
             + "dispensing and measures every dot";
 
@@ -2557,25 +2547,21 @@ public final class DispenseService {
         res.home = new HomeReport();
         Task t = new Task(r, "home");
         cameraTourAbort = false;
-        return submitResult(r, res, req.stopEpoch, () -> {
-            try {
-                t.run(() -> doseBlocks(req, res, t));
+        // a STOP since the job built the request refuses it at its start too (the body checks req.stopEpoch)
+        return submitResult(r, res, () -> t.run(() -> doseBlocks(req, res, t)), () -> {
+            res.ok = r.status == RunResult.Status.OK || r.status == RunResult.Status.RUNNING;
+            res.stoppedStage = r.status == RunResult.Status.ABORTED ? t.endedIn : null;
+            if (res.ok) {
+                int found = 0;
+                for (DoseBlocksResult.BlockOut b : res.blocks) {
+                    found += b.found();
+                }
+                res.message = String.format(Locale.ROOT, "%d %s laid %s, %d found by the camera", req.dots(),
+                        req.dots() == 1 ? "dot" : "dots", weigh ? "on the weigh coupons" : "on the blank", found);
+                r.message = res.message;
             }
-            finally {
-                res.ok = r.status == RunResult.Status.OK || r.status == RunResult.Status.RUNNING;
-                res.stoppedStage = r.status == RunResult.Status.ABORTED ? t.endedIn : null;
-                if (res.ok) {
-                    int found = 0;
-                    for (DoseBlocksResult.BlockOut b : res.blocks) {
-                        found += b.found();
-                    }
-                    res.message = String.format(Locale.ROOT, "%d %s laid %s, %d found by the camera", req.dots(),
-                            req.dots() == 1 ? "dot" : "dots", weigh ? "on the weigh coupons" : "on the blank", found);
-                    r.message = res.message;
-                }
-                else {
-                    res.message = r.message;
-                }
+            else {
+                res.message = r.message;
             }
         });
     }
@@ -3350,14 +3336,18 @@ public final class DispenseService {
     }
 
     private <T> Future<T> submitResult(RunResult r, T result, Body body) throws Exception {
-        return submitResult(r, result, stopEpoch.get(), body);
+        return submitResult(r, result, body, null);
     }
 
-    /** As above; {@code epoch} is the {@link #stopEpoch} the task was queued at (a STOP since then refuses it). */
-    private <T> Future<T> submitResult(RunResult r, T result, long epoch, Body body) throws Exception {
+    /**
+     * As above; {@code after} fills the result from the run once it has ended, also when the task was refused
+     * before its body (a STOP since it was queued, the machine not started).
+     */
+    private <T> Future<T> submitResult(RunResult r, T result, Body body, Runnable after) throws Exception {
         if (!busy.compareAndSet(false, true)) {
             throw new IllegalStateException("a dispense task is already running");
         }
+        long epoch = stopEpoch.get();
         try {
             return configuration.getMachine().submit(() -> {
                 try {
@@ -3370,6 +3360,14 @@ public final class DispenseService {
                     Logger.error(e, "dispense {} failed", r.kind);
                 }
                 finally {
+                    if (after != null) {
+                        try {
+                            after.run();
+                        }
+                        catch (RuntimeException e) {
+                            Logger.warn(e, "dispense {}: the result was not completed", r.kind);
+                        }
+                    }
                     finish(r);
                 }
                 return result;

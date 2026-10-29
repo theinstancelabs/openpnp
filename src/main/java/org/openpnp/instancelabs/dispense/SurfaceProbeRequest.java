@@ -32,7 +32,10 @@ public final class SurfaceProbeRequest {
         public List<double[]> looks;
         /** Where the blank's own colour is read (the calibration area's centre), or null: not compared. */
         public double[] blankSpot;
-        /** How far inside the rectangle the weigh grid's outer dot centres lie (mm). */
-        public double gridInsetMm;
+        /**
+         * How far the coupon's edges may lie inside its nominal rectangle before the weigh grid's margin is
+         * short (mm): the grid's room beyond the margin and half a dot.
+         */
+        public double slackMm;
     }
 }

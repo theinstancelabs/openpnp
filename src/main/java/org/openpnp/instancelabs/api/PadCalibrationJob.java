@@ -239,6 +239,9 @@ final class PadCalibrationJob {
     String planError;
     Map<String, Object> result;
     Balance balance;
+    PadCalibrationJobs.Engine engine;
+    /** The block steps' results (P7 reads the dots after each block switch). */
+    final List<DoseBlocksResult> results = new ArrayList<>();
 
     private PadCalibrationJob(ApiContext ctx, PadProfileEndpoints profile, DispenseEndpoints dispense,
             DispenseService svc, Request req) {
@@ -824,9 +827,9 @@ final class PadCalibrationJob {
         return c.needleChangedAtMs == null || req.regulatorAtMs + SKEW_MS >= c.needleChangedAtMs;
     }
 
-    /** What the ladder's band overlaps: the purge row, a coupon place, the plan's pads + 3 mm; null when nothing. */
+    /** What the calibration area overlaps: the purge row, a coupon place, the plan's pads + 3 mm; null when nothing. */
     private String overlap(DispenseConfig c) {
-        double x0 = layout.x0, x1 = layout.x1, y0 = layout.y0, y1 = layout.y1;
+        double x0 = area.x0Mm, x1 = area.x0Mm + area.widthMm, y0 = area.y0Mm, y1 = area.y0Mm + area.heightMm;
         DispenseConfig.PurgeRow row = c.purgeRow;
         if (row.isDefined()) {
             for (int i = 0; i < row.spots; i++) {
@@ -897,6 +900,7 @@ final class PadCalibrationJob {
     /** The job's steps on its own thread. */
     void run() {
         DispenseConfig c = svc.getConfig();
+        engine = ctx.padCalJobs.engine(svc);
         try {
             balance = ctx.padCalJobs.balance();
             if (find("blank") != null && blankNeeded) {
@@ -905,7 +909,7 @@ final class PadCalibrationJob {
                 r.surfaceName = area.surfaceName;
                 r.nominalZ = blankZ;
                 r.targets = blankTargets;
-                SurfaceProbeResult res = engine(() -> svc.probeSurface(r), x -> x.run, x -> x.ok, x -> x.message);
+                SurfaceProbeResult res = engine(() -> engine.probeSurface(r), x -> x.run, x -> x.ok, x -> x.message);
                 done("blank", String.format(Locale.ROOT, "blank surface probed: %d points, Z %.3f..%.3f",
                         res.points.size(), res.plane.minZ, res.plane.maxZ));
             }
@@ -913,7 +917,7 @@ final class PadCalibrationJob {
                 begin("coupons");
                 for (CouponPlan k : coupons) {
                     SurfaceProbeRequest r = couponProbe(c, k);
-                    engine(() -> svc.probeSurface(r), x -> x.run, x -> x.ok, x -> x.message);
+                    engine(() -> engine.probeSurface(r), x -> x.run, x -> x.ok, x -> x.message);
                 }
                 done("coupons", couponWords() + " found and touched");
             }
@@ -925,9 +929,10 @@ final class PadCalibrationJob {
                 r.areaReserveMm = layout.reservedMm;
                 r.parkAfter = coupons.isEmpty();
                 DoseBlocksResult res = engine(() -> {
-                    r.stopEpoch = svc.stopEpoch();
-                    return svc.runDoseBlocks(r);
+                    r.stopEpoch = engine.stopEpoch();
+                    return engine.runDoseBlocks(r);
                 }, x -> x.run, x -> x.ok, x -> x.message);
+                results.add(res);
                 List<DoseRecord> written = records(res, DoseRecord.OPTICAL);
                 control(c, written);
                 done(LADDER, ladderWords(res));
@@ -942,9 +947,10 @@ final class PadCalibrationJob {
                 r.kind = DoseBlocksRequest.WEIGH;
                 r.blocks.addAll(weighBlocks(c));
                 DoseBlocksResult res = engine(() -> {
-                    r.stopEpoch = svc.stopEpoch();
-                    return svc.runDoseBlocks(r);
+                    r.stopEpoch = engine.stopEpoch();
+                    return engine.runDoseBlocks(r);
                 }, x -> x.run, x -> x.ok, x -> x.message);
+                results.add(res);
                 List<DoseRecord> written = records(res, DoseRecord.COUPON);
                 for (int i = 0; i < written.size() && i < coupons.size(); i++) {
                     coupons.get(i).record = written.get(i);
@@ -1021,11 +1027,16 @@ final class PadCalibrationJob {
         r.coupon.label = k.label;
         r.coupon.rect = k.rect;
         r.coupon.looks = k.looks;
-        r.coupon.gridInsetMm = WeighPlan.insetMm(k.d95, c.padCalibration.couponMarginMm);
         CalibrationArea a = area != null ? area : c.calibrationArea.effective(c);
         if (a != null) {
             r.coupon.blankSpot = new double[] {a.x0Mm + a.widthMm / 2, a.y0Mm + a.heightMm / 2};
         }
+        double room = Double.MAX_VALUE;
+        for (double[] p : k.grid) {
+            room = Math.min(room, Math.min(Math.min(p[0] - k.rect[0], k.rect[2] - p[0]), Math.min(p[1] - k.rect[1],
+                    k.rect[3] - p[1])));
+        }
+        r.coupon.slackMm = Math.max(0, room - WeighPlan.insetMm(k.d95, c.padCalibration.couponMarginMm));
         return r;
     }
 
@@ -1632,7 +1643,7 @@ final class PadCalibrationJob {
                 return;
             }
         }
-        svc.abort(stopReason);
+        (engine != null ? engine : ctx.padCalJobs.engine(svc)).abort(stopReason);
     }
 
     private void halted() {
@@ -1952,6 +1963,10 @@ final class PadCalibrationJob {
         return t < 60 ? t + " s" : String.format(Locale.ROOT, "%d:%02d", t / 60, t % 60);
     }
 
+    private static Double r3(Double x) {
+        return x == null ? null : Math.round(x * 1000) / 1000.0;
+    }
+
     private static double r1(double x) {
         return Math.round(x * 10) / 10.0;
     }
@@ -2091,10 +2106,10 @@ final class PadCalibrationJob {
                 continue;
             }
             l.add(Views.map("steps", s, "turn", DoseModel.turnNoun(s), "dots", e.n, "found", e.n - e.misses, "hops",
-                    e.hops, "threads", e.threads, "residCv", e.residCv, "phase", e.phaseStat, "phaseLimit", e.phaseLimit,
-                    "dMeanMm", e.dMeanMm, "d95Mm", e.d95Mm, "driftPct", e.driftPct, "landingMeanMm", e.landingMeanMm,
-                    "mgPerDot", e.mgPerDot, "massConfirmed", e.massConfirmed, "pass", e.opticalPass, "failures",
-                    e.failures));
+                    e.hops, "threads", e.threads, "residCv", r3(e.residCv), "phase", r3(e.phaseStat), "phaseLimit",
+                    e.phaseLimit, "dMeanMm", r3(e.dMeanMm), "d95Mm", r3(e.d95Mm), "driftPct", r3(e.driftPct),
+                    "landingMeanMm", r3(e.landingMeanMm), "mgPerDot", r3(e.mgPerDot), "massConfirmed", e.massConfirmed,
+                    "pass", e.opticalPass, "failures", e.failures));
         }
         return l;
     }
@@ -2176,7 +2191,7 @@ final class PadCalibrationJob {
         }
         m.put("crops", cs);
         m.put("predictions", predictions());
-        m.put("control", Views.map("pass", controlPass, "text", controlText, "medianAreaMm2", controlMedianMm2,
+        m.put("control", Views.map("pass", controlPass, "text", controlText, "medianAreaMm2", r3(controlMedianMm2),
                 "drift", driftSentence()));
         m.put("pendingCoupons", hasPending());
         m.put("finishable", STOPPED.equals(outcome) || CANCELLED.equals(outcome));
@@ -2222,8 +2237,8 @@ final class PadCalibrationJob {
                     g.text, "steps", d == null ? g.steps : d.steps, "perPad", d == null ? g.perPad : d.perPad, "turn",
                     DoseModel.turnNoun(d == null ? g.steps : d.steps), "mgPerPad", d == null ? null : d.massPerPadMg,
                     "targetMg", d == null ? g.targetMg : d.targetMg, "errorPct", d == null ? null : d.errorPct,
-                    "dMeanMm", e == null ? null : e.dMeanMm, "d95Mm", e == null ? null : e.d95Mm, "residCv",
-                    e == null ? null : e.residCv, "phase", e == null ? null : e.phaseStat, "phaseLimit", e == null
+                    "dMeanMm", e == null ? null : r3(e.dMeanMm), "d95Mm", e == null ? null : r3(e.d95Mm), "residCv",
+                    e == null ? null : r3(e.residCv), "phase", e == null ? null : r3(e.phaseStat), "phaseLimit", e == null
                             ? null : e.phaseLimit, "threads", e == null ? null : e.threads, "hops", e == null ? null
                                     : e.hops, "massReadings", e == null ? null : e.massReadings, "massConfirmed",
                     e != null && e.massConfirmed, "padRipplePct", d == null ? null : d.padRipplePct,
@@ -2318,13 +2333,47 @@ final class PadCalibrationJob {
         }
         l.add(pred("P6", "threads between consecutive dots ≤ 3 %", "≤ k95(hops, 3 %) in ≥ 60 hops", th.isEmpty() ? null
                 : String.join(", ", th), p6));
+        int[] p7 = afterSwitch();
         l.add(pred("P7", "after a block switch the first 2 dots are within 2σ of their block", "reported, ≥ 95 %",
-                null, null));
+                p7[1] == 0 ? null : p7[0] + " of " + p7[1] + " within 2σ", p7[1] == 0 ? null
+                        : p7[0] >= 0.95 * p7[1] - Limits.EPS));
         Boolean p8 = controlMedianMm2 == null ? null : Math.abs(controlMedianMm2 / Limits.BENCH_CONTROL_AREA_MM2 - 1)
                 <= 0.15 + Limits.EPS;
         l.add(pred("P8", "the control matches the bench: 1.057 mm² ± 15 %", "as stated", controlMedianMm2 == null ? null
                 : Texts.num(controlMedianMm2, 3) + " mm²", p8));
         return l;
+    }
+
+    /** P7: the first 2 found dots of every block after a switch, within 2σ of the rest of their block: {in, of}. */
+    private int[] afterSwitch() {
+        int in = 0;
+        int of = 0;
+        for (DoseBlocksResult res : results) {
+            for (int k = 1; k < res.blocks.size(); k++) {
+                List<DoseBlocksResult.DotOut> dots = res.blocks.get(k).dots;
+                List<Double> rest = new ArrayList<>();
+                for (int i = Limits.EXCLUDED_AFTER_CROSS; i < dots.size(); i++) {
+                    if (dots.get(i).found != null) {
+                        rest.add(dots.get(i).found.areaMm2);
+                    }
+                }
+                if (rest.size() < 5) {
+                    continue;
+                }
+                double mean = rest.stream().mapToDouble(Double::doubleValue).average().orElse(0);
+                double ss = 0;
+                for (double a : rest) {
+                    ss += (a - mean) * (a - mean);
+                }
+                double sd = Math.sqrt(ss / (rest.size() - 1));
+                for (int i = 0; i < Math.min(Limits.EXCLUDED_AFTER_CROSS, dots.size()); i++) {
+                    of++;
+                    DoseBlocksResult.DotOut d = dots.get(i);
+                    in += d.found != null && Math.abs(d.found.areaMm2 - mean) <= 2 * sd ? 1 : 0;
+                }
+            }
+        }
+        return new int[] {in, of};
     }
 
     private Map<String, Object> statPred(String id, String what, String band, Set<Integer> doses,

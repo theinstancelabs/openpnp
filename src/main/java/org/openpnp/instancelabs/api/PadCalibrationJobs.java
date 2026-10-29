@@ -6,9 +6,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import org.openpnp.instancelabs.dispense.Balance;
+import org.openpnp.instancelabs.dispense.DispenseService;
+import org.openpnp.instancelabs.dispense.DoseBlocksRequest;
+import org.openpnp.instancelabs.dispense.DoseBlocksResult;
 import org.openpnp.instancelabs.dispense.ManualBalance;
+import org.openpnp.instancelabs.dispense.SurfaceProbeRequest;
+import org.openpnp.instancelabs.dispense.SurfaceProbeResult;
 import org.openpnp.instancelabs.sim.SimBalance;
 
 /**
@@ -31,9 +37,48 @@ final class PadCalibrationJobs {
     });
     private final Map<String, PadCalibrationJob> recent = new LinkedHashMap<>();
     private volatile PadCalibrationJob current;
+    /** The engine steps the jobs queue: the dispense service's, or a test's. */
+    volatile Engine engine;
+
+    /** The engine steps of a job (§7.1): each an ordinary engine task. */
+    interface Engine {
+        Future<SurfaceProbeResult> probeSurface(SurfaceProbeRequest r) throws Exception;
+
+        Future<DoseBlocksResult> runDoseBlocks(DoseBlocksRequest r) throws Exception;
+
+        long stopEpoch();
+
+        void abort(String reason);
+    }
 
     PadCalibrationJobs(ApiContext ctx) {
         this.ctx = ctx;
+    }
+
+    /** The engine of the jobs: a test's when set, else the dispense service's. */
+    Engine engine(DispenseService svc) {
+        Engine e = engine;
+        return e != null ? e : new Engine() {
+            @Override
+            public Future<SurfaceProbeResult> probeSurface(SurfaceProbeRequest r) throws Exception {
+                return svc.probeSurface(r);
+            }
+
+            @Override
+            public Future<DoseBlocksResult> runDoseBlocks(DoseBlocksRequest r) throws Exception {
+                return svc.runDoseBlocks(r);
+            }
+
+            @Override
+            public long stopEpoch() {
+                return svc.stopEpoch();
+            }
+
+            @Override
+            public void abort(String reason) {
+                svc.abort(reason);
+            }
+        };
     }
 
     /** The newest job (running, waiting or finished), or null. */
