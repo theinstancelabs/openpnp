@@ -161,7 +161,9 @@ Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, (
 - `IL.regProgress(run)`: where a Register board / blank probe task is, from `status.run.detail`: `{stage, k, n, part
   ('home' | 'FID 2/3' | 'check 2/3' | 'probe 3/5' | 'plan again'), left (s, counting down between the engine's steps)}`.
   The strip, the plan chip, the stepper and the foot button share it. `IL.TASK_WORD` maps task labels to words
-  (`board registration` → `Register`, `blank probe`, `z check`).
+  (`board registration` → `Register`, `blank probe`, `z check`). `IL.homeWhy(status.machine.home)`: why a task homes
+  first, for "Homes first (…)": `setting: always`, `a stop came during the last home`, `not homed since 07:27` (the
+  engine's `sinceMs` is the later of the last stop and the last connect) or `not homed`.
 - `IL.boardLeftS(run)`: seconds left of a board run, the one number for the strip, tiles, timeline and stepper (the
   live rate blended with the plan estimate over the first 20 dots). `IL.tourProgress` (set by run.js): the camera tour
   progress `{text, left, k, n, approx}` the strip and the Pads clean card share.
@@ -197,8 +199,8 @@ Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, (
   `POST /api/machine/z-check`); Setup registers `su-go-<card>`, `su-probe-blank`. Every gated fix-it row gets a visible
   `.fix-why` reason line from core (rows marked `[data-own-reason]` show their own).
   `IL.fixesForCode(code, status, message)`: an I4 refusal that names a place offers `Retake Z with N1` (#setup/places/<name>);
-  I4 seat / surface → `Register board`, `Do it by hand`; I4 "measured before the home" → `Check Z`; I4 "Z moved" →
-  Needle Z frame; `REG` → `Look with the camera`, `Change board`, `Plan without fiducial correction`, `Register again`,
+  I4 seat / surface → `Register board`, `Do it by hand`; I4 "measured before the home" → `Check Z`; I4 "Z moved" or
+  "no point measured before the home" → Needle Z frame (`IL.i4Kind` → `zcheck` for all three); `REG` → `Look with the camera`, `Change board`, `Plan without fiducial correction`, `Register again`,
   `Do it by hand`; `PROBE` → `Register again`, `Do it by hand` (+ `Probe the blank…` when it names the blank).
   `IL.CODE_RE` is the code prefix of an engine text (`I4:`, `MACHINE:`, `CONFIG:`, `PLAN:`, `REG:`, `PROBE:`).
 - `IL.lockReason(status, {connected, homed, idle = true, pressureOff = true, engine})` → the spec's locked-control
@@ -365,7 +367,8 @@ Never `/dev/ttyACM*`, `/dev/serial/*`, `/dev/video*` or a real-mode OpenPnP.
   (`status.machine.home.policy`): `homes first` / `homes first, checks Z`; the verdict reads `Ready to run · homes first
   (≈ 25 s)`. `need` only when a STOP left N1 low (`home.n1Low`). Homed with Z data that predate the home:
   `checks Z` with the `check-z` fix. The status I4 "measured before the home" no longer shows as a Place heights
-  blocker (a board run checks Z itself). Recovery's home step is done without a home unless N1 is low. The run confirm
+  blocker (a board run checks Z itself); "no point measured before the home" and "Z moved" (status or plan) are the
+  extra blocker `I4-z` (`Z check`, fix: Needle Z frame), never the surface item (Register board would not clear them). Recovery's home step is done without a home unless N1 is low. The run confirm
   shows `#run-confirm-home`; the Run step's phases add Home and Z check rows from `run.detail`.
 - **Board step:** `Board top Z (approximate, ±1 mm)`, prefilled when empty (`#board-z-note` says from where), the
   plan's frame check under it; copy names Register board.

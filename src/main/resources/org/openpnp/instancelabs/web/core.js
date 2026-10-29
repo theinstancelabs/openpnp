@@ -871,12 +871,26 @@
   /** The failure of the last background load of key ('runs' | 'config' | 'events') or null. */
   IL.loadError = (key) => S.loadErrors[key] || null;
 
+  /**
+   * Why a task homes first, for "Homes first (…)" (status.machine.home, AUTO_REGISTER_DESIGN.md §2.2): 'setting: always',
+   * 'a stop came during the last home', 'not homed since 07:27' (the engine's sinceMs is the later of the last stop and
+   * the last connect: after a STOP it is when Start was pressed) or 'not homed'; '' when no home is needed.
+   */
+  IL.homeWhy = function (h) {
+    if (!h || !h.needed) return '';
+    if (h.whyCode === 'always') return 'setting: always';
+    if (h.whyCode === 'home-unconfirmed') return 'a stop came during the last home';
+    return isNum(h.sinceMs) ? 'not homed since ' + IL.fmtTime(h.sinceMs - S.skewMs) : 'not homed';
+  };
+
   // ================================================================================== readiness (§9)
   IL.READY_ORDER = ['machine', 'angle', 'needle', 'regulator', 'padtypes', 'surface', 'plan', 'purge', 'clean'];
   const READY_OK = new Set(['ok', 'you', 'off', 'info']);   // info: a note that counts ready ("homes first")
   /** Which readiness item an I4 message belongs to. */
   function i4Kind(msg, boardSurface) {
     const t = String(msg || '').toLowerCase();
+    // Z after a home (AUTO_REGISTER_DESIGN.md §2.4): not checked yet, no point left to check it on, or it moved
+    if (/were measured before the home|must be checked after the home|^(i4:\s*)?z moved\b/.test(t)) return 'zcheck';
     if (/needle z frame|needle was changed|needle z offset/.test(t)) return 'needle';
     if (/^place '/.test(t)) return 'place';
     if (/the plan was made/.test(t)) return 'plan';
@@ -941,10 +955,10 @@
         detail: 'N1 stopped low (Z ' + IL.fmt(hm.n1Z, 2) + '): look at the board under it. Home raises N1 first, then homes.',
         fixes: [{ fix: 'home', label: 'Home now' }] });
     } else if (!m.homed && hm && hm.policy) {
-      const since = isNum(hm.sinceMs) ? ' since the stop at ' + IL.fmtTime(hm.sinceMs - S.skewMs) : '';
+      const why = IL.homeWhy(hm);
       add({ key: 'machine', code: 'MACHINE', title: 'Machine', state: 'info', value: zAfterHome ? 'homes first, checks Z' : 'homes first',
         short: 'homes first', homeFirst: true,
-        detail: 'Not homed' + since + ': Register board and Run home first (≈ ' + IL.fmtSecs(homeS) + ')'
+        detail: (/^not homed/.test(why) ? IL.cap(why) : 'Not homed' + (why ? ' (' + why + ')' : '')) + ': Register board and Run home first (≈ ' + IL.fmtSecs(homeS) + ')'
           + (zAfterHome ? ', then ' + IL.zTouches(zN) + (zN > 1 ? ' check' : ' checks') + ' Z (≈ ' + IL.fmtSecs(zS * zN) + ').' : '.'),
         fixes: [{ fix: 'home', label: 'Home now' }] });
     } else if (!m.homed) {
@@ -1239,15 +1253,25 @@
       if (i.state === 'blocked') addExtra(extraFor(code, i.text, 'block', i));
       else if (i.state === 'warning') addExtra(extraFor(code, i.text, 'need', i));
     }
-    // I4 "Z not checked since the home" gates prime, the test dot and the calibrations; a board run checks Z by itself
-    // (the machine item says so), so it is no blocker here
-    const zRule = ilk.I4 && /measured before the home|must be checked after the home/i.test(String(ilk.I4.text || ''));
+    // I4 Z after a home: "measured before the home, not checked since" gates prime, the test dot and the calibrations,
+    // but a board run checks Z by itself (the machine item says so), so it is no blocker here. With no point left to
+    // check Z on, or a Z that moved, the run is refused too: a blocker of its own, fixed at the needle Z frame (not by
+    // Register board, which measures after the home)
+    const zBlocks = (t) => i4Kind(t, bsName) === 'zcheck' && !/were measured before the home/i.test(String(t || ''));
+    const zExtra = (t) => {
+      if (!extras.some((x) => x.key === 'I4-z')) {
+        addExtra({ key: 'I4-z', code: 'I4', title: 'Z check', state: 'block', short: 'Z check', detail: sentence(t), fixes: IL.fixesForCode('I4', s, t) });
+      }
+    };
+    const zRule = !!ilk.I4 && i4Kind(ilk.I4.text, bsName) === 'zcheck';
+    if (zRule && ilk.I4.state === 'blocked' && zBlocks(ilk.I4.text)) zExtra(ilk.I4.text);
     if (ilk.I4 && ilk.I4.state === 'blocked' && items[2].ready && !zRule) addExtra({ key: 'I4', code: 'I4', title: 'Place heights', state: 'block', short: 'place heights', detail: sentence(ilk.I4.text), fixes: [{ href: '#setup/places', label: 'Open Places' }] });
     for (const v of viol) {
       if (['MACHINE', 'I9', 'I10', 'I11', 'PLAN'].includes(v.code)) continue;
       if (v.code === 'I4') {
         const k = i4Kind(v.message, bsName);
-        if (k === 'place') addExtra({ key: 'I4-place', code: 'I4', title: 'Place height', state: 'block', short: 'place Z', detail: sentence(v.message), fixes: [{ href: '#setup/places', label: 'Retake Z with N1' }] });
+        if (k === 'zcheck' && zBlocks(v.message)) zExtra(v.message);
+        else if (k === 'place') addExtra({ key: 'I4-place', code: 'I4', title: 'Place height', state: 'block', short: 'place Z', detail: sentence(v.message), fixes: [{ href: '#setup/places', label: 'Retake Z with N1' }] });
         else if (k === 'other-surface') addExtra({ key: 'I4-surface', code: 'I4', title: 'Surface', state: 'block', short: 'blank surface', detail: sentence(v.message), fixes: [{ href: '#setup/surfaces', label: 'Open Probed surfaces' }] });
         continue;
       }
@@ -2579,10 +2603,13 @@
           const pm = /^place '([^']+)'/i.exec(msg);
           return [{ href: '#setup/places' + (pm ? '/' + encodeURIComponent(pm[1]) : ''), label: 'Retake Z with N1' + (pm ? ' (' + pm[1] + ')' : '') }];
         }
+        // Z after a home: one N1 touch checks it; with no point left to touch, or a Z that moved, the frame (and
+        // everything after it) is measured again
+        if (k === 'zcheck') {
+          return /no point measured before/i.test(msg) || /^(I4:\s*)?z moved\b/i.test(msg) ? [{ href: '#setup/needle', label: 'Open Needle Z frame' }]
+            : [{ fix: 'check-z', label: 'Check Z' }];
+        }
         if (k === 'other-surface') return [{ href: '#setup/surfaces', label: 'Open Probed surfaces' }];
-        // Z after a home: one N1 touch checks it; a Z that moved needs the frame (and everything after it) again
-        if (/were measured before the home|must be checked after the home/i.test(msg) && !/no point measured/i.test(msg)) return [{ fix: 'check-z', label: 'Check Z' }];
-        if (/^z moved/i.test(msg) || /no point measured before/i.test(msg)) return [{ href: '#setup/needle', label: 'Open Needle Z frame' }];
         if (k === 'seat' || k === 'surface-bad' || k === 'plan') return [{ fix: 'register', label: 'Register board' }, { fix: 'probe-by-hand', label: 'Do it by hand' }];
         return [{ href: '#setup/needle', label: 'Open Needle Z frame' }];
       }

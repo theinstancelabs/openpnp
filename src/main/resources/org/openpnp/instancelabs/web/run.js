@@ -1272,14 +1272,15 @@
     const fileRow = el('div', { class: 'field', id: 'board-file-row' }, el('label', { class: 'field__l', for: 'board-file' }, el('span', { text: 'Board file' }), el('span', { class: 'unit', text: '.board.xml' })), file);
     const pos = el('div', { class: 'board-pos' },
       field('board-x', 'X (board origin)', 'mm', { step: '0.01' }), field('board-y', 'Y (board origin)', 'mm', { step: '0.01' }),
-      field('board-z', 'Board top Z (approximate, ±1 mm)', 'mm', { step: '0.01', placeholder: 'required',
+      field('board-z', 'Board top Z (approximate, ±1\u00a0mm)', 'mm', { step: '0.01', placeholder: 'required',
         title: 'Roughly the height of the board top as N1 sees it (OpenPnP frame). Register board measures it; within ±1 mm is enough.' }),
       field('board-rot', 'Rotation', '°', { step: '0.1' }));
     for (const [id, k] of [['board-x', 'x'], ['board-y', 'y'], ['board-z', 'z'], ['board-rot', 'rot']]) {
       pos.querySelector('#' + id).addEventListener('input', (e) => { R.form[k] = e.target.value; R.formDirty = true; if (k === 'z') R.form.zFrom = null; const er = $(id + '-err'); if (er) er.hidden = true; e.target.classList.remove('input--invalid'); IL.render(); });
     }
-    // the Board top Z: prefilled when empty (never mistaken for a measurement), and the window / frame check under it
-    pos.querySelector('#board-z').parentNode.append(el('div', { class: 'field__h', id: 'board-z-note', hidden: true }));
+    // the Board top Z: prefilled when empty (never mistaken for a measurement), and the window / frame check: a full-width
+    // row under the Z and Rotation fields (inside the Z field it pushed Rotation's input out of line)
+    pos.append(el('div', { class: 'field__h', id: 'board-z-note', hidden: true }));
     const useCam = el('button', { type: 'button', class: 'capture', id: 'btn-board-use-cam', title: 'Board origin X/Y = where the top camera is now (jog it onto the board origin in OpenPnP first)' });
     const useZ = el('button', { type: 'button', class: 'capture', id: 'btn-board-use-n1z', title: 'Board top Z = the N1 nozzle Z now (lower N1 until its tip touches the board top in OpenPnP first)' });
     useCam.addEventListener('click', () => { const c = IL.positions().cam; if (!c) return; R.form.x = c.x.toFixed(2); R.form.y = c.y.toFixed(2); R.formDirty = true; fillForm(); IL.render(); });
@@ -1572,8 +1573,8 @@
     const h = homePlan(s, p);
     const parts = [];
     if (h && h.needed) {
-      const why = isNum(h.sinceMs) && h.whyCode !== 'not-homed' ? ' (' + (h.whyCode === 'always' ? 'setting: always' : 'stopped at ' + IL.fmtTime(h.sinceMs - S.skewMs)) + ')' : '';
-      parts.push('Homes first' + why + ', ≈ ' + IL.fmtSecs(h.estimateS) + '.');
+      const why = IL.homeWhy(h);
+      parts.push('Homes first' + (why ? ' (' + why + ')' : '') + ', ≈ ' + IL.fmtSecs(h.estimateS) + '.');
     }
     const same = regSameSeatLikely(s, p);
     const sf = boardSurface(s);
@@ -1615,15 +1616,25 @@
     const where = st === 'same-seat' ? 'the same-seat check (point ' + Math.max(1, k) + ' of 3)' : st === 'probe' ? 'probe point ' + Math.max(1, k) + ' of ' + Math.max(1, nPts)
       : st === 'save' ? 'the save' : 'planning again';
     if (v.seat === 'same') {
-      return head + where + ': the board surface was not changed; the seat checked at ' + IL.fmtTime((v.previousAtMs || v.atMs) - S.skewMs) + ' still holds.';
+      const mine = regOf(v);
+      const held = mine ? (mine.lastCheckedAtMs > mine.atMs ? mine.lastCheckedAtMs : mine.atMs) : v.previousAtMs || v.atMs;
+      return head + where + ': the board surface was not changed; the seat checked at ' + IL.fmtTime(held - S.skewMs) + ' still holds.';
     }
     return head + where + ': the fiducials' + (isNum(v.movedMm) ? ' (board moved ' + mmText(v.movedMm) + ')' : '') + ' were saved and the board planned again; '
       + 'the surface was not: Register again to probe.';
   }
+  /** The registration a result stored or checked again, from the plan shown (the page head and "Dots use" show it). */
+  function regOf(v) {
+    const reg = plan() && plan().registration;
+    return reg && v.registrationId && reg.id === v.registrationId ? reg : null;
+  }
   /** The machine-readable first sentence of #reg-result (§8.1 state 3). */
   function regSentence(v, s) {
-    const at = IL.fmtTime((v.atMs || Date.now() + S.skewMs) - S.skewMs);
-    if (v.status === 'ABORTED') return stoppedText(v, at);
+    const ended = IL.fmtTime((v.atMs || Date.now() + S.skewMs) - S.skewMs);
+    if (v.status === 'ABORTED') return stoppedText(v, ended);
+    // the registration's own time, as the page head and "Dots use" show it (the task ends a little later)
+    const mine = regOf(v);
+    const at = mine ? IL.fmtTime((v.seat === 'same' && mine.lastCheckedAtMs ? mine.lastCheckedAtMs : mine.atMs) - S.skewMs) : ended;
     const fids = v.fiducials || [];
     const pr = v.probe || {};
     const pts = pr.points || [];
@@ -2050,7 +2061,9 @@
       : t && !R.byHand ? t.fids.map((f) => ({ name: f.name, expected: { x: f.x, y: f.y }, found: null, state: 'todo' })) : [];
     const fb = $('reg-fids');
     IL.show(fb, fids.length > 0 && !R.byHand);
-    const fstate = (f) => (f.found ? 'found' : f.state === 'todo' && det && det.stage === 'fiducials' && fids.filter((x) => x.found).length === fids.indexOf(f) ? 'now' : f.state || 'todo');
+    // the fiducial the camera looks at now: the engine visits them nearest first, its phase names it
+    const fidNow = det && det.stage === 'fiducials' ? (/^fiducials: (\S+)/.exec(String(live.phase || '')) || [])[1] : null;
+    const fstate = (f) => (f.found ? 'found' : f.state === 'todo' && f.name === fidNow ? 'now' : f.state || 'todo');
     const fk = JSON.stringify(fids.map((f) => [f.name, f.expected, f.found, f.state, f.offsetFromExpectedMm, f.movedMm, fstate(f)]));
     const idle = mode === 'idle';
     const regAt = idle && p && p.registration ? IL.fmtTime(p.registration.atMs - S.skewMs) : null;
@@ -2105,17 +2118,19 @@
     const fit = IL.boardview.planeFit(pts);
     const cfg = S.config || {};
     const lim = isNum(cfg.surfaceMaxResidualMm) ? Number(cfg.surfaceMaxResidualMm) : 0.04;
-    const tol = isNum(cfg.zFrameToleranceMm) ? Number(cfg.zFrameToleranceMm) : 1.0;
-    const anchor = anchorOf(s);
-    // the worst Z against the frame, signed (+ above, − below)
-    const zDev = anchor && pts.length ? pts.map((q) => q.z - anchor.surfaceZMm).reduce((a, b) => (Math.abs(b) > Math.abs(a) ? b : a), 0) : null;
+    // the worst Z against the board top Z of the plan (else the needle frame), signed (+ above, − below): the engine
+    // checks a board surface against the board's own nominal Z (AUTO_REGISTER_DESIGN.md §16 item 1), as the rows do
+    const lim2 = probeLimits(s, st.p);
+    const tol = lim2.tol;
+    const zDev = lim2.top !== null && pts.length ? pts.map((q) => q.z - lim2.top).reduce((a, b) => (Math.abs(b) > Math.abs(a) ? b : a), 0) : null;
     const mini = (k, v, u, sub, bad) => el('div', { class: 'mini' + (bad ? ' notebox--block' : '') }, el('div', { class: 'mini__k', text: k }),
       el('div', { class: 'mini__v' }, v, u ? el('span', { class: 'u', text: u }) : null), el('div', { class: 'mini__s', text: sub }));
-    IL.keyed(box, JSON.stringify([R.byHand, pts.length, st.targets.length, fit && fit.worst.toFixed(4), fit && fit.slope.toFixed(5), zDev !== null && zDev.toFixed(3)]), () => [
+    IL.keyed(box, JSON.stringify([R.byHand, pts.length, st.targets.length, fit && fit.worst.toFixed(4), fit && fit.slope.toFixed(5), zDev !== null && zDev.toFixed(3), lim2.top, tol]), () => [
       mini('Points', R.byHand ? pts.length + ' of ' + st.targets.length : String(pts.length), '', R.byHand ? (pts.length < 3 ? 'at least 3 to save' : 'enough to save') : 'board surface, tied'),
       mini('Worst residual', fit ? IL.fmt(fit.worst, 3) : '—', fit ? 'mm' : '', 'limit ' + IL.fmt(lim, 2) + ' mm', fit && fit.worst > lim),
       mini('Tilt', fit ? IL.fmt(fit.slope * 100, 2) : '—', fit ? 'mm / 100 mm' : '', fit ? 'plane through the points' : 'after 3 points'),
-      mini('Z vs the frame', zDev !== null ? IL.fmtSigned(zDev, 2) : '—', zDev !== null ? 'mm' : '', 'limit ±' + IL.fmt(tol, 2) + ' mm' + (anchor ? ' of ' + IL.fmt(anchor.surfaceZMm, 2) : ''), zDev !== null && Math.abs(zDev) > tol),
+      mini(lim2.topName === 'the board top' ? 'Z vs the board top' : 'Z vs the frame', zDev !== null ? IL.fmtSigned(zDev, 2) : '—', zDev !== null ? 'mm' : '',
+        'limit ±' + IL.fmt(tol, 2) + ' mm' + (lim2.top !== null ? ' of ' + IL.fmt(lim2.top, 2) : ''), zDev !== null && Math.abs(zDev) > tol),
     ]);
   }
   /** Inside "Do it by hand": the guide, the targets table and the untied note (ids and behaviour as before). */
@@ -2271,10 +2286,12 @@
       if (sev[it.code] !== 'block') sev[it.code] = st;
     }
     // a run homes first and checks Z after the home by itself: MACHINE "not homed" and I4 "Z not checked" are its own
-    // first steps then, not blockers (the machine item says so)
+    // first steps then, not blockers (the machine item says so). Not when nothing is left to check Z on, or Z moved (the
+    // readiness extra I4-z): that blocks the run
     const mi = r.items[0] || {};
-    const runFirst = (i) => (i.id === 'MACHINE' && !!mi.homeFirst) || (i.id === 'I4' && !!(mi.homeFirst || mi.zCheckFirst)
-      && /measured before the home|must be checked after the home/i.test(String(i.text || '')));
+    const zBlocked = r.extras.some((x) => x.key === 'I4-z');
+    const runFirst = (i) => (i.id === 'MACHINE' && !!mi.homeFirst) || (i.id === 'I4' && !zBlocked && !!(mi.homeFirst || mi.zCheckFirst)
+      && /were measured before the home/i.test(String(i.text || '')));
     const c = { ok: 0, need: 0, block: 0, off: 0, first: 0 };
     const firstNames = [];
     for (const i of list) {
@@ -2857,8 +2874,7 @@
     const zS = zc && isNum(zc.estimateS) ? zc.estimateS : 20;
     const zN = zc && zc.touchesAfterHome > 1 ? zc.touchesAfterHome : 1;
     if (h && h.needed) {
-      const why = h.whyCode === 'always' ? 'setting: always' : isNum(h.sinceMs) && h.whyCode !== 'not-homed' ? 'stopped at ' + IL.fmtTime(h.sinceMs - S.skewMs) : 'not homed';
-      return { home: true, z: zData, text: 'Homes first (' + why + '), ≈ ' + IL.fmtSecs(h.estimateS) + ': the head goes to its home corner and the top camera finds the homing fiducial. '
+      return { home: true, z: zData, text: 'Homes first (' + IL.homeWhy(h) + '), ≈ ' + IL.fmtSecs(h.estimateS) + ': the head goes to its home corner and the top camera finds the homing fiducial. '
         + 'The pressure stays off until homing is done.' + (zData ? ' Then ' + IL.zTouches(zN) + (zN > 1 ? ' check' : ' checks') + ' Z (≈ ' + IL.fmtSecs(zS * zN) + ').' : '') };
     }
     if (zc && zc.needed && zc.reference) {

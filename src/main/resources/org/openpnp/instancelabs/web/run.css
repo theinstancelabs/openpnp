@@ -157,6 +157,9 @@
 /* board step */
 .board-pos { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; }
 .board-pos .field__l .ro { color: var(--ink-3); font-weight: 600; }
+/* a label that wraps (Board top Z (approximate, ±1 mm)) keeps the inputs of its row in line: labels end at the input */
+.board-pos > .field > .field__l { flex: 1 0 auto; align-items: flex-end; }
+#board-z-note { grid-column: 1 / -1; margin-top: -4px; }
 .capture-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .capture-row .capture { flex: 1 1 auto; justify-content: center; }
 .seat-q { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border-radius: 12px; background: var(--tile); border: 1px solid var(--line); }

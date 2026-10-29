@@ -957,7 +957,7 @@
     const homeS = h.needed ? Number(h.estimateS) || 0 : 0;
     const used = pr.defined && pr.usedSpots ? ' (clear of the ' + IL.plural(pr.usedSpots, 'used spot') + ')' : '';
     const where = pr.defined && pr.surfaceName === name ? 'beside the purge row' + used : 'around the ' + name + ' place';
-    return IL.nb((h.needed ? 'Homes first' + (h.whyCode === 'stopped' && isNum(h.sinceMs) ? ' (stopped at ' + tm(h.sinceMs) + ')' : '') + ', ≈ ' + IL.fmtSecs(homeS) + '. Then N1' : 'N1')
+    return IL.nb((h.needed ? 'Homes first' + (IL.homeWhy(h) ? ' (' + IL.homeWhy(h) + ')' : '') + ', ≈ ' + IL.fmtSecs(homeS) + '. Then N1' : 'N1')
       + ' touches the ' + name + ' at ' + IL.plural(t.targets.length, 'spot') + ' ' + where + ', after a camera look at each. ≈ ' + IL.fmtSecs(t.estimatedSeconds)
       + '. The paste pressure stays off; hands clear of the head.');
   }
@@ -977,7 +977,9 @@
       const pts = det.probes || [];
       const cur = pts.find((q) => q.state === 'now' || q.state === 'look');
       const k = cur ? cur.n : Math.min(pts.length, pts.filter((q) => q.state === 'contact').length + 1);
-      return 'Stopped ' + at + (det.stage === 'home' ? ' during the home' : pts.length ? ' during point ' + Math.max(1, k) + ' of ' + pts.length : '') + ': nothing was saved.';
+      // the probe reports its points as it reaches them: the total is in stepsPlanned (the points + the save)
+      const n = Math.max(pts.length, (Number(det.stepsPlanned) || 0) - 1);
+      return 'Stopped ' + at + (det.stage === 'home' ? ' during the home' : pts.length ? ' during point ' + Math.max(1, k) + ' of ' + n : '') + ': nothing was saved.';
     }
     return 'Not saved: ' + stripCode(run.message || run.status).replace(/([^.!?])$/, '$1.');
   }
