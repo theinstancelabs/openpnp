@@ -10,6 +10,11 @@ specific to one board, so an imported board works the same way.
 Affines are [[a, b, tx], [c, d, ty]], board mm -> machine mm (SimScene's "affine"). The pivot is the board
 origin: the board origin lands at (tx, ty).
 
+Pad calibration (docs/instancelabs/PROFILE_CALIBRATION_DESIGN.md §11.3, §11.7): padcal() adds the SIM paste model
+(whose mass per turn, footprint law, ripple and noise differ on purpose from the engine's), two weigh coupons, the
+SIM balance and the bench blank colour; variant() applies one negative control. The N2 offset and the needle Z offset
+are read from the config copy (machine.xml, instancelabs/dispense-config.json) when it has them.
+
 Python API (tests compute every expected value from the transforms):
   seat(x, y, rot_deg, sx=1, sy=1, shear_deg=0)   T(x, y)·R(rot)·Shear·Scale (Utils2D.affineInfo's order)
   reseat(base, dx, dy, drot_deg)                 a re-seat in the machine frame about base(board origin)
@@ -19,14 +24,18 @@ Python API (tests compute every expected value from the transforms):
   min_pad_shift(board_file, a, b), moved_mm(board_file, a, b)
   scene(...) -> dict, write(config_dir, scene), board_contact_z(scene, bx, by), blank_contact_z(scene, x, y)
   CAMERA_XML_SETS, FAST_TIMINGS, FAST_VACUUM
+  padcal(sc, paste=True, coupons=True, balance="display", bench_blank=True, config_dir=None), variant(sc, name, ...),
+  needle_offsets(config_dir), PASTE, COUPONS, BENCH_BLANK_BGR, VARIANTS
 
 CLI:
   il_sim_scene.py write --config DIR --board FILE --x X --y Y --rot DEG --z Z
                         [--dx --dy --drot --sx --sy --shear] [--slope-x --slope-y] [--leaky bx,by[,r]]...
                         [--hide FID]... [--dirty-spot bx,by]... [--blank x0,y0,x1,y1 --blank-z Z
                         --blank-slope-x --blank-slope-y] [--tip normal|missing|blocked|part]
-                        [--upp-error ex,ey] [--fast]
+                        [--upp-error ex,ey] [--fast] [PADCAL]
+  il_sim_scene.py amend --config DIR [PADCAL]      the session's scene file, changed in place (it reloads on its stamp)
   il_sim_scene.py selftest [--board FILE] [--config DIR]
+  PADCAL: [--paste] [--coupons] [--balance display|connected] [--bench-blank] [--variant NAME]
 Python 3 standard library only.
 """
 import argparse
@@ -53,6 +62,43 @@ FID_DIAMETER = re.compile(r"(?i)fiducial[_-]?(\d+(?:\.\d+)?)mm")
 FID_MASK = re.compile(r"(?i)mask(\d+(?:\.\d+)?)mm")
 # Bench defaults (SimScene): board plane from BOARD_PROBES_R7, blank from BLANK_PROBES (z0 at the rect corner).
 DEFAULT_BLANK = {"rect": [280.0, 225.0, 365.0, 250.0], "surface": {"z0": 5.62, "slopeX": -0.0012, "slopeY": 0.0}}
+# Pad calibration (§11.3). mRevMg 2.30 differs on purpose from the configured 2.11 (tools/lumen.py:97): a weighing
+# must find 1.15 mg per half turn, not 1.06. needleZOffsetMm None = the engine configuration's.
+PASTE = {"mRevMg": 2.30, "ripple": 0.15, "ripplePeakDeg": 299, "cv": 0.08, "seed": 11,
+         "footprint": {"c": 0.875, "e": 0.77},
+         "transferRatio": 0.75, "oozeFirst": 0.40, "refillDip": 0.30, "refillTauDots": 2, "idleFullS": 300,
+         "idleDeadS": 3600, "threadShare": 0.5, "threadFullMg": 0.35, "threadZeroMg": 0.45, "missBelowMg": 0.12,
+         "maxGapMm": 0.20, "needleZOffsetMm": None, "feedLimitMgS": 3.0,
+         "landingSdMm": 0.03, "landingBiasMm": [0, 0], "n2OffsetMm": [25.291, -75.926], "reportCount": True}
+COUPONS = [{"place": "coupon1", "rect": [330, 40, 370, 70], "z": 5.80, "bgr": [206, 25, 0], "massMg": 4100},
+           {"place": "coupon2", "rect": [330, 75, 370, 105], "z": 5.80, "bgr": [206, 25, 0], "massMg": 4060}]
+BALANCE = {"resolutionMg": 1, "noiseMg": 0.4, "settleS": 2}
+BALANCE_MODES = ("display", "connected")
+# The bench blank under the ring light (runs/p18_half frames); paste on it is 56 levels of blue away.
+BENCH_BLANK_BGR = [206, 25, 0]
+# ripple-0.45 puts the engine's 298 deg start (count based) at the ripple's worst phase for half turns.
+RIPPLE_WORST_OFFSET_STEPS = 405
+# cv-0.20 is §11.7's "cv 0.16" row: the tip bead (transferRatio 0.75) averages each dot's mass noise with the dots
+# before it, so 0.16 gives an area CV of 0.123, which passes the repeat check on about one ladder in five; 0.20
+# gives 0.154 (§11.7 meant 0.147 without the bead).
+REPEAT_FAIL_CV = 0.20
+# The negative controls of §11.7: name -> (what the scene changes, None for a test action; the expected outcome).
+VARIANTS = {
+    "report-count-off": ("paste.reportCount false", "the quarter-turn block refuses (I11 count text)"),
+    "ripple-0.45": ("paste.ripple 0.45, offsetSteps %d" % RIPPLE_WORST_OFFSET_STEPS,
+                    "the phase checks fail; J and Q stay provisional"),
+    "thread-zero-0.65": ("paste.threadZeroMg 0.65", "quarter-turn threads > k95: Q stays provisional, text names threads"),
+    "cv-0.20": ("paste.cv %.2f" % REPEAT_FAIL_CV, "the repeat check fails"),
+    "landing-bias-0.2": ("paste.landingBiasMm [0.2, 0]", "the landing check fails (points to the needle offset)"),
+    "coupon1-off-1.5": ("coupon1 rect moved +1.5 mm in X", "step 2 refuses (Coupon 1 is not at its place: its edge is "
+                        "1.5 mm inside the weigh grid's margin)"),
+    "needle-gap-0.25": ("paste.needleZOffsetMm = the engine's - 0.15 (true gap 0.25 for a commanded 0.10)",
+                        "misses: transfer fails"),
+    "reconnect": (None, "a reconnect between calibration and run: the run refuses the 400 block (I11) until the start "
+                  "angle is confirmed; a new job cannot reuse the old quarter optical record"),
+    "idle-dead-0": ("paste.idleDeadS 0", "the purge absorbs the dead first dots: the ladder still passes (P7 reported)"),
+    "dwell-50-one-turn": (None, "profile dwellMs 50 with one-turn dots: I6-feed refuses before anything moves"),
+}
 
 
 # --------------------------------------------------------------------------- affines
@@ -196,7 +242,7 @@ def min_pad_shift(board_file, a, b, config_dir=None):
 
 def moved_mm(board_file, a, b, config_dir=None):
     """Largest fiducial move between seats a and b (the registration's movedMm)."""
-    return max(_shifts([(f["bx"], f["by"]) for f in fiducials(board_file, config_dir)], a, b))
+    return max(_shifts([(f["bx"], f["by"]) for f in fiducials(board_file, config_dir)], a, b), default=0.0)
 
 
 # --------------------------------------------------------------------------- scene
@@ -239,6 +285,88 @@ def blank_contact_z(sc, x, y):
     s = b.get("surface", DEFAULT_BLANK["surface"])
     x0, y0 = b.get("rect", DEFAULT_BLANK["rect"])[:2]
     return s["z0"] + s.get("slopeX", 0.0) * (x - x0) + s.get("slopeY", 0.0) * (y - y0)
+
+
+def needle_offsets(config_dir):
+    """(n2 [x, y] or None, needleZOffsetMm or None) from a config copy: the dispense nozzle's head offsets in
+    machine.xml (instancelabs/dispense-config.json "nozzle", default N2) and the engine's needle Z offset."""
+    if not config_dir:
+        return None, None
+    nozzle, needle_z = "N2", None
+    cfg = os.path.join(config_dir, "instancelabs", "dispense-config.json")
+    if os.path.exists(cfg):
+        with open(cfg) as f:
+            c = json.load(f)
+        nozzle = c.get("nozzle", nozzle)
+        needle_z = c.get("needleZOffsetMm")
+    n2 = None
+    machine = os.path.join(config_dir, "machine.xml")
+    if os.path.exists(machine):
+        for n in ET.parse(machine).getroot().iter("nozzle"):
+            off = n.find("head-offsets")
+            if n.get("name") == nozzle and off is not None:
+                u = off.get("units")
+                n2 = [_mm(off.get("x", 0), u), _mm(off.get("y", 0), u)]
+                break
+    return n2, needle_z
+
+
+def padcal(sc, paste=True, coupons=True, balance="display", bench_blank=True, config_dir=None):
+    """Adds the pad-calibration blocks (§11.3) to a scene dict: the paste model (N2 offset and needle Z offset from
+    the config copy when it has them), the two weigh coupons, the SIM balance (display | connected | None) and the
+    bench blank colour."""
+    if paste:
+        p = json.loads(json.dumps(PASTE))
+        n2, needle_z = needle_offsets(config_dir)
+        if n2 is not None:
+            p["n2OffsetMm"] = n2
+        if needle_z is not None:
+            p["needleZOffsetMm"] = needle_z
+        sc["paste"] = p
+    if coupons:
+        sc["coupons"] = json.loads(json.dumps(COUPONS))
+    if balance:
+        if balance not in BALANCE_MODES:
+            raise ValueError("balance mode %r is not one of %s" % (balance, ", ".join(BALANCE_MODES)))
+        sc["balance"] = dict(BALANCE, mode=balance)
+    if bench_blank:
+        if sc.get("blank") is None and "blank" in sc:
+            raise ValueError("the scene has no blank to colour")
+        sc["blank"] = dict(sc.get("blank") or DEFAULT_BLANK, bgr=list(BENCH_BLANK_BGR))
+    return sc
+
+
+def variant(sc, name, config_dir=None):
+    """Applies a negative control of §11.7 to a padcal scene dict (a test-action variant leaves it alone)."""
+    if name not in VARIANTS:
+        raise ValueError("no variant %r (%s)" % (name, ", ".join(VARIANTS)))
+    p = sc.get("paste")
+    if VARIANTS[name][0] is not None and name != "coupon1-off-1.5" and p is None:
+        raise ValueError("variant %s needs the paste block (--paste)" % name)
+    if name == "report-count-off":
+        p["reportCount"] = False
+    elif name == "ripple-0.45":
+        p["ripple"] = 0.45
+        p["offsetSteps"] = RIPPLE_WORST_OFFSET_STEPS
+    elif name == "thread-zero-0.65":
+        p["threadZeroMg"] = 0.65
+    elif name == "cv-0.20":
+        p["cv"] = REPEAT_FAIL_CV
+    elif name == "landing-bias-0.2":
+        p["landingBiasMm"] = [0.2, 0.0]
+    elif name == "coupon1-off-1.5":
+        k = next((c for c in sc.get("coupons", []) if c["place"] == "coupon1"), None)
+        if k is None:
+            raise ValueError("variant coupon1-off-1.5 needs the coupons (--coupons)")
+        k["rect"] = [k["rect"][0] + 1.5, k["rect"][1], k["rect"][2] + 1.5, k["rect"][3]]
+    elif name == "needle-gap-0.25":
+        base = p.get("needleZOffsetMm")
+        if base is None:
+            base = needle_offsets(config_dir)[1]
+        p["needleZOffsetMm"] = (base if base is not None else 0.0) - 0.15
+    elif name == "idle-dead-0":
+        p["idleDeadS"] = 0
+    return sc
 
 
 def scene_path(config_dir):
@@ -290,9 +418,38 @@ def cmd_write(a):
     sc = scene(a.board, true_seat, plane(a.z, a.slope_x, a.slope_y), blank=blank,
                leaky=[_floats(l, 2, 3) for l in a.leaky], hide=a.hide,
                dirty_spots=[_floats(d, 2) for d in a.dirty_spot], vacuum=vacuum, camera=camera, config_dir=a.config)
+    _padcal_args(sc, a)
     path = write(a.config, sc)
     print(json.dumps({"scene": path, "seat": true_seat, "fiducials": len(sc["board"]["fiducials"]),
-                      "movedFromNominalMm": round(moved_mm(a.board, seat(a.x, a.y, a.rot), true_seat, a.config), 4)}))
+                      "movedFromNominalMm": round(moved_mm(a.board, seat(a.x, a.y, a.rot), true_seat, a.config), 4),
+                      "padcal": sorted(k for k in ("paste", "coupons", "balance") if k in sc)}))
+
+
+def _padcal_args(sc, a):
+    padcal(sc, paste=a.paste, coupons=a.coupons, balance=a.balance, bench_blank=a.bench_blank, config_dir=a.config)
+    if a.variant:
+        variant(sc, a.variant, a.config)
+
+
+def cmd_amend(a):
+    """The session's scene, changed in place: a running session reloads it on its stamp (SimScene.Source)."""
+    path = scene_path(a.config)
+    if not os.path.exists(path):
+        raise SystemExit("il_sim_scene: no scene at %s (write one first)" % path)
+    with open(path) as f:
+        sc = json.load(f)
+    _padcal_args(sc, a)
+    write(a.config, sc)
+    print(json.dumps({"scene": path, "padcal": sorted(k for k in ("paste", "coupons", "balance") if k in sc),
+                      "variant": a.variant}))
+
+
+def _add_padcal_args(p):
+    p.add_argument("--paste", action="store_true", help="the SIM paste model (§11.3)")
+    p.add_argument("--coupons", action="store_true", help="the two weigh coupons coupon1, coupon2")
+    p.add_argument("--balance", choices=BALANCE_MODES, help="the SIM balance: display (typed) or connected")
+    p.add_argument("--bench-blank", action="store_true", help="the bench blank colour (DotInspector sees the paste)")
+    p.add_argument("--variant", choices=sorted(VARIANTS), help="one negative control of §11.7")
 
 
 def _close(a, b, tol=1e-9):
@@ -324,6 +481,18 @@ def cmd_selftest(a):
     check("reseat: by drot", abs(ang - 0.2) < 1e-9)
     check("fiducial name parse", FID_DIAMETER.search("Fiducial_1mm_Mask3mm-Fiducial").group(1) == "1"
           and FID_MASK.search("Fiducial_1mm_Mask3mm").group(1) == "3")
+    pc = padcal({"blank": None}, bench_blank=False)
+    check("padcal: §11.3 blocks", pc["paste"]["mRevMg"] == 2.30 and len(pc["coupons"]) == 2
+          and pc["balance"]["mode"] == "display" and json.loads(json.dumps(pc))["paste"]["needleZOffsetMm"] is None)
+    check("padcal: bench blank keeps the rect", padcal({}, paste=False, coupons=False, balance=None)["blank"]
+          == dict(DEFAULT_BLANK, bgr=BENCH_BLANK_BGR))
+    check("variants: ten", len(VARIANTS) == 10)
+    for name in VARIANTS:
+        v = variant(padcal({}), name)
+        check("variant %s changes the scene: %s" % (name, VARIANTS[name][0] is not None),
+              (v != padcal({})) == (VARIANTS[name][0] is not None))
+    check("variant needle-gap-0.25: 0.15 below the engine's", variant(padcal({}), "needle-gap-0.25")["paste"]
+          ["needleZOffsetMm"] == -0.15)
     if a.board:
         f = fiducials(a.board, a.config)
         check("board fiducials found (%d)" % len(f), len(f) >= 2)
@@ -354,12 +523,19 @@ def main(argv=None):
     w.add_argument("--tip", choices=["normal", "missing", "blocked", "part"])
     w.add_argument("--upp-error", help="ex,ey: true mm/px = configured x (1 + e)")
     w.add_argument("--fast", action="store_true", help="sensor time constants for FAST_TIMINGS")
+    _add_padcal_args(w)
+    m = sub.add_parser("amend", help="add the pad-calibration blocks (or a variant) to the session's scene")
+    m.add_argument("--config", required=True, help="the session's config COPY")
+    _add_padcal_args(m)
     t = sub.add_parser("selftest", help="check the transforms (and a board file)")
     t.add_argument("--board")
     t.add_argument("--config")
     a = ap.parse_args(argv)
     if a.cmd == "write":
         cmd_write(a)
+        return 0
+    if a.cmd == "amend":
+        cmd_amend(a)
         return 0
     if a.cmd == "selftest":
         return cmd_selftest(a)

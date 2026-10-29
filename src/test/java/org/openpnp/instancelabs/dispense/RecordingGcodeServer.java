@@ -12,9 +12,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.DoubleUnaryOperator;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.openpnp.instancelabs.sim.SimPaste;
 import org.openpnp.instancelabs.sim.SimVacuum;
 
 /**
@@ -27,6 +29,10 @@ import org.openpnp.instancelabs.sim.SimVacuum;
  * shift; G92 B sets the logical position and the shift so that the machine position (and the step
  * count) does not change; G0/G1 B moves the machine position; only a power-up (here
  * {@link #setBStepCount}) resets it. M114 reports {@code Count ... B:<round(machine x 4.44)>}.</p>
+ *
+ * <p>With a {@link #paste} model (whose scene has a paste block) the screw is the model's: the count
+ * is its count, reported only when the scene's {@code reportCount} says so, and every new
+ * connection is a controller power-up ({@link SimPaste#powerCycle}).</p>
  */
 public class RecordingGcodeServer implements AutoCloseable {
     private final ServerSocket server;
@@ -45,6 +51,10 @@ public class RecordingGcodeServer implements AutoCloseable {
     public volatile boolean reportBCount = true;
     /** The simulated N1 vacuum sensor, fed every line with the tracked X/Y/Z; null = no sensor (plain "ok"). */
     public volatile SimVacuum vacuum;
+    /** The SIM needle paste, fed every line with the tracked X/Y and the needle's Z; null = none. */
+    public volatile SimPaste paste;
+    /** The needle (N2) Z of a raw Z: the DispenseSimMachine's see-saw (z2 = 63 − z1). */
+    public volatile DoubleUnaryOperator pasteNeedleZ = (z) -> 63 - z;
     /** The M115 firmware name; "GcodeServer (RecordingGcodeServer)" makes SimGuard take this for the simulator. */
     public volatile String firmwareName = "Marlin (RecordingGcodeServer)";
     /** Wait before the "ok" of lines starting with a prefix, e.g. "G28" -> 3000 (a slow home). */
@@ -76,6 +86,10 @@ public class RecordingGcodeServer implements AutoCloseable {
     private void run() {
         while (!server.isClosed()) {
             try (Socket s = server.accept()) {
+                SimPaste connected = paste;
+                if (connected != null) {
+                    connected.powerCycle(); // a reconnect is a controller power-up
+                }
                 BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
                 OutputStream out = s.getOutputStream();
                 String line;
@@ -99,6 +113,10 @@ public class RecordingGcodeServer implements AutoCloseable {
                     if (failAtLine >= 0 && idx == failAtLine) {
                         reply.append("Error: simulated failure\n");
                     }
+                    SimPaste p = paste;
+                    if (p != null) {
+                        p.onLine(line, x, y, pasteNeedleZ.applyAsDouble(z));
+                    }
                     SimVacuum v = vacuum;
                     String sensed = v == null ? null : v.onLine(line, x, y, z);
                     if (sensed != null) {
@@ -112,9 +130,10 @@ public class RecordingGcodeServer implements AutoCloseable {
                     }
                     else if (line.startsWith("M114")) {
                         synchronized (this) {
+                            boolean model = p != null && p.isActive();
                             reply.append(String.format(Locale.ROOT, "X:%.4f Y:%.4f Z:%.4f A:%.4f B:%.4f Count X:0 Y:0 Z:0%s\n",
                                     pos.get('X'), pos.get('Y'), pos.get('Z'), pos.get('A'), pos.get('B'),
-                                    reportBCount ? " B:" + bStepCount() : ""));
+                                    reportBCount && (!model || p.reportsCount()) ? " B:" + bStepCount() : ""));
                         }
                     }
                     if (mute.contains(line)) {
@@ -183,17 +202,25 @@ public class RecordingGcodeServer implements AutoCloseable {
         return pos.get(axis);
     }
 
-    /** The Marlin step count of B (machine position x steps/deg), as M114 reports it. */
+    /** The Marlin step count of B (machine position x steps/deg), as M114 reports it; the paste model's if any. */
     public synchronized long bStepCount() {
+        SimPaste p = paste;
+        if (p != null && p.isActive()) {
+            return p.count();
+        }
         return Math.round((pos.get('B') + bShift) * B_STEPS_PER_DEG);
     }
 
     /**
      * Sets the B step count (the screw history since the controller's power-up) without changing
-     * the logical B position.
+     * the logical B position (also the paste model's).
      */
     public synchronized void setBStepCount(long steps) {
         bShift = steps / B_STEPS_PER_DEG - pos.get('B');
+        SimPaste p = paste;
+        if (p != null) {
+            p.setCount(steps);
+        }
     }
 
     @Override
