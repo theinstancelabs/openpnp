@@ -1,6 +1,7 @@
 package org.openpnp.instancelabs.api;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -151,9 +152,16 @@ final class PlanStore {
         if (dots.size() == p.dots.size()) {
             return p;
         }
-        Set<String> padsWithDots = new HashSet<>();
+        // the kept dots' pads by index where the plan has one (two pads of a footprint may share a name)
+        Set<Integer> padsWithDots = new HashSet<>();
+        Set<String> idsWithDots = new HashSet<>();
         for (DispensePlan.PlannedDot d : dots) {
-            padsWithDots.add(d.padId);
+            if (d.padIndex >= 0) {
+                padsWithDots.add(d.padIndex);
+            }
+            else {
+                idsWithDots.add(d.padId);
+            }
         }
         DispensePlan s = new DispensePlan();
         s.planId = p.planId + "-subset-" + UUID.randomUUID().toString().substring(0, 8);
@@ -178,8 +186,11 @@ final class PlanStore {
         // Dot-to-dot length of the kept dots (the parent's start leg is not included).
         s.pathLengthMm = path;
         s.pathLengthNearestNeighbourMm = Double.NaN;
-        for (DispensePlan.PlannedPad pad : p.pads) {
-            if (padsWithDots.contains(pad.padId)) {
+        Map<Integer, Integer> padAt = new HashMap<>();
+        for (int i = 0; i < p.pads.size(); i++) {
+            DispensePlan.PlannedPad pad = p.pads.get(i);
+            if (padsWithDots.contains(i) || idsWithDots.contains(pad.padId)) {
+                padAt.put(i, s.pads.size());
                 s.pads.add(pad);
             }
         }
@@ -194,6 +205,8 @@ final class PlanStore {
             d.dispenseZMm = o.dispenseZMm;
             d.hopZMm = o.hopZMm;
             d.rotationDeg = o.rotationDeg;
+            d.netSteps = o.netSteps;
+            d.padIndex = padAt.getOrDefault(o.padIndex, -1);
             s.dots.add(d);
         }
         s.warnings.addAll(p.warnings);

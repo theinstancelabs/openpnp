@@ -179,6 +179,31 @@ public class ValidatorBlocksTest {
                 GcodeStreamValidator.validate(p, c, "B"));
     }
 
+    /**
+     * Review 1: two pads of one footprint with the same name (KiCad shield tabs "6" and "6", which OpenPnP's
+     * importer keeps) share the pad id J1.6. The planner's pad index keeps them apart: not a split pad.
+     */
+    @Test
+    public void twoPadsOfOneNameAreNotASplitPad() throws Exception {
+        DispenseConfig c = GcodeStreamTest.toyConfig();
+        PadType t = DispenseDb.seedPadTypes().get(1); // chip-0603
+        t.status = PadTypeStatus.PROVISIONAL;
+        t.version = 1;
+        List<PadGeometry> pads = new ArrayList<>();
+        pads.add(new PadGeometry("J1.6", 100.0, 80.0, 0, 0.8, 0.95, 5.5, t));
+        pads.add(new PadGeometry("J1.1", 103.0, 80.0, 0, 0.8, 0.95, 5.5, t));
+        pads.add(new PadGeometry("J1.6", 106.0, 80.0, 0, 0.8, 0.95, 5.5, t));
+        DispensePlan plan = new DispensePlanner(c, new PadTypeResolver(Collections.singletonList(t), null))
+                .plan("toy", pads, 77.5, 40);
+        List<String> order = new ArrayList<>();
+        for (DispensePlan.PlannedDot d : plan.dots) {
+            order.add(d.padId + "@" + d.xMm);
+        }
+        assertEquals(Arrays.asList("J1.6@100.0", "J1.1@103.0", "J1.6@106.0"), order);
+        GcodeProgram p = GcodeStreamTest.board(c, GcodeStreamTest.mapper(), plan, false, false, 0L);
+        assertEquals(Collections.emptyList(), GcodeStreamValidator.validate(p, c, "B"));
+    }
+
     @Test
     public void aProgramTurningMoreThanItsDots() throws Exception {
         DispenseConfig c = GcodeBlocksTest.cfg();
