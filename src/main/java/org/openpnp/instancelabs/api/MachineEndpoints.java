@@ -257,8 +257,8 @@ final class MachineEndpoints {
             home.put("n1Low", n1 != null && n1[1] > 0);
             s.put("home", home);
             DispenseService.ZCheckPlan zc = svc.zCheckPlan(null, false);
-            // the check after the next home (Run and Register home first when needed): every height predates it
-            DispenseService.ZCheckPlan za = svc.zCheckPlan(null, true);
+            // a board run's check after the home it does first (every height predates it): what Run announces
+            DispenseService.ZCheckPlan za = svc.boardRunZCheckPlan(true);
             List<Map<String, Object>> stale = new ArrayList<>();
             for (org.openpnp.instancelabs.dispense.ZCheck.Stale x : zc.stale) {
                 stale.add(Views.map("what", x.what, "atMs", x.atMs));

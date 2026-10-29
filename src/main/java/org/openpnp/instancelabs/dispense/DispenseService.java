@@ -1354,15 +1354,28 @@ public final class DispenseService {
      */
     public ZCheckPlan zCheckPlan(DispensePlan plan, boolean homeFirst) {
         DispenseConfig c = cfg;
+        return zCheckPlan(c, plan == null ? needleTasksScope(c) : boardScope(c, plan),
+                plan == null ? null : plan.boardRegistration, homeFirst);
+    }
+
+    /**
+     * The Z check of a board run of a plan that may run now: tied to the board surface's registration (I4 refuses
+     * any other), on the board and the blank (its purge row). For the status before a plan is chosen.
+     */
+    public ZCheckPlan boardRunZCheckPlan(boolean homeFirst) {
+        DispenseConfig c = cfg;
+        DispenseConfig.SurfaceMap board = c.surface(c.boardSurfaceName);
+        return zCheckPlan(c, needleTasksScope(c), board == null ? null : board.boardFingerprint, homeFirst);
+    }
+
+    private ZCheckPlan zCheckPlan(DispenseConfig c, Interlocks.Scope sc, String planRegistration, boolean homeFirst) {
         ZCheckPlan p = new ZCheckPlan();
         p.last = homeTracker.getZCheck();
         p.homeAtMs = homeTracker.getLastHomeAtMs();
-        Interlocks.Scope sc = plan == null ? needleTasksScope(c) : boardScope(c, plan);
         p.stale = ZCheck.stale(c, sc, homeFirst ? Long.valueOf(Long.MAX_VALUE) : p.homeAtMs);
         List<ZCheck.Stale> open = homeFirst ? p.stale : ZCheck.unchecked(p.last, p.homeAtMs, p.stale);
         p.needed = !open.isEmpty();
-        List<ZCheck.Reference> refs = ZCheck.references(c, plan == null ? null : plan.boardRegistration,
-                homeFirst ? null : p.homeAtMs);
+        List<ZCheck.Reference> refs = ZCheck.references(c, planRegistration, homeFirst ? null : p.homeAtMs);
         p.reference = ZCheck.unreachable(refs, open).isEmpty() ? ZCheck.first(refs, open) : null;
         p.touches = p.needed && p.reference != null ? ZCheck.touches(refs, open) : 0;
         return p;

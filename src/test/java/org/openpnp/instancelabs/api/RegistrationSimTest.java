@@ -613,9 +613,12 @@ public class RegistrationSimTest {
         sim.server.delayBeforeOkMs.clear();
         restart();
 
-        // the run after the STOP: N1 raised (Z only), G28, one Z-check touch, then the dots
+        // the run after the STOP: N1 raised (Z only), G28, one Z-check touch (all heights from one home), the dots
+        JsonObject zc = ok(get("/api/status")).getAsJsonObject("machine").getAsJsonObject("zCheck");
+        assertEquals(1, zc.get("touchesAfterHome").getAsInt(), zc.toString());
         sim.server.mark();
         JsonObject run = ok(post("/api/run", "{\"planId\":\"" + p1 + "\",\"wait\":true}"));
+        assertEquals(1, run.get("zCheckTouches").getAsInt(), run.toString());
         assertTrue(run.get("homeFirst").getAsBoolean(), run.toString());
         assertEquals("stopped", run.get("homeWhyCode").getAsString());
         assertTrue(run.get("zCheckFirst").getAsBoolean(), run.toString());
