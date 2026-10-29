@@ -173,6 +173,49 @@ public class SExprReaderTest {
         assertThrows(SExprException.class, d::check); // and every step after it
     }
 
+    /**
+     * Hostile files put their work where no per-footprint check sees it: thousands of unnamed pads in one footprint
+     * (each looks for its host pad) or thousands of Edge.Cuts lines meeting at one point (each chaining step searches
+     * them all). The deadline is checked inside those loops too: a clock that ticks once per check runs out there.
+     */
+    @Test
+    public void deadlineInsideOneFootprintAndInsideTheOutline() throws Exception {
+        StringBuilder pads = new StringBuilder("(kicad_pcb (version 20240108)\n"
+                + "(gr_rect (start 0 0) (end 50 50) (layer \"Edge.Cuts\"))\n"
+                + "(footprint \"L:X\" (layer \"F.Cu\") (at 10 10) (property \"Reference\" \"U1\")\n");
+        for (int i = 0; i < 3000; i++) {
+            pads.append("(pad \"\" smd rect (at 0 0) (size 1 1) (layers \"F.Paste\"))\n");
+        }
+        byte[] onePart = pads.append("))").toString().getBytes(StandardCharsets.UTF_8);
+        AtomicLong ticks = new AtomicLong();
+        Deadline d = new Deadline(1000, ticks::getAndIncrement);
+        KicadPcb pcb = KicadParser.read(onePart, d);
+        BoardFrame frame = BoardFrame.of(pcb, d);
+        SExprException e = assertThrows(SExprException.class, () -> new ImportRules().propose(pcb, frame, d));
+        assertTrue(e.getMessage().contains("took longer than 1 s"), e.getMessage());
+        Deadline none = Deadline.none();
+        KicadPcb again = KicadParser.read(onePart, none);
+        assertEquals(3000, new ImportRules().propose(again, BoardFrame.of(again, none), none).counts.pastePads);
+
+        StringBuilder edges = new StringBuilder("(kicad_pcb (version 20240108)\n");
+        for (int i = 0; i < 3000; i++) {
+            edges.append("(gr_line (start 0 0) (end 1 0) (layer \"Edge.Cuts\"))\n");
+        }
+        KicadPcb star = KicadParser.read(edges.append(')').toString().getBytes(StandardCharsets.UTF_8), none);
+        AtomicLong t2 = new AtomicLong();
+        assertThrows(SExprException.class, () -> BoardFrame.of(star, new Deadline(1000, t2::getAndIncrement)));
+
+        double[] zigzag = new double[2 * 5000]; // Douglas–Peucker peels one point per split: quadratic
+        for (int k = 0; k < 5000; k++) {
+            zigzag[2 * k] = k;
+            zigzag[2 * k + 1] = (k % 2 == 0 ? 1 : -1) * k;
+        }
+        AtomicLong t3 = new AtomicLong();
+        Deadline five = new Deadline(5, t3::getAndIncrement);
+        assertThrows(SExprException.class, () -> KGeom.simplify(zigzag, 0.01, false, five));
+        assertEquals(5000, KGeom.simplify(zigzag, 0.01, false).length / 2);
+    }
+
     @Test
     public void deadlineDuringReading() {
         AtomicLong now = new AtomicLong();

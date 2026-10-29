@@ -155,15 +155,17 @@ public final class BoardFrame {
                     Collections.emptyList(), warnings);
         }
         List<double[]> open = new ArrayList<>();
+        double openArea = -1; // the largest box of an open chain
         List<double[]> allLoops = new ArrayList<>();
         List<double[]> allLoopBoxes = new ArrayList<>();
-        for (KGeom.Chain c : KGeom.chain(pieces, pieceBoxes, CHAIN_TOL)) {
+        for (KGeom.Chain c : KGeom.chain(pieces, pieceBoxes, CHAIN_TOL, deadline)) {
             if (c.closed) {
                 allLoops.add(c.pts);
                 allLoopBoxes.add(c.box);
             }
             else {
                 open.add(c.pts);
+                openArea = Math.max(openArea, KGeom.boxArea(c.box));
             }
         }
         allLoops.addAll(loops);
@@ -176,6 +178,9 @@ public final class BoardFrame {
                 bestArea = a;
                 outlineIndex = i;
             }
+        }
+        if (openArea > bestArea) {
+            outlineIndex = -1; // the outline is the open chain (it has a gap): every closed loop is a cut-out
         }
         double[] outlineK = outlineIndex < 0 ? null : allLoops.get(outlineIndex);
         List<double[]> cutouts = new ArrayList<>();

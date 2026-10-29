@@ -103,11 +103,25 @@ public final class PasteRules {
 
     // ---- apertures -----------------------------------------------------------------------------------------------
 
-    /** The paste openings of a top-side footprint, named, with its notes. */
+    /** The paste openings of a top-side footprint, named, with its notes (no time limit). */
     public static Result paste(KicadPcb pcb, Footprint fp) {
+        try {
+            return paste(pcb, fp, Deadline.none());
+        }
+        catch (SExprException e) {
+            throw new IllegalStateException(e); // Deadline.none() never runs out
+        }
+    }
+
+    /**
+     * The paste openings of a top-side footprint, named, with its notes, under the import's deadline (one footprint
+     * of a hostile file can hold most of its 1.5 million items).
+     */
+    public static Result paste(KicadPcb pcb, Footprint fp, Deadline deadline) throws SExprException {
         Result res = new Result();
         List<String> gone = new ArrayList<>();
         List<String> tht = new ArrayList<>();
+        List<String> custom = new ArrayList<>();
         List<String> chamfered = new ArrayList<>();
         double chamferPct = 0;
         List<String> zeroNotes = new ArrayList<>();
@@ -138,8 +152,7 @@ public final class PasteRules {
                         + "paste opening is taken as the surrounding rectangle (" + pct(pct) + " more area)."));
             }
             else if ("custom".equals(a.approx)) {
-                res.notes.add(new Note("PAD_SHAPE_APPROX", " pad " + KText.clean(p.name, 40) + " has a custom "
-                        + "shape: its paste opening is taken as the surrounding rectangle."));
+                custom.add(KText.clean(p.name, 40));
             }
             int corners = chamferCorners(p);
             if (corners > 0) {
@@ -188,8 +201,13 @@ public final class PasteRules {
                 }
             }
         }
-        name(fp, res, true);
+        name(fp, res, true, deadline);
         polygonNotes(res);
+        if (!custom.isEmpty()) {
+            res.notes.add(new Note("PAD_SHAPE_APPROX", " " + pads(custom) + (custom.size() == 1
+                    ? " has a custom shape: its paste opening is" : " have a custom shape: their paste openings are")
+                    + " taken as the surrounding rectangle."));
+        }
         if (!gone.isEmpty()) {
             res.notes.add(new Note("APERTURE_GONE", " " + pads(gone) + (gone.size() == 1 ? " gets" : " get")
                     + " no paste: the board's paste margin removes the whole opening. Change the margin in KiCad if "
@@ -215,15 +233,25 @@ public final class PasteRules {
         return res;
     }
 
-    /** The copper pads of a fiducial as its package pads (no paste, margin 0). */
+    /** The copper pads of a fiducial as its package pads (no paste, margin 0; no time limit). */
     public static Result copper(KicadPcb pcb, Footprint fp) {
+        try {
+            return copper(pcb, fp, Deadline.none());
+        }
+        catch (SExprException e) {
+            throw new IllegalStateException(e); // Deadline.none() never runs out
+        }
+    }
+
+    /** The copper pads of a fiducial as its package pads (no paste, margin 0), under the import's deadline. */
+    public static Result copper(KicadPcb pcb, Footprint fp, Deadline deadline) throws SExprException {
         Result res = new Result();
         for (Pad p : fp.pads) {
             if (p.onFrontCopper()) {
                 res.apertures.add(padShape(fp, p, 0, 0));
             }
         }
-        name(fp, res, false);
+        name(fp, res, false, deadline);
         return res;
     }
 
@@ -470,7 +498,7 @@ public final class PasteRules {
      * Unique names within the footprint (§2.8): unique names kept; repeats become name~2, name~3; empty names and
      * drawn shapes become host~k, host = the copper pad containing the opening's centre (a named pad first), else P.
      */
-    static void name(Footprint fp, Result res, boolean notes) {
+    static void name(Footprint fp, Result res, boolean notes, Deadline deadline) throws SExprException {
         List<Aperture> ap = res.apertures;
         Set<String> used = new HashSet<>();
         for (Aperture a : ap) {
@@ -490,11 +518,16 @@ public final class PasteRules {
         }
         Map<String, Integer> nextHosted = new HashMap<>();
         Map<String, List<String>> byHost = new LinkedHashMap<>();
+        List<Aperture> hosts = null;
         for (Aperture a : ap) {
             if (!a.emptyName) {
                 continue;
             }
-            a.host = host(fp, a);
+            deadline.check();
+            if (hosts == null) {
+                hosts = hostShapes(fp);
+            }
+            a.host = host(hosts, a);
             a.name = free(a.host, nextHosted, used, 1);
             byHost.computeIfAbsent(a.host, k -> new ArrayList<>()).add(a.name);
         }
@@ -517,7 +550,11 @@ public final class PasteRules {
         }
         // windows inside a centre pad that has no paste of its own are dispensed as separate small pads
         for (Map.Entry<String, List<String>> e : byHost.entrySet()) {
-            if (e.getValue().size() < 2 || !isBareCentrePad(fp, e.getKey(), ap)) {
+            if (e.getValue().size() < 2) {
+                continue;
+            }
+            deadline.check(); // each host scans every opening
+            if (!isBareCentrePad(fp, e.getKey(), ap)) {
                 continue;
             }
             double area = 0;
@@ -552,19 +589,31 @@ public final class PasteRules {
         return n;
     }
 
-    /** The name of the copper pad whose rectangle holds the opening's centre (a named pad first), else "P". */
-    private static String host(Footprint fp, Aperture a) {
+    /** The named copper pads of a footprint as shapes in the part frame, file order, each with its cleaned name. */
+    private static List<Aperture> hostShapes(Footprint fp) {
+        List<Aperture> l = new ArrayList<>();
         for (Pad p : fp.pads) {
             String n = KText.clean(p.name, 40);
-            if (p.onFrontCopper() && p != a.pad && !n.isEmpty() && contains(fp, p, a.x, a.y)) {
-                return n;
+            if (p.onFrontCopper() && !n.isEmpty()) {
+                Aperture c = padShape(fp, p, 0, 0);
+                c.name = n;
+                l.add(c);
+            }
+        }
+        return l;
+    }
+
+    /** The name of the copper pad whose rectangle holds the opening's centre (a named pad first), else "P". */
+    private static String host(List<Aperture> hosts, Aperture a) {
+        for (Aperture c : hosts) {
+            if (c.pad != a.pad && contains(c, a.x, a.y)) {
+                return c.name;
             }
         }
         return "P";
     }
 
-    private static boolean contains(Footprint fp, Pad p, double x, double y) {
-        Aperture c = padShape(fp, p, 0, 0);
+    private static boolean contains(Aperture c, double x, double y) {
         double t = Math.toRadians(-c.rotation);
         double dx = x - c.x;
         double dy = y - c.y;

@@ -94,7 +94,7 @@ public final class ImportRules {
                 continue;
             }
             boolean fiducial = isFiducial(fp);
-            PasteRules.Result r = fiducial ? PasteRules.copper(pcb, fp) : PasteRules.paste(pcb, fp);
+            PasteRules.Result r = fiducial ? PasteRules.copper(pcb, fp, deadline) : PasteRules.paste(pcb, fp, deadline);
             boolean dnp = fp.hasAttr("dnp") && !fiducial;
             if (r.apertures.isEmpty()) {
                 if (fiducial) {
@@ -130,7 +130,7 @@ public final class ImportRules {
             p.enabled = true;
             p.id = placementId(out, f.ref, usedIds);
             if (!fiducial) {
-                p.id = uniquePadIds(out, padIds, usedIds, p.id, r.apertures);
+                p.id = uniquePadIds(out, padIds, usedIds, p.id, r.apertures, deadline);
             }
             f.ref = p.id;
             f.placement = out.placements.size();
@@ -355,9 +355,10 @@ public final class ImportRules {
      * id gets the next free ~n (PAD_ID_CLASH). Fiducials have no dispensed pads.
      */
     private static String uniquePadIds(ImportProposal out, Map<String, String> padIds, Set<String> usedIds,
-            String id, List<PasteRules.Aperture> apertures) {
+            String id, List<PasteRules.Aperture> apertures, Deadline deadline) throws SExprException {
         String result = id;
         for (int k = 2; ; k++) {
+            deadline.check(); // each try scans every opening of the part
             String clash = null;
             for (PasteRules.Aperture a : apertures) {
                 if (padIds.containsKey(result + "." + a.name)) {

@@ -259,6 +259,20 @@ public final class KGeom {
      * @param boxes the exact box of each piece (arcs bulge past their points), or null to use the points
      */
     public static List<Chain> chain(List<double[]> pieces, List<double[]> boxes, double tol) {
+        try {
+            return chain(pieces, boxes, tol, Deadline.none());
+        }
+        catch (SExprException e) {
+            throw new IllegalStateException(e); // Deadline.none() never runs out
+        }
+    }
+
+    /**
+     * {@link #chain(List, List, double)} under the import's deadline, checked before every neighbour search: end
+     * points piled into a few grid cells (a hostile file) make each search slow.
+     */
+    public static List<Chain> chain(List<double[]> pieces, List<double[]> boxes, double tol, Deadline deadline)
+            throws SExprException {
         int n = pieces.size();
         double cell = 2 * tol;
         Map<Long, List<Integer>> grid = new HashMap<>();
@@ -289,6 +303,7 @@ public final class KGeom {
                     closed = true;
                     break;
                 }
+                deadline.check();
                 int code = gridFind(grid, cell, pieces, used, tx, ty, tol);
                 if (code < 0) {
                     break;
@@ -302,6 +317,7 @@ public final class KGeom {
                 ty = p[p.length - 1];
             }
             while (!closed) {
+                deadline.check();
                 int code = gridFind(grid, cell, pieces, used, hx, hy, tol);
                 if (code < 0) {
                     break;
@@ -417,6 +433,19 @@ public final class KGeom {
      * simplified line. A closed polygon keeps at least 3 points.
      */
     public static double[] simplify(double[] p, double tol, boolean closed) {
+        try {
+            return simplify(p, tol, closed, Deadline.none());
+        }
+        catch (SExprException e) {
+            throw new IllegalStateException(e); // Deadline.none() never runs out
+        }
+    }
+
+    /**
+     * {@link #simplify(double[], double, boolean)} under the import's deadline: a zigzag whose amplitude grows makes
+     * Douglas–Peucker quadratic (each split peels off one point), so the deadline is checked as the work grows.
+     */
+    public static double[] simplify(double[] p, double tol, boolean closed, Deadline deadline) throws SExprException {
         int n = p.length / 2;
         if (n <= (closed ? 3 : 2)) {
             return p.clone();
@@ -436,9 +465,15 @@ public final class KGeom {
         int sp = 0;
         stack[sp++] = 0;
         stack[sp++] = m - 1;
+        long work = 0;
         while (sp > 0) {
             int j = stack[--sp];
             int i = stack[--sp];
+            work += j - i;
+            if (work >= 1 << 20) {
+                work = 0;
+                deadline.check();
+            }
             double best = -1;
             int bk = -1;
             for (int k = i + 1; k < j; k++) {
@@ -549,7 +584,8 @@ public final class KGeom {
 
     /**
      * The minimum-area rectangle enclosing the points (rotating calipers over the convex hull): {cx, cy, w, h, angle}
-     * with angle in degrees, (−45, 45], the direction of the w side. Exact for a rectangle.
+     * with angle in degrees, (−45, 45], the direction of the w side. Exact for a rectangle. O(n log n): the hull points
+     * farthest along, across and back along each edge only move forward as the edges turn.
      */
     public static double[] minAreaRect(double[] pts) {
         double[] h = convexHull(pts);
@@ -561,28 +597,35 @@ public final class KGeom {
         }
         double bestArea = Double.POSITIVE_INFINITY;
         double[] best = null;
+        int right = -1; // the hull points of largest u, largest v and smallest u; -1: find them afresh
+        int top = -1;
+        int left = -1;
         for (int i = 0; i < n; i++) {
             int j = (i + 1) % n;
             double ex = h[2 * j] - h[2 * i];
             double ey = h[2 * j + 1] - h[2 * i + 1];
             double len = Math.hypot(ex, ey);
             if (len < 1e-12) {
+                right = -1;
                 continue;
             }
             double ux = ex / len;
             double uy = ey / len;
-            double minU = Double.POSITIVE_INFINITY;
-            double maxU = Double.NEGATIVE_INFINITY;
-            double minV = Double.POSITIVE_INFINITY;
-            double maxV = Double.NEGATIVE_INFINITY;
-            for (int k = 0; k < n; k++) {
-                double u = h[2 * k] * ux + h[2 * k + 1] * uy;
-                double v = -h[2 * k] * uy + h[2 * k + 1] * ux;
-                minU = Math.min(minU, u);
-                maxU = Math.max(maxU, u);
-                minV = Math.min(minV, v);
-                maxV = Math.max(maxV, v);
+            if (right < 0) {
+                right = farthest(h, ux, uy);
+                top = farthest(h, -uy, ux);
+                left = farthest(h, -ux, -uy);
             }
+            else {
+                right = walk(h, right, ux, uy);
+                top = walk(h, top, -uy, ux);
+                left = walk(h, left, -ux, -uy);
+            }
+            // the hull is counter-clockwise, so every point lies on the left of the edge: its own v is the smallest
+            double minU = h[2 * left] * ux + h[2 * left + 1] * uy;
+            double maxU = h[2 * right] * ux + h[2 * right + 1] * uy;
+            double minV = Math.min(-h[2 * i] * uy + h[2 * i + 1] * ux, -h[2 * j] * uy + h[2 * j + 1] * ux);
+            double maxV = -h[2 * top] * uy + h[2 * top + 1] * ux;
             double area = (maxU - minU) * (maxV - minV);
             if (area < bestArea - 1e-12) {
                 bestArea = area;
@@ -608,6 +651,33 @@ public final class KGeom {
             hh = t;
         }
         return new double[] {best[0], best[1], w, hh, a};
+    }
+
+    /** The point of h farthest in the direction (dx, dy). */
+    private static int farthest(double[] h, double dx, double dy) {
+        int k = 0;
+        for (int i = 1; i < h.length / 2; i++) {
+            if (h[2 * i] * dx + h[2 * i + 1] * dy > h[2 * k] * dx + h[2 * k + 1] * dy) {
+                k = i;
+            }
+        }
+        return k;
+    }
+
+    /**
+     * From the farthest point of a counter-clockwise convex polygon for an earlier direction, the farthest point for
+     * (dx, dy) turned counter-clockwise from it: walk forward while the next point is at least as far.
+     */
+    private static int walk(double[] h, int k, double dx, double dy) {
+        int n = h.length / 2;
+        for (int steps = 0; steps < n; steps++) {
+            int next = (k + 1) % n;
+            if (h[2 * next] * dx + h[2 * next + 1] * dy < h[2 * k] * dx + h[2 * k + 1] * dy) {
+                break;
+            }
+            k = next;
+        }
+        return k;
     }
 
     // ---- numbers -------------------------------------------------------------------------------------------------

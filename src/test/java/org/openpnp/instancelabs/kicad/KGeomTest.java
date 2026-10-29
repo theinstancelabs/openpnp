@@ -159,6 +159,54 @@ public class KGeomTest {
         assertEquals(0, q[4], 1e-9);
     }
 
+    /** Rotating calipers against the plain search over every hull edge and point, and in linear time. */
+    @Test
+    public void minimumAreaRectangleIsTheBestOverAllEdgesAndFast() {
+        java.util.Random r = new java.util.Random(7);
+        for (int t = 0; t < 2000; t++) {
+            int m = 3 + r.nextInt(t % 2 == 0 ? 300 : 10);
+            double[] p = new double[2 * m];
+            double sx = 0.05 + 20 * r.nextDouble();
+            double sy = 0.05 + 20 * r.nextDouble();
+            for (int i = 0; i < m; i++) {
+                double a = 2 * Math.PI * r.nextDouble();
+                p[2 * i] = t % 3 == 0 ? sx * r.nextGaussian() : sx * Math.cos(a);
+                p[2 * i + 1] = t % 3 == 0 ? sy * r.nextGaussian() : sy * Math.sin(a);
+            }
+            double[] got = KGeom.minAreaRect(p);
+            assertEquals(bruteMinArea(KGeom.convexHull(p)), got[2] * got[3], 1e-9 * got[2] * got[3], "polygon " + t);
+        }
+        int n = 200_000; // a convex hull of 200,000 points: the search over all pairs would take minutes
+        double[] big = new double[2 * n];
+        for (int i = 0; i < n; i++) {
+            double x = 100.0 * i / n - 50;
+            big[2 * i] = x;
+            big[2 * i + 1] = -x * x / 10;
+        }
+        long t0 = System.nanoTime();
+        double[] b = KGeom.minAreaRect(big);
+        assertTrue((System.nanoTime() - t0) / 1_000_000 < 2000, "linear in the hull");
+        assertEquals(100, b[2], 0.01);
+        assertEquals(250, b[3], 0.01);
+    }
+
+    private static double bruteMinArea(double[] h) {
+        int n = h.length / 2;
+        double best = Double.POSITIVE_INFINITY;
+        for (int i = 0; i < n; i++) {
+            int j = (i + 1) % n;
+            double len = Math.hypot(h[2 * j] - h[2 * i], h[2 * j + 1] - h[2 * i + 1]);
+            double ux = (h[2 * j] - h[2 * i]) / len;
+            double uy = (h[2 * j + 1] - h[2 * i + 1]) / len;
+            double[] box = KGeom.emptyBox();
+            for (int k = 0; k < n; k++) {
+                KGeom.extend(box, h[2 * k] * ux + h[2 * k + 1] * uy, -h[2 * k] * uy + h[2 * k + 1] * ux);
+            }
+            best = Math.min(best, KGeom.boxArea(box));
+        }
+        return best;
+    }
+
     @Test
     public void polygonHelpers() {
         double[] sq = {0, 0, 2, 0, 2, 2, 0, 2};

@@ -180,6 +180,19 @@ public class KicadSyntheticTest {
         ImportWarning w = l.proposal.warnings("OUTLINE_OPEN").get(0);
         assertTrue(w.text.contains("gap 0.12 mm"), w.text);
         assertEquals(1, l.frame.openChains.size());
+
+        // with a gap in the outline, a mounting hole is a cut-out, not the outline
+        String hole = "(gr_circle (center 5 5) (end 6.6 5) (layer \"Edge.Cuts\") (stroke (width 0.1)))\n";
+        BoardFrame gap = Fixtures.board(20240108, board + hole).frame;
+        assertNull(gap.outlineLoop);
+        assertEquals(1, gap.cutouts.size());
+        // a closed outline with a stray Edge.Cuts line: the outline loop stays the outline
+        String stray = "(gr_line (start 10 10) (end 12 10) (layer \"Edge.Cuts\") (stroke (width 0.1)))\n";
+        BoardFrame strayLine = Fixtures.board(20240108, OUTLINE + stray).frame;
+        assertEquals("open", strayLine.outline);
+        assertNotNull(strayLine.outlineLoop);
+        assertEquals(0, strayLine.cutouts.size());
+        assertEquals(50.0, strayLine.widthMm(), 1e-9);
     }
 
     @Test
@@ -316,6 +329,8 @@ public class KicadSyntheticTest {
         assertTrue(codes(p).contains("PASTE_POLY"));
         assertTrue(codes(p).contains("PASTE_POLY_APPROX"));
         assertTrue(p.warnings("PAD_SHAPE_APPROX").stream().anyMatch(w -> w.text.contains("(40 % more area)")));
+        assertTrue(p.warnings("PAD_SHAPE_APPROX").stream().anyMatch(w -> w.text.equals("U1 pad CU has a custom shape: "
+                + "its paste opening is taken as the surrounding rectangle.")));
         assertTrue(p.warnings("APERTURE_GONE").get(0).text.startsWith("U1 pad G gets no paste"));
         assertEquals(1, p.warnings("APERTURE_GONE").get(0).group);
     }
@@ -387,6 +402,30 @@ public class KicadSyntheticTest {
         assertEquals(p.placements.get(0).packageIndex, p.placements.get(2).packageIndex);
         ImportWarning v = p.warnings("PACKAGE_VARIANT").get(0);
         assertEquals(List.of("U1.1", "U1~2"), v.refs);
+    }
+
+    @Test
+    public void customPadsShareOneNote() throws Exception {
+        String custom = "(options (clearance outline) (anchor rect)) (primitives (gr_poly (pts (xy 0 0) (xy 1 0) (xy 1 1)) "
+                + "(width 0) (fill yes)))";
+        String body = "(pad \"1\" smd custom (at 0 0) (size 0.5 0.5) " + PASTE + " " + custom + ")\n"
+                + "(pad \"2\" smd custom (at 2 0) (size 0.5 0.5) " + PASTE + " " + custom + ")\n";
+        ImportProposal p = Fixtures.board(20240108, OUTLINE + fp("U1", "X", 10, 10, 0, "", body)
+                + fp("U2", "X", 20, 10, 0, "", body)).proposal;
+        List<ImportWarning> approx = p.warnings("PAD_SHAPE_APPROX");
+        assertEquals(1, approx.size(), approx.toString());
+        assertEquals("U1, U2 pads 1, 2 have a custom shape: their paste openings are taken as the surrounding "
+                + "rectangle.", approx.get(0).text);
+    }
+
+    @Test
+    public void padstackRefsAreCleaned() throws Exception {
+        String body = "(pad \"1\" smd rect (at 0 0) (size 1 1) " + PASTE + " (padstack (mode custom)))\n";
+        ImportProposal p = Fixtures.board(20241229, OUTLINE + fp("U\u00071", "X", 10, 10, 0, "", body + body))
+                .proposal;
+        ImportWarning w = p.warnings("PADSTACK_IGNORED").get(0);
+        assertEquals(List.of("U1"), w.refs);
+        assertTrue(w.text.startsWith("U1: "), w.text);
     }
 
     @Test

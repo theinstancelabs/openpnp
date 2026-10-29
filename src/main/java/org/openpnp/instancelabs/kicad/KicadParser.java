@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -51,7 +52,7 @@ public final class KicadParser {
     }
 
     private final KicadPcb pcb = new KicadPcb();
-    private final List<String> padstackRefs = new ArrayList<>();
+    private final Set<String> padstackRefs = new LinkedHashSet<>(); // cleaned: they go into the warning text
     private String currentRef = "";
 
     private KicadParser() {
@@ -133,7 +134,8 @@ public final class KicadParser {
         }
         pcb.legacy = modules || pcb.version < KicadPcb.V_KICAD6;
         if (!padstackRefs.isEmpty()) {
-            warn(ImportWarning.of("PADSTACK_IGNORED", padstackRefs, ImportWarning.names(padstackRefs)
+            List<String> refs = new ArrayList<>(padstackRefs);
+            warn(ImportWarning.of("PADSTACK_IGNORED", refs, ImportWarning.names(refs)
                     + ": pads with a different shape per copper layer (a pad stack): only the front shape is read."));
         }
         if (pcb.version > KicadPcb.V_KICAD10) {
@@ -395,8 +397,8 @@ public final class KicadParser {
         }
         SExpr padstack = e.child("padstack");
         String mode = padstack == null ? null : padstack.str("mode");
-        if (mode != null && !"normal".equals(mode) && !padstackRefs.contains(currentRef)) {
-            padstackRefs.add(currentRef);
+        if (mode != null && !"normal".equals(mode)) {
+            padstackRefs.add(KText.clean(currentRef, KText.ID_MAX));
         }
         return p;
     }
