@@ -1,6 +1,8 @@
 package org.openpnp.instancelabs.dispense;
 
 import java.awt.geom.AffineTransform;
+import java.util.List;
+import java.util.Map;
 
 import org.openpnp.model.BoardLocation;
 
@@ -28,4 +30,11 @@ public final class RegisterRequest {
     public double nominalZ;
     public ProbeMode probe = ProbeMode.AUTO;
     public Replanner replanner;
+    /**
+     * From the board's KiCad drawing (BOARD_IMPORT_DESIGN.md §10.2 item 4), both null without one: fiducial name ->
+     * {copper, mask} diameter in mm, and the circles N1 must not touch (holes, vias, outline and cut-outs; null:
+     * a mounting hole is assumed in each corner, {@link ProbeTargets#forBoard}).
+     */
+    public Map<String, double[]> fiducialHints;
+    public List<ProbeTargets.KeepOut> keepOuts;
 }

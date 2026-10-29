@@ -1906,7 +1906,8 @@ public final class DispenseService {
         t.stage = "fiducials";
         Board board = req.nominal.getBoard();
         boolean job = req.boardKey != null && req.boardKey.startsWith("job:");
-        BoardFeatures f = BoardFeatures.of(board, new PadTypeResolver(db.currentPadTypes(), db.packageMappings()));
+        BoardFeatures f = BoardFeatures.of(board, new PadTypeResolver(db.currentPadTypes(), db.packageMappings()),
+                req.fiducialHints);
         String few = fewFiducials(f, c.fiducialCheck.minFiducials);
         if (few != null) {
             throw refused(few);
@@ -2136,7 +2137,7 @@ public final class DispenseService {
         t.stage = "probe";
         t.points.clear();
         List<VacuumProber.Target> targets = ProbeTargets.map(ProbeTargets.forBoard(f, ProbeTargets.dotsBoard(req.plan,
-                req.planToBoard), c), reg.transform());
+                req.planToBoard), c, req.keepOuts), reg.transform());
         t.stepsPlanned = t.stepsDone + targets.size() + 1;
         t.secondsLeft = targets.size() * PROBE_POINT_ESTIMATE_S;
         for (VacuumProber.Target x : targets) {
