@@ -27,11 +27,11 @@ public final class Decider {
         public int perPad;
         /** The plan is the user's own (planFrom "your plan"). */
         public boolean edited;
-        /** The control (§7.4) passed, else its text. */
-        public boolean controlPass = true;
+        /** The control (§7.4) passed, else its text. False until the job says so (fails closed). */
+        public boolean controlPass;
         public String controlText;
-        /** The regulator reading was attested for the job (§12.2). */
-        public boolean regulatorAttested = true;
+        /** The regulator reading was attested for the job (§12.2). False until the job says so. */
+        public boolean regulatorAttested;
         /** The tip the records were made with (null = the current tip). */
         public String recordsTipKey;
         /** The before-start view named the demotion of a validated type. */
@@ -267,7 +267,7 @@ public final class Decider {
                         + Texts.mm(Limits.COPPER_GAP_MM) + " mm",
                 d == null ? "no measured " + turn + " dot size to check the pads with" : geometryText));
         l.add(new Check("control", in.controlPass, null, null, null,
-                in.controlText != null ? in.controlText : "the control dots did not match the bench"));
+                in.controlText != null ? in.controlText : "the control dots were not checked or did not match the bench"));
         boolean tip = in.recordsTipKey == null || in.recordsTipKey.equals(c.tip().key);
         l.add(new Check("tip", tip, null, in.recordsTipKey, c.tip().key, "the dots were measured with another tip ("
                 + in.recordsTipKey + ")"));

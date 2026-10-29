@@ -58,6 +58,8 @@ public class DeciderTest {
         d.group = ProfileCheck.of(in).groups.get(0).group;
         d.steps = steps;
         d.perPad = perPad;
+        d.controlPass = true;
+        d.regulatorAttested = true;
         return d;
     }
 
@@ -162,6 +164,16 @@ public class DeciderTest {
         in.regulatorAttested = true;
         in.recordsTipKey = "25g";
         assertEquals("the dots were measured with another tip (25g)", Decider.decide(in).why);
+        // the job must say the control passed and the regulator was read: a caller that does not, fails closed
+        Decider.Inputs fresh = new Decider.Inputs();
+        assertFalse(fresh.controlPass);
+        assertFalse(fresh.regulatorAttested);
+        in.recordsTipKey = null;
+        in.controlPass = fresh.controlPass;
+        in.controlText = null;
+        Decider.Decision d2 = Decider.decide(in);
+        assertEquals(Decider.PROVISIONAL, d2.outcome);
+        assertEquals("the control dots were not checked or did not match the bench", d2.why);
     }
 
     @Test

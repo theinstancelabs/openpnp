@@ -389,6 +389,84 @@ public class SuggesterTest {
         assertTrue(s.confidenceWhy.contains("the mass per step comes from another turn size"));
     }
 
+    static DoseEvidence confirmed(int steps, double mgPerStep) {
+        DoseEvidence e = new DoseEvidence(steps);
+        e.massConfirmed = true;
+        e.massReadings = 2;
+        e.mgPerStep = mgPerStep;
+        e.mgPerDot = mgPerStep * steps;
+        return e;
+    }
+
+    @Test
+    public void theSameEvidenceInAnyMapOrderGivesTheSameSuggestion() {
+        // 400 and 1600 weighed, 800 not: both are one octave from 800; the tie goes to the larger dose
+        List<Suggestion> l = new ArrayList<>();
+        for (boolean quarterFirst : new boolean[] {true, false}) {
+            CheckInputs in = PadFixtures.inputs(PadFixtures.packageLevel(PadFixtures.load("ftp")).get("R_0603_1608Metric"));
+            in.evidence = new java.util.HashMap<>();
+            for (DoseEvidence e : quarterFirst ? Arrays.asList(confirmed(400, 1.40e-3), confirmed(1600, 1.45e-3))
+                    : Arrays.asList(confirmed(1600, 1.45e-3), confirmed(400, 1.40e-3))) {
+                in.evidence.put(e.steps, e);
+            }
+            l.add(ProfileCheck.of(in).groups.get(0).suggestion);
+        }
+        assertEquals("weighed-per-step", l.get(0).dots.mgSource);
+        assertEquals(800 * 1.45e-3, l.get(0).dots.mgPerDot, 0.0005);
+        assertEquals(l.get(0).dots.mgPerDot, l.get(1).dots.mgPerDot, 0);
+        assertEquals(l.get(0).id, l.get(1).id);
+    }
+
+    @Test
+    public void mediumConfidenceNeedsAnAnchorOfTheFamily() {
+        // §4.5: a passing half or one turn of a family with no validated anchor stays low (mobo AVX-9155 1.30 x 1.15,
+        // Custom, 1 one-turn dot, +2 %); a chip of the same plan is medium on the bench anchor
+        Map<String, List<PadInstance>> mobo = PadFixtures.packageLevel(PadFixtures.load("mobo"));
+        Suggestion avx = null;
+        for (ProfileCheck.Group g : ProfileCheck.of(PadFixtures.inputs(mobo.get("AVX-9155-005-541"))).groups) {
+            if (Math.abs(Math.max(g.aperture.wMm, g.aperture.hMm) - 1.30) < 0.006) {
+                avx = g.suggestion;
+            }
+        }
+        assertEquals("pass", avx.fit);
+        assertEquals(1600, avx.dots.steps);
+        assertEquals("low", avx.confidence);
+        assertTrue(avx.confidenceWhy.contains("no validated Custom pads yet: the amount is scaled from the 0603 half turn"),
+                avx.confidenceWhy.toString());
+        Suggestion r0805 = ProfileCheck.of(PadFixtures.inputs(mobo.get("R_0805_2012Metric"))).groups.get(0).suggestion;
+        assertEquals(1600, r0805.dots.steps);
+        assertEquals("medium", r0805.confidence);
+    }
+
+    @Test
+    public void onlyValidatedTypesWithKOneAreAnchors() {
+        // a validated SOT-223 tab type (k 0.5: 5.5 mg weighed on 7.6 mm², half the chip rate) is not a mass per
+        // area for the family's k 1 pads: SOT-23 pins keep the bench rate (anchored on it, 0.72 mg/mm² would leave
+        // them with no plan at all)
+        CheckInputs in = sot23(sot23Seed());
+        TypeInfo tab = new TypeInfo();
+        tab.key = "sot-223-tab";
+        tab.name = "SOT-223 tab";
+        tab.family = Family.SMALL_OUTLINE;
+        tab.version = 3;
+        tab.status = TypeInfo.VALIDATED;
+        tab.padWMm = 3.8;
+        tab.padHMm = 2.0;
+        tab.k = 0.5;
+        tab.massPerPadMg = 5.5;
+        in.types.put(tab.key, tab);
+        ProfileCheck.Group g = ProfileCheck.of(in).groups.get(0);
+        assertEquals(ProfileCheck.BELOW_GATE, g.reason);
+        assertEquals(1.26, g.suggestion.amount.targetMg, 0.005);
+        assertEquals(1.455, g.suggestion.amount.mgPerMm2, 0.0005);
+        // a validated k 1 type of the family is its anchor
+        tab.k = 1.0;
+        tab.massPerPadMg = 10.0;
+        Suggestion s = ProfileCheck.of(in).groups.get(0).suggestion;
+        assertEquals(10.0 / 7.6, s.amount.mgPerMm2, 0.0005);
+        assertTrue(s.amount.rule.contains("SOT-223 tab validated on a board (10.00 mg on 7.60 mm²)"), s.amount.rule);
+    }
+
     @Test
     public void confidenceLevels() {
         CheckInputs in = PadFixtures.inputs(PadFixtures.packageLevel(PadFixtures.load("ftp")).get("R_0603_1608Metric"));

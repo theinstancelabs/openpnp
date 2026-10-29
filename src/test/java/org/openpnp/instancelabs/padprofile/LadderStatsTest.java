@@ -113,6 +113,31 @@ public class LadderStatsTest {
     }
 
     @Test
+    public void aPartialDoseNotSeenAtEveryStartAngleFails() {
+        // R4: 64 good dots, all from one start angle, measure no phase; the dose must not pass
+        for (int steps : new int[] {800, 400}) {
+            LadderStats.Record r = record(new Random(8), steps, 62, 0, 0.04, 0);
+            for (LadderStats.Dot d : r.dots) {
+                d.phase = 0;
+            }
+            LadderStats.Stats s = LadderStats.of(steps, Arrays.asList(r), null);
+            assertFalse(s.pass, "" + steps);
+            assertFalse(check(s, "phase").ok);
+            assertNull(s.phaseStat);
+            String turn = steps == 800 ? "half-turn" : "quarter-turn";
+            int phases = steps == 800 ? 2 : 4;
+            assertEquals("the " + turn + " dots were measured at 1 of their " + phases + " start angles (at least 2 dots "
+                    + "at each needed)", check(s, "phase").text);
+            assertTrue(check(s, "repeat").ok, "the plain CV of 4 % still passes");
+        }
+        // one turn has a single start angle: no phase check at all
+        LadderStats.Stats whole = LadderStats.of(1600, Arrays.asList(record(new Random(9), 1600, 62, 0, 0.04, 0)), null);
+        assertEquals("none", whole.phaseKind);
+        assertNull(check(whole, "phase"));
+        assertTrue(whole.pass);
+    }
+
+    @Test
     public void theDriftRule() {
         LadderStats.Stats flat = LadderStats.of(1600, Arrays.asList(record(new Random(4), 1600, 24, 0, 0.0, 0)), null);
         assertTrue(check(flat, "drift").ok);

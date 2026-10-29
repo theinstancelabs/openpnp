@@ -14,7 +14,7 @@ import java.util.List;
  * <li>threads: threads (a string counts as one) in H hops, H at least 60, at most k95(H, 3 %);</li>
  * <li>repeat: residual area CV after the phase harmonic, its upper bound cv (1 + 1.645 / sqrt(2N));</li>
  * <li>phase: half turns |m0 - m1| / (m0 + m1) + 1.645 SE; quarter turns the least-squares
- * first-harmonic amplitude + 1.645 SE;</li>
+ * first-harmonic amplitude + 1.645 SE; a partial dose not seen at every start angle fails (R4);</li>
  * <li>drift: OLS slope x (N - 1) / mean per record, failing above 10 % and 2 SE;</li>
  * <li>landing: |mean offset| and per-axis sd; size: mean d, CV_d, d95 = mean (1 + 1.65 CV_d).</li>
  * </ul>
@@ -347,8 +347,14 @@ public final class LadderStats {
             st.meanAreaMm2 = mean(a);
             st.medianAreaMm2 = median(areas);
             double cv;
+            // R4: a partial dose is calibrated at every start angle of its set (at least 2 dots each)
+            double[][] split = byPhase(a, phase, phases);
+            int angles = 0;
+            for (double[] k : split) {
+                angles += k.length >= 2 ? 1 : 0;
+            }
+            boolean everyAngle = angles == phases;
             if (phases == 2) {
-                double[][] split = byPhase(a, phase, 2);
                 double rss = 0;
                 double[] means = {mean(split[0]), mean(split[1])};
                 for (int i = 0; i < a.length; i++) {
@@ -356,7 +362,7 @@ public final class LadderStats {
                     rss += r * r;
                 }
                 cv = Math.sqrt(rss / Math.max(1, a.length - 2)) / st.meanAreaMm2;
-                if (split[0].length >= 2 && split[1].length >= 2) {
+                if (everyAngle) {
                     double[] hs = halfSplit(split[0], split[1]);
                     st.phaseKind = "half";
                     st.phaseValue = hs[0];
@@ -364,7 +370,7 @@ public final class LadderStats {
                     st.phaseLimit = s.maxHalfSplit;
                 }
             }
-            else if (phases >= 3) {
+            else if (phases >= 3 && everyAngle) {
                 double[] rad = new double[a.length];
                 for (int i = 0; i < a.length; i++) {
                     rad[i] = 2 * Math.PI * phase.get(i) / phases;
@@ -377,8 +383,9 @@ public final class LadderStats {
                 st.phaseLimit = s.maxQuarterAmplitude;
             }
             else {
+                // a whole turn, or a partial dose not seen at every start angle (failed below): the plain CV
                 cv = sd(a) / st.meanAreaMm2;
-                st.phaseKind = "none";
+                st.phaseKind = phases == 1 ? "none" : null;
             }
             st.residCv = cv;
             st.residCvUpper = cvUpper(cv, a.length);
@@ -393,6 +400,10 @@ public final class LadderStats {
                                 + Texts.pct(st.phaseLimit) + " % allowed)"
                         : "the " + turn + " dots swing " + Texts.pct(st.phaseStat) + " % in area with the screw angle (at most "
                                 + Texts.pct(st.phaseLimit) + " % allowed)");
+            }
+            else if (phases > 1) {
+                add(st, "phase", false, (double) angles, (double) phases, "the " + turn + " dots were measured at "
+                        + angles + " of their " + phases + " start angles (at least 2 dots at each needed)");
             }
         }
         else {

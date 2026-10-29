@@ -201,15 +201,16 @@ public final class ProfileCheck {
             return views.computeIfAbsent(steps, s -> Suggester.view(in.evidence, s));
         }
 
+        /** Validated k = 1 types with a weighed mass per pad (§1.3), in key order (ties in anchorFor). */
         private void collectAnchors() {
-            for (TypeInfo t : in.types.values()) {
+            for (TypeInfo t : new TreeMap<>(in.types).values()) {
                 if (!t.retired && TypeInfo.rank(t.status) == 3 && t.massPerPadMg != null && t.massPerPadMg > 0
-                        && t.family != null) {
+                        && t.family != null && Math.abs(t.k - 1) <= Limits.EPS) {
                     anchors.computeIfAbsent(t.family, f -> new ArrayList<>())
                             .add(new Anchor(t.family, t.key, t.version, t.massPerPadMg, t.calArea()));
                 }
             }
-            for (Map.Entry<String, Anchor> e : in.anchors.entrySet()) {
+            for (Map.Entry<String, Anchor> e : new TreeMap<>(in.anchors).entrySet()) {
                 anchors.computeIfAbsent(e.getKey(), f -> new ArrayList<>()).add(e.getValue());
             }
             anchors.computeIfAbsent(Family.CHIP, f -> new ArrayList<>());

@@ -45,11 +45,17 @@ public final class Suggester {
         DoseView v = new DoseView();
         v.steps = steps;
         v.ev = evidence == null ? null : evidence.get(steps);
+        // the confirmed dose nearest in log steps; a tie (400 and 1600 for 800) goes to the larger, so the
+        // result does not depend on the map's order
         DoseEvidence other = null;
         if (evidence != null) {
             for (DoseEvidence e : evidence.values()) {
-                if (e != null && e.steps != steps && e.massConfirmed && e.mgPerStep != null && (other == null
-                        || Math.abs(Math.log((double) e.steps / steps)) < Math.abs(Math.log((double) other.steps / steps)))) {
+                if (e == null || e.steps == steps || !e.massConfirmed || e.mgPerStep == null) {
+                    continue;
+                }
+                double d = other == null ? 0
+                        : Math.abs(Math.log((double) e.steps / steps)) - Math.abs(Math.log((double) other.steps / steps));
+                if (other == null || d < -1e-12 || Math.abs(d) <= 1e-12 && e.steps > other.steps) {
                     other = e;
                 }
             }
@@ -562,7 +568,8 @@ public final class Suggester {
         boolean neverQuarter = x.steps == DoseModel.QUARTER && (v.ev == null || v.ev.n == 0);
         boolean high = v.measured && v.opticalPass && v.massConfirmed && g.ownAnchor
                 && ratioIn(ratio, Limits.COVER_RATIO_LOW, Limits.COVER_RATIO_HIGH) && g.k == 1 && fitPass;
-        boolean medium = (x.steps == DoseModel.HALF || x.steps == DoseModel.ONE_TURN)
+        // medium needs an anchor of the family (its own, or the bench's for chips), §4.5
+        boolean medium = (x.steps == DoseModel.HALF || x.steps == DoseModel.ONE_TURN) && g.ownAnchor
                 && ratioIn(ratio, Limits.MEDIUM_RATIO_LOW, Limits.MEDIUM_RATIO_HIGH) && g.k == 1 && fitPass;
         s.confidence = high ? "high" : medium ? "medium" : "low";
         if (neverQuarter) {
