@@ -237,11 +237,11 @@ public class FiducialLocatorTest {
     }
 
     /**
-     * The predictions move the frames: moved (-2, -1.5) mm and turned 3 deg about FID1, FID2 lies
+     * The predictions order the frames: moved (-2, -1.5) mm and turned 3 deg about FID1, FID2 lies
      * 6.8 mm from its expected position, more than a frame's usable half height (4.6 mm), and the
-     * similarity of FID1 and FID3 puts it into its first frame. A re-seat past the radius is not
-     * found however good the prediction: moved (-5, -3) and turned 6 deg, FID3 lies 12.3 mm from
-     * its expected position, 6.8 mm from its prediction and inside that first frame.
+     * similarity of FID1 and FID3 picks the frame that holds it first. A re-seat past the radius is
+     * not found however good the prediction: moved (-5, -3) and turned 6 deg, FID3 lies 12.3 mm
+     * from its expected position, 6.8 mm from its prediction and inside its first frame.
      */
     @Test
     public void predictionsFollowTheFirstFinds() throws Exception {
@@ -272,8 +272,7 @@ public class FiducialLocatorTest {
         Found fid2 = got.get(1);
         assertEquals(1, fid2.frames, "FID2 predicted by the similarity of FID1 and FID3");
         double[] firstLook = cam.captures.get(cam.captures.size() - fid2.iterations);
-        assertTrue(Math.hypot(firstLook[0] - t[1][0], firstLook[1] - t[1][1]) < 1.0,
-                Arrays.toString(firstLook));
+        assertTrue(inFrame(firstLook, t[1]), Arrays.toString(firstLook));
         Fit previous = Fit.of(prev, "affine-3", null);
         Fit fit = FiducialLocator.fit(got, previous, new Settings());
         assertEquals(previous.rotationDeg + 3, fit.rotationDeg, 0.01);
@@ -294,9 +293,10 @@ public class FiducialLocatorTest {
         assertEquals("FID3", x.target.name);
         assertTrue(x.getMessage().startsWith(String.format(Locale.ROOT, "REG: FID3 not found within"
                 + " 8.0 mm of X %.2f, Y %.2f (3 camera frames).", e[2][0], e[2][1])), x.getMessage());
-        double[] fid3Look = farCam.captures.get(farCam.captures.size() - 3);
-        assertTrue(Math.abs(fid3Look[0] - fid3[0]) < 9 && Math.abs(fid3Look[1] - fid3[1]) < 4.5,
-                "the mark was in the first frame at the prediction: " + Arrays.toString(fid3Look));
+        // FID3's three frames tile the 8 mm circle around its expected position (one column of tiles)
+        for (int k = 1; k <= 3; k++) {
+            assertEquals(e[2][0], farCam.captures.get(farCam.captures.size() - k)[0], 1e-9);
+        }
     }
 
     /**
@@ -329,10 +329,9 @@ public class FiducialLocatorTest {
         assertEquals("FID1", e.target.name);
         assertTrue(e.getMessage().startsWith("REG: FID1 not found within 8.0 mm of X 352.11,"
                 + " Y 108.55 (3 camera frames)."), e.getMessage());
-        // its first frame, at the prediction, held the mark: 9.24 mm out, it was not taken
+        // its first frame, the one nearest the prediction, held the mark: 9.24 mm out, it was not taken
         double[] firstLook = cam.captures.get(cam.captures.size() - 3);
-        assertTrue(Math.hypot(firstLook[0] - found[0][0], firstLook[1] - found[0][1]) < 1.0,
-                Arrays.toString(firstLook));
+        assertTrue(inFrame(firstLook, found[0]), Arrays.toString(firstLook));
 
         Settings wide = new Settings();
         wide.searchRadiusMm = 10;
@@ -349,6 +348,57 @@ public class FiducialLocatorTest {
         }
         assertEquals(9.24, got.get(0).offsetFromExpectedMm, 0.01);
         assertEquals(1, got.get(0).frames);
+    }
+
+    /**
+     * Review 1: the frames tiled the circle around the prediction while only marks within the radius of the
+     * expected position count, so a mark inside the radius could lie outside every frame. The ftp board re-seated
+     * 8.5 deg about its fiducials' centroid: FID1, FID2 and FID3 lie 6.89, 5.91 and 4.04 mm from expected. FID1
+     * is found first; FID3's prediction (moved by FID1's offset) is then 9.6 mm off in X, past a frame's usable
+     * half width (9.1 mm), and its three frames saw nothing ("REG: FID3 not found within 8.0 mm"). The frames
+     * now tile the circle around the expected position, the one nearest the prediction first.
+     */
+    @Test
+    public void theFramesTileTheRadiusAroundTheExpectedPosition() throws Exception {
+        AffineTransform prev = affine(BOARD2);
+        double[][] e = new double[3][];
+        double cx = 0;
+        double cy = 0;
+        for (int i = 0; i < 3; i++) {
+            e[i] = apply(prev, FTP[i][0], FTP[i][1]);
+            cx += e[i][0] / 3;
+            cy += e[i][1] / 3;
+        }
+        AffineTransform truth = AffineTransform.getRotateInstance(Math.toRadians(8.5), cx, cy);
+        truth.concatenate(prev);
+        FakeCamera cam = new FakeCamera();
+        List<Target> targets = new ArrayList<>();
+        double[][] t = new double[3][];
+        for (int i = 0; i < 3; i++) {
+            t[i] = apply(truth, FTP[i][0], FTP[i][1]);
+            cam.mark(t[i][0], t[i][1]);
+            targets.add(target(NAMES[i], FTP[i][0], FTP[i][1], e[i][0], e[i][1]));
+        }
+        double[] moved = {6.89, 5.91, 4.04};
+        List<String> order = new ArrayList<>();
+        List<Found> got = new FiducialLocator(new Settings(), cam, () -> false,
+                f -> order.add(f.target.name), null).locateAll(targets);
+        assertEquals(Arrays.asList("FID1", "FID3", "FID2"), order);
+        for (int i = 0; i < 3; i++) {
+            assertEquals(t[i][0], got.get(i).x, 0.005, NAMES[i]);
+            assertEquals(t[i][1], got.get(i).y, 0.005, NAMES[i]);
+            assertEquals(moved[i], got.get(i).offsetFromExpectedMm, 0.01, NAMES[i]);
+        }
+        Found fid3 = got.get(2);
+        assertEquals(1, fid3.frames, "the frame on FID3's expected position, nearest its prediction, holds it");
+        Found fid1 = got.get(0);
+        assertArrayEquals(e[2], cam.captures.get(fid1.frames + fid1.iterations - 1), 1e-9);
+    }
+
+    /** A mark lies in the usable part of a frame centred at (x, y): its 2r ring (1.2 mm) inside. */
+    static boolean inFrame(double[] look, double[] mark) {
+        return Math.abs(mark[0] - look[0]) <= FidScene.W * SX / 2 - 1.2
+                && Math.abs(mark[1] - look[1]) <= FidScene.H * SY / 2 - 1.2;
     }
 
     @Test
