@@ -16,9 +16,9 @@ import org.pmw.tinylog.Logger;
  * the approach height; pump and valve on, settle, an open-air baseline (5 reads); coarse 0.25 mm steps
  * until the 3-read mean falls below baseline - max(40000, 15 % of |baseline|). Then, unlike the bench:
  * back to the last open coarse step until the seal lets go (the bench's fine pass started right after
- * the seal and reported contact up to 0.3 mm high, 29 of 156 passes at their first step), and a fine
- * pass of 0.025 mm steps below that step whose contact needs two sealed steps in a row (partial seals
- * reach the threshold's size). A fine miss re-probes once from the start; the coarse contact is never
+ * the seal and reported contact up to 0.3 mm high, 29 of 156 passes at their first step; one step
+ * higher when that step itself holds a partial seal), and a fine pass of 0.025 mm steps below it whose
+ * contact needs two sealed steps in a row (partial seals reach the threshold's size). A fine miss re-probes once from the start; the coarse contact is never
  * accepted. Every point ends with the bench's lift and vent: {@code G1 Z<travel> F600, M400, M107 P1,
  * M107 P0}, also after a refusal or an error inside it; only a STOP sends nothing but the I1 shutdown.
  *
@@ -229,6 +229,8 @@ public final class VacuumProber {
         public int alternate;
         public double baseline, drop, threshold;
         public Double coarseZ, lastOpenZ;
+        /** Where the seal let go before the fine pass: the last open step, or one step higher. */
+        public Double releaseZ;
         public boolean fine, retried;
         /** [z, 3-read mean] at each step (the release reads at the last open Z). */
         public List<double[]> readings = new ArrayList<>();
@@ -345,6 +347,9 @@ public final class VacuumProber {
                     }
                     break;
                 }
+            }
+            if (dirty) {
+                endLinesOrShutdown(null); // e.g. no spot was bare: N1 never went down, but the task ends the same
             }
         }
         catch (DispenseExecutor.AbortedException e) {
@@ -549,6 +554,7 @@ public final class VacuumProber {
     private Double coarse(Target t, Point p, Window w) throws Exception {
         p.coarseZ = null;
         p.lastOpenZ = null;
+        p.releaseZ = null;
         for (int k = 0;; k++) {
             double z = round4(w.startZ - k * s.coarseStepMm);
             if (z < w.floorZ - 1e-9) {
@@ -572,25 +578,27 @@ public final class VacuumProber {
      * Back to the last open coarse step until the seal lets go (|mean - baseline| < drop / 2 within
      * {@link Settings#releaseTimeoutMs}), then the fine pass below it: the first step whose mean and the
      * next step's mean are both sealed. Null when the fine pass finds no such pair.
+     *
+     * <p>The last "open" coarse step often reads a partial seal already: in 101 of 155 bench probes
+     * (runs/serial.log) its mean was more than drop / 2 below the baseline (median 169 k counts against
+     * a ~230 k threshold), and it never comes back to the baseline there. So when it does not let go
+     * within the wait, N1 waits once more one coarse step higher, and the fine pass starts below that
+     * step; only a seal that holds there too is refused.</p>
      */
     private Double releaseAndFine(Point p, Window w, double zc) throws Exception {
         double zo = p.lastOpenZ;
-        moveZ(zo, s.zProbeFeedMmMin, w);
-        sync();
-        long t0 = s.clock.getAsLong();
-        while (true) {
-            double m = mean(reads(s.stepReads));
-            p.readings.add(new double[] {zo, m});
-            report(p);
-            if (Math.abs(m - p.baseline) < p.drop / 2) {
-                break;
-            }
-            if (s.clock.getAsLong() - t0 >= s.releaseTimeoutMs) {
+        if (!released(p, w, zo)) {
+            double up = round4(zo + s.coarseStepMm);
+            p.notes.add(String.format(Locale.ROOT, "%s: still drawing at Z %.3f after %.1f s (a partial seal at the "
+                    + "last open step): let go at Z %.3f", spotName(p), zo, s.releaseTimeoutMs / 1000.0, up));
+            if (!released(p, w, up)) {
                 throw refused(String.format(Locale.ROOT, "PROBE: N1 did not let go of the surface within %.1f s after "
                         + "the touch at X %.2f, Y %.2f: check the N1 tip and tubing, then try again",
                         s.releaseTimeoutMs / 1000.0, p.x, p.y));
             }
+            zo = up;
         }
+        p.releaseZ = zo;
         double bottom = Math.max(round4(zc - s.fineBelowContactMm), w.floorZ);
         boolean prevSealed = false;
         double prevZ = Double.NaN;
@@ -613,6 +621,24 @@ public final class VacuumProber {
         }
     }
 
+    /** Moves to {@code z} and reads until the seal let go there, at most {@link Settings#releaseTimeoutMs}. */
+    private boolean released(Point p, Window w, double z) throws Exception {
+        moveZ(z, s.zProbeFeedMmMin, w);
+        sync();
+        long t0 = s.clock.getAsLong();
+        while (true) {
+            double m = mean(reads(s.stepReads));
+            p.readings.add(new double[] {z, m});
+            report(p);
+            if (Math.abs(m - p.baseline) < p.drop / 2) {
+                return true;
+            }
+            if (s.clock.getAsLong() - t0 >= s.releaseTimeoutMs) {
+                return false;
+            }
+        }
+    }
+
     /** One probe step: Z, M400, the mean of the step reads (recorded). */
     private double step(Point p, double z, Window w) throws Exception {
         moveZ(z, s.zProbeFeedMmMin, w);
@@ -629,8 +655,9 @@ public final class VacuumProber {
     // Lines
     // ------------------------------------------------------------------------------------------
 
-    private void checkAbort() throws DispenseExecutor.AbortedException {
+    private void checkAbort() throws Exception {
         if (aborted != null && aborted.getAsBoolean()) {
+            io.sleep(0); // the executor's Io ends with its own abort reason ("STOP pressed in the web UI")
             throw new DispenseExecutor.AbortedException("stopped during the N1 probe");
         }
     }
