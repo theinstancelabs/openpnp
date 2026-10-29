@@ -267,7 +267,8 @@
     return String(text)
       .replace(/(\d) (?=(?:mm²|mm|ms|min|s|°|psi|rpm|DPH|mg|mm\/100|%|per|spots?|dots?|pads?|of|to)(?![\w²]))/g, '$1\u00a0')
       .replace(/\b(bench|estimate|gap|dwell|purge|pitch|slowest|fastest|median|ended|started|limit|worst|tilt|offset|frame) (?=[\d−+-])/g, '$1\u00a0')
-      .replace(/([a-z])-([a-z])/g, '$1\u2011$2');
+      .replace(/([a-z])-([a-z])/g, '$1\u2011$2')
+      .replace(/≈ (?=[\d−-])/g, '≈\u00a0');
   };
   /** <dl class="kv"> from [[key, value, title?], ...]; rebuilt only when the pairs change. */
   IL.kv = function (dl, pairs) {
@@ -339,6 +340,12 @@
     const t = Math.round(v), m = Math.floor(t / 60);
     if (m >= 60) return Math.floor(m / 60) + ' h ' + (m % 60) + ' min';
     return m + ' min ' + (t % 60) + ' s';
+  };
+  /** An estimate in whole seconds: 25 → "25 s", 85 → "1 min 25 s" (the ≈ is the caller's). */
+  IL.fmtSecs = function (s) {
+    if (!isNum(s)) return '—';
+    const t = Math.max(0, Math.round(Number(s)));
+    return t < 90 ? t + ' s' : Math.floor(t / 60) + ' min' + (t % 60 ? ' ' + (t % 60) + ' s' : '');
   };
   IL.fmtTime = (ms) => { if (!ms) return '—'; const d = new Date(ms); return pad2(d.getHours()) + ':' + pad2(d.getMinutes()); };
   IL.fmtTimeS = (ms) => { if (!ms) return '—'; const d = new Date(ms); return IL.fmtTime(ms) + ':' + pad2(d.getSeconds()); };
@@ -504,7 +511,8 @@
     planForgotten: false,  // GET /api/plan/{id} answered 404 (OpenPnP restarted)
     planAt: 0,
     cleanCheck: null,      // newest clean-pad report of the plan shown (plan, its subsets, or lastRun)
-    newSeatAtMs: lsJson('il.newSeatAtMs', null), // operator said "re-seated / new board": probe this seat
+    newSeatAtMs: null,     // the engine's new-seat flag (status.dispense.newSeatAtMs) as client ms: probe this seat
+    newSeatPending: 0,     // client ms of an IL.setNewSeat post in flight (the status may still show the old flag)
     route: { ws: 'run', section: null, id: null, panel: null },
     recovery: null,        // after STOP / ABORTED / ERROR: see IL.recoverySteps
     lastStop: null,        // the last recovery, kept after it cleared (board decision on Run)
@@ -603,18 +611,46 @@
     }
     return a;
   }
-  /** The operator answered "re-seated / new board" (or null after probing or "same seat"). */
+  /**
+   * The operator answered "re-seated / new board" (atMs) or "same seat" / probed (null). The answer is the engine's
+   * new-seat flag (POST /api/board/new-seat, AUTO_REGISTER_DESIGN.md §3.6): Register board probes again after it, and
+   * every page and browser sees it at its next status (S.newSeatAtMs mirrors status.dispense.newSeatAtMs, client ms).
+   * Returns the promise of the post; a refusal (a task runs) is a toast and the status keeps the engine's answer.
+   */
   IL.setNewSeat = function (atMs) {
-    S.newSeatAtMs = atMs || null;
-    lsSet('il.newSeatAtMs', atMs ? JSON.stringify(atMs) : null);
+    S.newSeatAtMs = atMs ? Date.now() : null;
+    S.newSeatPending = Date.now();
     attestVersion++;
     IL.render();
+    return IL.api('POST', '/api/board/new-seat', { newSeat: !!atMs }).then((r) => {
+      S.newSeatAtMs = r && isNum(r.newSeatAtMs) ? r.newSeatAtMs - S.skewMs : null;
+      return S.newSeatAtMs;
+    }).catch((e) => {
+      IL.toast((atMs ? 'New seat not noted: ' : 'Same seat not noted: ') + IL.errorText(e), 'need');
+      return null;
+    }).finally(() => { S.newSeatPending = 0; attestVersion++; IL.render(); });
   };
-  // both live in this browser's localStorage: an answer or a tick in another tab counts here at once (without this a
-  // second tab stayed "Ready to run" on the old seat's surface)
+  /** status.dispense.newSeatAtMs (server ms) → S.newSeatAtMs (client ms); a post in flight wins for 3 s. */
+  function mirrorNewSeat(s) {
+    const d = (s && s.dispense) || {};
+    if (!('newSeatAtMs' in d) || (S.newSeatPending && Date.now() - S.newSeatPending < 3000)) return;
+    const v = isNum(d.newSeatAtMs) ? d.newSeatAtMs - S.skewMs : null;
+    if ((v === null) !== (S.newSeatAtMs === null) || (v !== null && Math.abs(v - S.newSeatAtMs) > 2000)) {
+      S.newSeatAtMs = v;
+      attestVersion++;
+    }
+  }
+  /** One-time migration: a new-seat answer this browser kept before the engine flag existed is posted once. */
+  function migrateNewSeat(s) {
+    const old = lsJson('il.newSeatAtMs', null);
+    if (old === null || old === undefined) return;
+    lsSet('il.newSeatAtMs', null);
+    const d = (s && s.dispense) || {};
+    if (isNum(old) && 'newSeatAtMs' in d && !isNum(d.newSeatAtMs)) IL.setNewSeat(old);
+  }
+  // the attestations live in this browser's localStorage: a tick in another tab counts here at once
   window.addEventListener('storage', (e) => {
-    if (e.key !== null && e.key !== ATTEST_KEY && e.key !== 'il.newSeatAtMs') return;
-    S.newSeatAtMs = lsJson('il.newSeatAtMs', null);
+    if (e.key !== null && e.key !== ATTEST_KEY) return;
     attestVersion++;
     IL.render();
   });
@@ -668,7 +704,7 @@
     const m = s.machine || {}, d = s.dispense || {}, pr = s.pressure || {};
     if (n.idle && IL.taskRunning(s)) {
       const lab = s.run && s.run.running ? s.run.label : 'task';
-      return lab === 'board' ? 'Locked while the board runs' : 'Locked while the ' + lab + ' runs';
+      return lab === 'board' ? 'Locked while the board runs' : 'Locked while the ' + (lab === 'z check' ? 'Z check' : lab) + ' runs';
     }
     if (n.pressureOff && pr.state && pr.state !== 'off') return 'Pressure is held: switch it off first';
     if (n.connected && !m.enabled) return 'Not connected: connect first';
@@ -835,7 +871,7 @@
 
   // ================================================================================== readiness (§9)
   IL.READY_ORDER = ['machine', 'angle', 'needle', 'regulator', 'padtypes', 'surface', 'plan', 'purge', 'clean'];
-  const READY_OK = new Set(['ok', 'you', 'off']);
+  const READY_OK = new Set(['ok', 'you', 'off', 'info']);   // info: a note that counts ready ("homes first")
   /** Which readiness item an I4 message belongs to. */
   function i4Kind(msg, boardSurface) {
     const t = String(msg || '').toLowerCase();
@@ -883,17 +919,42 @@
     };
     const sim = IL.isSim(s);
 
-    // 1 Machine
+    // 1 Machine. With a home policy (status.machine.home) Register board and Run home by themselves: "homes first" is
+    // a note that counts ready (AUTO_REGISTER_DESIGN.md §8.2); a STOP that left N1 low needs the operator to look first
+    const hm = m.home || null;
+    const zc = m.zCheck || null;
+    const homeS = hm && isNum(hm.estimateS) ? hm.estimateS : 25;
+    const zS = zc && isNum(zc.estimateS) ? zc.estimateS : 20;
+    // after the run's own home every N1 height predates it: one touch checks Z (only when there is one to touch)
+    const zAfterHome = !!nd.anchor || Object.values(d.surfaces || {}).length > 0;
+    const zNow = !!zc && zc.needed && !!zc.reference;
     if (!m.enabled) {
       add({ key: 'machine', code: 'MACHINE', title: 'Machine', state: 'block', value: 'not connected', short: 'connect',
         detail: 'Not connected to the controller.', fixes: [{ fix: 'connect', label: 'Connect', primary: true }] });
+    } else if (!m.homed && m.busy) {
+      add({ key: 'machine', code: 'MACHINE', title: 'Machine', state: 'live', value: 'homing', short: 'homing', detail: 'Homing…' });
+    } else if (!m.homed && hm && hm.policy && hm.n1Low) {
+      add({ key: 'machine', code: 'MACHINE', title: 'Machine', state: 'need', value: 'N1 low', short: 'N1 low',
+        detail: 'N1 stopped low (Z ' + IL.fmt(hm.n1Z, 2) + '): look at the board under it. Home raises N1 first, then homes.',
+        fixes: [{ fix: 'home', label: 'Home now' }] });
+    } else if (!m.homed && hm && hm.policy) {
+      const since = isNum(hm.sinceMs) ? ' since the stop at ' + IL.fmtTime(hm.sinceMs - S.skewMs) : '';
+      add({ key: 'machine', code: 'MACHINE', title: 'Machine', state: 'info', value: zAfterHome ? 'homes first, checks Z' : 'homes first',
+        short: 'homes first', homeFirst: true,
+        detail: 'Not homed' + since + ': Register board and Run home first (≈ ' + IL.fmtSecs(homeS) + ')'
+          + (zAfterHome ? ', then one N1 touch checks Z (≈ ' + IL.fmtSecs(zS) + ').' : '.'),
+        fixes: [{ fix: 'home', label: 'Home now' }] });
     } else if (!m.homed) {
-      add(m.busy
-        ? { key: 'machine', code: 'MACHINE', title: 'Machine', state: 'live', value: 'homing', short: 'homing', detail: 'Homing…' }
-        : { key: 'machine', code: 'MACHINE', title: 'Machine', state: 'need', value: 'not homed', short: 'home',
-          detail: 'Not homed: positions are unknown (always after STOP).', fixes: [{ fix: 'home', label: 'Home' }] });
+      add({ key: 'machine', code: 'MACHINE', title: 'Machine', state: 'need', value: 'not homed', short: 'home',
+        detail: 'Not homed: positions are unknown (always after STOP).', fixes: [{ fix: 'home', label: 'Home' }] });
     } else if (m.busy && !IL.taskRunning(s)) {
       add({ key: 'machine', code: 'MACHINE', title: 'Machine', state: 'live', value: 'moving', short: 'machine moving', detail: 'The machine is moving.' });
+    } else if (zNow) {
+      const ref = zc.reference;
+      add({ key: 'machine', code: 'MACHINE', title: 'Machine', state: 'info', value: 'checks Z', short: 'checks Z', zCheckFirst: true,
+        detail: 'Homed' + (c.homedAt ? ' ' + IL.fmtTime(c.homedAt) : '') + '. The N1 heights predate this home: Run checks Z first, one N1 touch on the '
+          + (ref.name || 'surface') + ' at X ' + IL.fmt(ref.x, 1) + ', Y ' + IL.fmt(ref.y, 1) + ' (≈ ' + IL.fmtSecs(zS) + ').',
+        fixes: [{ fix: 'check-z', label: 'Check Z now' }] });
     } else {
       add({ key: 'machine', code: 'MACHINE', title: 'Machine', state: 'ok', value: c.homedAt ? IL.fmtTime(c.homedAt) : 'homed',
         short: 'machine', detail: 'Connected and homed.' });
@@ -1012,20 +1073,31 @@
       const which = !(seat.length || newSeat || !sf) ? undefined : newSeat ? 'new'
         : !sf || /^no '/i.test(seat[0] ? seat[0].v.message : 'no ') ? 'none'
           : /another registration/.test(seat[0].v.message) ? 'other' : 'untied';
-      const why = which && { new: 'You said the board was re-seated: probe this seat.', none: 'No board surface yet: probe this seat.',
-        other: 'The board surface belongs to another seat of this board.', untied: 'The board surface is not tied to this plan.' }[which];
-      const seatFixes = [{ fix: 'probe', label: 'Probe this seat', primary: true }];
-      if (newSeat) seatFixes.push({ fix: 'same-seat', label: 'Same board, not moved' });
+      const why = which && { new: 'You said the board was re-seated: register it (fiducials, then N1 touches the board).',
+        none: 'No board surface for this seat yet: register the board (fiducials, then N1 touches the board).',
+        other: 'The board surface belongs to another seat of this board: register it again.', untied: 'The board surface is not tied to this plan.' }[which];
+      // Register board (fiducials + N1 probe) is the one primary fix; by hand stays. A new seat on a board that can be
+      // registered asks the fiducials instead of taking "same board" on trust (AUTO_REGISTER_DESIGN.md §8.2)
+      const rt = plan.registrationTargets || null;
+      const camera = (m.positions || []).some((t) => t.kind === 'camera');
+      const registrable = !!rt && !rt.error && (rt.fiducialCount || (rt.fiducials || []).length) >= 2 && camera;
+      const reg = plan.registration || null;
+      const seatFixes = [{ fix: 'register', label: 'Register board', primary: true }, { fix: 'probe-by-hand', label: 'Do it by hand' }];
+      if (newSeat) seatFixes.push(registrable ? { fix: 'register-check', label: 'Same seat? Check the fiducials' } : { fix: 'same-seat', label: 'Same board, not moved' });
+      const registered = reg ? { atMs: reg.atMs, seat: reg.lastCheckedAtMs && reg.lastCheckedAtMs > reg.atMs ? 'same' : null } : null;
       if (bad.length) {
         add({ key: 'surface', code: 'I4', title: 'Surface', state: 'block', value: 'probe again', short: 'board surface',
           detail: bad.map((x) => sentence(x.v.message)).concat(why || []).join(' '),
-          fixes: which ? seatFixes : [{ fix: 'probe', label: 'Add probe points' }], seat: which });
+          fixes: which ? seatFixes : [{ fix: 'register', label: 'Register board', primary: true }, { fix: 'probe-by-hand', label: 'Add probe points by hand' }],
+          seat: which, registered });
       } else if (which) {
-        add({ key: 'surface', code: 'I4', title: 'Surface', state: 'need', value: 'probe', short: 'probe seat', detail: why, fixes: seatFixes, seat: which });
+        add({ key: 'surface', code: 'I4', title: 'Surface', state: 'need', value: 'probe', short: 'probe seat', detail: why, fixes: seatFixes, seat: which, registered });
       } else {
-        add({ key: 'surface', code: 'I4', title: 'Surface', state: 'ok', value: 'tied', short: 'board surface',
+        const regText = reg ? ' · registered ' + IL.fmtTime(reg.atMs - S.skewMs) + ' (' + IL.plural((reg.fiducials || []).length, 'fiducial') + ')'
+          : ' · not registered (no fiducial correction)';
+        add({ key: 'surface', code: 'I4', title: 'Surface', state: 'ok', value: 'tied', short: 'board surface', registered,
           detail: 'Board surface: ' + IL.plural((sf.points || []).length, 'point') + (sf.plane ? ', worst ' + IL.fmt(sf.plane.maxResidualMm, 3) + ' mm' : '')
-            + ', tied to this plan.' });
+            + ', tied to this plan' + regText + '.' });
       }
     }
 
@@ -1110,7 +1182,7 @@
         dirty: IL.dirtyPads(cc), fixes: [{ fix: 'clean-check', label: 'Wiped: check again' }] });
     } else if (!cpc.enabled) {
       add({ key: 'clean', code: 'I10', title: 'Pads clean', state: 'off', value: 'off', short: 'pads clean',
-        detail: sim ? 'Off (simulator): the simulated camera is a static picture.' : 'Off: not checked before a board.' });
+        detail: sim && !(s.server && s.server.simulatorConfirmed) ? 'Off (simulator): the simulated camera is a static picture.' : 'Off: not checked before a board.' });
     } else if (i10 && i10.state === 'blocked') {
       add({ key: 'clean', code: 'I10', title: 'Pads clean', state: 'block', value: 'no camera', short: 'pad check camera',
         detail: 'Clean-pad check is on but there is no top camera.', fixes: [{ href: '#setup/settings', label: 'Switch the check off in Settings' }] });
@@ -1163,7 +1235,10 @@
       if (i.state === 'blocked') addExtra(extraFor(code, i.text, 'block', i));
       else if (i.state === 'warning') addExtra(extraFor(code, i.text, 'need', i));
     }
-    if (ilk.I4 && ilk.I4.state === 'blocked' && items[2].ready) addExtra({ key: 'I4', code: 'I4', title: 'Place heights', state: 'block', short: 'place heights', detail: sentence(ilk.I4.text), fixes: [{ href: '#setup/places', label: 'Open Places' }] });
+    // I4 "Z not checked since the home" gates prime, the test dot and the calibrations; a board run checks Z by itself
+    // (the machine item says so), so it is no blocker here
+    const zRule = ilk.I4 && /measured before the home|must be checked after the home/i.test(String(ilk.I4.text || ''));
+    if (ilk.I4 && ilk.I4.state === 'blocked' && items[2].ready && !zRule) addExtra({ key: 'I4', code: 'I4', title: 'Place heights', state: 'block', short: 'place heights', detail: sentence(ilk.I4.text), fixes: [{ href: '#setup/places', label: 'Open Places' }] });
     for (const v of viol) {
       if (['MACHINE', 'I9', 'I10', 'I11', 'PLAN'].includes(v.code)) continue;
       if (v.code === 'I4') {
@@ -1186,7 +1261,11 @@
     if (blocked.length) verdict = { state: 'block', text: 'Blocked · ' + blocked[0].short, title: blocked.map((x) => x.title + ': ' + x.detail).join('\n') };
     else if (!plan && !c.planForgotten) verdict = { state: 'need', text: 'No plan yet', title: 'Choose a board and plan it (Run).' };
     else if (notReady.length) verdict = { state: 'need', text: count + ' of 9 · ' + next.short, title: notReady.map((x) => x.title + ': ' + x.detail).join('\n') };
-    else verdict = { state: 'ok', text: 'Ready to run', title: 'All 9 checks are ready: a board can run now.' };
+    else if (items[0].homeFirst) {
+      // the strip drops the long part when it would run under STOP (cells--t1)
+      verdict = { state: 'ok', text: 'Ready to run · homes first (≈ ' + IL.fmtSecs(homeS) + ')', value: ['Ready to run', ' · homes first (≈\u00a0' + IL.fmtSecs(homeS) + ')', 1],
+        title: 'All 9 checks are ready. ' + items[0].detail };
+    } else verdict = { state: 'ok', text: 'Ready to run', title: 'All 9 checks are ready: a board can run now.' };
     const soft = new Set(['regulator', 'clean']);
     // items 4 (regulator: asked in the confirm) and 9 (pads clean: the run re-checks) may be not ready, unless blocked
     const hard = extras.concat(items.filter((x) => !soft.has(x.key) || x.state === 'block')).filter((x) => !x.ready);
@@ -1256,7 +1335,9 @@
 
   // ================================================================================== verdict (strip "Board run")
   const TASK_WORD = { prime: 'Prime', 'test dot': 'Test dot', 'needle touch-off': 'Touch-off', 'dot ladder': 'Dot ladder',
-    'scale shots': 'Shots', 'clean-pad check': 'Pad check', board: 'Board' };
+    'scale shots': 'Shots', 'clean-pad check': 'Pad check', board: 'Board', 'board registration': 'Register', 'blank probe': 'Blank probe',
+    'z check': 'Z check' };
+  IL.TASK_WORD = TASK_WORD;
   const VENT_S = 1;
   /**
    * Seconds left of a board run's dots (one number for the strip, the tiles and the timeline): the live rate blended
@@ -1292,10 +1373,48 @@
         const left = IL.boardLeftS(run);
         return [run.dotsDone + '/' + run.dotsPlanned, left !== null ? ' · ' + IL.fmtClock(left) + ' left' : ''];
       }
+      // a run homes first and checks Z after the home by itself (run.detail.stage, AUTO_REGISTER_DESIGN.md §5.5)
+      const st = run.detail && run.detail.stage;
+      if (st === 'home') return ['Homing first', ' · 0/' + run.dotsPlanned];
+      if (st === 'z check') return ['Checking Z', ' · 0/' + run.dotsPlanned];
       return ['0/' + run.dotsPlanned, ' · starting'];
+    }
+    if (run.label === 'board registration' || run.label === 'blank probe') {
+      const g = IL.regProgress(run);
+      return [word + ' · ' + g.part, g.left !== null ? ' · ≈ ' + IL.fmtClock(g.left) + ' left' : ''];
     }
     return [word, ''];
   }
+  const regLeft = { runId: null, value: null, at: 0 };
+  /**
+   * Where a Register board or blank probe task is, from status.run.detail (AUTO_REGISTER_DESIGN.md §7.5): {stage, k, n,
+   * part: 'home' | 'FID 2/3' | 'check 2/3' | 'probe 3/5' | 'save' | 'plan again', left: seconds left or null}. The
+   * engine sends its estimate at each step; between steps it counts down here (never below 3 s while steps remain).
+   */
+  IL.regProgress = function (run) {
+    const d = (run && run.detail) || {};
+    const stage = d.stage || 'home';
+    const fids = d.fiducials || [], pr = d.probes || [];
+    let k = 0, n = 0, part = stage;
+    if (stage === 'fiducials') {
+      n = fids.length;
+      k = Math.min(n, fids.filter((f) => f.state === 'found').length + 1);
+      part = 'FID ' + k + '/' + n;
+    } else if (stage === 'probe' || stage === 'same-seat') {
+      // the blank probe reports its points as it reaches them: its total is in stepsPlanned (the points + the save)
+      n = stage === 'same-seat' ? 3 : run.label === 'blank probe' ? Math.max(pr.length, (Number(d.stepsPlanned) || 0) - 1) : pr.length;
+      k = Math.min(n, pr.filter((q) => q.state === 'contact').length + 1);
+      part = (stage === 'same-seat' ? 'check ' : 'probe ') + k + '/' + n;
+    } else if (stage === 'plan') part = 'plan again';
+    let left = null;
+    if (isNum(d.estimatedSecondsLeft)) {
+      const v = Number(d.estimatedSecondsLeft);
+      if (regLeft.runId !== run.runId || regLeft.value !== v) Object.assign(regLeft, { runId: run.runId, value: v, at: Date.now() });
+      const since = run.running ? (Date.now() - regLeft.at) / 1000 : 0;
+      left = v > 0 ? Math.max(Math.min(v, 3), v - since) : 0;
+    }
+    return { stage, k, n, part, left };
+  };
   /** Short live label of a running task: "96/160 · 0:44 left", "Pad check ≈ 57/160 · 1:52 left", "Prime". */
   IL.taskLabel = (run) => taskParts(run).join('');
   /** The strip verdict now: {state, text, title} (task, recovery, offline and engine override the readiness). */
@@ -1408,8 +1527,20 @@
         : 'STOP keeps the screw step count; asked after Connect (I11)',
       fixes: m.enabled && !angleOk ? [{ fix: 'I11-confirm', label: 'No, it stayed on: ' + IL.fmtDeg(prof.startAngleDeg, 1) + ' still holds' },
         { href: '#calibrate/angle', label: 'Yes, it was off: measure again' }] : [] });
-    steps.push({ key: 'home', title: 'Home', detail: 'M410 can lose steps: home before any move', wait: !m.enabled, done: !!m.enabled && !!m.homed,
-      fixes: m.enabled && !m.homed ? [{ fix: 'home', label: 'Home', primary: true }] : [] });
+    // Register board and Run home by themselves (status.machine.home.policy): the step is done without a home unless a
+    // STOP left N1 low (an automatic home must not drag it across the board, AUTO_REGISTER_DESIGN.md §8.2)
+    const hm = m.home || {};
+    const autoHome = !!m.enabled && !m.homed && !!hm.policy && !hm.n1Low;
+    const homeS = isNum(hm.estimateS) ? hm.estimateS : 25;
+    steps.push(m.enabled && !m.homed && hm.policy && hm.n1Low
+      ? { key: 'home', title: 'Home', wait: false, done: false,
+        detail: 'N1 stopped low (Z ' + IL.fmt(hm.n1Z, 2) + '): look at the board under it; Home raises N1 first, then homes.',
+        fixes: [{ fix: 'home', label: 'Home now', primary: true }] }
+      : autoHome
+        ? { key: 'home', title: 'Home first', state: 'info', done: true,
+          detail: 'Register board and Run home first (≈ ' + IL.fmtSecs(homeS) + '); or home now.', fixes: [{ fix: 'home', label: 'Home now' }] }
+        : { key: 'home', title: 'Home', detail: 'M410 can lose steps: home before any move', wait: !m.enabled, done: !!m.enabled && !!m.homed,
+          fixes: m.enabled && !m.homed ? [{ fix: 'home', label: 'Home', primary: true }] : [] });
     const short = !!row.defined && row.spotsLeft < row.perBoard;
     const tooShort = !!row.defined && row.spots < row.perBoard;
     if (short || (rec && rec.purgeShort)) {
@@ -1531,6 +1662,10 @@
     if (m.enabled && !pm.enabled) S.connectedAt = now;
     if (m.homed && !pm.homed) S.homedAt = prev ? now : null;
     if (!m.homed) S.homedAt = null;
+    // the engine knows when the machine was homed (also before this page loaded): status.machine.home.homedAtMs
+    if (m.homed && m.home && isNum(m.home.homedAtMs)) S.homedAt = m.home.homedAtMs - S.skewMs;
+    mirrorNewSeat(s);
+    if (!prev) migrateNewSeat(s);
     // when this page saw the profile change (the plan chip says "stale: profile changed 11:07")
     const fp = d.profile && d.profile.fingerprint, pfp = prev && prev.dispense && prev.dispense.profile && prev.dispense.profile.fingerprint;
     if (prev && fp && pfp && fp !== pfp) S.profileChangedAt = now;
@@ -1801,7 +1936,10 @@
           setCell(mc, 'live', undefined, 'Homing: every axis goes to its home switch');
           IL.setText(homed, 'Homing…');
         } else {
-          setCell(mc, 'need', undefined, 'Connected, not homed: positions are unknown. Home before any move.');
+          const hm = m.home || {};
+          const auto = hm.policy && !hm.n1Low ? ' Register board and Run home first (≈ ' + IL.fmtSecs(isNum(hm.estimateS) ? hm.estimateS : 25) + ').'
+            : hm.n1Low ? ' N1 stopped low (Z ' + IL.fmt(hm.n1Z, 2) + '): Home raises it first, then homes.' : ' Home before any move.';
+          setCell(mc, 'need', undefined, 'Connected, not homed: positions are unknown.' + auto);
           IL.setText(homed, 'Not homed');
           showHome = !IL.taskRunning(s) && (!s.pressure || s.pressure.state === 'off');
         }
@@ -2337,9 +2475,11 @@
     return box;
   };
   function codeFromMessage(msg) {
-    const m = /^(I\d+|MACHINE|CONFIG|PLAN):\s*(.*)$/s.exec(String(msg || ''));
+    const m = IL.CODE_RE.exec(String(msg || ''));
     return m ? [{ code: m[1], message: m[2] }] : [];
   }
+  /** The code prefix of an engine refusal ("I4: …", "REG: …", "PROBE: …"): the prefix drives the fix-its. */
+  IL.CODE_RE = /^(I\d+|MACHINE|CONFIG|PLAN|REG|PROBE):\s*(.*)$/s;
   const FIXES = {};
   /**
    * Registers a fix-it: spec {run(btn, arg, status) → promise, press2: verb | fn(status) → verb|null, ok: toast text |
@@ -2413,7 +2553,8 @@
     if (verb && btn) press2Click(btn, typeof verb === 'function' ? () => verb(S.status, arg) : verb, action, { ok: spec.ok }, ev);
     else IL.act(btn, action, { ok: spec.ok });
   };
-  const FALLBACK_FIX = { 'plan-again': { href: '#run/board' }, 'clean-check': { href: '#run/checks' }, probe: { href: '#run/probe' } };
+  const FALLBACK_FIX = { 'plan-again': { href: '#run/board' }, 'clean-check': { href: '#run/checks' }, probe: { href: '#run/probe' },
+    register: { href: '#run/probe' }, 'probe-by-hand': { href: '#run/probe' }, 'board-step': { href: '#run/board' }, 'look-camera': { href: '#setup/camera' } };
   /** Fix-its for a refusal's I-code (message: the engine's text, e.g. an I4 refusal that names a place). */
   IL.fixesForCode = function (code, status, message) {
     const s = status || S.status || {};
@@ -2435,8 +2576,20 @@
           return [{ href: '#setup/places' + (pm ? '/' + encodeURIComponent(pm[1]) : ''), label: 'Retake Z with N1' + (pm ? ' (' + pm[1] + ')' : '') }];
         }
         if (k === 'other-surface') return [{ href: '#setup/surfaces', label: 'Open Probed surfaces' }];
-        if (k === 'seat' || k === 'surface-bad' || k === 'plan') return [{ href: '#run/probe', label: 'Probe this seat' }];
+        // Z after a home: one N1 touch checks it; a Z that moved needs the frame (and everything after it) again
+        if (/were measured before the home|must be checked after the home/i.test(msg) && !/no point measured/i.test(msg)) return [{ fix: 'check-z', label: 'Check Z' }];
+        if (/^z moved/i.test(msg) || /no point measured before/i.test(msg)) return [{ href: '#setup/needle', label: 'Open Needle Z frame' }];
+        if (k === 'seat' || k === 'surface-bad' || k === 'plan') return [{ fix: 'register', label: 'Register board' }, { fix: 'probe-by-hand', label: 'Do it by hand' }];
         return [{ href: '#setup/needle', label: 'Open Needle Z frame' }];
+      }
+      // Register board (AUTO_REGISTER_DESIGN.md §8.2): the fiducial check failed, or the probe did
+      case 'REG': return [{ fix: 'look-camera', label: 'Look with the camera' }, { fix: 'board-step', label: 'Change board' },
+        { fix: 'plan-unregistered', label: 'Plan without fiducial correction' }, { fix: 'register', label: 'Register again' },
+        { fix: 'probe-by-hand', label: 'Do it by hand' }];
+      case 'PROBE': {
+        const out = [{ fix: 'register', label: 'Register again' }, { fix: 'probe-by-hand', label: 'Do it by hand' }];
+        if (/\b(blank|purge row)\b|'(?!board')[^']+' (surface|place)/i.test(msg) && !/board top/i.test(msg)) out.push({ view: 'probe-blank', label: 'Probe the blank…' });
+        return out;
       }
       case 'I7': return [{ href: '#setup/settings', label: 'Settings' }, { fix: 'run-fewer', label: 'Run fewer dots' }];
       case 'PLAN': return [{ href: '#profile', label: 'Pad types' }];

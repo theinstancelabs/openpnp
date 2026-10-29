@@ -69,7 +69,7 @@
     return names;
   };
   pcr.TASK = { 'needle touch-off': 'Touch-off', 'dot ladder': 'Dot ladder', 'scale shots': 'Scale shots', prime: 'Prime',
-    'test dot': 'Test dot', 'clean-pad check': 'Pad check', board: 'Board' };
+    'test dot': 'Test dot', 'clean-pad check': 'Pad check', board: 'Board', 'board registration': 'Register', 'blank probe': 'Blank probe', 'z check': 'Z check' };
   pcr.statusWord = (st) => ({ OK: 'Finished', ABORTED: 'Stopped', ERROR: 'Ended by an error', REFUSED: 'Refused', RUNNING: 'Running' }[st] || IL.cap(String(st || '—').toLowerCase()));
   pcr.statusKind = (st) => ({ OK: 'ok', ABORTED: 'block', ERROR: 'block', REFUSED: 'need', RUNNING: 'live' }[st] || 'off');
   /**

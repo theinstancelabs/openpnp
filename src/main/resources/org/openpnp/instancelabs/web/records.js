@@ -23,6 +23,10 @@
       case 'shots': return r.board === 'waste' ? 'Prime' : r.board === 'waste-test-dot' ? 'Test dot' : 'Scale shots' + (r.board ? ' · ' + r.board : '');
       case 'dot-ladder': return 'Dot ladder';
       case 'touch-off': return 'Touch-off';
+      // Register board, the automatic probe of a surface, Check Z (AUTO_REGISTER_DESIGN.md §8.2)
+      case 'board-registration': return 'Registration' + (r.board ? ' · ' + r.board : '');
+      case 'surface-probe': return 'Surface probe' + (r.board ? ' · ' + r.board : '');
+      case 'z-check': return 'Z check';
       default: return IL.cap(r.kind || 'Task');
     }
   }
@@ -277,6 +281,9 @@
     const src = plan.source || {};
     const bv = IL.boardview.create(host, { aria: 'Done-dot map' + (only ? ' of this run' : '') + ': ' + done + ' pads done, ' + part + ' partly, ' + left + ' not dispensed' });
     bv.setPlan(plan, { origin: src.source === 'file' ? { x: Number(src.x), y: Number(src.y) } : null });
+    // H4 (BOARD_IMPORT_DESIGN.md §5.1.1): the board drawing under the map once boardflow.js loads
+    if (IL.boardFlow) IL.boardFlow.recordsMap(bv, plan);
+    R.mapBv = bv;
     if (timings) bv.update({ done: doneIdx, check });
     return { host, done, part, left, leftPads };
   }
@@ -292,6 +299,8 @@
     const key = JSON.stringify([r.id, r.status, r.dots_done, !!lr, plan ? plan.planId : null, IL.basePlanId(r.plan_id) in R.plans,
       part ? (runPlan ? 1 : runPlan === null ? 0 : -1) : '']);
     IL.keyed(p.body, key, () => {
+      // H5 (BOARD_IMPORT_DESIGN.md §5.1.1): the replaced map view lets go of its ResizeObserver and SVGs
+      if (R.mapBv) { R.mapBv.destroy(); R.mapBv = null; }
       const start = serverToClient(r.started_at), end = serverToClient(r.ended_at);
       const prof = profileOf(r);
       const out = [

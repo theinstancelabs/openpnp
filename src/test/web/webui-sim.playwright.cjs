@@ -15,10 +15,14 @@
  * pressure off), the top-camera snapshot, the regulator tick expiring on a psi change and back (a tick at
  * the new psi stays), the board-surface editor after "new seat" (also seen by a second tab) and for a
  * moved board, the run confirm closing after a task its tab never saw running, STOP NOT CONFIRMED and
- * the offline band at 1024 px, no native dialogs, no JS errors.
+ * the offline band at 1024 px, then Register board (docs/instancelabs/AUTO_REGISTER_DESIGN.md §10.3: recovery without
+ * Home, the Register step, a first registration that homes first with its G-code, the fiducial correction against the
+ * SIM scene, a same seat, STOP mid-register and Home with N1 low, the by-hand path with the engine's targets, a run that
+ * homes and checks Z by itself, the automatic blank probe, the home setting, a fiducial not found and a plan without
+ * fiducial correction), no native dialogs, no JS errors.
  *
  * Env: IL_API_URL (http://127.0.0.1:PORT/), PLAYWRIGHT_DIR (dir with node_modules/playwright),
- *      UINAV (uinav CLI), UINAV_SESSION, OUT_DIR (screenshots + results.json).
+ *      UINAV (uinav CLI), UINAV_SESSION, OUT_DIR (screenshots + results.json), SIM_SCENE (the session's SIM scene file).
  */
 'use strict';
 const path = require('path');
@@ -30,6 +34,7 @@ const BASE = process.env.IL_API_URL;
 const UINAV = process.env.UINAV;
 const SESSION = process.env.UINAV_SESSION;
 const OUT = process.env.OUT_DIR;
+const SIM_SCENE = process.env.SIM_SCENE;
 fs.mkdirSync(OUT, { recursive: true });
 
 const results = [];
@@ -42,8 +47,10 @@ function check(name, cond, detail) {
 function gcode(since) {
   const args = ['--session', SESSION, 'gcode', '--json'];
   if (since !== undefined) args.push('--since', String(since));
-  return JSON.parse(execFileSync(UINAV, args, { encoding: 'utf8' }));
+  return JSON.parse(execFileSync(UINAV, args, { encoding: 'utf8', maxBuffer: 512 * 1024 * 1024 }));
 }
+/** Sequence number of the next captured G-code line (without fetching the log: it grows with every probe). */
+const gcodeNext = () => gcode(1e9).next;
 const lines = (g) => g.entries.filter((e) => !e.dir || e.dir === '>').map((e) => e.line.trim());
 /** The bench F9 Stop sequence (engine abort and machine.xml DISABLE_COMMAND). */
 const F9 = ['M410', 'M107 P3', 'M107 P2', 'M107 P1', 'M107 P0', 'M18 B'];
@@ -703,7 +710,14 @@ async function runFirstDots(page, n) {
     await page.click('#btn-start');
     await waitText(page, 'pill-conn', /^Connected$/, 60000);
     await press2(page, '#btn-home');
-    await waitText(page, 'pill-homed', /^Homed$/, 120000);
+    // the simulator only: after a run its auger axis B stands thousands of degrees out, and OpenPnP's GcodeServer models
+    // G28 and the park move after it as up to 20 s each (its dwell cap), past the driver's 10 s M400 timeout. The
+    // home then fails ("timeout waiting for response to M204"); the second one starts from home and works
+    if (!(await waitText(page, 'pill-homed', /^Homed$/, 90000).then(() => true, () => false))) {
+      console.log('     home after the STOP mid-run failed in the simulator (GcodeServer dwell cap after a run): homing again');
+      await press2(page, '#btn-home');
+      await waitText(page, 'pill-homed', /^Homed$/, 120000);
+    }
 
     // ---- Records › the stopped run of the 140 pads left: finish only its own pads, never the test run's 20 ---------
     {
@@ -779,6 +793,355 @@ async function runFirstDots(page, n) {
     await page.waitForFunction(() => document.getElementById('cam-img').naturalWidth > 0, null, { timeout: 15000 });
     check('camera snapshot shown in the UI', true);
     await page.screenshot({ path: path.join(OUT, 'setup-camera.png') });
+
+    // ---- Register board, the automatic blank probe, home at run, Z check (AUTO_REGISTER_DESIGN.md §10.3) ---------
+    // The SIM scene (run-webui-sim-test.sh) seats the board 0.60 / -0.45 mm and +0.20 deg off the plan, scaled
+    // 1.002 / 0.997 with a 0.1 deg shear: Register board must find a real correction. Every expected value comes from
+    // the scene. Here the machine is stopped (the F9 above), so N1 sits in the safe zone.
+    {
+      const scene = SIM_SCENE ? JSON.parse(fs.readFileSync(SIM_SCENE, 'utf8')) : null;
+      check('SIM scene present (run-webui-sim-test.sh)', !!scene, SIM_SCENE);
+      const aff = scene.board.seat.affine;
+      const trueAt = (bx, by) => [aff[0][0] * bx + aff[0][1] * by + aff[0][2], aff[1][0] * bx + aff[1][1] * by + aff[1][2]];
+      const status = async () => (await page.request.get(BASE + 'api/status')).json();
+      const put = (p, body) => page.request.put(BASE + p, { data: body });
+      const post = (p, body) => page.request.post(BASE + p, { data: body || {} });
+      const surfAt = async () => { const s = await status(); const b = s.dispense.surfaces.board; return b ? b.setAtMs : null; };
+      const panelView = () => page.evaluate(() => document.getElementById('panel').dataset.view);
+      const recStep = (key) => page.evaluate((k) => {
+        const st = IL.recoverySteps(IL.S.status, IL.S.recovery || IL.S.lastStop).find((x) => x.key === k);
+        return st ? { title: st.title, done: !!st.done, detail: st.detail, state: st.state } : null;
+      }, key);
+      /** Waits for a Register board task to end; returns its status. */
+      const regEnd = async (since, timeout) => waitStatus(page, (x) => x.run && x.run.label === 'board registration' && !x.run.running
+        && x.run.startedAtMs > since, timeout || 300000);
+      // the start-angle answer of the recovery panel (other workspaces carry their own copy of the fix, hidden)
+      const answerI11 = async () => {
+        const sel = '#panel [data-fix="I11-confirm"]';
+        await page.waitForSelector(sel + ':enabled', { state: 'visible', timeout: 20000 }).catch(() => {});
+        if (await page.isVisible(sel)) await page.click(sel);
+        else if ((await status()).dispense.profile.startAngleNeedsConfirm) await post('api/screw/start-angle', { note: 'PW: the controller stayed on' });
+        await waitStatus(page, (x) => !x.dispense.profile.startAngleNeedsConfirm, 15000).catch(() => {});
+      };
+      let r = await put('api/config', { vacuumProbe: { vacuumSettleMs: 300, readDelayMs: 0 } });
+      check('register: fast simulator probe timings saved (FAST_TIMINGS)', r.ok(), r.status());
+      await post('api/purge-row/reset');
+
+      // 1. Recovery without Home: connect, the start-angle answer; Register board and Run home first by themselves
+      await nav(page, 'run');
+      await page.click('#btn-start');
+      await waitText(page, 'pill-conn', /^Connected$/, 60000);
+      await answerI11();
+      const home0 = await recStep('home');
+      check('recovery: the home step reads "home first" and is done (N1 in the safe zone)', home0 && /home first/i.test(home0.title) && home0.done, home0);
+      await page.waitForFunction(() => !IL.recoveryActive(), null, { timeout: 15000 }).catch(() => {});
+      const s0 = await status();
+      check('recovery done without a home: machine started, not homed', !(await page.evaluate(() => IL.recoveryActive())) && s0.machine.enabled && !s0.machine.homed,
+        { enabled: s0.machine.enabled, homed: s0.machine.homed });
+
+      // 2. Register step, idle
+      await page.evaluate(() => IL.go('#run/probe'));
+      await page.waitForSelector('#panel[data-view=probe] #btn-register', { timeout: 15000 });
+      check('Register step: panel view probe, step title Register', await panelView() === 'probe'
+        && (await page.textContent('#panel .step[data-step=probe] .step__t')).trim() === 'Register');
+      await waitText(page, 'register-note', /FID1, FID2 and FID3/, 15000).catch(() => {});
+      const note = await textOf(page, 'register-note');
+      check('#register-note: homes first, the fiducials, a time', /^Homes first/.test(note) && /FID1, FID2 and FID3/.test(note) && /≈\s\d/.test(note), note);
+      const byHand0 = await page.evaluate(() => { const d = document.getElementById('probe-by-hand'); return { body: !!d.closest('#panel-body'), foot: !!d.closest('.panel__foot, #panel-foot'), open: d.open }; });
+      check('"Do it by hand" is in the panel body, closed', byHand0.body && !byHand0.foot && !byHand0.open, byHand0);
+      await page.screenshot({ path: path.join(OUT, 'register-idle.png') });
+      await page.evaluate(() => IL.go('#run/board'));
+      await page.waitForSelector('#board-z', { timeout: 10000 });
+      const zTitle = await page.getAttribute('#board-z', 'title');
+      check('Board top Z: approximate, Register board measures it (±1 mm)', /Register board/.test(zTitle) && /±1 mm/.test(zTitle), zTitle);
+      await page.evaluate(() => IL.go('#run/probe'));
+      await page.waitForSelector('#btn-register', { timeout: 10000 });
+
+      // 3. Register (first seat): homes first, fiducials, probe, plan again
+      let g1 = gcodeNext();
+      const t1 = Date.now() + (await page.evaluate(() => IL.S.skewMs));
+      const regLabel = await press2(page, '#btn-register');
+      check('Register board asks for a second press', /Press again: register board/.test(regLabel), regLabel);
+      await waitStatus(page, (x) => x.run && x.run.label === 'board registration' && x.run.running, 20000);
+      const liveNow = await page.waitForSelector('#reg-phases li.now', { timeout: 20000 }).then(() => true, () => false);
+      check('registering: the live phases show (#reg-phases li.now)', liveNow);
+      const homeRow = await page.waitForSelector('#reg-phases li[data-ph=home]', { timeout: 10000 }).then(() => true, () => false);
+      check('registering: the Home row is shown', homeRow);
+      await waitStatus(page, (x) => x.run && x.run.label === 'board registration' && x.run.detail && x.run.detail.stage === 'fiducials'
+        && (x.run.detail.fiducials || []).some((f) => f.state === 'found'), 120000).catch(() => {});
+      await page.screenshot({ path: path.join(OUT, 'register-running.png') });
+      let rs = await regEnd(t1);
+      await page.waitForFunction((id) => { const v = IL.S.plan && IL.S.plan.registrationRun; return v && v.runId === id; }, rs.run.runId, { timeout: 20000 }).catch(() => {});
+      await waitText(page, 'reg-result', /\S/, 15000).catch(() => {});
+      check('register: the task ended OK', rs.run.status === 'OK', { status: rs.run.status, message: rs.run.message });
+      const homeDone = await page.evaluate(() => { const v = IL.S.plan.registrationRun; return v && v.home; });
+      check('register: homed first (it was needed)', homeDone && homeDone.needed && homeDone.done, homeDone);
+      const res1 = await textOf(page, 'reg-result');
+      check('#reg-result: "Registered hh:mm: 3 of 3 fiducials"', /^Registered \d\d:\d\d: 3\sof\s3 fiducials/.test(res1), res1);
+      check('register: the new plan is shown (status.run.nextPlanId)', await page.evaluate((n) => IL.S.plan.planId === n, rs.run.nextPlanId), rs.run.nextPlanId);
+      check('register: the board surface is tied', !!rs.dispense.surfaces.board && rs.dispense.surfaces.board.boundToBoard, rs.dispense.surfaces.board);
+      check('#reg-fids lists 3 fiducials', (await page.$$eval('#reg-fids tbody tr', (e) => e.length)) === 3);
+      const view1 = await page.evaluate(() => IL.S.plan.registrationRun);
+      const f1 = view1.fiducials.find((f) => f.name === 'FID1');
+      const want = trueAt(f1.board.x, f1.board.y);
+      const nominal = [120 + f1.board.x, 120 + f1.board.y];
+      const corr = [f1.found.x - f1.expected.x, f1.found.y - f1.expected.y];
+      const err = Math.hypot(corr[0] - (want[0] - nominal[0]), corr[1] - (want[1] - nominal[1]));
+      check('FID1 correction = the scene\'s true seat − the plan\'s (within 0.05 mm)', err <= 0.05, { corr, want: [want[0] - nominal[0], want[1] - nominal[1]], err });
+      check('#reg-correction: "fiducial check hh:mm"', /^fiducial check \d\d:\d\d/.test(await textOf(page, 'reg-correction')), await textOf(page, 'reg-correction'));
+      await page.screenshot({ path: path.join(OUT, 'register-result.png') });
+      // 4. the G-code: home first, the bench probe lines, never below the floor, X/Y only at the travel Z
+      let l = lines(gcode(g1));
+      const window1 = view1.probe.window;
+      const iG28 = l.findIndex((x) => /^G28\b/.test(x)), iValve = l.indexOf('M106 P1 S180');
+      check('register G-code: G28 before the first N1 valve (M106 P1 S180)', iG28 >= 0 && iValve > iG28, { iG28, iValve });
+      check('register G-code: pump, valve, settle 300 ms, a VAC1 read, valve off, pump off (in order)',
+        inOrder(l, ['M106', 'M106 P1 S180', 'G4 P300', 'M261 A109 B3 S1', 'M107 P1', 'M107 P0']), l.filter((x) => /^M10[67]|^G4|^M261/.test(x)).slice(0, 12));
+      // from the probe's own first raise to the travel Z (OpenPnP's home and camera moves before it use its safe Z)
+      let below = [], lastZ = null, xyLow = [];
+      let on = false;
+      for (const x of l.slice(Math.max(0, l.indexOf('G1 Z31.5000 F600')))) {
+        if (x === 'M106 P1 S180') on = true;
+        if (x === 'M107 P1') on = false;
+        const z = /^G1\b.*\bZ(-?[\d.]+)/.exec(x);
+        if (z) { lastZ = Number(z[1]); if (on && lastZ < window1.floorZ - 1e-6) below.push(x); }
+        if (/^G1\b.*\b[XY]-?[\d.]/.test(x) && !/\bZ/.test(x) && lastZ !== null && Math.abs(lastZ - 31.5) > 1e-3) xyLow.push(x + ' at Z ' + lastZ);
+      }
+      check('register G-code: no N1 Z below the probe floor ' + window1.floorZ + ' while the vacuum is on', below.length === 0, below.slice(0, 5));
+      check('register G-code: X/Y moves only at the travel Z 31.5', xyLow.length === 0, xyLow.slice(0, 5));
+      const lastZLine = l.filter((x) => /^G1\b.*\bZ/.test(x)).pop();
+      check('register G-code: the last Z move is G1 Z31.5000', /^G1 Z31\.5000\b/.test(lastZLine || ''), lastZLine);
+
+      // 5. Same seat: 3 touches, the registration and the surface stay
+      const regId1 = view1.registrationId;
+      const surf1 = await surfAt();
+      g1 = gcodeNext();
+      const t2 = Date.now() + (await page.evaluate(() => IL.S.skewMs));
+      await press2(page, '#btn-reg-again');
+      rs = await regEnd(t2);
+      await page.waitForFunction((id) => { const v = IL.S.plan && IL.S.plan.registrationRun; return v && v.runId === id; }, rs.run.runId, { timeout: 20000 }).catch(() => {});
+      await waitText(page, 'reg-result', /^Same seat/, 15000).catch(() => {});
+      check('#reg-result: "Same seat hh:mm"', /^Same seat \d\d:\d\d/.test(await textOf(page, 'reg-result')), await textOf(page, 'reg-result'));
+      l = lines(gcode(g1));
+      check('same seat: exactly 3 N1 touches', l.filter((x) => x === 'M106 P1 S180').length === 3, l.filter((x) => x === 'M106 P1 S180').length);
+      const view2 = await page.evaluate(() => IL.S.plan.registrationRun);
+      check('same seat: the registration and the board surface are unchanged', view2.registrationId === regId1 && (await surfAt()) === surf1,
+        { reg: [regId1, view2.registrationId], surf: [surf1, await surfAt()] });
+      check('same seat: "Probe again" is offered', await page.isVisible('#btn-reg-probe'));
+
+      // 6. STOP during a forced probe ("Probe again"): nothing moves after M410, the surface stays
+      const t3 = Date.now() + (await page.evaluate(() => IL.S.skewMs));
+      await press2(page, '#btn-reg-probe');
+      await waitStatus(page, (x) => x.run && x.run.label === 'board registration' && x.run.running && x.run.detail && x.run.detail.stage === 'probe'
+        && (x.run.detail.probes || []).some((q) => q.state === 'now'), 120000);
+      await page.waitForTimeout(1200);
+      g1 = gcodeNext();
+      await page.click('#btn-stop');
+      rs = await regEnd(t3, 90000);
+      check('STOP mid-register: ABORTED', rs.run.status === 'ABORTED', { status: rs.run.status, message: rs.run.message });
+      await page.waitForFunction(() => document.getElementById('panel').dataset.view === 'recovery', null, { timeout: 15000 }).catch(() => {});
+      check('STOP mid-register: Recovery shows', await panelView() === 'recovery');
+      l = lines(gcode(g1));
+      const iStop = l.indexOf('M410');
+      check('STOP mid-register: the F9 lines follow M410, no Z move after it', iStop >= 0 && inOrder(l.slice(iStop), F9) && !l.slice(iStop).some((x) => /^G1\b.*\bZ/.test(x)), l.slice(Math.max(0, iStop - 3)));
+      check('STOP mid-register: the board surface was not changed', (await surfAt()) === surf1);
+      await page.screenshot({ path: path.join(OUT, 'register-stopped-recovery.png') });
+
+      // 7. Recovery with N1 low: the home step names N1's Z; Home raises N1 first (Z only), then homes
+      await page.click('#btn-start');
+      await waitText(page, 'pill-conn', /^Connected$/, 60000);
+      await answerI11();
+      const home1 = await recStep('home');
+      check('recovery: N1 stopped low: the home step is needed and names its Z', home1 && !home1.done && /N1 stopped low \(Z \d/.test(home1.detail), home1);
+      g1 = gcodeNext();
+      await press2(page, '#btn-home');
+      await waitText(page, 'pill-homed', /^Homed$/, 120000);
+      l = lines(gcode(g1));
+      const iRaise = l.indexOf('G1 Z31.5000 F600'), iHome = l.findIndex((x) => /^G28\b/.test(x));
+      check('Home with N1 low: G1 Z31.5000 F600 before G28', iRaise >= 0 && iHome > iRaise, l.slice(0, 12));
+      await page.waitForFunction(() => !IL.recoveryActive(), null, { timeout: 15000 }).catch(() => {});
+      await page.evaluate(() => IL.go('#run/probe'));
+      await waitText(page, 'reg-result', /^Stopped/, 20000).catch(() => {});
+      const stoppedText = await textOf(page, 'reg-result').catch(() => '');
+      check('#reg-result after the STOP: the surface was not changed, the seat still holds',
+        /^Stopped \d\d:\d\d during probe point \d\sof\s\d: the board surface was not changed; the seat checked at/.test(stoppedText), stoppedText);
+
+      // 7b. The board moved (the scene's seat 0.40 / 0.30 mm further): Register board says re-seated and probes again
+      {
+        const movedScene = JSON.parse(JSON.stringify(scene));
+        movedScene.board.seat.affine[0][2] += 0.40;
+        movedScene.board.seat.affine[1][2] += 0.30;
+        fs.writeFileSync(SIM_SCENE + '.tmp', JSON.stringify(movedScene));
+        fs.renameSync(SIM_SCENE + '.tmp', SIM_SCENE);
+        await page.waitForTimeout(600);
+        const regBefore = await page.evaluate(() => IL.S.plan.registration && IL.S.plan.registration.id);
+        const surfBefore = await surfAt();
+        g1 = gcodeNext();
+        const t6 = Date.now() + (await page.evaluate(() => IL.S.skewMs));
+        await press2(page, '#btn-register');
+        rs = await regEnd(t6);
+        await page.waitForFunction((id) => { const v = IL.S.plan && IL.S.plan.registrationRun; return v && v.runId === id; }, rs.run.runId, { timeout: 20000 }).catch(() => {});
+        await waitText(page, 'reg-result', /^Re-seated/, 15000).catch(() => {});
+        const rsText = await textOf(page, 'reg-result');
+        check('moved seat: #reg-result "Re-seated hh:mm: the board moved 0.5 mm"', rs.run.status === 'OK' && /^Re-seated \d\d:\d\d: the board moved 0\.(4[5-9]|5\d)\smm/.test(rsText), rsText);
+        l = lines(gcode(g1));
+        const regAfter = await page.evaluate(() => IL.S.plan.registration && IL.S.plan.registration.id);
+        check('moved seat: a new registration, every spot touched again, a new surface', regAfter && regAfter !== regBefore
+          && l.filter((x) => x === 'M106 P1 S180').length >= 5 && (await surfAt()) !== surfBefore, { regBefore, regAfter, touches: l.filter((x) => x === 'M106 P1 S180').length });
+      }
+
+      // 8. Do it by hand on Run: the engine's targets, three points, save ties the surface and plans again
+      await page.evaluate(() => { IL.run.byHand = true; IL.render(); });
+      await page.waitForSelector('#btn-probe-add', { state: 'visible', timeout: 10000 });
+      const tgt = await page.evaluate(() => ({ rows: [...document.querySelectorAll('#probe-targets tbody tr')].map((tr) => [Number(tr.cells[1].textContent), Number(tr.cells[2].textContent)]),
+        engine: IL.S.plan.registrationTargets.probes.map((q) => [Math.round(q.x * 100) / 100, Math.round(q.y * 100) / 100]) }));
+      check('by hand: the foot shows Add point, the targets are the engine\'s', tgt.rows.length === tgt.engine.length
+        && tgt.rows.every((rw, i) => Math.abs(rw[0] - tgt.engine[i][0]) < 0.011 && Math.abs(rw[1] - tgt.engine[i][1]) < 0.011), tgt);
+      // every target: a surface must cover the dots (3 points over one corner would leave most of them outside)
+      const nTargets = tgt.rows.length;
+      for (let i = 0; i < nTargets; i++) {
+        await page.waitForSelector('#btn-probe-add:enabled', { timeout: 10000 });
+        await page.click('#btn-probe-add');
+        if (await page.waitForSelector('#btn-probe-add.btn--press', { timeout: 1500 }).then(() => true, () => false)) {
+          await page.waitForTimeout(450);
+          await page.click('#btn-probe-add');
+        }
+        await page.waitForFunction((n) => IL.run.probe.points.length === n, i + 1, { timeout: 5000 });
+      }
+      check('by hand: a point at every target added (' + nTargets + ')', await page.evaluate(() => IL.run.probe.points.length) === nTargets);
+      // the simulated operator lowers N1 onto the board at each target (no jog in this test): the Z the scene gives there
+      await page.evaluate((sc) => {
+        const a = sc.board.seat.affine, sf = sc.board.surface;
+        const det = a[0][0] * a[1][1] - a[0][1] * a[1][0];
+        for (const q of IL.run.probe.points) {
+          const t = IL.run.targets[q.target];
+          const dx = t.x - a[0][2], dy = t.y - a[1][2];
+          const bx = (a[1][1] * dx - a[0][1] * dy) / det, by = (-a[1][0] * dx + a[0][0] * dy) / det;
+          Object.assign(q, { x: t.x, y: t.y, z: Math.round((sf.z0 + sf.slopeX * bx + sf.slopeY * by) * 1000) / 1000 });
+        }
+        IL.render();
+      }, scene);
+      const plan3 = await page.evaluate(() => IL.S.plan.planId);
+      await page.click('#btn-probe-save');
+      await page.waitForFunction((id) => IL.S.plan && IL.S.plan.planId !== id, plan3, { timeout: 30000 }).catch(() => {});
+      const s3 = await status();
+      check('by hand: Save ties the board surface and plans again', !!s3.dispense.surfaces.board.boundToBoard
+        && await page.evaluate((id) => IL.S.plan.planId !== id, plan3), s3.dispense.surfaces.board);
+
+      // 9. Home at run: a STOP while idle; Start; the start angle; the run homes and checks Z by itself
+      await post('api/stop');
+      await waitText(page, 'pill-conn', /^Not connected$/, 30000);
+      await page.click('#btn-start');
+      await waitText(page, 'pill-conn', /^Connected$/, 60000);
+      await answerI11();
+      await page.waitForFunction(() => IL.ready().items.find((x) => x.key === 'angle').ready, null, { timeout: 15000 }).catch(() => {});
+      await post('api/purge-row/reset');
+      await page.evaluate(() => IL.attest.set('regulator', IL.S.status.dispense.profile.pressurePsi));
+      await page.waitForFunction(() => !IL.recoveryActive(), null, { timeout: 15000 }).catch(() => {});
+      // the plan is read again after the reconnect ("checking"): wait for it
+      await page.waitForFunction(() => IL.ready().items[0].state === 'info' && IL.ready().canRun && !IL.S.planPending, null, { timeout: 20000 }).catch(() => {});
+      const mach = await page.evaluate(() => { const r = IL.ready(); const it = r.items[0]; return { state: it.state, value: it.value, canRun: r.canRun, verdict: r.verdict.text }; });
+      check('Run readiness: the machine item is a note "homes first", and a board can run', mach.state === 'info' && /^homes first/.test(mach.value) && mach.canRun, mach);
+      check('Run readiness: the verdict reads "Ready to run · homes first"', /^Ready to run · homes first/.test(mach.verdict), mach.verdict);
+      await page.evaluate(() => IL.go('#run/checks'));
+      await page.waitForSelector('#btn-run', { timeout: 15000 });
+      await page.screenshot({ path: path.join(OUT, 'run-checks-home-first.png') });
+      // this board has paste on part of its pads (the stopped runs above): a run of two of the pads left, through the
+      // run confirm as Records › Finish opens it (a whole board would take minutes in the simulator)
+      await page.evaluate(() => {
+        const p = IL.S.plan;
+        const left = IL.run.padsLeft && IL.run.padsLeft.length ? IL.run.padsLeft
+          : Array.from(new Set(p.dots.filter((d) => !IL.run.doneSet.has(d.index)).map((d) => d.padId)));
+        IL.runFix('run-rest', null, { planId: p.planId, padIds: left.slice(0, 2) });
+      });
+      await page.waitForSelector('#dlg-run', { timeout: 10000 });
+      const hf = await textOf(page, 'run-confirm-home').catch(() => '');
+      check('run confirm: #run-confirm-home says it homes first, then checks Z', /^Homes first/.test(hf) && /checks Z/.test(hf), hf);
+      await page.screenshot({ path: path.join(OUT, 'run-confirm-home-first.png') });
+      g1 = gcodeNext();
+      for (const t of ['#run-tick-gauge', '#run-tick-paste', '#run-tick-hands']) if (!(await page.isChecked(t))) await page.check(t);
+      await page.waitForSelector('#btn-run-go:enabled', { timeout: 10000 });
+      await page.click('#btn-run-go');
+      await page.waitForSelector('#dlg-run', { state: 'detached', timeout: 15000 });
+      const rr = await waitStatus(page, (x) => x.run && x.run.label === 'board' && !x.run.running, 300000);
+      l = lines(gcode(g1));
+      const iH = l.findIndex((x) => /^G28\b/.test(x)), iPress = l.indexOf('M106 P2 S255');
+      const touches = l.slice(Math.max(0, iH), iPress < 0 ? undefined : iPress).filter((x) => x === 'M106 P1 S180').length;
+      check('run: G28, then one Z-check touch, before the dispenser pump (M106 P2 S255)', iH >= 0 && iPress > iH && touches === 1, { iH, iPress, touches });
+      check('run after the home and the Z check: OK, homed', rr.run.status === 'OK' && rr.machine.homed, { status: rr.run.status, message: rr.run.message });
+      await waitText(page, 'pill-homed', /^Homed$/, 15000).catch(() => {});
+
+      // 10. Setup › Probe the blank: automatic, beside the purge row, the panel stays open with the result
+      await nav(page, 'setup');
+      await page.evaluate(() => IL.openView('probe-blank', { keep: true }));
+      await waitText(page, 'blank-note', /beside the purge row/, 20000).catch(() => {});
+      check('#blank-note: beside the purge row', /beside the purge row/.test(await textOf(page, 'blank-note').catch(() => '')), await textOf(page, 'blank-note').catch(() => ''));
+      const t4 = Date.now() + (await page.evaluate(() => IL.S.skewMs));
+      await press2(page, '#btn-blank-auto');
+      const bs1 = await waitStatus(page, (x) => x.run && x.run.label === 'blank probe' && !x.run.running && x.run.startedAtMs > t4, 300000);
+      await waitText(page, 'blank-result', /^(Saved|Not saved|Stopped)/, 20000).catch(() => {});
+      const bres = await textOf(page, 'blank-result').catch(() => '');
+      check('#blank-result: "Saved hh:mm: n points"', bs1.run.status === 'OK' && /^Saved \d\d:\d\d: \d+\spoints/.test(bres), { status: bs1.run.status, message: bs1.run.message, bres });
+      await page.screenshot({ path: path.join(OUT, 'blank-probe-result.png') });
+      const pr = bs1.dispense.purgeRow;
+      const used = Array.from({ length: pr.usedSpots }, (_, i) => [pr.x0Mm + i * pr.pitchXMm, pr.y0Mm + i * pr.pitchYMm]);
+      const bp = bs1.dispense.surfaces.blank.points.map((q) => (Array.isArray(q) ? q : [q.x, q.y]));
+      const near = bp.filter((q) => used.some((u) => Math.hypot(q[0] - u[0], q[1] - u[1]) < 1.9));
+      check('blank probe: at least 4 points, none within 1.9 mm of a used purge spot', bp.length >= 4 && near.length === 0, { n: bp.length, near });
+      const bh = await page.evaluate(() => { const d = document.getElementById('blank-by-hand'); return !!d && !!d.closest('#panel-body'); });
+      await openDetails(page, 'blank-by-hand');
+      await page.waitForSelector('#btn-blank-add', { state: 'visible', timeout: 5000 }).catch(() => {});
+      const bhFoot = await page.evaluate(() => ['btn-blank-add', 'btn-blank-save'].every((id) => { const b = document.getElementById(id); return b && !!b.closest('#panel-foot') && b.offsetParent !== null; }));
+      check('blank by hand: in the body; open, the foot shows Add and Save', bh && bhFoot, { bh, bhFoot });
+      for (let i = 0; i < 3; i++) {
+        await page.click('#btn-blank-add');
+        await page.waitForFunction((n) => /Add point (\d+)/.exec(document.getElementById('btn-blank-add').textContent)[1] === String(n), i + 2, { timeout: 5000 }).catch(() => {});
+      }
+      check('blank by hand: three points added, Save offered', /Save 3 points/.test(await textOf(page, 'btn-blank-save')), await textOf(page, 'btn-blank-save'));
+      await page.evaluate(() => IL.panel.close());
+
+      // 11. The home setting
+      await page.evaluate(() => IL.go('#setup/settings'));
+      await page.waitForSelector('#set-homebefore', { timeout: 10000 });
+      for (const v of ['always', 'whenNeeded']) {
+        // the save before re-reads the settings: change the field once it has
+        await page.waitForFunction(() => !document.getElementById('btn-settings').hasAttribute('aria-busy') && IL.S.config, null, { timeout: 30000 });
+        await page.selectOption('#set-homebefore', v);
+        await page.waitForSelector('#btn-settings:enabled', { timeout: 10000 });
+        await page.click('#btn-settings');
+        const c = await waitStatus(page, (x) => x.dispense.homeBeforeRun === v, 10000).then(() => true, () => false);
+        check('Settings: "Before Register board, Probe and Run" saves ' + v, c);
+      }
+
+      // 12. A fiducial not found (FID2 hidden in the scene): the REG fixes, then a plan without fiducial correction
+      const hidden = Object.assign({}, scene, { board: Object.assign({}, scene.board, { hideFiducials: ['FID2'] }) });
+      fs.writeFileSync(SIM_SCENE + '.tmp', JSON.stringify(hidden));
+      fs.renameSync(SIM_SCENE + '.tmp', SIM_SCENE);
+      await page.waitForTimeout(600);
+      await nav(page, 'run');
+      await page.evaluate(() => IL.go('#run/probe'));
+      await page.waitForSelector('#btn-register:enabled', { timeout: 20000 });
+      const t5 = Date.now() + (await page.evaluate(() => IL.S.skewMs));
+      await press2(page, '#btn-register');
+      rs = await regEnd(t5);
+      await waitText(page, 'reg-result', /^Not registered/, 20000).catch(() => {});
+      const nf = await textOf(page, 'reg-result');
+      check('#reg-result: "Not registered: FID2 not found within 8.0 mm"', rs.run.status === 'REFUSED' && /^Not registered: FID2 not found within 8\.0\smm/.test(nf), nf);
+      const fixes = await page.$$eval('#reg-result [data-fix]', (bs) => bs.map((b) => b.textContent.trim()));
+      check('REG fixes in order: look with the camera, change board, plan without correction, do it by hand (Register again in the foot)',
+        JSON.stringify(fixes) === JSON.stringify(['Look with the camera', 'Change board', 'Plan without fiducial correction', 'Do it by hand'])
+        && /^Register again/.test(await textOf(page, 'btn-register')), { fixes, foot: await textOf(page, 'btn-register') });
+      await page.screenshot({ path: path.join(OUT, 'register-fid-not-found.png') });
+      fs.writeFileSync(SIM_SCENE + '.tmp', JSON.stringify(scene));
+      fs.renameSync(SIM_SCENE + '.tmp', SIM_SCENE);
+      const plan5 = await page.evaluate(() => IL.S.plan.planId);
+      await page.click('#reg-result [data-fix="plan-unregistered"]');
+      await page.waitForFunction((id) => IL.S.plan && IL.S.plan.planId !== id, plan5, { timeout: 30000 }).catch(() => {});
+      await page.evaluate(() => IL.go('#run/probe'));
+      await waitText(page, 'reg-correction', /no fiducial correction/, 10000).catch(() => {});
+      check('Plan without fiducial correction: no registration, #reg-correction says so',
+        await page.evaluate(() => IL.S.plan.registration === null) && /^no fiducial correction/.test(await textOf(page, 'reg-correction')), await textOf(page, 'reg-correction'));
+    }
 
     check('no native dialogs (confirm / alert / prompt)', dialogs.length === 0, dialogs);
     // refusals answer 4xx on purpose (e.g. none expected here); the browser logs those as resource errors
