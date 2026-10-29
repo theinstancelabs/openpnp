@@ -2752,7 +2752,7 @@ public final class DispenseService {
         List<DotImager.Frame> before = new ArrayList<>();
         if (req.image) {
             t.stage = "before images";
-            phase(r, "pad calibration: looking at " + all.size() + " spots (" + tiles.size() + " frames)");
+            phase(r, "pad calibration: looking at " + all.size() + " spots (" + frames(tiles.size()) + ")");
             for (int k = 0; k < tiles.size(); k++) {
                 if (t.aborted()) {
                     throw new DispenseExecutor.AbortedException(abortReason(s.exec, "stopped before dispensing"));
@@ -2858,7 +2858,7 @@ public final class DispenseService {
         }
         if (req.image) {
             t.stage = "after images";
-            phase(r, "pad calibration: measuring the dots (" + tiles.size() + " frames)");
+            phase(r, "pad calibration: measuring the dots (" + frames(tiles.size()) + ")");
             afterImages(req, res, t, im, tiles, tileOf, before, all, blockOf);
         }
         if (req.parkAfter) {
@@ -2933,6 +2933,11 @@ public final class DispenseService {
                     + "its place Z %.3f: probe it again", b.surfaceName, plane.minZ, plane.maxZ, window, place.z);
         }
         return null;
+    }
+
+    /** "1 frame", "4 frames": the camera frames of a pad calibration step, as its phase text says them. */
+    private static String frames(int n) {
+        return n + (n == 1 ? " frame" : " frames");
     }
 
     /** After frames of every tile; every dot found, landed, its thread to the next told; 3 crops per block. */

@@ -4,7 +4,7 @@
 /* ================================================================ reason badge (Needs a profile, upload preview, card) */
 .pp-badge { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; padding: 3px 10px 3px 4px; border-radius: 13px; font: 650 13px/1.2 var(--font-ui);
   border: 1px solid var(--need-line); background: var(--need-bg); color: var(--need); max-width: 100%; }
-.pp-badge > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.pp-badge > span:last-child { min-width: 0; overflow-wrap: break-word; }
 .pp-badge[data-reason="tip"], .pp-badge[data-reason="part"] { border-color: var(--block-line); background: var(--block-bg); color: var(--block); }
 .pp-badge[data-reason="outside"] { border-color: var(--info-line); background: var(--info-bg); color: var(--info); }
 .pp-badge[data-reason="ready"] { border-color: var(--ok-line); background: var(--ok-bg); color: var(--ok); }
@@ -24,6 +24,9 @@
 .pt-needs__t th { padding: 9px 10px 7px; font-size: 11px; background: var(--tile); }
 .pt-needs__t th:first-child, .pt-needs__t td:first-child { padding-left: 14px; }
 .pt-needs__t td { vertical-align: top; padding: 10px; }
+/* the row whose suggestion the side panel shows */
+.pt-needs__t tr.sel > td { background: var(--accent-tint); }
+.pt-needs__t tr.sel > td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 .pt-needs__t th:nth-child(1) { width: 33%; }
 .pt-needs__t th:nth-child(2) { width: 22%; }
 .pt-needs__t--tip td:first-child { width: 30%; }
@@ -46,7 +49,7 @@
 .pt-sugg { display: flex; flex-direction: column; gap: 12px; padding-top: 4px; }
 .pt-sugg .notebox { display: flex; gap: 8px; align-items: flex-start; }
 .pt-sugg .notebox .st { margin-top: 1px; flex: none; }
-.pt-sugg__text { margin: 0; font: 600 15px/1.45 var(--font-ui); color: var(--ink); }
+.pt-sugg__text { margin: 0; font: 450 15px/1.5 var(--font-ui); color: var(--ink); }
 .pt-sugg__fig { margin: 0; }
 .pt-sugg__pv { height: 220px; border: 1px solid var(--line); border-radius: 12px; background: var(--pv-bg); overflow: hidden; }
 .pt-sugg__fig figcaption { font-size: 12.5px; color: var(--ink-3); margin-top: 6px; }
@@ -55,7 +58,7 @@
 .pt-sugg__alt { margin: 4px 0 0; padding-left: 18px; font-size: 13.5px; line-height: 1.45; display: flex; flex-direction: column; gap: 4px; }
 .pt-sugg__foot { flex-wrap: wrap; }
 .pt-sugg__foot .btn { flex: 1 1 auto; }
-.pv-sugg { fill: color-mix(in srgb, var(--data) 16%, transparent); stroke: var(--data); stroke-width: 1.5px; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
+.pv-sugg { fill: color-mix(in srgb, var(--data) 28%, transparent); stroke: var(--data); stroke-width: 1.5px; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
 .pv-l-sugg { pointer-events: none; }
 
 /* pad-type editor: the type's own turn and dots, its calibration facts */
@@ -108,7 +111,8 @@
 /* the result */
 .ri--ok { background: var(--ok-bg); border-color: var(--ok-line); }
 #pcal-result { grid-template-columns: auto minmax(0, 1fr); }
-#pcal-result .ri__t { display: block; font-size: 15px; line-height: 1.4; }
+#pcal-result .ri__t { display: block; font-size: 15px; line-height: 1.45; font-weight: 500; }
+#pcal-result .ri__t > b { font-weight: 700; }
 .pcal__res { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .pcal__res > li { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; background: var(--surface); }
 .pcal__gh { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -126,8 +130,9 @@
 .pcal__pred td { vertical-align: top; padding: 6px 6px; }
 
 /* ================================================================ upload preview, pad inspector */
-td.bi-pp { vertical-align: middle; }
-th.bi-pp { width: 24%; }
+td.bi-pp { font-size: 13.5px; line-height: 1.35; }
+.bi-pkgs--pp th:nth-child(1) { width: 38%; }   /* the profile badge gets the room a long reason needs */
+.pp-cell__s { font-size: 12.5px; color: var(--ink-2); margin-top: 4px; line-height: 1.35; }
 .pp-insp { display: flex; gap: 8px; align-items: flex-start; margin-top: 10px; }
 .pp-insp > .st { flex: none; margin-top: 1px; }
 .pp-insp .btn-row { margin-top: 8px; flex-wrap: wrap; }

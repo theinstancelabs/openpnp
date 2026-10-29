@@ -156,7 +156,7 @@
     n.key = el('div', { class: 'bi-key', 'aria-hidden': 'true' },
       el('span', { 'data-k': 'paste' }, el('i', { class: 'bi-sw' }), 'gets paste'),
       el('span', { 'data-k': 'wait' }, el('i', { class: 'bi-sw bi-sw--wait' }), 'pad type to characterize'),
-      el('span', { 'data-k': 'block' }, el('i', { class: 'bi-sw bi-sw--block' }), 'no pad type yet'),
+      el('span', { 'data-k': 'block' }, el('i', { class: 'bi-sw bi-sw--block' }), IL.padProfile ? 'needs a profile' : 'no pad type yet'),   // H-P6
       el('span', { 'data-k': 'none' }, el('i', { class: 'bi-sw bi-sw--dim' }), 'not dispensed'));
     n.found = el('div', { class: 'bi-found', id: 'board-import-found' });
     n.attach = el('div', { class: 'notebox notebox--info bi-attach', id: 'board-import-attach', hidden: true });

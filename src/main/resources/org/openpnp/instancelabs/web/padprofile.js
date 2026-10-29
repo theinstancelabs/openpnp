@@ -58,7 +58,8 @@
   const turnAdj = (steps) => (TURN[steps] ? TURN[steps][2] : IL.turnLabel(steps));
   const mg = (v) => (isNum(v) ? IL.fmt(v, 2) + ' mg' : '—');
   const mm = (v) => (isNum(v) ? IL.fmt(v, 2) + ' mm' : '—');
-  const pair = (w, h) => (IL.pcr && IL.pcr.fmtPadPair ? IL.pcr.fmtPadPair(w, h) : IL.fmt(w, 2) + ' × ' + IL.fmt(h, 2));
+  /** An opening as the engine's texts write it: mm to 2 decimals, half up. */
+  const pair2 = (w, h) => (isNum(w) && isNum(h) ? f2(w) + ' × ' + f2(h) : '—');
   const refList = (refs, n) => (refs || []).slice(0, n).join(', ') + ((refs || []).length > n ? ' +' + ((refs || []).length - n) : '');
   /** 2 decimals, half up (0.825 → 0.83, as the engine's texts round). */
   const f2 = (v) => IL.fmt(Math.round(v * 100 + 1e-6) / 100, 2);
@@ -145,7 +146,7 @@
   });
   IL.on('padtypes', () => { if (P.board) P.board.stale = true; staleEstimates(); });
   /** Read the summaries again, keeping the last answers meanwhile (a Start button never flickers to "Reading…"). */
-  function staleEstimates() { for (const e of Object.values(P.est)) e.at = 0; }
+  function staleEstimates() { for (const e of Object.values(P.est)) e.stale = true; }
 
   // ================================================================================== actions
   /**
@@ -262,8 +263,17 @@
   });
 
   // ================================================================================== calibration estimates
-  /** The query of GET /api/pad-calibrations/preview for a request. */
+  /** The query of GET /api/pad-calibrations/preview for a request (the browser's attestations in server time). */
   function previewQuery(req) {
+    const q = new URLSearchParams(requestQuery(req));
+    const reg = IL.attest.valid('regulator', S.status);
+    if (reg) { q.set('regulatorPsi', String(reg.value)); q.set('regulatorAtMs', String(Math.round(reg.atMs + S.skewMs))); }
+    const life = IL.attest.valid('paste-life', S.status);
+    if (life) q.set('pasteLifeAtMs', String(Math.round(life.atMs + S.skewMs)));
+    return q.toString();
+  }
+  /** The request's own fields: the cache key of its summary (the clock skew moves the attestations' server times). */
+  function requestQuery(req) {
     const q = new URLSearchParams();
     if (req.planId) q.set('planId', req.planId);
     if (req.boardFile) q.set('boardFile', req.boardFile);
@@ -273,19 +283,25 @@
     if (isNum(req.doseSteps)) q.set('doseSteps', String(req.doseSteps));
     if (isNum(req.weighDots)) q.set('weighDots', String(req.weighDots));
     if (req.suggestionIds) q.set('suggestionIds', Object.entries(req.suggestionIds).map(([g, s]) => g + ':' + s).join(','));
-    const reg = IL.attest.valid('regulator', S.status);
-    if (reg) { q.set('regulatorPsi', String(reg.value)); q.set('regulatorAtMs', String(Math.round(reg.atMs + S.skewMs))); }
-    const life = IL.attest.valid('paste-life', S.status);
-    if (life) q.set('pasteLifeAtMs', String(Math.round(life.atMs + S.skewMs)));
     return q.toString();
   }
-  /** The before-start summary of a request (cached, read again after 10 s or when asked): {s, error} or null while loading. */
+  /** Which ticks the summary was read with (browser times): a new tick reads it again. */
+  function attestKey() {
+    const reg = IL.attest.valid('regulator', S.status), life = IL.attest.valid('paste-life', S.status);
+    return JSON.stringify([reg && reg.value, reg && reg.atMs, life && life.atMs]);
+  }
+  /**
+   * The before-start summary of a request: {s, error, loading}. Cached by the request; read again after 10 s, after a
+   * new tick, when stale (a new plan, pad types) or when asked, keeping the last answer meanwhile, so a Start button
+   * armed for its second press is not locked by a refresh.
+   */
   function estimate(req, force) {
-    const key = previewQuery(req);
+    const key = requestQuery(req);
+    const att = attestKey();
     const e = P.est[key];
-    if (!e || force || (!e.loading && Date.now() - e.at > 10000)) {
-      const x = P.est[key] = Object.assign(e || {}, { loading: true, at: Date.now() });
-      IL.api('GET', '/api/pad-calibrations/preview?' + key, undefined, { timeoutMs: 20000 })
+    if (!e || force || (!e.loading && (e.stale || e.att !== att || Date.now() - e.at > 10000))) {
+      const x = P.est[key] = Object.assign(e || {}, { loading: true, at: Date.now(), att, stale: false });
+      IL.api('GET', '/api/pad-calibrations/preview?' + previewQuery(req), undefined, { timeoutMs: 20000 })
         .then((s) => { x.s = s; x.error = null; }, (err) => { x.error = IL.errorText(err); })
         .then(() => { x.loading = false; x.at = Date.now(); IL.render(); });
     }
@@ -331,19 +347,21 @@
     host.appendChild(sec);
     return sec;
   }
-  function needsRow(c, g, kind) {
+  /** A row of the Needs list; lead: its action is the list's one primary (a single row; else the foot's "all" is). */
+  function needsRow(c, g, kind, lead) {
     const s = g.suggestion || {};
+    const main = 'btn btn--sm' + (lead ? ' btn--primary' : '');
     const open = el('button', { type: 'button', class: 'btn btn--sm btn--quiet', 'data-action': 'open', 'data-focus-key': 'open:' + g.group }, 'Suggestion…');
     open.addEventListener('click', () => IL.go('#profile/needs/' + g.group));
     const acts = [];
     if (kind === 'fix' && usable(g)) {
-      const use = el('button', { type: 'button', class: 'btn btn--sm btn--primary', 'data-action': 'use', 'data-focus-key': 'use:' + g.group },
+      const use = el('button', { type: 'button', class: main, 'data-action': 'use', 'data-focus-key': 'use:' + g.group },
         'Use ' + typeLabel(s) + (c.kind === 'plan' ? ' · plans again' : ''));
       use.addEventListener('click', () => useOne(use, c, g));
       acts.push(use);
     }
     if (kind === 'fix' && calibrates(g)) {
-      const auto = el('button', { type: 'button', class: 'btn btn--sm btn--primary', 'data-action': 'auto', 'data-focus-key': 'auto:' + g.group }, 'Calibrate automatically…');
+      const auto = el('button', { type: 'button', class: main, 'data-action': 'auto', 'data-focus-key': 'auto:' + g.group }, 'Calibrate automatically…');
       auto.addEventListener('click', () => openCal(calRequest(c, [g])));
       const man = el('button', { type: 'button', class: 'btn btn--sm btn--quiet', 'data-action': 'manual', 'data-focus-key': 'manual:' + g.group }, 'I’ll do it by hand');
       man.addEventListener('click', () => manual(man, c, g));
@@ -355,7 +373,7 @@
     return el('tr', { 'data-group': g.group, 'data-reason': g.reason },
       el('td', { class: 'pt-needs__pkg' }, el('div', { class: 'pt-needs__n' }, breakable(pkgOf(g))),
         el('div', { class: 'pt-needs__s', text: refList(g.refs, 3) + ' · ' + IL.plural(g.pads, 'pad'), title: (g.refs || []).join(', ') }),
-        el('div', { class: 'pt-needs__s', text: IL.nb(pair(ap.wMm, ap.hMm) + ' mm openings'), title: IL.fmt(ap.areaMm2, 3) + ' mm²' + (ap.roundness ? ', corners ' + IL.fmt(ap.roundness, 0) + ' %' : '') }), partial),
+        el('div', { class: 'pt-needs__s', text: IL.nb(pair2(ap.wMm, ap.hMm) + ' mm openings'), title: IL.fmt(ap.areaMm2, 3) + ' mm²' + (ap.roundness ? ', corners ' + IL.fmt(ap.roundness, 0) + ' %' : '') }), partial),
       el('td', {}, el('span', { class: 'pp-badge', 'data-reason': g.reason }, IL.glyph(reasonKind(g), 'xs'), el('span', { text: g.short }))),
       el('td', { class: 'pt-needs__sugg' }, el('div', { class: 'pt-needs__st' }, suggShort(g),
         s.confidence ? el('span', { class: 'pt-needs__conf', text: ' · ' + s.confidence + ' confidence' }) : null),
@@ -387,15 +405,16 @@
       : sp.fix.length ? 'These pads get no paste until each has a pad type. Use an existing type of the same size, or let the machine calibrate the suggested one.'
         : 'Every pad that the ' + tipName + ' can dispense has a pad type.');
     const key = JSON.stringify([c.kind, c.planId || c.boardFile, (pc && pc.groups || []).map((g) => [g.group, g.reason, g.suggestion && g.suggestion.id])]);
-    IL.keyed($('pt-needs-table').tBodies[0], key, () => (sp.fix.length ? sp.fix.map((g) => needsRow(c, g, 'fix'))
+    IL.keyed($('pt-needs-table').tBodies[0], key, () => (sp.fix.length ? sp.fix.map((g) => needsRow(c, g, 'fix', sp.fix.length === 1))
       : [el('tr', {}, el('td', { colspan: '3', class: 'muted', text: pc ? 'Nothing to choose.' : '…' }))]));
     IL.show($('pt-needs-table'), sp.fix.length > 0);
+    for (const tr of sec.querySelectorAll('tr[data-group]')) tr.classList.toggle('sel', tr.dataset.group === P.sel);
     const tip = $('pt-needs-tip'), notes = $('pt-needs-notes');
     IL.show(tip, sp.tip.length > 0);
     IL.setText($('pt-needs-tip-s'), 'Cannot be dispensed with the ' + tipName + ' (' + sp.tip.reduce((a, g) => a + g.pads, 0) + ' pads)');
     IL.keyed(tip.querySelector('tbody'), key, () => sp.tip.map((g) => el('tr', { 'data-group': g.group, 'data-reason': g.reason },
       el('td', { class: 'pt-needs__pkg' }, el('div', { class: 'pt-needs__n' }, breakable(pkgOf(g))), el('div', { class: 'pt-needs__s', text: refList(g.refs, 3) + ' · ' + IL.plural(g.pads, 'pad') }),
-        el('div', { class: 'pt-needs__s', text: IL.nb(pair((g.aperture || {}).wMm, (g.aperture || {}).hMm) + ' mm openings') })),
+        el('div', { class: 'pt-needs__s', text: IL.nb(pair2((g.aperture || {}).wMm, (g.aperture || {}).hMm) + ' mm openings') })),
       el('td', { class: 'pt-needs__why', text: g.reasonText }))));
     IL.show(notes, sp.notes.length > 0);
     IL.setText($('pt-needs-notes-s'), 'Notes (' + sp.notes.length + ')');
@@ -473,7 +492,7 @@
       const d = sg.dots || {}, pr = sg.predicted || {}, am = sg.amount || {}, op = sg.opening || g.aperture || {};
       const ripple = pr.padRipplePct && (pr.padRipplePct[0] || pr.padRipplePct[1]) ? IL.fmt(pr.padRipplePct[0], 0) + '–' + IL.fmt(pr.padRipplePct[1], 0) + ' %' : '0 % (whole turns per pad)';
       IL.kv($('pt-sugg-kv'), [
-        ['Opening', pair(op.wMm, op.hMm) + ' mm' + (op.roundness ? ' · ' + IL.fmt(op.roundness, 0) + ' % round' : '') + ' · ' + IL.fmt(op.areaMm2, 3) + ' mm²'],
+        ['Opening', pair2(op.wMm, op.hMm) + ' mm' + (op.roundness ? ' · ' + IL.fmt(op.roundness, 0) + ' % round' : '') + ' · ' + IL.fmt(op.areaMm2, 3) + ' mm²'],
         ['Amount', IL.fmt(am.targetMg, 2) + ' mg per pad' + (am.k && am.k !== 1 ? ' (k ' + IL.fmt(am.k, 2) + ')' : '') + (am.capped ? ', capped at a 0.25 mm print' : '') + ': ' + (am.rule || '')],
         ['Dots per pad and turn', d.perPad + ' ' + turnAdj(d.steps) + ' ' + (d.perPad === 1 ? 'dot' : 'dots') + ' per pad (' + IL.fmt(d.netDeg, 2) + '° each)'],
         ['Dot size', dRange(d.diameterMm) + (d.dSource === 'measured' ? ' (measured)' : ' (model)')],
@@ -703,7 +722,7 @@
     });
     pt.filters.needs = (t) => {
       const c = current();
-      return split(c && c.check).fix.some((g) => g.typeKey === t.typeKey);
+      return split(c && c.check).fix.some((g) => g.typeKey === t.typeKey || (g.suggestion && g.suggestion.kind !== 'new' && g.suggestion.typeKey === t.typeKey));
     };
     pt.navSubs.push(() => {
       const c = current();
@@ -844,6 +863,13 @@
     C.mode = 'job';
     C.readings = {};
     IL.panel.reset();
+    // saving the suggestions as provisional types planned the board again (§7.2 step 0): show that plan, the one the
+    // job plans again from at its end (status.padCalibration.planId), so the plan it makes then is loaded here too
+    const pid = r.preview && r.preview.source && r.preview.source.planId;
+    if (pid && req.planId && pid !== req.planId && IL.planMatches(req.planId)) {
+      await IL.loadPlan(pid);
+      if (IL.pcr && IL.pcr.loadPadTypes) IL.pcr.loadPadTypes();
+    }
     return r;
   }
 
@@ -950,7 +976,7 @@
     const skip = el('button', { type: 'button', class: 'btn btn--quiet', id: 'btn-pcal-skip' }, 'Skip weighing (the types stay provisional: boards still refuse these pads)');
     const cancel = el('button', { type: 'button', class: 'btn btn--danger-ghost', id: 'btn-pcal-cancel' }, 'Cancel the calibration');
     save.addEventListener('click', () => saveReadings(save, !!C.confirm));
-    skip.addEventListener('click', () => IL.act(skip, () => answer({ step: 'readings', skip: true }), { ok: 'Weighing skipped: the types stay provisional.' }));
+    skip.addEventListener('click', () => IL.act(skip, () => answer({ step: 'readings', skip: true }), { ok: 'Weighing skipped: the types stay provisional.', refusalIn: $('pcal-ask-ref') }));
     IL.press2(cancel, 'cancel', () => IL.api('POST', '/api/pad-calibrations/' + encodeURIComponent(job(S.status).id) + '/cancel', {}), { ok: 'Pad calibration cancelled: the coupons keep their dots until they are weighed or stale.' });
     const again = el('button', { type: 'button', class: 'btn', id: 'btn-pcal-again' }, 'Calibrate again…');
     const weighNow = el('button', { type: 'button', class: 'btn btn--primary', id: 'btn-pcal-weigh-now' }, 'Type the readings');
@@ -975,7 +1001,8 @@
           el('div', { class: 'ri__t', text: 'Weigh the coupons' }),
           el('p', { class: 'ri__d', id: 'pcal-ask-text' }),
           el('div', { id: 'pcal-coupons', 'data-enter-submits': 'btn-pcal-readings' }),
-          el('div', { class: 'ri__act' }, save, skip, cancel))),
+          el('div', { id: 'pcal-ask-ref' }),
+          el('div', { class: 'ri__act' }, skip))),
       el('div', { class: 'ri', id: 'pcal-result', role: 'status', hidden: true, 'data-refusals': '' }),
       el('div', { id: 'pcal-result-more', hidden: true },
         el('ul', { class: 'pcal__res', id: 'pcal-groups' }),
@@ -990,8 +1017,11 @@
       el('div', { id: 'pcal-ladder-box', hidden: true }, IL.sectionK('Test dots on the blank'),
         el('div', { class: 'pcal__tblwrap' }, el('table', { class: 'tbl pcal__ladder', id: 'pcal-ladder' },
           el('thead', {}, el('tr', {}, [['Turn'], ['Found', 'dots found of dots laid'], ['Threads', 'paste threads to the next dot, of the moves'], ['Spread', 'residual spread of the dot area'],
-            ['Angle', 'spread between screw angles, and its limit'], ['Size', 'mean and 95th percentile diameter (mm)'], ['']].map(([h, t]) => el('th', { scope: 'col', title: t || null, text: h })))), el('tbody'))))));
-    parts.foot.append(el('div', { class: 'btn-row pcal__foot', 'data-refusals': '' }, plan, weighNow, finish, again, man), el('p', { class: 'pcal-stop', id: 'pcal-stopline', text: 'STOP stops it at once (F9).' }));
+            ['Angle', 'dot area between the screw angles, and its limit'], ['Size', 'mean and 95th percentile diameter (mm)'], ['']].map(([h, t]) => el('th', { scope: 'col', title: t || null, text: h })))), el('tbody'))))));
+    // the pinned foot: Save the readings while they are asked for (always in view); Cancel while the job is active (an
+    // engine step is aborted; the coupons laid keep waiting for their readings); the next step after it ended
+    parts.foot.append(el('div', { class: 'btn-row pcal__foot', 'data-refusals': '' }, save, plan, weighNow, finish, again, man, cancel),
+      el('p', { class: 'pcal-stop', id: 'pcal-stopline', text: 'STOP stops it at once (F9).' }));
   }
   function again2(finish) {
     const j = job(S.status);
@@ -1023,7 +1053,7 @@
         if (e.status === 409 && e.data && (e.data.error === 'implausible' || e.data.error === 'late')) C.confirm = e.message;
         throw e;
       }
-    }, { ok: 'Readings saved: it decides and plans again.' });
+    }, { ok: 'Readings saved: it decides and plans again.', refusalIn: $('pcal-ask-ref') });
     IL.render();
   }
   function renderJob(s) {
@@ -1049,7 +1079,7 @@
         : x.st === 'cut' ? IL.glyph('block', 'sm') : IL.glyph('num', 'sm', 'Step ' + (i + 1), i + 1),
       el('div', {}, el('div', { class: 'ph__t', text: x.t }), x.d ? el('div', { class: 'ph__d', text: x.d }) : null), el('span', { class: 'ph__v', text: x.v }))));
     const live = $('pcal-live');
-    const ltext = active && j.state !== 'awaiting-reading' ? (isNum(j.estimatedSecondsLeft) ? '≈ ' + IL.fmtClock(j.estimatedSecondsLeft) + ' left. ' : '') + 'STOP stops it at once (F9).' : '';
+    const ltext = active && j.state !== 'awaiting-reading' && isNum(j.estimatedSecondsLeft) ? '≈ ' + IL.fmtClock(j.estimatedSecondsLeft) + ' left' : '';
     IL.setText(live, ltext);
     IL.show(live, !!ltext);
     // the readings prompt
@@ -1074,7 +1104,7 @@
       el('td', { class: 'r nowrap', text: x.dots ? (isNum(x.found) ? x.found + '/' : '') + x.dots : '—' }),
       el('td', { class: 'r nowrap', text: isNum(x.hops) ? (x.threads || 0) + '/' + x.hops : '—' }),
       el('td', { class: 'r', text: isNum(x.residCv) ? IL.fmt(100 * x.residCv, 0) + ' %' : '—' }),
-      el('td', { class: 'r nowrap', text: isNum(x.phase) ? IL.fmt(x.phase, 2) + (isNum(x.phaseLimit) ? ' / ' + IL.fmt(x.phaseLimit, 2) : '') : '—' }),
+      el('td', { class: 'r nowrap', text: isNum(x.phase) ? IL.fmt(100 * x.phase, 0) + ' %' + (isNum(x.phaseLimit) ? ' (≤ ' + IL.fmt(100 * x.phaseLimit, 0) + ' %)' : '') : '—' }),
       el('td', { class: 'r nowrap', text: isNum(x.dMeanMm) ? IL.fmt(x.dMeanMm, 2) + ' / ' + IL.fmt(x.d95Mm, 2) + ' mm' : '—' }),
       el('td', {}, x.pass === null || x.pass === undefined ? el('span', { class: 'muted', text: x.dots ? '…' : 'not yet' })
         : el('span', { class: 'pp-pass' }, IL.glyph(x.pass ? 'ok' : 'block', 'xs'), x.pass ? 'pass' : (x.failures && x.failures[0]) || 'fail'))))
@@ -1091,6 +1121,8 @@
     IL.setClass($('btn-pcal-again'), 'btn' + (good ? '' : ' btn--primary'));
     IL.show($('btn-pcal-manual'), ended && !!res && res.outcome !== 'characterized' && !j.manual);
     IL.show($('pcal-stopline'), active && j.state !== 'awaiting-reading');
+    IL.show($('btn-pcal-cancel'), active);
+    IL.show($('btn-pcal-readings'), !!asking);
     for (const id of ['btn-pcal-again', 'btn-pcal-finish']) IL.gate($(id), jobLockText(s));
   }
   function renderAsk(j, s) {
@@ -1148,13 +1180,18 @@
   };
   const checkText = (k) => k.text || (CHECK_WORD[k.key] ? CHECK_WORD[k.key](k) : [k.key, k.measured, k.limit].filter(Boolean).join(': '));
   const OUT_KIND = { characterized: 'ok', partly: 'need', provisional: 'need', measured: 'ok', stopped: 'block', cancelled: 'need', failed: 'block' };
+  /** "Characterized 14:05: SW … planned again." → the verdict and its time in bold, the rest as the sentence goes on. */
+  function headSplit(t) {
+    const m = /^(\S+(?: \S+)? \d\d:\d\d(?: during [^:]+)?:)(\s[\s\S]*)$/.exec(String(t || ''));
+    return m ? [el('b', { text: m[1] }), m[2]] : [String(t || '')];
+  }
   function renderResult(j, res, s) {
     const kind = OUT_KIND[res.outcome] || 'need';
     const box = $('pcal-result');
     IL.setClass(box, 'ri ri--' + kind);
     IL.setAttr(box, 'data-outcome', res.outcome);
     IL.keyed(box, JSON.stringify([res.sentence, res.control && res.control.drift, res.planError]), () => [IL.glyph(kind),
-      el('div', {}, el('div', { class: 'ri__t', id: 'pcal-result-t', text: res.sentence }),
+      el('div', {}, el('div', { class: 'ri__t', id: 'pcal-result-t' }, headSplit(res.sentence)),
         res.control && res.control.drift ? el('div', { class: 'ri__d', text: IL.cap(res.control.drift) + '.' }) : null,
         res.planError ? el('div', { class: 'ri__d', text: 'Not planned again: ' + res.planError }) : null,
         (j.warnings || []).slice(0, 2).map((w) => el('div', { class: 'ri__d', text: IL.cap(w) + '.' })))]);
@@ -1169,7 +1206,8 @@
           ['Per pad', isNum(g.perPad) ? g.perPad + ' ' + turnAdj(g.steps) + ' ' + (g.perPad === 1 ? 'dot' : 'dots') : '—'],
           ['Amount', (isNum(g.mgPerPad) ? IL.fmt(g.mgPerPad, 2) + ' mg' : '—') + (isNum(g.targetMg) ? ' (target ' + IL.fmt(g.targetMg, 2) + ' mg' + (isNum(g.errorPct) ? ', ' + (g.errorPct >= 0 ? '+' : '−') + Math.abs(Math.round(g.errorPct)) + ' %' : '') + ')' : '')],
           ['Dot size', isNum(g.dMeanMm) ? IL.fmt(g.dMeanMm, 2) + ' mm (d95 ' + IL.fmt(g.d95Mm, 2) + ' mm)' : '—'],
-          ['Spread', isNum(g.residCv) ? IL.fmt(100 * g.residCv, 0) + ' %' + (isNum(g.phase) ? ' · phase ' + IL.fmt(g.phase, 2) + ' / ' + IL.fmt(g.phaseLimit, 2) : '') : '—'],
+          ['Spread', isNum(g.residCv) ? IL.fmt(100 * g.residCv, 0) + ' % dot to dot' + (isNum(g.phase) ? ' · ' + IL.fmt(100 * g.phase, 0) + ' % between the screw angles'
+            + (isNum(g.phaseLimit) ? ' (at most ' + IL.fmt(100 * g.phaseLimit, 0) + ' %)' : '') : '') : '—'],
           ['Threads', isNum(g.hops) ? (g.threads || 0) + ' in ' + g.hops + ' moves' : '—'],
           ['Weighed', isNum(g.massReadings) ? IL.plural(g.massReadings, 'reading') + (g.massConfirmed ? ', confirmed' : ', not confirmed yet') : '—'],
         ].flatMap(([k, v]) => [el('dt', { text: k }), el('dd', { text: IL.nb(v) })])),
@@ -1215,23 +1253,68 @@
   });
 
   // ================================================================================== upload preview and save (H-P6)
-  /** State 3: a "Profile" column with each package's reason (span.pp-badge[data-reason]) or its pad type. */
+  /**
+   * State 3 (H-P6): BI's "Pad type" column becomes "Profile": per package its reason (span.pp-badge[data-reason]) and
+   * the suggestion, or "ready" and its pad types; the packages that need a profile first, then those the tip cannot
+   * dispense, then the ready ones and the fiducials.
+   */
   function importRows(table, pv) {
-    if (!table || !pv) return;
+    if (!table || !pv || !(pv.packages || []).some((p) => 'profileCheck' in p)) return;
     const pk = new Map((pv.packages || []).map((p) => [p.id, p]));
-    if (!(pv.packages || []).some((p) => 'profileCheck' in p)) return;
     const head = table.tHead && table.tHead.rows[0];
-    if (head && !head.querySelector('th.bi-pp')) head.appendChild(el('th', { class: 'bi-pp', scope: 'col', text: 'Profile' }));
-    for (const tr of table.tBodies[0].rows) {
-      const p = pk.get(tr.dataset.package);
-      if (!p || tr.querySelector('td.bi-pp')) continue;
-      const t = (p.padTypes || []).find((x) => x.typeKey);
-      const reason = p.fiducial ? 'fiducial' : p.profileReason || (t ? 'ready' : 'no-type');
-      const text = p.fiducial ? 'no paste' : p.profileShort || (t ? 'ready: ' + shortType((t.name && /\s/.test(t.name) ? '' : 'Chip ') + (t.name || t.typeKey)) : 'no pad type');
-      const kind = p.fiducial ? 'off' : reason === 'ready' ? 'ok' : TIPS.has(reason) ? 'block' : reason === 'outside' ? 'info' : 'need';
-      tr.appendChild(el('td', { class: 'bi-pp' }, el('span', { class: 'pp-badge', 'data-reason': reason }, IL.glyph(kind, 'xs'), el('span', { text }))));
+    const th = head && head.cells[head.cells.length - 1];
+    if (th && !th.classList.contains('bi-pp')) { th.classList.add('bi-pp'); th.textContent = 'Profile'; table.classList.add('bi-pkgs--pp'); }
+    const body = table.tBodies[0];
+    const rows = Array.from(body.rows).map((tr, i) => ({ tr, i, p: pk.get(tr.dataset.package) }));
+    for (const { tr, p } of rows) {
+      const td = tr.cells[tr.cells.length - 1];
+      if (!p || !td || td.classList.contains('bi-pp')) continue;
+      td.classList.add('bi-pp');
+      td.replaceChildren(...profileCell(p));
     }
+    const rank = (p) => (!p ? 5 : p.fiducial ? 4 : FIX.has(p.profileReason) ? 0 : p.profileReason === 'outside' ? 1 : TIPS.has(p.profileReason) ? 2 : 3);
+    rows.sort((a, b) => rank(a.p) - rank(b.p) || a.i - b.i);
+    body.append(...rows.map((x) => x.tr));
+    typeLabels(() => {
+      for (const n of table.querySelectorAll('[data-type-key]')) IL.setText(n, P.labels.get(n.dataset.typeKey) || n.textContent);
+    });
   }
+  /** A package's profile cell: its badge, then the suggestion (a fixable reason) or its pad types (ready). */
+  function profileCell(p) {
+    const badge = (reason, kind, text) => el('span', { class: 'pp-badge', 'data-reason': reason }, IL.glyph(kind, 'xs'), el('span', { text }));
+    if (p.fiducial) return [badge('fiducial', 'off', 'fiducial: no paste')];
+    const r = p.profileReason;
+    const types = (p.padTypes || []).filter((t) => t.typeKey);
+    if (!r) {
+      if (!types.length) return [badge('no-type', 'need', 'no pad type')];
+      return [badge('ready', 'ok', 'ready'), el('div', { class: 'pp-cell__s' }, types.map((t, i) => [i ? ', ' : '',
+        el('span', { 'data-type-key': t.typeKey, text: (P.labels && P.labels.get(t.typeKey)) || t.name || t.typeKey }),
+        t.status ? ' · ' + (STATUS_WORD[t.status] || t.status) : '']))];
+    }
+    const out = [badge(r, r === 'outside' ? 'info' : TIPS.has(r) ? 'block' : 'need', p.profileShort || r)];
+    const g = FIX.has(r) ? (p.profileCheck || []).find((x) => x.reason === r && x.suggestion && x.suggestion.kind && x.suggestion.kind !== 'none') : null;
+    if (g) out.push(el('div', { class: 'pp-cell__s', text: 'Suggested: ' + suggWords(g) + '.' }));
+    return out;
+  }
+  /** The suggestion in words for the upload preview: "use Chip 0603", "a new pad type, 2 half turns per pad". */
+  function suggWords(g) {
+    const s = g.suggestion, d = s.dots || {};
+    if (s.kind === 'use') return 'use ' + typeLabel(s);
+    const per = isNum(d.perPad) ? turnWords(d.perPad, d.steps) + ' per pad' : '';
+    return (s.kind === 'new' ? 'a new pad type' : 'calibrate ' + typeLabel(s)) + (per ? ', ' + per : '');
+  }
+  /** The pad types' names with their family ("Chip 0603"), read once; then done() (the upload preview's ready rows). */
+  function typeLabels(done) {
+    if (P.labels) { done(); return; }
+    if (P.labelsLoading) { P.labelsLoading.then(done); return; }
+    P.labelsLoading = IL.api('GET', '/api/pad-types').then((r) => {
+      const m = new Map();
+      for (const f of (r && r.families) || []) for (const t of f.types || []) m.set(t.typeKey, typeLabel({ family: t.family || f.family, name: t.name, typeKey: t.typeKey }));
+      P.labels = m;
+    }, () => { P.labels = new Map(); }).then(() => { P.labelsLoading = null; });
+    P.labelsLoading.then(done);
+  }
+  IL.on('padtypes', () => { P.labels = null; });
   /** State 6: the packages that need a profile, "Use Chip 0603" (the mapping) and "Needs a profile…"; null when none. */
   function importSaved(pv, o) {
     const pkgs = (pv.packages || []).filter((p) => (p.profileCheck || []).some((g) => !TIPS.has(g.reason) && g.reason !== 'outside'));
