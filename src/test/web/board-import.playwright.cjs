@@ -4,7 +4,7 @@
  * layout at 1280 and 1024 px and the dark theme. Run by run-webui-sim-test.sh right after webui-sim.playwright.cjs in
  * the same session (its own preconditions: a pushed Recovery panel is closed, then Run › Board). Nothing here moves
  * the machine: it plans, previews and reads; the uploads go to the session's copy of the configuration (unique names,
- * so a board imported before never answers "exists").
+ * so a board imported before never answers "exists"), and it stops at once on a server that is not a simulator.
  *
  * Checks: (1) 00-ftp.board.xml planned at 30°: its drawing (the fallback from the board file) drawn, every fiducial of
  * the drawing within 0.5 px of the plan's, every pad on drawn copper; (2) a pad click opens the inspector (rule
@@ -166,6 +166,10 @@ const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y
     const resp = await page.goto(BASE + '#run');
     check('UI served', resp.ok(), resp.status());
     await page.waitForFunction(() => window.IL && IL.S && IL.S.status && IL.run && IL.run.bv, null, { timeout: 60000 });
+    // it saves boards into the configuration and gives ftp.board.xml a drawing: a simulator's copy only
+    const sim = await page.evaluate(() => !!(IL.S.status.server && IL.S.status.server.simulated === true));
+    check('the server is an OpenPnP simulator (status.server.simulated)', sim);
+    if (!sim) throw new Error('not a simulator: nothing was uploaded');
     await page.evaluate(() => IL.setTheme('light'));
     check('the board flow is loaded (IL.boardFlow, IL.boardImport) and Run calls it (#btn-board-upload in the Board step)',
       await page.evaluate(() => !!(IL.boardFlow && IL.boardImport)) && (await toBoardStep(page), await page.isVisible('#btn-board-upload')));
