@@ -78,13 +78,17 @@ BALANCE_MODES = ("display", "connected")
 BENCH_BLANK_BGR = [206, 25, 0]
 # ripple-0.45 puts the engine's 298 deg start (count based) at the ripple's worst phase for half turns.
 RIPPLE_WORST_OFFSET_STEPS = 405
+# cv-0.20 is §11.7's "cv 0.16" row: the tip bead (transferRatio 0.75) averages each dot's mass noise with the dots
+# before it, so 0.16 gives an area CV of 0.123, which passes the repeat check on about one ladder in five; 0.20
+# gives 0.154 (§11.7 meant 0.147 without the bead).
+REPEAT_FAIL_CV = 0.20
 # The negative controls of §11.7: name -> (what the scene changes, None for a test action; the expected outcome).
 VARIANTS = {
     "report-count-off": ("paste.reportCount false", "the quarter-turn block refuses (I11 count text)"),
     "ripple-0.45": ("paste.ripple 0.45, offsetSteps %d" % RIPPLE_WORST_OFFSET_STEPS,
                     "the phase checks fail; J and Q stay provisional"),
     "thread-zero-0.65": ("paste.threadZeroMg 0.65", "quarter-turn threads > k95: Q stays provisional, text names threads"),
-    "cv-0.16": ("paste.cv 0.16", "the repeat check fails"),
+    "cv-0.20": ("paste.cv %.2f" % REPEAT_FAIL_CV, "the repeat check fails"),
     "landing-bias-0.2": ("paste.landingBiasMm [0.2, 0]", "the landing check fails (points to the needle offset)"),
     "coupon1-off-1.5": ("coupon1 rect moved +1.5 mm in X", "step 2 refuses (Coupon 1 is not at its place: its edge is "
                         "1.5 mm inside the weigh grid's margin)"),
@@ -346,8 +350,8 @@ def variant(sc, name, config_dir=None):
         p["offsetSteps"] = RIPPLE_WORST_OFFSET_STEPS
     elif name == "thread-zero-0.65":
         p["threadZeroMg"] = 0.65
-    elif name == "cv-0.16":
-        p["cv"] = 0.16
+    elif name == "cv-0.20":
+        p["cv"] = REPEAT_FAIL_CV
     elif name == "landing-bias-0.2":
         p["landingBiasMm"] = [0.2, 0.0]
     elif name == "coupon1-off-1.5":

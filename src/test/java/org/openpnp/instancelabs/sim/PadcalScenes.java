@@ -15,13 +15,20 @@ public final class PadcalScenes {
      * Drawn, the offset could put the start where the two half-turn phases are equal.
      */
     public static final int RIPPLE_WORST_OFFSET_STEPS = 405;
+    /**
+     * cv-0.20 is §11.7's "cv 0.16" row. 0.16 leaves the tip bead out: transferRatio 0.75 averages each
+     * dot's mass noise with the dots before it (× 0.775), so 0.16 gives a residual area CV of 0.123,
+     * and that passes the repeat check on about one ladder in five. 0.20 gives 0.154, close to the
+     * 0.147 that §11.7 meant (√((0.77·0.16)² + 0.08²) without the bead).
+     */
+    public static final double REPEAT_FAIL_CV = 0.20;
 
     /** §11.7: the scene variants and the two that are a test action, with the outcome the design expects. */
     public enum Variant {
         REPORT_COUNT_OFF("report-count-off", true, "the quarter-turn block refuses (I11 count text)"),
         RIPPLE_045("ripple-0.45", true, "the phase checks fail; J and Q stay provisional"),
         THREAD_ZERO_065("thread-zero-0.65", true, "quarter-turn threads > k95: Q stays provisional, text names threads"),
-        CV_016("cv-0.16", true, "the repeat check fails"),
+        CV_020("cv-0.20", true, "the repeat check fails"),
         LANDING_BIAS_02("landing-bias-0.2", true, "the landing check fails (points to the needle offset)"),
         COUPON1_OFF_15("coupon1-off-1.5", true, "step 2 refuses (Coupon 1 is not at its place: its edge is 1.5 mm "
                 + "inside the weigh grid's margin)"),
@@ -94,8 +101,8 @@ public final class PadcalScenes {
             case THREAD_ZERO_065:
                 s.paste.threadZeroMg = 0.65;
                 break;
-            case CV_016:
-                s.paste.cv = 0.16;
+            case CV_020:
+                s.paste.cv = REPEAT_FAIL_CV;
                 break;
             case LANDING_BIAS_02:
                 s.paste.landingBiasMm = new double[] {0.2, 0};

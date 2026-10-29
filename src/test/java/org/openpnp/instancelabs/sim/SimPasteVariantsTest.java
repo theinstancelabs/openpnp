@@ -146,14 +146,37 @@ public class SimPasteVariantsTest {
     }
 
     @Test
-    public void cv016FailsTheRepeatCheck() {
-        // Repeat check: cv·(1 + 1.645/√(2N)) ≤ 0.13; at N = 28 half turns the factor is 1.22.
-        SimScene s = scene(PadcalScenes.Variant.CV_016);
+    public void cv020FailsTheRepeatCheckOnAlmostEveryLadder() {
+        // §7.4's repeat check at the ladder's own size: residual area CV × (1 + 1.645/√(2n)) ≤ 0.13, n the dots
+        // after the first 2 of 28 half turns or 48 quarter turns. §11.7's cv 0.16 gives an area CV of 0.123 with
+        // the tip bead and passes on about one ladder in five; cv 0.20 (PadcalScenes.REPEAT_FAIL_CV) gives 0.154.
+        SimScene s = scene(PadcalScenes.Variant.CV_020);
         double bad = residualCv(ladder(s, paste(s), 800, 200, 2.5), 800);
         s = scene(null);
         double good = residualCv(ladder(s, paste(s), 800, 200, 2.5), 800);
-        assertTrue(bad * 1.22 > 0.13 && bad < 0.15, "cv 0.16: area CV " + bad);
-        assertTrue(good * 1.22 < 0.10, "cv 0.08: area CV " + good);
+        assertTrue(bad > 0.14 && bad < 0.17, "cv 0.20: area CV " + bad);
+        assertTrue(good < 0.075, "cv 0.08: area CV " + good);
+        int badPassed = 0, goodFailed = 0;
+        for (long seed = 0; seed < 40; seed++) {
+            for (long steps : new long[] {800, 400}) {
+                int n = steps == 800 ? 28 : 48;
+                double pitch = steps == 800 ? 2.5 : 2.0;
+                s = scene(PadcalScenes.Variant.CV_020);
+                s.paste.seed = seed;
+                badPassed += repeatPasses(ladder(s, paste(s), steps, n, pitch), steps) ? 1 : 0;
+                s = scene(null);
+                s.paste.seed = seed;
+                goodFailed += repeatPasses(ladder(s, paste(s), steps, n, pitch), steps) ? 0 : 1;
+            }
+        }
+        assertTrue(badPassed <= 2, "cv 0.20 passed the repeat check on " + badPassed + " of 80 ladders");
+        assertEquals(0, goodFailed, "the default scene failed it on " + goodFailed + " of 80 ladders");
+    }
+
+    /** §7.4's repeat check on one ladder: the residual area CV's upper bound at most 0.13. */
+    static boolean repeatPasses(List<SimPaste.Deposit> dots, long steps) {
+        int n = dots.size() - 2;
+        return residualCv(dots, steps) * (1 + 1.645 / Math.sqrt(2 * n)) <= 0.13;
     }
 
     @Test
