@@ -847,6 +847,8 @@ async function runFirstDots(page, n) {
       await waitText(page, 'register-note', /FID1, FID2 and FID3/, 15000).catch(() => {});
       const note = await textOf(page, 'register-note');
       check('#register-note: homes first, the fiducials, a time', /^Homes first/.test(note) && /FID1, FID2 and FID3/.test(note) && /≈\s\d/.test(note), note);
+      // the engine's sinceMs is the later of the stop and the Start: the note says since when, never "stopped at" Start's time
+      check('#register-note: "Homes first (not homed since hh:mm)"', /^Homes first \(not homed since \d\d:\d\d\)/.test(note), note);
       const byHand0 = await page.evaluate(() => { const d = document.getElementById('probe-by-hand'); return { body: !!d.closest('#panel-body'), foot: !!d.closest('.panel__foot, #panel-foot'), open: d.open }; });
       check('"Do it by hand" is in the panel body, closed', byHand0.body && !byHand0.foot && !byHand0.open, byHand0);
       await page.screenshot({ path: path.join(OUT, 'register-idle.png') });
@@ -854,6 +856,15 @@ async function runFirstDots(page, n) {
       await page.waitForSelector('#board-z', { timeout: 10000 });
       const zTitle = await page.getAttribute('#board-z', 'title');
       check('Board top Z: approximate, Register board measures it (±1 mm)', /Register board/.test(zTitle) && /±1 mm/.test(zTitle), zTitle);
+      // its label wraps: the Z and Rotation inputs of the row stay in line (at 1280 px too)
+      const zRot = [];
+      for (const w of [1280, 1440]) {
+        await page.setViewportSize({ width: w, height: 900 });
+        await page.waitForTimeout(250);
+        zRot.push(await page.evaluate(() => ['board-z', 'board-rot'].map((id) => Math.round(document.getElementById(id).getBoundingClientRect().top))));
+      }
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      check('Board step: the Board top Z and Rotation inputs line up at 1280 and 1440 px', zRot.every(([a, b]) => Math.abs(a - b) <= 1), zRot);
       await page.evaluate(() => IL.go('#run/probe'));
       await page.waitForSelector('#btn-register', { timeout: 10000 });
 
@@ -889,6 +900,11 @@ async function runFirstDots(page, n) {
       const err = Math.hypot(corr[0] - (want[0] - nominal[0]), corr[1] - (want[1] - nominal[1]));
       check('FID1 correction = the scene\'s true seat − the plan\'s (within 0.05 mm)', err <= 0.05, { corr, want: [want[0] - nominal[0], want[1] - nominal[1]], err });
       check('#reg-correction: "fiducial check hh:mm"', /^fiducial check \d\d:\d\d/.test(await textOf(page, 'reg-correction')), await textOf(page, 'reg-correction'));
+      {
+        // one time for one registration: the card, the page head and "Dots use" (the task ends a little after the fit)
+        const tCard = (/^Registered (\d\d:\d\d)/.exec(res1) || [])[1], tCorr = (/^fiducial check (\d\d:\d\d)/.exec(await textOf(page, 'reg-correction')) || [])[1];
+        check('#reg-result names the registration\'s time, as #reg-correction does', !!tCard && tCard === tCorr, { tCard, tCorr });
+      }
       await page.screenshot({ path: path.join(OUT, 'register-result.png') });
       // 4. the G-code: home first, the bench probe lines, never below the floor, X/Y only at the travel Z
       let l = lines(gcode(g1));
@@ -1139,6 +1155,24 @@ async function runFirstDots(page, n) {
       await page.waitForFunction((id) => IL.S.plan && IL.S.plan.planId !== id, plan5, { timeout: 30000 }).catch(() => {});
       await page.evaluate(() => IL.go('#run/probe'));
       await waitText(page, 'reg-correction', /no fiducial correction/, 10000).catch(() => {});
+      {
+        // Z after a home with no point left to check it on (a plan's I4): a blocker of its own whose fix is the needle Z
+        // frame, never Register board (it measures after the home, so the run would stay refused)
+        const zr = await page.evaluate(() => {
+          const msg = 'Z must be checked after the home at 07:38, but no point measured before it is left to touch (no blank or board '
+            + 'surface, no needle-frame X/Y): record the needle frame again';
+          const p = JSON.parse(JSON.stringify(IL.S.plan));
+          p.interlocks = Object.assign({}, p.interlocks, { ok: false, violations: (p.interlocks.violations || []).concat([{ code: 'I4', message: msg }]) });
+          const r = IL.readiness(IL.S.status, p, IL.readyCtx());
+          const x = r.extras.find((e) => e.key === 'I4-z');
+          const sf = r.items.find((e) => e.key === 'surface');
+          return { extra: x ? { state: x.state, fixes: x.fixes } : null, surface: sf.state, surfaceText: sf.detail, canRun: r.canRun,
+            fixes: IL.fixesForCode('I4', IL.S.status, msg) };
+        });
+        check('I4 "no point measured before the home": a Z check blocker with "Open Needle Z frame", not on the surface item',
+          zr.extra && zr.extra.state === 'block' && zr.extra.fixes.length === 1 && zr.extra.fixes[0].href === '#setup/needle'
+          && !/no point measured/.test(zr.surfaceText) && !zr.canRun && zr.fixes[0].href === '#setup/needle', zr);
+      }
       check('Plan without fiducial correction: no registration, #reg-correction says so',
         await page.evaluate(() => IL.S.plan.registration === null) && /^no fiducial correction/.test(await textOf(page, 'reg-correction')), await textOf(page, 'reg-correction'));
     }
