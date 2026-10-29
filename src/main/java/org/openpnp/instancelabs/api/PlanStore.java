@@ -28,6 +28,11 @@ final class PlanStore {
         /** Cross after the purge to the last dot (the bench's DPH window), s. */
         Double estimatedWorkSeconds;
         String estimateError;
+        /** Per dot (plan order): arrive and end, s from the program start (the path preview's clock); null if unknown. */
+        double[] dotArriveS;
+        double[] dotEndS;
+        /** Dot diameter from the current calibration's ladder at the plan's turn, mm; null if not measured there. */
+        Double dotDiameterMm;
         /** The last camera-only clean-pad check of this plan (POST /api/plan/{id}/clean-check). */
         volatile java.util.concurrent.Future<org.openpnp.instancelabs.dispense.PadCleanReport> cleanCheckFuture;
 
@@ -165,6 +170,7 @@ final class PlanStore {
         s.boardRegistration = p.boardRegistration;
         s.boardZMm = p.boardZMm;
         s.padTypesFingerprint = p.padTypesFingerprint;
+        p.copyBoardFieldsTo(s);
         double path = 0;
         for (int i = 1; i < dots.size(); i++) {
             path += Math.hypot(dots.get(i).xMm - dots.get(i - 1).xMm, dots.get(i).yMm - dots.get(i - 1).yMm);

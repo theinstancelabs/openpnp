@@ -307,6 +307,7 @@ final class Views {
         m.put("registrationTargets", e.registrationTargets);
         m.put("registrationRun", registration(e.registration()));
         m.put("registrationRunning", e.registrationRunning());
+        BoardPlanView.addTo(m, e);
         return m;
     }
 
