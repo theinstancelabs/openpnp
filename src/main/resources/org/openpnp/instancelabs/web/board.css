@@ -17,6 +17,7 @@
   --pv-a-edge: #0e1416;           /* the only theme-dependent board token */
   --pv-a-fab: rgba(255, 255, 255, .3);
   --pv-a-ref: rgba(255, 255, 255, .85);
+  --pv-a-fabref: rgba(255, 255, 255, .45);   /* a reference the board does not print (no KiCad silkscreen label) */
   --pv-a-paste: #8c939a;          /* paste apertures in the upload preview */
 
   /* overlay marks on the board (same in both themes; >= 3:1 on --pv-a-bare, casing >= 6.5:1 elsewhere) */
@@ -30,8 +31,12 @@
   --pv-o-case-l: #ffffff;
   --pv-o-ghost: #ffffff;
   --pv-o-path: #ffffff;
+  /* the path on the Quiet mask (one known tone, §5.3), uncased: light theme 4.5:1 / 3.4:1 on that mask, 6.7:1 / 5.0:1 on the
+     finish; dark theme 13.6:1 / 6.4:1 on its mask, the dark casing kept for the finish */
+  --pv-o-path-q: #3d4548;         /* planned path */
+  --pv-o-trail-q: #1a50b8;        /* done and previewed path */
 }
-[data-theme="dark"] { --pv-a-edge: #8ca2ab; }
+[data-theme="dark"] { --pv-a-edge: #8ca2ab; --pv-o-path-q: #ffffff; --pv-o-trail-q: #8fb3f7; }
 
 /* ================================================================ hosts and the two stacked SVGs */
 .pv-host { position: relative; }
@@ -45,8 +50,8 @@ svg.pv-art[data-mask="red"] { --pv-a-mask: #8a1c1c; }
 svg.pv-art[data-mask="blue"] { --pv-a-mask: #1c3f8a; }
 svg.pv-art[data-mask="purple"] { --pv-a-mask: #4a2a6e; }
 svg.pv-art[data-mask="black"] { --pv-a-mask: #15181a; }
-svg.pv-art[data-mask="white"] { --pv-a-mask: #e9ecec; --pv-a-fab: rgba(0, 0, 0, .35); --pv-a-ref: rgba(0, 0, 0, .85); }
-svg.pv-art[data-mask="yellow"] { --pv-a-mask: #c9a81c; --pv-a-fab: rgba(0, 0, 0, .35); --pv-a-ref: rgba(0, 0, 0, .85); }
+svg.pv-art[data-mask="white"] { --pv-a-mask: #e9ecec; --pv-a-fab: rgba(0, 0, 0, .35); --pv-a-ref: rgba(0, 0, 0, .85); --pv-a-fabref: rgba(0, 0, 0, .5); }
+svg.pv-art[data-mask="yellow"] { --pv-a-mask: #c9a81c; --pv-a-fab: rgba(0, 0, 0, .35); --pv-a-ref: rgba(0, 0, 0, .85); --pv-a-fabref: rgba(0, 0, 0, .5); }
 svg.pv-art[data-silk="black"] { --pv-a-silk: #15181a; }
 svg.pv-art[data-silk="yellow"] { --pv-a-silk: #e8d44d; }
 
@@ -65,6 +70,9 @@ svg.pv-art[data-silk="yellow"] { --pv-a-silk: #e8d44d; }
 .pv-art .pv-a-fab path { fill: none; stroke: var(--pv-a-fab); stroke-linecap: round; stroke-linejoin: round; }
 .pv-art .pv-a-edge { fill: none; stroke: var(--pv-a-edge); stroke-width: 1px; vector-effect: non-scaling-stroke; fill-rule: evenodd; }
 .pv-art .pv-a-refs text { fill: var(--pv-a-ref); font-family: var(--font-ui); font-weight: 650; text-anchor: middle; dominant-baseline: central; }
+/* a reference KiCad does not put on the silkscreen (boardart: at the body centre, like KiCad's fab text): fainter than the
+   silkscreen, so a board without printed references (nano) does not look printed, and the overlay over the part wins */
+.pv-art .pv-a-refs text.pv-a-ref--fab { fill: var(--pv-a-fabref); font-weight: 600; }
 .pv-art .pv-a-origin { display: none; }
 .pv-art .pv-a-origin path { fill: none; stroke: var(--pv-o-case-l); stroke-width: 1.5px; vector-effect: non-scaling-stroke; stroke-linecap: round; }
 .pv-art .pv-a-origin .pv-a-origin__case { stroke: var(--pv-o-case-d); stroke-width: 4px; }
@@ -84,6 +92,9 @@ svg.pv-art.pv-art--quiet { --pv-a-mask: #aab2b1; --pv-a-mask-op: 1; }
 [data-theme="dark"] svg.pv-art.pv-art--quiet { --pv-a-mask: #243034; }
 .pv-art--quiet .pv-a-cu, .pv-art--quiet .pv-a-tracks, .pv-art--quiet .pv-a-silk, .pv-art--quiet .pv-a-silklines,
 .pv-art--quiet .pv-a-text, .pv-art--quiet .pv-a-fab, .pv-art.pv-art--quiet .pv-a-refs text { display: none; }
+/* light theme: the via drills (mobo: hundreds) a field of black dots over the light mask; kept (probe spots avoid them),
+   at less than full black. The dark theme's Quiet mask is dark: drills there already read quietly */
+:root:not([data-theme="dark"]) svg.pv-art.pv-art--quiet .pv-a-hole--via { fill-opacity: .4; }
 
 /* ================================================================ the overlay on the board (.pv--art) */
 .pv--art .pv-l-board { display: none; }
@@ -99,6 +110,8 @@ svg.pv-art.pv-art--quiet { --pv-a-mask: #aab2b1; --pv-a-mask-op: 1; }
 .pv--art rect.pad.sel { stroke: var(--pv-o-case-d); stroke-width: 2.5px; }
 .pv rect.pad.sel { stroke-width: 2.5px; }
 .pv--art circle.dot { fill: rgba(31, 95, 209, .15); stroke: var(--pv-o-dot); }
+/* a dot under 3 px radius on screen (boardview.resizeDots): a 1 px ring, so an undone dot keeps its light centre */
+.pv.pv--dots-thin circle.dot { stroke-width: 1px; }
 .pv--art circle.dot.done { fill: var(--pv-o-dot); stroke: var(--pv-o-dot); }
 
 /* cased marks (rule 2): a light then a dark stroke under the coloured one; only on the board */
@@ -121,9 +134,19 @@ svg.pv-art.pv-art--quiet { --pv-a-mask: #aab2b1; --pv-a-mask-op: 1; }
 .pv--art .pv-n1 circle:not(.pv-case), .pv--art .pv-n1 path:not(.pv-case) { stroke: var(--pv-o-probe); }
 .pv--art .pv-callout path:not(.pv-case) { stroke-width: 1.5px; }
 .pv--no-path .pv-cased--path, .pv--no-dots .pv-cased--first, .pv--no-dirty .pv-cased--dirty { visibility: hidden; }
+/* the first-dot marker is part of the order: it goes with the path (the inspector's path numbers already say "1") */
+.pv--art.pv--no-path .pv-cased--first { visibility: hidden; }
 /* the path's core is white, i.e. already the light tone: only the dark casing goes under it (a light one as well drew a
    five-stripe "rail" that outweighed the dots over the whole board) */
 .pv.pv--art .pv-cased--path:not(.pv-cased--done):not(.pv-cased--pre) > .pv-case--l { display: none; }
+/* Quiet: the mask is the stage's tone, one known background, so the path lines need no light casing: one line in a tone
+   made for that mask, thinner than a dot (cased, the planned path read as a three-stripe rail across the board, and the
+   done or previewed path was wider than the dots it passed and hid them). The dark theme keeps the dark casing, for
+   where a line crosses a pad's finish */
+.pv.pv--art.pv--quiet .pv-cased--path > .pv-case--l { display: none; }
+:root:not([data-theme="dark"]) .pv.pv--art.pv--quiet .pv-cased--path > .pv-case--d { display: none; }
+.pv--art.pv--quiet .pv-path { stroke: var(--pv-o-path-q); }
+.pv--art.pv--quiet .pv-path--done, .pv--art.pv--quiet .pv-path--pre, .pv--art.pv--quiet .pv-path--leg { stroke: var(--pv-o-trail-q); }
 
 /* parts: hit rects (click opens the inspector), selection outlines */
 .pv .pv-l-parts { display: none; }

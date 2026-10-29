@@ -19,7 +19,8 @@
  * on a 48-pin QFP, one pad type said once), the Records map, the preview row's layout at 1440, 1280 and 1024 px with the
  * readout never cut, no reference label on a pad-less footprint, the mask as painted in Quiet, the scale bar's size, keyboard focus
  * in the inspector table and after Clear, no rebuild when a render repeats the selection, polls that never touch the
- * drawing (a re-plan only moves it), the dirty layer's casing, no
+ * drawing (a re-plan only moves it), the dirty layer's casing, the path lines on the Quiet mask (one uncased line), small dots
+ * that keep a light centre, unprinted references as fab text, a QFP's selection outline round its leads, no
  * JavaScript errors, no native dialogs. Screenshots (1440 and
  * 1280 px, light and dark) of the Run hero (Full and Quiet), the path preview mid-play, the pad inspector and the
  * Records map go to SHOTS_DIR.
@@ -56,7 +57,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function largestArt() {
   const files = fs.readdirSync(FIX).filter((f) => f.endsWith('.art.json')).map((f) => path.join(FIX, f));
   const artDir = path.join(FIX, 'art');
-  if (fs.existsSync(artDir)) for (const f of fs.readdirSync(artDir)) if (f.endsWith('.json')) files.push(path.join(artDir, f));
+  if (fs.existsSync(artDir)) for (const f of fs.readdirSync(artDir)) if (/^[0-9a-f]{16}\.json$/.test(f)) files.push(path.join(artDir, f));
   return files.map((f) => {
     const b = fs.readFileSync(f);
     return { id: crypto.createHash('sha256').update(b).digest('hex').slice(0, 16), bytes: b.length, file: path.basename(f) };
@@ -211,6 +212,38 @@ async function glueRecords(page) {
       && pm.q.cu === 'none' && pm.q.exposed !== 'none' && pm.q.bare === 'rgb(221, 213, 193)' && pm.q.holes !== 'none' && pm.q.edge !== 'none', pm.q);
     check('Off: the drawing hidden, no .pv--art, today\'s substrate back', pm.o.hidden && pm.o.display === 'none' && !pm.o.art && pm.o.board !== 'none', pm.o);
     check('Full: everything back', pm.f.silk !== 'none' && pm.f.art && pm.f.shown, pm.f);
+
+    // ---- the whole board in Quiet: one thin path line, undone dots still rings (not solid discs like done ones) -----------
+    const wq = await page.evaluate(() => {
+      const bv = IL.run.bv;
+      bv.picture('quiet');
+      bv.setView('board');
+      const cs = (n) => getComputedStyle(n);
+      const out = {};
+      for (const theme of ['light', 'dark']) {
+        IL.setTheme(theme);
+        const g = bv.svg.querySelector('.pv-l-path > .pv-cased--path');
+        const core = g.querySelector('.pv-path'), l = g.querySelector('.pv-case--l'), d = g.querySelector('.pv-case--d');
+        const pre = bv.svg.querySelector('.pv-path--pre');
+        const dot = bv.svg.querySelector('circle.dot');
+        const rPx = Number(dot.getAttribute('r')) / bv.k, ring = parseFloat(cs(dot).strokeWidth);
+        out[theme] = { overlayQuiet: bv.svg.classList.contains('pv--quiet'), light: cs(l).display, dark: cs(d).display, core: cs(core).stroke,
+          pre: cs(pre).stroke, preCase: cs(pre.closest('.pv-cased').querySelector('.pv-case--l')).display, thin: bv.svg.classList.contains('pv--dots-thin'),
+          ring, hole: +(2 * (rPx - ring / 2)).toFixed(2), outer: +(2 * (rPx + ring / 2)).toFixed(2) };
+      }
+      IL.setTheme('light');
+      bv.setView('dots');
+      bv.picture('full');
+      return out;
+    });
+    check('Quiet, light theme: the path one #3d4548 line without a casing, the done/preview trail #1a50b8 without the light casing',
+      wq.light.overlayQuiet && wq.light.light === 'none' && wq.light.dark === 'none' && wq.light.core === 'rgb(61, 69, 72)'
+      && wq.light.pre === 'rgb(26, 80, 184)' && wq.light.preCase === 'none', wq.light);
+    check('Quiet, dark theme: the path a white core on the dark casing, the trail #8fb3f7 without the light casing',
+      wq.dark.light === 'none' && wq.dark.dark !== 'none' && wq.dark.core === 'rgb(255, 255, 255)' && wq.dark.pre === 'rgb(143, 179, 247)'
+      && wq.dark.preCase === 'none', wq.dark);
+    check('whole board: small dots get a 1 px ring and keep a light centre >= 1.5 px across (an undone dot is not a solid disc)',
+      ['light', 'dark'].every((t) => wq[t].thin && wq[t].ring === 1 && wq[t].hole >= 1.5), wq);
 
     // ---- (6) reference labels ---------------------------------------------------------------------------------------
     const lb = await page.evaluate(() => {
@@ -472,10 +505,12 @@ async function glueRecords(page) {
               const g = core && core.closest('.pv-cased');
               const l = g && g.querySelector('.pv-case--l'), d = g && g.querySelector('.pv-case--d');
               if (!l || !d) { fails.push([sel, 'no casing']); continue; }
-              // a white-core mark (the path) draws no light casing: its core is the light tone
-              const cl = parse(cs(cs(l).display === 'none' ? core : l).stroke), cd = parse(cs(d).stroke);
+              // only the tones drawn count: a white-core mark (the path) draws no light casing, its core is the light
+              // tone; on the light theme's Quiet mask the path draws no casing at all, its core alone must stand out
+              const tones = [l, d].filter((n) => cs(n).display !== 'none').map((n) => parse(cs(n).stroke));
+              if (cs(l).display === 'none') tones.push(parse(cs(core).stroke));
               for (const bg of [bare, comp]) {
-                const r = Math.max(ratio(cl, bg), ratio(cd, bg));
+                const r = Math.max(...tones.map((t) => ratio(t, bg)));
                 worstCase = Math.min(worstCase, r);
                 if (r < 3) fails.push([theme, mask, pic, sel, r.toFixed(2)]);
               }
@@ -593,6 +628,18 @@ async function glueRecords(page) {
         const d = dots[Number(n.textContent) - 1], x = Number(n.getAttribute('x')), y = -Number(n.getAttribute('y'));
         return Math.hypot(x - d.x, y - d.y) <= 1.5 && Math.hypot(x - 100, y - 100) > Math.hypot(d.x - 100, d.y - 100);
       });
+      // the selection outline of a drawn QFP goes round its leads (its body box, KiCad's fab outline, lies inside them)
+      v.setPlan({ planId: 'pw-fine-art', pads, dots, dot: { diameterMm: 0.6 }, board: { toMachine: [1, 0, 0, 1, 0, 0], widthMm: 200, heightMm: 200 } }, {});
+      v.setArt({ id: 'pw-qfp', size: [200, 200], outline: { d: 'M0 0H200V200H0Z' }, layers: {}, parts: [
+        { ref: 'U1', kind: 'placement', pkg: 'LQFP-48', x: 100, y: 100, a: 0, box: [-3.5, -3.5, 3.5, 3.5], pads: 48, label: null }] });
+      v.fit({ x0: 93, y0: 93, x1: 107, y1: 107 });
+      v.select({ padIds: [], refs: ['U1'] });
+      const so = v.svg.querySelector('.pv-l-sel .pv-sel').getBoundingClientRect();
+      const inside = Array.from(v.svg.querySelectorAll('rect.pad')).every((n) => {
+        const b = n.getBoundingClientRect();
+        return b.left >= so.left - 0.5 && b.right <= so.right + 0.5 && b.top >= so.top - 0.5 && b.bottom <= so.bottom + 0.5;
+      });
+      const sel = { inside, w: +so.width.toFixed(1) };
       v.destroy();
       host.remove();
       // a footprint without pads and without a KiCad label (a logo) gets no reference; one with pads gets one at its body
@@ -600,11 +647,18 @@ async function glueRecords(page) {
         { ref: 'Silkscreen_Front', kind: 'art', pads: 0, x: 5, y: 5, a: 0, box: [-4, -4, 4, 4], label: null },
         { ref: 'R9', kind: 'placement', pads: 2, x: 2, y: 2, a: 0, box: [-1, -0.5, 1, 0.5], label: null }] }, {});
       const refs = Array.from(b.root.querySelectorAll('.pv-a-refs text')).map((n) => n.textContent);
-      return { n: boxes.length, overlap, near, first, refs };
+      const fab = Array.from(b.root.querySelectorAll('.pv-a-refs text.pv-a-ref--fab')).map((n) => n.textContent);
+      const printed = IL.boardart.build({ size: [10, 10], outline: { d: 'M0 0H10V10H0Z' }, layers: {}, parts: [
+        { ref: 'R8', kind: 'placement', pads: 2, x: 2, y: 2, a: 0, box: [-1, -0.5, 1, 0.5], label: { x: 2, y: 3.2, a: 0, h: 1 } }] }, {});
+      const silk = printed.root.querySelectorAll('.pv-a-refs text.pv-a-ref--fab').length;
+      return { n: boxes.length, overlap, near, first, refs, fab, silk, sel };
     });
     check('fine pitch (48-pin QFP): path numbers outside the pad ring, next to their dots, never overlapping; a number with no free place is left out, the ends kept',
       !fp.overlap && fp.near && fp.n >= 16 && fp.n < 48 && fp.first.includes('1') && fp.first.includes('48'), fp);
     check('a pad-less footprint without a KiCad label gets no reference label; a part with pads does', fp.refs.join() === 'R9', fp.refs);
+    check('a reference the board does not print (no KiCad label) is drawn as fab text (.pv-a-ref--fab); a silkscreen one is not',
+      fp.fab.join() === 'R9' && fp.silk === 0, { fab: fp.fab, silk: fp.silk });
+    check('the selection outline of a drawn QFP goes round its leads, not between its body and its pads', fp.sel.inside, fp.sel);
 
     // ---- (8) destroy: no ResizeObserver left after 20 create/destroy cycles ---------------------------------------------
     const ds = await page.evaluate(async () => {
