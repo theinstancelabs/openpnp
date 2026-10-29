@@ -21,6 +21,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.openpnp.gui.MainFrame;
 import org.openpnp.instancelabs.dispense.DispenseService;
 import org.openpnp.instancelabs.dispense.DotMath;
+import org.openpnp.instancelabs.dispense.PadInstances;
 import org.openpnp.instancelabs.dispense.PadType;
 import org.openpnp.instancelabs.dispense.PadTypeResolver;
 import org.openpnp.instancelabs.dispense.PadTypeStatus;
@@ -37,6 +38,9 @@ import org.openpnp.instancelabs.kicad.KText;
 import org.openpnp.instancelabs.kicad.KicadParser;
 import org.openpnp.instancelabs.kicad.KicadPcb;
 import org.openpnp.instancelabs.kicad.SExprException;
+import org.openpnp.instancelabs.padprofile.GroupKey;
+import org.openpnp.instancelabs.padprofile.PadInstance;
+import org.openpnp.instancelabs.padprofile.ProfileCheck;
 import org.openpnp.model.Abstract2DLocatable.Side;
 import org.openpnp.model.Board;
 import org.openpnp.model.BoardLocation;
@@ -324,8 +328,9 @@ public final class BoardImporter {
                 throw new ImportException(409, "ids-exhausted", e.getMessage());
             }
             padTypes = padTypes(p, ids, snap.ids);
+            ProfileCheck.Result check = profileCheck(p, ids, padTypes);
             for (int i = 0; i < p.packages.size(); i++) {
-                packages.add(packageEntry(p.packages.get(i), ids.packages.get(i), padTypes));
+                packages.add(packageEntry(p.packages.get(i), ids.packages.get(i), padTypes, check));
             }
             List<ImportWarning> more = new ArrayList<>(parsed.art.warnings);
             more.addAll(padTypeWarnings(p, packages));
@@ -399,11 +404,49 @@ public final class BoardImporter {
     }
 
     /**
+     * The profile check of the board as it would be saved (PROFILE_CALIBRATION_DESIGN.md §12.6): every paste opening of
+     * its placements in the board frame, with the final package ids and the pad types they resolve to (the carried
+     * mappings included); null without the engine.
+     */
+    ProfileCheck.Result profileCheck(ImportProposal p, IdAllocator.Result ids, PadTypes pt) throws SQLException {
+        if (svc == null || svc.getDb() == null) {
+            return null;
+        }
+        List<PadInstance> pads = new ArrayList<>();
+        for (PlacementP x : p.placements) {
+            PackageP pk = p.packages.get(x.packageIndex);
+            if (pk.fiducial) {
+                continue;
+            }
+            String pkgId = ids.packages.get(x.packageIndex).id;
+            double c = Math.cos(Math.toRadians(x.rotation));
+            double s = Math.sin(Math.toRadians(x.rotation));
+            for (PadP pad : pk.pads) {
+                PadInstance i = new PadInstance(x.id, pkgId, pad.name, x.x + pad.x * c - pad.y * s,
+                        x.y + pad.x * s + pad.y * c, x.rotation + pad.rotation, pad.w, pad.h, pad.roundness);
+                PadTypeResolver.Resolution r = pt.resolver.explain(pkgId, pad.name, pad.x, pad.y,
+                        DotMath.padAreaMm2(pad.w, pad.h, pad.roundness));
+                i.typeRule = r.rule;
+                i.centrePad = PadTypeResolver.Resolution.CENTRE_PAD.equals(r.rule);
+                if (r.type != null) {
+                    i.typeKey = r.type.typeKey;
+                    i.typeVersion = r.type.version;
+                    i.typeStatus = r.type.status == null ? null : r.type.status.dbName;
+                }
+                pads.add(i);
+            }
+        }
+        return ProfileCheck.of(PadInstances.inputs(svc, pads, false));
+    }
+
+    /**
      * One package of the preview (§3.2, §3.9): its id and why, its pads, the pad types its pads resolve to (with the
      * rule and a sentence), and the outcome of its placements: paste, no-pad-type or not-dispensed. The one place a
-     * package's entry is built: the profile check's lines (PROFILE_CALIBRATION_DESIGN.md §12.6) belong here.
+     * package's entry is built. With the profile check (PROFILE_CALIBRATION_DESIGN.md §12.6) the package also lists
+     * its groups that need a profile, and needs-profile replaces no-pad-type: some pads wait for a profile;
+     * not-dispensed when no pad of it can get paste (the tip, or parts treated whole).
      */
-    Map<String, Object> packageEntry(PackageP pk, IdAllocator.PackageId id, PadTypes pt) {
+    Map<String, Object> packageEntry(PackageP pk, IdAllocator.PackageId id, PadTypes pt, ProfileCheck.Result check) {
         List<Map<String, Object>> pads = new ArrayList<>();
         for (PadP pad : pk.pads) {
             pads.add(map("name", pad.name, "x", pad.x, "y", pad.y, "w", pad.w, "h", pad.h, "rotation", pad.rotation,
@@ -413,7 +456,7 @@ public final class BoardImporter {
         int untyped = 0;
         if (!pk.fiducial) {
             for (PadP pad : pk.pads) {
-                PadTypeResolver.Resolution r = pt.resolver.explain(id.id, pad.x, pad.y,
+                PadTypeResolver.Resolution r = pt.resolver.explain(id.id, pad.name, pad.x, pad.y,
                         DotMath.padAreaMm2(pad.w, pad.h, pad.roundness));
                 PadType t = r.type;
                 untyped += t == null ? 1 : 0;
@@ -431,20 +474,73 @@ public final class BoardImporter {
             }
         }
         String outcome = pk.fiducial ? "not-dispensed" : untyped > 0 ? "no-pad-type" : "paste";
-        return map("baseId", pk.baseId, "variant", pk.variant, "id", id.id, "state", id.state, "why", id.why,
-                "usesPadTypesOf", pt.carriedFrom.get(id.id), "lib", pk.lib, "kicadName", pk.kicadName, "refs",
+        Map<String, Object> e = map("baseId", pk.baseId, "variant", pk.variant, "id", id.id, "state", id.state, "why",
+                id.why, "usesPadTypesOf", pt.carriedFrom.get(id.id), "lib", pk.lib, "kicadName", pk.kicadName, "refs",
                 pk.refs, "fiducial", pk.fiducial, "bodyW", pk.bodyW, "bodyH", pk.bodyH, "pads", pads, "padTypes",
                 new ArrayList<>(types.values()), "untypedPads", untyped, "outcome", outcome);
+        if (check != null && !pk.fiducial) {
+            List<Map<String, Object>> groups = new ArrayList<>();
+            int needs = 0;
+            int none = 0;
+            ProfileCheck.Group highest = null;
+            for (ProfileCheck.Group g : check.groups) {
+                if (!g.packageIds.contains(id.id)) {
+                    continue;
+                }
+                groups.add(map("group", g.group, "padNames", g.padNames, "reason", g.reason, "tipKind", g.tipKind,
+                        "partial", g.partial, "short", g.shortText, "reasonText", g.reasonText, "suggestion",
+                        g.suggestion));
+                boolean noPaste = ProfileCheck.TIP.equals(g.reason) || ProfileCheck.PART.equals(g.reason);
+                none += noPaste ? g.pads : 0;
+                needs += noPaste || ProfileCheck.OUTSIDE.equals(g.reason) ? 0 : 1;
+                if (!ProfileCheck.OUTSIDE.equals(g.reason) && (highest == null || REASON_ORDER.indexOf(g.reason)
+                        < REASON_ORDER.indexOf(highest.reason))) {
+                    highest = g;
+                }
+            }
+            e.put("profileCheck", groups.isEmpty() ? null : groups);
+            e.put("profileReason", highest == null ? null : highest.reason);
+            e.put("profileShort", highest == null ? null : highest.shortText);
+            e.put("outcome", needs > 0 ? "needs-profile"
+                    : none > 0 && none >= pk.pads.size() * pk.refs.size() ? "not-dispensed" : "paste");
+        }
+        return e;
     }
 
-    /** NO_PAD_TYPE: one warning per package whose placements are blocked until it has a pad type (group 1). */
+    /** The profile check's reasons, highest first (§3.3): the one a package is named with in NEEDS_PROFILE. */
+    static final List<String> REASON_ORDER = Arrays.asList(ProfileCheck.TIP, ProfileCheck.PART, ProfileCheck.NO_PAD_SIZE,
+            ProfileCheck.NO_TYPE, ProfileCheck.BELOW_GATE, ProfileCheck.BRIDGE, ProfileCheck.OUTSIDE);
+
+    /**
+     * NO_PAD_TYPE: one warning per package whose placements are blocked until it has a pad type (group 1). With the
+     * profile check, one NEEDS_PROFILE warning names every package with pads that cannot be pasted yet instead, each
+     * with its highest reason (PROFILE_CALIBRATION_DESIGN.md §12.6).
+     */
+    @SuppressWarnings("unchecked")
     static List<ImportWarning> padTypeWarnings(ImportProposal p, List<Map<String, Object>> packages) {
         List<ImportWarning> l = new ArrayList<>();
+        List<String> named = new ArrayList<>();
+        List<String> needRefs = new ArrayList<>();
+        boolean checked = false;
+        for (Map<String, Object> e : packages) {
+            checked |= e.containsKey("profileCheck");
+            if (e.get("profileShort") != null) {
+                named.add(GroupKey.basePackage((String) e.get("id")) + " (" + e.get("profileShort") + ")");
+                needRefs.addAll((List<String>) e.get("refs"));
+            }
+        }
+        if (checked) {
+            if (!named.isEmpty()) {
+                l.add(ImportWarning.of("NEEDS_PROFILE", needRefs, named.size() + (named.size() == 1 ? " package needs"
+                        : " packages need") + " a profile: " + String.join(", ", named) + ". After saving, choose a "
+                        + "suggestion for each in Profile › Needs a profile."));
+            }
+            return l;
+        }
         for (Map<String, Object> e : packages) {
             if (!"no-pad-type".equals(e.get("outcome"))) {
                 continue;
             }
-            @SuppressWarnings("unchecked")
             List<String> refs = (List<String>) e.get("refs");
             int pads = (Integer) e.get("untypedPads") * refs.size();
             boolean one = refs.size() == 1;
@@ -510,6 +606,10 @@ public final class BoardImporter {
         }
         if (PadTypeResolver.Resolution.PACKAGE_MAP.equals(rule)) {
             return "Mapped to this package by hand in Profile › Pad types.";
+        }
+        if (PadTypeResolver.Resolution.PAD_MAP.equals(rule)) {
+            return "Mapped to pads " + (matched == null ? "" : matched.replace(",", ", ")) + " of this package in "
+                    + "Profile.";
         }
         if (PadTypeResolver.Resolution.CENTRE_PAD.equals(rule)) {
             return "Centre pad of a QFN/DFN: it sits at the part centre and is at least 1.0 mm².";

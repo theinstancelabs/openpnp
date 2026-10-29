@@ -58,15 +58,18 @@ final class DispenseEndpoints {
             "boardRegistrations", "newSeatAtMs"));
     /** Nested settings PUT /api/config merges one level deep (a partial object keeps the other fields). */
     static final java.util.Set<String> NESTED_SETTINGS = new java.util.HashSet<>(java.util.Arrays.asList(
-            "profile", "purgeRow", "cleanPadCheck", "needleXyTrim", "fiducialCheck", "vacuumProbe"));
+            "profile", "purgeRow", "cleanPadCheck", "needleXyTrim", "fiducialCheck", "vacuumProbe", "tip", "paste",
+            "calibrationArea", "padCalibration"));
     /**
      * Nested fields only the engine or their own endpoints change: the start angle's set time (I11:
      * POST /api/screw/start-angle, or a changed angle), the times of the trim and the purge reset,
      * and the used purge spots (runs reserve them, POST /api/purge-row/reset frees them: a stale
-     * full-settings save must not put paste-covered spots back in use).
+     * full-settings save must not put paste-covered spots back in use); likewise the used calibration
+     * area and its wipe (POST /api/calibration-area/reset), and when the paste was loaded (POST /api/paste).
      */
     static final java.util.Set<String> PROTECTED_NESTED = new java.util.HashSet<>(java.util.Arrays.asList(
-            "profile.startAngleSetAtMs", "needleXyTrim.setAtMs", "purgeRow.resetAtMs", "purgeRow.usedSpots"));
+            "profile.startAngleSetAtMs", "needleXyTrim.setAtMs", "purgeRow.resetAtMs", "purgeRow.usedSpots",
+            "calibrationArea.usedMm", "calibrationArea.resetAtMs", "paste.loadedAtMs"));
 
     /** How long OpenPnP's thread may take to start a read of its board list (BOARD_IMPORT_DESIGN.md §3.6). */
     static final long EDT_START_MS = 10_000;
@@ -516,6 +519,14 @@ final class DispenseEndpoints {
         if (next.locations == null) {
             next.locations = new LinkedHashMap<>();
         }
+        if (next.padCalibration != null && !SimGuard.isSimulated(ctx.machine())) {
+            // the shortened statistics of the SIM tests are refused on the machine (PROFILE_CALIBRATION_DESIGN.md §5.4)
+            List<String> floors = next.padCalibration.realMachineProblems();
+            floors.removeAll(svc.getConfig().padCalibration.realMachineProblems());
+            if (!floors.isEmpty()) {
+                throw ApiException.badRequest(String.join("; ", floors));
+            }
+        }
         svc.updateConfig(next); // validates; IllegalArgumentException -> 400 with the problems
         return svc.getConfig();
     }
@@ -782,7 +793,7 @@ final class DispenseEndpoints {
      * The board drawing of the plan, fixed now (a later replace or edit cannot put another drawing under these dots),
      * read where OpenPnP's lists are read.
      */
-    private void artRef(DispensePlan plan, BoardLocation bl) throws Exception {
+    void artRef(DispensePlan plan, BoardLocation bl) throws Exception {
         Board board = bl.getBoard();
         if (board == null) {
             return;

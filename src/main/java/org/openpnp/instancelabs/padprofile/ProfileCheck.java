@@ -32,6 +32,11 @@ import java.util.TreeSet;
  * <li>{@code outside}: what its type was calibrated for does not cover these pads (a note).</li>
  * </ol>
  *
+ * <p>Decision 14: when no plan fits every pad of a group, the pads whose own neighbours leave no plan
+ * ({@code MAY_BRIDGE} in a plan) are split off as a sub-group of their own, reason {@code tip} of kind
+ * {@link #TIP_NEAR}, and the rest keeps its plan; such a sub-group does not make the package's other
+ * pads {@code part}.</p>
+ *
  * <p>The check never adds or removes a flag: in a plan {@code blocking} is "some pad of the group is
  * blocked by its flags"; before planning it is what the planner would flag.</p>
  */
@@ -47,6 +52,8 @@ public final class ProfileCheck {
     public static final String TIP_PITCH = "pitch";
     public static final String TIP_COPPER = "copper";
     public static final String TIP_NO_PLAN = "no-plan";
+    /** Decision 14: some pads of a group are too close to a neighbour for the plan the others keep. */
+    public static final String TIP_NEAR = "near";
 
     public static final String OUTSIDE_INTERLOCK = "interlock";
     public static final String OUTSIDE_RECIPE = "recipe";
@@ -76,6 +83,8 @@ public final class ProfileCheck {
         public TipView tip;
         public List<Anchor> anchors = new ArrayList<>();
         public List<Group> groups = new ArrayList<>();
+        /** Every pad's numbers (listed groups or not), by pad id: what the plan view shows per pad (§12.5). */
+        public Map<String, PadInfo> pads = new LinkedHashMap<>();
 
         /** The group with this id, or null. */
         public Group group(String id) {
@@ -86,6 +95,15 @@ public final class ProfileCheck {
             }
             return null;
         }
+    }
+
+    /** A pad's group, the amount its opening should get and its clearance under its group's plan. */
+    public static final class PadInfo {
+        public String group;
+        /** κ·A·k of the opening (capped at fine pitch for families without an anchor), mg. */
+        public double anchorMassMg;
+        /** Smallest dot gap or copper gap of the pad's dots under its group's plan (mm); null without a plan. */
+        public Double clearanceMm;
     }
 
     public static final class TipView {
@@ -128,6 +146,8 @@ public final class ProfileCheck {
         public String outsideKind;
         /** Decision 11: the neighbour pad the dots may bridge to ("U3 pad 2"). */
         public String bridgeTo;
+        /** Decision 14: the pads of the group this sub-group ({@link #TIP_NEAR}) was split from; null otherwise. */
+        public Integer nearOf;
         public boolean partial;
         public boolean blocking;
         public boolean fixable;
@@ -139,6 +159,9 @@ public final class ProfileCheck {
         transient int[] idx = new int[0];
         transient List<PadInstance> members = new ArrayList<>();
         transient GroupKey key;
+        /** What the id hashes beyond the key (a group split by type or a near sub-group), null for none. */
+        transient String split;
+        transient Set<String> allNames;
         transient TypeInfo type;
         transient boolean usableType;
         transient boolean centre;
@@ -286,7 +309,28 @@ public final class ProfileCheck {
         for (Group g : r.groups) {
             r.ok &= !g.blocking;
         }
+        for (Group g : c.groups) {
+            padInfo(c, g, r.pads);
+        }
         return r;
+    }
+
+    /** §12.5: each pad of a group, listed or not, with its group's amount and its clearance under the group's plan. */
+    private static void padInfo(Ctx c, Group g, Map<String, PadInfo> out) {
+        Suggester.Candidate x = g.typePlan != null ? g.typePlan : g.plan;
+        for (PadInstance p : g.members) {
+            PadInfo i = new PadInfo();
+            i.group = g.group;
+            i.anchorMassMg = Suggester.r3(g.target);
+            Integer at = c.index.get(p);
+            if (x != null && at != null && x.local.containsKey(at)) {
+                Neighbours.Eval e = c.nb.evaluate(new int[] {at}, Collections.singletonMap(at, x.local.get(at)),
+                        x.view.dGap / 2, x.view.dOverhang / 2);
+                double gap = Math.min(e.dotGap, e.copperGap);
+                i.clearanceMm = Double.isInfinite(gap) ? null : Suggester.r3(gap);
+            }
+            out.put(p.padId, i);
+        }
     }
 
     /** Groups, the tip test, the neighbours' dots, the plan search (two passes) and the reasons. */
@@ -354,6 +398,9 @@ public final class ProfileCheck {
                 }
             }
         }
+        for (Group g : new ArrayList<>(c.groups)) {
+            splitNear(c, g);
+        }
         for (Group g : c.groups) {
             if (g.idx.length > 0 && g.tipKind == null && g.plan == null) {
                 g.tipKind = TIP_NO_PLAN;
@@ -364,6 +411,9 @@ public final class ProfileCheck {
             double fine = Double.NaN;
             double narrow = Double.NaN;
             for (Group g : pkg) {
+                if (TIP_NEAR.equals(g.tipKind)) {
+                    continue; // decision 14: these pads' own neighbours, not the package
+                }
                 if (TIP_NO_PLAN.equals(g.tipKind) && !(narrow <= g.key.shortMm)) {
                     narrow = g.key.shortMm;
                 }
@@ -384,6 +434,79 @@ public final class ProfileCheck {
             reason(c, g, tip);
         }
         return c;
+    }
+
+    private static String nearSplit(String split) {
+        return split == null ? TIP_NEAR : split + "|" + TIP_NEAR;
+    }
+
+    /**
+     * Decision 14: when no plan fits every pad of a group, the pads whose own neighbours leave no plan
+     * (in a plan: the pads the planner held back as bridging) become a sub-group ({@link #TIP_NEAR}),
+     * if the rest then has a plan. A group with a plan for every pad keeps its reason (a pad type for
+     * this size avoids the bridge, decision 11).
+     */
+    private static void splitNear(Ctx c, Group g) {
+        if (g.tipKind != null || g.plan != null || g.idx.length < 2 || g.idx.length != g.members.size()) {
+            return;
+        }
+        List<PadInstance> near = new ArrayList<>();
+        if (c.in.planned) {
+            for (PadInstance p : g.members) {
+                if (p.flags != null && p.flags.contains(FLAG_MAY_BRIDGE)) {
+                    near.add(p);
+                }
+            }
+        }
+        else {
+            for (int i : g.idx) {
+                Group one = newGroup(c, g.key, Collections.singletonList(c.nb.pads.get(i)), g.family, g.allNames,
+                        g.split);
+                one.target = g.target;
+                if (Suggester.search(c, one) == null) {
+                    near.add(c.nb.pads.get(i));
+                }
+            }
+        }
+        if (near.isEmpty() || near.size() == g.members.size()) {
+            return;
+        }
+        List<PadInstance> keep = new ArrayList<>(g.members);
+        keep.removeAll(near);
+        Group rest = newGroup(c, g.key, keep, g.family, g.allNames, g.split);
+        rest.tipEval = g.tipEval;
+        rest.dotsFromSuggestion = g.dotsFromSuggestion;
+        rest.plan = Suggester.search(c, rest);
+        if (rest.plan == null) {
+            return;
+        }
+        Suggester.Candidate dots = rest.dotsFromSuggestion ? rest.plan : null;
+        if (rest.usableType && !c.in.planned) {
+            rest.typePlan = Suggester.typePlan(c, rest, rest.type);
+            dots = rest.typePlan;
+        }
+        for (int at : rest.idx) {
+            PadInstance p = c.nb.pads.get(at);
+            if (c.in.planned && p.dots != null && !p.dots.isEmpty()) {
+                c.nb.setDots(at, p.dots, c.view(p.dotSteps != null ? p.dotSteps : c.in.profileSteps).dGap / 2);
+            }
+            else if (dots != null) {
+                c.nb.setDots(at, c.nb.toBoard(at, dots.local.get(at)), dots.view.dGap / 2);
+            }
+        }
+        Group n = newGroup(c, g.key, near, g.family, g.allNames, nearSplit(g.split));
+        n.tipEval = g.tipEval;
+        n.tipKind = TIP_NEAR;
+        n.nearOf = g.members.size();
+        n.dotsFromSuggestion = g.dotsFromSuggestion;
+        replace(c.groups, g, rest, n);
+        replace(c.byPackage.get(g.packageIds.get(0)), g, rest, n);
+    }
+
+    private static void replace(List<Group> l, Group g, Group a, Group b) {
+        int at = l.indexOf(g);
+        l.set(at, a);
+        l.add(at + 1, b);
     }
 
     private static void buildGroups(Ctx c) {
@@ -448,6 +571,8 @@ public final class ProfileCheck {
             String split) {
         Group g = new Group();
         g.key = key;
+        g.split = split;
+        g.allNames = allNames;
         g.group = key.id(split);
         g.members = members;
         PadInstance first = members.get(0);
@@ -568,7 +693,8 @@ public final class ProfileCheck {
             }
         }
         else if (g.reason != null) {
-            g.blocking = PART.equals(g.reason) || BRIDGE.equals(g.reason) || flagged && !OUTSIDE.equals(g.reason);
+            g.blocking = PART.equals(g.reason) || BRIDGE.equals(g.reason) || TIP_NEAR.equals(g.tipKind)
+                    || flagged && !OUTSIDE.equals(g.reason);
         }
         g.fixable = g.blocking && (NO_PAD_SIZE.equals(g.reason) || NO_TYPE.equals(g.reason)
                 || BELOW_GATE.equals(g.reason) || BRIDGE.equals(g.reason));
@@ -620,7 +746,10 @@ public final class ProfileCheck {
         switch (g.reason) {
             case TIP:
                 g.shortText = "cannot be dispensed with the " + tip.name;
-                if (TIP_PITCH.equals(g.tipKind)) {
+                if (TIP_NEAR.equals(g.tipKind)) {
+                    nearTexts(c, g);
+                }
+                else if (TIP_PITCH.equals(g.tipKind)) {
                     g.reasonText = Texts.tipPitch(tip.name, g.pitch, c.dTip, tip.minDotSteps, te.dotGap);
                 }
                 else if (TIP_COPPER.equals(g.tipKind)) {
@@ -674,6 +803,19 @@ public final class ProfileCheck {
         g.hopMm = hop(c, g);
     }
 
+    /** Decision 14: the sub-group's gap under the plan its group keeps (the type's), else under the closest plan. */
+    private static void nearTexts(Ctx c, Group g) {
+        Suggester.Candidate x = g.usableType ? Suggester.typePlan(c, g, g.type) : Suggester.closest(c, g);
+        Neighbours.Eval e = x == null ? null : c.nb.evaluate(g.idx, x.local, x.view.dGap / 2, x.view.dOverhang / 2);
+        boolean byDot = e == null || e.dotGap < Limits.DOT_GAP_MARGINAL_MM - Limits.EPS
+                || e.copperGap >= Limits.COPPER_GAP_MARGINAL_MM - Limits.EPS;
+        int at = e == null ? -1 : byDot ? e.dotGapPad : e.copperPad;
+        g.bridgeTo = at >= 0 ? Texts.padWords(c.nb.pads.get(at)) : "the next pad";
+        g.shortText = "too close to " + g.bridgeTo;
+        g.reasonText = Texts.near(g.pads, g.nearOf == null ? g.pads : g.nearOf, g.bridgeTo, e == null ? null
+                : byDot ? e.dotGap : e.copperGap, byDot);
+    }
+
     private static void outsideTexts(Ctx c, Group g, String typeName) {
         TypeInfo t = g.type;
         Suggester.Candidate tp = g.typePlan;
@@ -686,7 +828,8 @@ public final class ProfileCheck {
                 break;
             case OUTSIDE_RECIPE:
                 g.shortText = "calibrated with another recipe";
-                g.reasonText = Texts.outsideRecipe(typeName, Texts.recipeDiff(t.doseFp, c.in.doseFingerprint));
+                String diff = Texts.recipeDiff(t.doseFp, c.in.doseFingerprint);
+                g.reasonText = Texts.outsideRecipe(typeName, diff.isEmpty() ? "another fingerprint" : diff);
                 break;
             case OUTSIDE_AREA:
                 double ratio = g.area / t.calArea() - 1;

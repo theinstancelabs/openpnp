@@ -286,6 +286,9 @@ public class BoardImportSimTest {
 
     @Test
     public void ftpPreviewSavePlanAndTheDrawing() throws Exception {
+        // the 0603s' pad type passes the gate: nothing needs a profile (PROFILE_CALIBRATION_DESIGN.md §12.6)
+        ok(send("PUT", "/api/pad-types/chip-0603", "{\"status\":\"characterized\"}".getBytes(StandardCharsets.UTF_8),
+                "Content-Type", "application/json"));
         byte[] ftp = fixture(FTP);
         JsonObject pv = preview(ftp, "ftp.kicad_pcb");
         JsonObject counts = pv.getAsJsonObject("counts");
@@ -362,8 +365,6 @@ public class BoardImportSimTest {
         assertEquals("ftp.kicad_pcb", listed.getAsJsonObject("imported").get("sourceName").getAsString());
 
         // 3. plan it at (120, 120, z 10, 0°)
-        ok(send("PUT", "/api/pad-types/chip-0603", "{\"status\":\"characterized\"}".getBytes(StandardCharsets.UTF_8),
-                "Content-Type", "application/json"));
         JsonObject plan = plan(boardFile.getCanonicalPath());
         JsonArray pads = plan.getAsJsonArray("pads");
         assertEquals(160, pads.size());
@@ -701,7 +702,8 @@ public class BoardImportSimTest {
         setUpBoardRuns();
         double[][] pos = new double[30][];
         for (int i = 0; i < pos.length; i++) {
-            pos[i] = new double[] {2 + 2.5 * (i % 10), 2 + 3 * (i / 10), 0};
+            // 4 mm apart: at 2.5 mm two 0603s' facing dots would bridge (MAY_BRIDGE)
+            pos[i] = new double[] {2 + 4.0 * (i % 6), 2 + 3 * (i / 6), 0};
         }
         File board = writeBoard(pos);
         ok(send("PUT", "/api/pad-types/chip-0603", "{\"status\":\"characterized\"}".getBytes(StandardCharsets.UTF_8),
@@ -1053,20 +1055,20 @@ public class BoardImportSimTest {
         assertEquals(2, pv.getAsJsonObject("counts").get("fiducials").getAsInt());
         assertEquals(20, pv.getAsJsonObject("skipped").getAsJsonArray("bottom").size());
         Set<String> codes = codes(pv);
-        assertTrue(codes.containsAll(Arrays.asList("PASTE_POLY", "PAD_NAME_EMPTY", "NO_PAD_TYPE", "BOTTOM_SKIPPED")),
+        // with the engine the profile check's NEEDS_PROFILE replaces NO_PAD_TYPE (PROFILE_CALIBRATION_DESIGN.md §12.6)
+        assertTrue(codes.containsAll(Arrays.asList("PASTE_POLY", "PAD_NAME_EMPTY", "NEEDS_PROFILE", "BOTTOM_SKIPPED")),
                 codes.toString());
+        assertFalse(codes.contains("NO_PAD_TYPE"), codes.toString());
         int blocked = 0;
         for (JsonElement w : pv.getAsJsonArray("warnings")) {
             JsonObject o = w.getAsJsonObject();
-            if ("NO_PAD_TYPE".equals(o.get("code").getAsString())) {
+            if ("NEEDS_PROFILE".equals(o.get("code").getAsString())) {
                 assertEquals(1, o.get("group").getAsInt());
-                assertTrue(o.get("text").getAsString().contains(" no paste until "), o.toString());
+                assertTrue(o.get("text").getAsString().contains("SW_SPST_3.9x2.9mm (no pad type)"), o.toString());
                 blocked += o.getAsJsonArray("refs").size();
             }
         }
-        assertEquals(3, blocked, "J3, SW1, Y1");
-        assertTrue(pv.getAsJsonArray("warnings").toString().contains("SW1 (2 pads) gets no paste until its package "
-                + "has a pad type. Save the board, then add one: New pad type for SW_SPST_3.9x2.9mm."));
+        assertEquals(8, blocked, "4 LEDs below the gate, J3, SW1, Y1 and IC3");
         JsonObject saved = importBoard(nano, "NanoV3.3.kicad_pcb", "Arduino Nano V3.3", false);
         assertEquals("arduino-nano-v3-3", saved.get("slug").getAsString());
         JsonObject plan = plan(saved.get("file").getAsString());

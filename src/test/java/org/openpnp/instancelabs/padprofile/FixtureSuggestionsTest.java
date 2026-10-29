@@ -300,24 +300,37 @@ public class FixtureSuggestionsTest {
     @Test
     public void theNanoBottomSideBoardWide() {
         // Board-wide (not in the package-level survey): C3 and C4 face each other 1.27 mm apart, so their
-        // half-turn dots would leave 0.11 mm; a group has one plan, so all 14 C_0603 pads have none.
+        // half-turn dots would leave 0.11 mm. Decision 14: the group keeps its plan for the other 12 C_0603
+        // pads; C3.1 and C4.1 are a sub-group of their own, without paste.
         PadFixtures.Fixture f = PadFixtures.load("nano");
         ProfileCheck.Result r = ProfileCheck.of(PadFixtures.inputs(PadFixtures.side(f, "bottom")));
         ProfileCheck.Group c = null;
+        ProfileCheck.Group near = null;
         for (ProfileCheck.Group g : r.groups) {
             if (g.packageIds.get(0).equals("C_0603_1608Metric")) {
-                c = g;
+                if (ProfileCheck.TIP_NEAR.equals(g.tipKind)) {
+                    near = g;
+                }
+                else {
+                    c = g;
+                }
             }
         }
         assertNotNull(c);
-        assertEquals(ProfileCheck.TIP, c.reason);
-        assertEquals(ProfileCheck.TIP_NO_PLAN, c.tipKind);
-        assertEquals(14, c.pads);
-        assertEquals("Not dispensable with the 22G tip: on these 0.95 × 0.75 mm pads the closest plan (1 half-turn dot "
-                + "per pad) comes within 0.11 mm of the next pad's dot (at least 0.20 mm).", c.reasonText);
+        assertEquals(12, c.pads);
+        assertEquals(ProfileCheck.NO_TYPE, c.reason);
+        assertNotNull(near);
+        assertEquals(ProfileCheck.TIP, near.reason);
+        assertEquals(Arrays.asList("C3.1", "C4.1"), near.padIds);
+        assertEquals(Integer.valueOf(14), near.nearOf);
+        assertFalse(near.partial || c.partial, "a pad's own neighbour does not hold back the package");
+        assertEquals("2 of 14 pads are too close to a neighbour: their dots would leave 0.11 mm to the dot of C4 pad 1 "
+                + "(at least 0.20 mm), so they get no paste. The other 12 keep the plan.", near.reasonText);
+        assertEquals(Suggestion.NONE, near.suggestion.kind);
+        assertTrue(near.blocking);
         int[] n = count(r);
         assertEquals(70, n[0] + n[1] + n[2]);
-        assertEquals(44 + 1 + 14, n[0]);
+        assertEquals(44 + 1 + 2, n[0]);
         assertEquals(1, n[1]);
     }
 

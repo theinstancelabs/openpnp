@@ -268,7 +268,7 @@ public class ProfileCheckTest {
         SuggesterTest.type(in, t, "RES");
         ProfileCheck.Group g = ProfileCheck.of(in).groups.get(0);
         assertEquals(ProfileCheck.OUTSIDE_RECIPE, g.outsideKind);
-        assertEquals("Chip 0603 was calibrated with another recipe (psi 16.000 then, 18.000 now); calibrate it again, or "
+        assertEquals("Chip 0603 was calibrated with another recipe (psi 16 -> 18); calibrate it again, or "
                 + "set the profile back.", g.reasonText);
         t.doseFp = null;
         t.dotSteps = 400;

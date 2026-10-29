@@ -1,5 +1,6 @@
 package org.openpnp.instancelabs.dispense;
 
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -10,6 +11,7 @@ import java.util.Map;
 import java.util.TreeMap;
 
 import org.openpnp.instancelabs.padprofile.CheckInputs;
+import org.openpnp.instancelabs.padprofile.DoseEvidence;
 import org.openpnp.instancelabs.padprofile.DotGeometry;
 import org.openpnp.instancelabs.padprofile.Limits;
 import org.openpnp.instancelabs.padprofile.PadInstance;
@@ -166,6 +168,68 @@ public final class PadInstances {
         }
         in.nowMs = System.currentTimeMillis();
         return in;
+    }
+
+    /**
+     * The check's inputs from the engine as it is now (§3.1): the current pad types and their rules, the
+     * configuration, the packages pasted partly and the dose evidence of the fresh records.
+     */
+    public static CheckInputs inputs(DispenseService svc, List<PadInstance> pads, boolean planned)
+            throws SQLException {
+        DispenseConfig cfg = svc.getConfig();
+        DispenseDb db = svc.getDb();
+        CheckInputs in = inputs(pads, db.currentPadTypes(), db.currentPadRules(), cfg, db.pastePartialPackages(),
+                planned);
+        long since = in.nowMs - (long) (cfg.padCalibration.doseRecordMaxAgeH * 3600e3); // older ones are stale
+        in.evidence = evidence(db.doseRecords(null, since), cfg, new DoseRecord.Epochs(
+                svc.getControllerConnectedAtMs(), svc.isSimulatorConfirmed()), in.nowMs);
+        return in;
+    }
+
+    /**
+     * The fresh dose records of the current setup (§1.7) per dose, as the check reads them between pad
+     * calibrations: the newest fresh weighing (confirmed when a second fresh reading agrees with it,
+     * §7.5) and the newest fresh camera record's dot size. A dose passes the camera only if every fresh
+     * camera record of it passed (a later pass does not erase an earlier failure).
+     */
+    public static Map<Integer, DoseEvidence> evidence(List<DoseRecord> records, DispenseConfig cfg,
+            DoseRecord.Epochs epochs, long nowMs) {
+        Map<Long, DoseRecord> fresh = new LinkedHashMap<>();
+        for (DoseRecord r : records) {
+            if (r.isFresh(nowMs, cfg, epochs)) {
+                fresh.put(r.id, r);
+            }
+        }
+        Map<Integer, DoseEvidence> m = new TreeMap<>();
+        for (DoseRecord r : fresh.values()) {
+            if (DoseRecord.OPTICAL.equals(r.kind)) {
+                DoseEvidence e = m.computeIfAbsent(r.steps, DoseEvidence::new);
+                e.opticalPass = (e.opticalFresh ? e.opticalPass : true) && Boolean.TRUE.equals(r.pass);
+                e.opticalFresh = true;
+                if (!Boolean.TRUE.equals(r.pass) && r.why != null) {
+                    e.failures.add(r.why);
+                }
+                e.n += r.n;
+                e.misses += r.misses == null ? 0 : r.misses;
+                e.hops += r.hops == null ? 0 : r.hops;
+                e.threads += r.threads == null ? 0 : r.threads;
+                e.dMeanMm = r.diameterMeanMm;
+                e.dCv = r.diameterCv;
+                e.d95Mm = r.diameterP95Mm;
+                e.residCv = r.residCv;
+                e.driftPct = r.drift;
+                e.landingMeanMm = r.landingMeanMm;
+                e.landingSdMm = r.landingSdMm;
+            }
+            else if (r.hasReading()) {
+                DoseEvidence e = m.computeIfAbsent(r.steps, DoseEvidence::new);
+                e.massReadings++;
+                e.mgPerStep = r.mgPerStep;
+                e.mgPerDot = r.mgPerDot;
+                e.massConfirmed |= r.confirmedBy != null && fresh.containsKey(r.confirmedBy);
+            }
+        }
+        return m;
     }
 
     /**
