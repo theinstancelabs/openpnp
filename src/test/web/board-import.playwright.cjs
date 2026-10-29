@@ -4,25 +4,28 @@
  * layout at 1280 and 1024 px and the dark theme. Run by run-webui-sim-test.sh right after webui-sim.playwright.cjs in
  * the same session (its own preconditions: a pushed Recovery panel is closed, then Run › Board). Nothing here moves
  * the machine: it plans, previews and reads; the uploads go to the session's copy of the configuration (unique names,
- * so a board imported before never answers "exists").
+ * so a board imported before never answers "exists"), and it stops at once on a server that is not a simulator.
  *
  * Checks: (1) 00-ftp.board.xml planned at 30°: its drawing (the fallback from the board file) drawn, every fiducial of
  * the drawing within 0.5 px of the plan's, every pad on drawn copper; (2) a pad click opens the inspector (rule
  * sentence, dots, the selected pad, the top camera, Esc back) and #btn-pad-inspect opens the first pad in path order;
  * (3) #pv-play expands #run-preview, Clear collapses it; (4) a file dropped outside the drop zone never replaces the
- * page; (5) upload of ftp.kicad_pcb: 80 parts get paste (160 pads), 3 fiducials, the drawing, three packages new or
- * suffixed, nothing that blocks dispensing, PACKAGE_SUFFIXED a note, the attach offer naming ftp.board.xml and FID1;
+ * page; (5) a file the server refuses shows its reason with "Choose another file", Cancel while reading goes back to
+ * the file choice; upload of ftp.kicad_pcb: 80 parts get paste (160 pads), 3 fiducials, the drawing, three packages new
+ * or suffixed, nothing that blocks dispensing, PACKAGE_SUFFIXED a note, the attach offer naming ftp.board.xml and FID1,
+ * a package row focused from the keyboard outlines its parts;
  * (6) save under a unique name, Use this board: the Board step has it, with its picture; (7) the same file dropped on
  * the drop zone under the same name: "exists", a two-press replace, Esc does nothing while it saves; (8) the import
  * planned at 30°: 160 pads and dots, R pads within 0.01 mm and LED pads within 0.04 mm of (1), copper and silkscreen
  * in Full, the drawing aligned (FID1 included); (9) Camera is on FID1 sets the origin to camera − R(30°)·FID1 within
- * 0.01 mm; (10) attach: ftp.board.xml gets the KiCad drawing, its plan's pads unchanged; (11) Records: a board run's
- * map draws the board (skipped when the session has no board run yet); (12) the stage bar and the expanded preview row
- * fit at 1280 × 800 and 1024 × 768, #plan-svg >= 280 px tall at 1280; (13) dark theme: the marks on the board keep their
- * contrast; (14) screenshots to SHOTS_DIR (1440 and 1280, light and dark): the empty dialog, and for nano, ftp and mobo
- * the preview, the saved state with its pad-type actions, the Board step with the board chosen (the hero before
- * planning), the board planned on Run and the pad inspector; (15) no JavaScript errors, no native dialogs; (16) the hero
- * draws a plan's dispensed dots on that plan only (another plan starts with none; a stale index breaks nothing).
+ * 0.01 mm, and the plan from it puts FID1 under the camera; (10) attach: ftp.board.xml gets the KiCad drawing, its
+ * plan's pads unchanged; (11) Records: a board run's map draws the board (skipped when the session has no board run
+ * yet); (12) the stage bar and the expanded preview row fit at 1280 × 800 and 1024 × 768, #plan-svg >= 280 px tall
+ * at 1280; (13) dark theme: the marks on the board keep their contrast; (14) screenshots to SHOTS_DIR (1440 and 1280,
+ * light and dark): the empty dialog, and for nano, ftp and mobo the preview, the saved state with its pad-type actions,
+ * the Board step with the board chosen (the hero before planning), the board planned on Run and the pad inspector;
+ * (15) no JavaScript errors, no native dialogs; (16) the hero draws a plan's dispensed dots on that plan only (another
+ * plan starts with none; a stale index breaks nothing).
  *
  * Env: IL_BASE or IL_API_URL (the UI, trailing / optional), PLAYWRIGHT_DIR, OUT_DIR (results.json), SHOTS_DIR
  * (default OUT_DIR), IL_KICAD_FIXTURES (default src/test/resources/kicad), BI_SHOTS=0 skips (14).
@@ -164,6 +167,10 @@ const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y
     const resp = await page.goto(BASE + '#run');
     check('UI served', resp.ok(), resp.status());
     await page.waitForFunction(() => window.IL && IL.S && IL.S.status && IL.run && IL.run.bv, null, { timeout: 60000 });
+    // it saves boards into the configuration and gives ftp.board.xml a drawing: a simulator's copy only
+    const sim = await page.evaluate(() => !!(IL.S.status.server && IL.S.status.server.simulated === true));
+    check('the server is an OpenPnP simulator (status.server.simulated)', sim);
+    if (!sim) throw new Error('not a simulator: nothing was uploaded');
     await page.evaluate(() => IL.setTheme('light'));
     check('the board flow is loaded (IL.boardFlow, IL.boardImport) and Run calls it (#btn-board-upload in the Board step)',
       await page.evaluate(() => !!(IL.boardFlow && IL.boardImport)) && (await toBoardStep(page), await page.isVisible('#btn-board-upload')));
@@ -237,6 +244,21 @@ const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y
 
     // ---- (5) upload ftp ---------------------------------------------------------------------------------------------
     await openDialog(page);
+    // first the server's refusal of a .kicad_pcb that is not a board, shown as it says it, with one way on
+    await page.setInputFiles('#board-import-file', { name: 'notes.kicad_pcb', mimeType: 'application/octet-stream', buffer: Buffer.from('(kicad_sch (version 20231120) (generator "eeschema"))') });
+    await page.waitForSelector('#dlg-board-import[data-state="error"]', { timeout: 30000 }).catch(() => {});
+    const rf = await page.evaluate(() => ({ state: document.getElementById('dlg-board-import').dataset.state, text: document.getElementById('board-import-status').textContent,
+      other: !!document.querySelector('#board-import-status #btn-board-import-other'), drop: !document.getElementById('board-import-drop').hidden }));
+    check('(5) a refused file: the server\'s reason in the dialog ("This is a KiCad schematic, not a board"), "Choose another file", no second drop box',
+      rf.state === 'error' && /^This is a KiCad schematic, not a board: choose the board's \.kicad_pcb file\./.test(rf.text) && rf.other && !rf.drop, rf);
+    // Cancel while the server reads: back to the file choice, and the late answer is dropped
+    await page.setInputFiles('#board-import-file', MOBO());
+    if (await page.evaluate(() => document.getElementById('dlg-board-import').dataset.state === 'reading')) {
+      await page.click('#btn-board-import-cancel');
+      await sleep(3000);
+      const cr = await page.evaluate(() => ({ open: !!document.getElementById('dlg-board-import'), state: (document.getElementById('dlg-board-import') || { dataset: {} }).dataset.state }));
+      check('(5) Cancel while reading: the dialog stays, back to the file choice (a late answer is not shown)', cr.open && cr.state === 'choose', cr);
+    } else skip('(5) Cancel while reading', 'the server answered before Cancel could be pressed');
     const ftp = FTP();
     await upload(page, ftp);
     const pv = await page.evaluate(() => ({ found: document.getElementById('board-import-found').textContent,
@@ -249,6 +271,12 @@ const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y
       && pv.rows.every((s) => /^(new|suffixed|reuse)$/.test(s)), pv.rows);
     check('(5) ftp: nothing blocks dispensing; PACKAGE_SUFFIXED (if any) is a note', pv.g1 === 0 && pv.suffixed.every((x) => x === 'notes'), pv);
     check('(5) ftp: the attach offer names ftp.board.xml and FID1', !!pv.attach && /ftp\.board\.xml/.test(pv.attach) && /FID1/.test(pv.attach), pv.attach);
+    // keyboard: a package row takes the focus and outlines its parts on the drawing
+    await page.focus('#board-import-packages tbody tr[data-package]');
+    await sleep(150);
+    const kb = await page.evaluate(() => ({ focused: !!(document.activeElement && document.activeElement.dataset && document.activeElement.dataset.package),
+      outlined: document.querySelectorAll('#board-import-preview .pv-l-sel rect').length }));
+    check('(5) keyboard: a focused package row outlines its parts on the drawing', kb.focused && kb.outlined > 0, kb);
 
     // ---- (6) save, Use this board -------------------------------------------------------------------------------------
     const name6 = 'ftp-kicad-' + TS;
@@ -286,9 +314,10 @@ const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y
     check('(7) first press: "Press again: replace board"', armed === 'Press again: replace board', armed);
     await sleep(450);
     await page.click('#btn-board-import-save');
+    const st7 = await page.evaluate(() => document.getElementById('dlg-board-import').dataset.state);   // the save runs (not a pending press)
     await page.keyboard.press('Escape');
     const during = await page.evaluate(() => ({ open: !!document.getElementById('dlg-board-import'), state: document.getElementById('dlg-board-import') && document.getElementById('dlg-board-import').dataset.state }));
-    check('(7) Esc while it saves does nothing', during.open, during);
+    check('(7) Esc while it saves does nothing', st7 === 'saving' && during.open, Object.assign({ pressedIn: st7 }, during));
     await page.waitForSelector('#dlg-board-import[data-state="saved"]', { timeout: 60000 });
     check('(7) second press: saved', /^Saved/.test((await page.textContent('#board-import-saved')).trim()));
     await page.click('#btn-board-import-use');
@@ -331,6 +360,17 @@ const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y
     const got9 = { x: Number(await page.inputValue('#board-x')), y: Number(await page.inputValue('#board-y')) };
     check('(9) Camera is on FID1: origin = camera − R(30°)·FID1 within 0.01 mm', want9.fid && want9.fid.id === 'FID1'
       && Math.abs(got9.x - want9.x) <= 0.01 && Math.abs(got9.y - want9.y) <= 0.01, { want9, got9 });
+    // the server's own board → machine transform agrees (the formula above could share a sign error with the page's):
+    // planned from that origin, FID1 lies under the camera, within the 0.01 mm the origin is kept to
+    const before9 = await page.evaluate(() => IL.S.planId);
+    await page.click('#btn-plan');
+    await page.waitForFunction((b) => !!IL.S.plan && IL.S.plan.planId !== b, before9, { timeout: 60000 }).catch(() => {});
+    const fid9 = await page.evaluate(() => {
+      const f = ((IL.S.plan && IL.S.plan.board && IL.S.plan.board.fiducials) || []).find((x) => x.id === 'FID1');
+      return f ? { x: f.x, y: f.y } : null;
+    });
+    check('(9) planned from that origin, the plan puts FID1 under the top camera (within 0.01 mm)', !!fid9 && !!want9.cam
+      && Math.hypot(fid9.x - want9.cam.x, fid9.y - want9.cam.y) <= 0.01, { fid9, cam: want9.cam });
 
     // ---- (10) attach the drawing to ftp.board.xml ---------------------------------------------------------------------
     await openDialog(page);
