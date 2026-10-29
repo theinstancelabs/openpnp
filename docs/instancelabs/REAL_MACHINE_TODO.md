@@ -362,10 +362,11 @@ web UI (pc-web) are still to come. These items need the job or a test board.
 From the first review of the merged backend; each is listed for the final fix round. None changes what the items above
 ask, but each can explain a surprise on the machine.
 
-- **Board far below the needle anchor.** Planning accepts a board top up to 2.0 mm from the anchor, but the board
-  probe's floor is 1.5 mm below the higher of the two: a board more than about 1.25–1.5 mm under the anchor gets a
-  window whose floor is at or above its top, and the probe cannot reach it. Keep the anchor and the board top within
-  about 1 mm until this is fixed.
+- **Board far below the needle anchor** (fixed in the final round). Planning accepts a board top up to 2.0 mm from
+  the anchor, but the board probe's floor is 1.5 mm below the higher of the two. Register board now refuses before
+  anything moves when that floor lies at or above the board top ("… it cannot reach that height …"): a board 1.5 mm
+  or more under the anchor is probed by hand. Between about 1.25 and 1.5 mm under it the probe reaches only a board
+  that sits at or above its typed Z.
 - **Fiducial search frames and the acceptance circle use different centres** (F4): frames are tiled around the
   prediction, marks are accepted within the radius of the expected position. A mark well inside the radius can lie
   outside every frame (at 8 mm the 1920 × 1080 frame tiles only vertically, usable ±9.1 × ±4.6 mm).
@@ -374,10 +375,11 @@ ask, but each can explain a surprise on the machine.
   0.15° shear limit and refuse a correct fit ("the fiducials do not fit this board's last registration").
 - **The look before an N1 touch** takes its mm/px from the camera's default Z, not the surface Z: the 1.0 mm disc is
   slightly mis-scaled on the real camera.
-- **Tasks dropped behind a failing OpenPnP task.** A machine task that throws makes OpenPnP drop every task queued
-  behind it; some engine endpoints (clean check, prime, test dot, shots, dot ladder, touch-off) queue without waiting
-  for an idle machine thread, so the engine can stay "busy" until a restart. Do not press OpenPnP's own buttons while
-  an engine task is queued.
+- **Tasks dropped behind a failing OpenPnP task** (fixed in the final round for the web home and every engine
+  endpoint). A machine task that throws makes OpenPnP drop every task queued behind it. Every engine endpoint now
+  refuses while OpenPnP is busy, and the web home returns its failure instead of throwing it. A task of OpenPnP's own
+  (its Home or jog buttons) that fails can still drop an engine task queued in the moment between the check and the
+  queue: do not press OpenPnP's own buttons while an engine task is starting.
 - **Pressure hold race.** The machine-thread pressure-hold guard is in runs, Register board, the blank probe and Check
   Z, but not in prime, test dot, shots, dot ladder, touch-off or the clean check.
 - **After a failed Z check** the refusal's own remedy leads nowhere for that home: recording the needle frame again

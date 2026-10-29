@@ -780,6 +780,12 @@ public final class VacuumProber {
 **Refusals before anything moves:**
 
 - `floorZ < 2.0` (an absolute N1 floor; it catches a board Z typed as 0).
+- `floorZ` at or above the nominal (review 1): planning accepts a board top up to 2.0 mm under the needle-frame
+  surface, but the floor sits 1.5 mm under the higher of the two, so the probe could not reach such a board. Refused
+  as `PROBE: the board top Z 3.500 lies 2.000 mm under the needle-frame surface 5.500, and the probe goes at most 1.5
+  mm under the higher of the two (down to Z 4.000): it cannot reach that height. Set the board top Z to roughly the N1
+  contact height, or record the needle frame again; if both are right, probe by hand` (Register's preview shows it in
+  `frame.message`). A weigh coupon's window is its own (±`couponWindowMm` around its place Z) and is not refused so.
 - A needle anchor exists and `|nominal − anchor.surfaceZMm| > zFrameToleranceMm`. I4 would refuse such a surface anyway
   (D/Interlocks.java:212-216). The text names where and when the anchor was taken (§6.2; §14 question 1).
 - A **board** probe without an anchor. I4 refuses an unanchored surface ("the needle Z frame is not set",
