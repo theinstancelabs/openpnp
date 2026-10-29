@@ -10,6 +10,7 @@ import java.util.WeakHashMap;
 
 import org.openpnp.instancelabs.dispense.DispensePlan;
 import org.openpnp.instancelabs.dispense.DispenseService;
+import org.openpnp.instancelabs.dispense.DoseBlocks;
 import org.openpnp.instancelabs.dispense.PadInstances;
 import org.openpnp.instancelabs.dispense.PadType;
 import org.openpnp.instancelabs.padprofile.Anchor;
@@ -99,14 +100,16 @@ final class PadProfileViews {
             d.put("clearanceMm", info == null ? null : info.clearanceMm);
         }
         List<Map<String, Object>> dots = (List<Map<String, Object>>) out.get("dots");
+        // the dose the stream gives each dot: a run subset copies its dots without netSteps, its pads keep the dose
+        int[] doses = in == null ? null : DoseBlocks.dosesOf(p, in.profileSteps);
         for (int i = 0; dots != null && i < dots.size() && i < p.dots.size(); i++) {
             DispensePlan.PlannedDot x = p.dots.get(i);
             Map<String, Object> d = dots.get(i);
-            d.put("netSteps", x.netSteps);
+            int steps = x.netSteps > 0 || doses == null ? x.netSteps : doses[i];
+            d.put("netSteps", steps);
             d.put("block", x.block);
             d.put("padIndex", x.padIndex);
-            d.put("diameterMm", x.netSteps > 0 && in != null ? Suggester.dotDiameterMm(in.evidence, x.netSteps)[1]
-                    : null);
+            d.put("diameterMm", steps > 0 && in != null ? Suggester.dotDiameterMm(in.evidence, steps)[1] : null);
         }
         List<Map<String, Object>> blocks = new ArrayList<>();
         for (DispensePlan.Block b : p.blocks) {

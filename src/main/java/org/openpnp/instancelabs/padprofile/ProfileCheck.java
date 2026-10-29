@@ -55,6 +55,8 @@ public final class ProfileCheck {
     public static final String TIP_NO_PLAN = "no-plan";
     /** Decision 14: some pads of a group are too close to a neighbour for the plan the others keep. */
     public static final String TIP_NEAR = "near";
+    /** Decision 14: why a part held whole by a {@link #TIP_NEAR} pad gets no paste ({@code otherPads}). */
+    static final String NEAR_PART = "too close to a neighbour";
 
     public static final String OUTSIDE_INTERLOCK = "interlock";
     public static final String OUTSIDE_RECIPE = "recipe";
@@ -517,7 +519,7 @@ public final class ProfileCheck {
                 }
                 Group w = keep.isEmpty() ? g : rebuild(c, g, whole, sub(g.split, PART));
                 w.partial = true;
-                w.otherPads = "too close to a neighbour";
+                w.otherPads = NEAR_PART;
                 if (!keep.isEmpty()) {
                     replace(c, g, Arrays.asList(rebuild(c, g, keep, g.split), w));
                 }
@@ -808,7 +810,8 @@ public final class ProfileCheck {
                 break;
             case PART:
                 g.shortText = "not pasted: other pads of the part cannot be dispensed";
-                g.reasonText = Texts.part(g.packageIds.get(0), tip.name, g.otherPads);
+                g.reasonText = NEAR_PART.equals(g.otherPads) ? Texts.nearPart(g.packageIds.get(0))
+                        : Texts.part(g.packageIds.get(0), tip.name, g.otherPads);
                 break;
             case NO_PAD_SIZE:
                 g.shortText = "no pad size";
