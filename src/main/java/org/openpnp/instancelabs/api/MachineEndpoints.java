@@ -4,6 +4,7 @@ import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -53,6 +54,7 @@ final class MachineEndpoints {
         t.setDaemon(true);
         return t;
     });
+    private volatile boolean noJpegLogged;
 
     MachineEndpoints(ApiContext ctx) {
         this.ctx = ctx;
@@ -376,9 +378,27 @@ final class MachineEndpoints {
         g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
         g.drawImage(img, 0, 0, w, h, null);
         g.dispose();
+        return encodeFrame(rgb);
+    }
+
+    /** JPEG, else PNG: never an empty 200. */
+    ApiServer.Response encodeFrame(BufferedImage rgb) throws IOException, ApiException {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        ImageIO.write(rgb, "jpg", out);
-        return ApiServer.Response.bytes(200, "image/jpeg", out.toByteArray());
+        if (ImageIO.write(rgb, "jpg", out) && out.size() > 0) {
+            return ApiServer.Response.bytes(200, "image/jpeg", out.toByteArray());
+        }
+        // ImageIO answers false (no exception) when it has no writer for the image. Seen in real mode on the bench
+        // ThinkPad (2026-10-28): the JVM's writers were tif, bmp, gif, wbmp, png, no JPEG. PNG is always there.
+        if (!noJpegLogged) {
+            noJpegLogged = true;
+            Logger.warn("Top camera snapshot: no JPEG writer in this JVM (writers: {}); sending PNG",
+                    String.join(",", ImageIO.getWriterFormatNames()));
+        }
+        out.reset();
+        if (!ImageIO.write(rgb, "png", out) || out.size() == 0) {
+            throw ApiException.unavailable("the camera frame could not be encoded (no JPEG or PNG writer)");
+        }
+        return ApiServer.Response.bytes(200, "image/png", out.toByteArray());
     }
 
     void shutdown() {
