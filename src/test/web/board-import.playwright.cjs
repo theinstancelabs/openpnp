@@ -101,7 +101,9 @@ async function alignment(page) {
       const pf = ((p.board && p.board.fiducials) || []).find((q) => q.id === f.name);
       if (!pf) return { name: f.name, missing: true };
       const a = sp(root, f.bx, f.by), o = sp(bv.svg, pf.x, -pf.y);
-      return { name: f.name, px: +Math.hypot(a.x - o.x, a.y - o.y).toFixed(3) };
+      const m = bv.svg.getScreenCTM(), pxPerMm = Math.hypot(m.a, m.b);
+      const px = Math.hypot(a.x - o.x, a.y - o.y);
+      return { name: f.name, px: +px.toFixed(3), mm: +(px / pxPerMm).toFixed(4) };
     });
     const exp = root.querySelector('path.pv-a-exposed');
     const inv = root.getScreenCTM().inverse();
@@ -175,7 +177,11 @@ const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y
     const a1 = await alignment(page);
     check('(1) ftp.board.xml at 30°: its drawing is drawn (the fallback from the board file in a fresh session: ' + a1.kind + ')',
       a1.kind === 'fallback' || a1.kind === 'kicad', a1.kind);
-    check('(1) every fiducial of the drawing within 0.5 px of the plan\'s', a1.fids.length === 3 && a1.fids.every((f) => !f.missing && f.px <= 0.5), a1.fids);
+    // a fresh session draws the board file itself (every fiducial exact); after an attach in an earlier run it draws
+    // KiCad's, whose FID1 is 0.31 mm from the board file's (§3.10): the other two stay exact, FID1 within 0.35 mm
+    const exact1 = a1.fids.filter((f) => !f.missing && f.px <= 0.5).length;
+    check('(1) every fiducial of the drawing within 0.5 px of the plan\'s (an attached KiCad drawing: two, and FID1 within 0.35 mm)',
+      a1.fids.length === 3 && (a1.kind === 'fallback' ? exact1 === 3 : exact1 >= 2 && a1.fids.every((f) => !f.missing && f.mm <= 0.35)), a1.fids);
     check('(1) every pad of the plan on the drawing\'s copper', a1.offCount === 0 && a1.pads === 160, a1);
     const pads1 = await padMap(page);
 
@@ -238,7 +244,8 @@ const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y
       suffixed: Array.from(document.querySelectorAll('#board-import-warn li[data-code="PACKAGE_SUFFIXED"]')).map((li) => li.closest('details') ? 'notes' : 'open'),
       attach: document.getElementById('board-import-attach').hidden ? null : document.getElementById('board-import-attach').textContent }));
     check('(5) ftp: 80 parts get paste (160 pads), 3 fiducials', /80 parts get paste \(160 pads\)/.test(pv.found) && /3 fiducials/.test(pv.found), pv.found);
-    check('(5) ftp: three packages, each new or suffixed', pv.rows.length === 3 && pv.rows.every((s) => /^(new|suffixed)$/.test(s)), pv.rows);
+    check('(5) ftp: three packages, each new or suffixed (reuse after an import in an earlier run)', pv.rows.length === 3
+      && pv.rows.every((s) => /^(new|suffixed|reuse)$/.test(s)), pv.rows);
     check('(5) ftp: nothing blocks dispensing; PACKAGE_SUFFIXED (if any) is a note', pv.g1 === 0 && pv.suffixed.every((x) => x === 'notes'), pv);
     check('(5) ftp: the attach offer names ftp.board.xml and FID1', !!pv.attach && /ftp\.board\.xml/.test(pv.attach) && /FID1/.test(pv.attach), pv.attach);
 
@@ -327,9 +334,16 @@ const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y
     // ---- (10) attach the drawing to ftp.board.xml ---------------------------------------------------------------------
     await openDialog(page);
     await upload(page, FTP());
-    await page.click('#btn-board-import-attach');
-    const again = await page.waitForSelector('#btn-board-import-attach.btn--press', { timeout: 1500 }).then(() => true, () => false);
-    if (again) { await sleep(450); await page.click('#btn-board-import-attach'); }
+    // one press; two when ftp.board.xml has a drawing already (an earlier run) or the server says the name is taken
+    for (let i = 0; i < 4; i++) {
+      if (await page.$('#dlg-board-import[data-state="saved"]')) break;
+      await page.waitForSelector('#dlg-board-import[data-state="preview"] #btn-board-import-attach:enabled', { timeout: 60000 });
+      const armed10 = await page.$('#btn-board-import-attach.btn--press');
+      if (armed10) await sleep(450);
+      await page.click('#btn-board-import-attach');
+      await page.waitForFunction(() => { const d = document.getElementById('dlg-board-import'); return !d || d.dataset.state !== 'saving'; }, null, { timeout: 60000 });
+      await sleep(200);
+    }
     await page.waitForSelector('#dlg-board-import[data-state="saved"]', { timeout: 60000 });
     const t10 = await page.textContent('#toast');
     check('(10) attach: a toast says the drawing is used for ftp.board.xml', /drawing is now used for .*ftp\.board\.xml/.test(t10), t10);

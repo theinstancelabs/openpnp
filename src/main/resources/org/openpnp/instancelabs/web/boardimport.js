@@ -32,6 +32,20 @@
   const shortType = (name) => String(name || '').replace(/\s*\([^)]*\)\s*/g, ' ').replace(/\s+/g, ' ').trim();
   const STATUS_T = { 'not-started': 'not started', provisional: 'provisional', characterized: 'characterized', validated: 'validated' };
   const statusText = (st) => STATUS_T[st] || String(st || '').replace(/-/g, ' ');
+  /** "Chip 0603": the pad type's family (without its note) and name, as Profile and the pad inspector name it. */
+  function typeLabel(t) {
+    const x = M && M.types && M.types.get(t.typeKey);
+    if (x) return shortType((x.family || '') + ' ' + (x.name || ''));
+    return shortType(t.name && /\s/.test(t.name) ? t.name : t.typeKey || t.name || '');
+  }
+  function loadTypes() {
+    IL.api('GET', '/api/pad-types').then((r) => {
+      if (!M) return;
+      M.types = new Map();
+      for (const f of (r && r.families) || []) for (const t of f.types || []) M.types.set(t.typeKey, { family: f.family || t.family, name: t.name });
+      if (M.pv && (M.state === 'preview' || M.state === 'saving')) paintPackages(M.pv);
+    }, () => { /* the type keys stand in for the names */ });
+  }
   /** The server's slug rule (§3.7): NFKD, ASCII letters and digits lower-cased, every other run → "-", at most 40. */
   function slugOf(name) {
     const s = String(name || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase()
@@ -98,8 +112,9 @@
       if (o.file) choose(o.file);
       return M;
     }
-    M = { onSaved: o.onSaved || null, state: 'choose', file: null, pv: null, ctl: null, bv: null, replace: false, saved: null };
+    M = { onSaved: o.onSaved || null, state: 'choose', file: null, pv: null, ctl: null, bv: null, replace: false, saved: null, types: null };
     build();
+    loadTypes();
     if (o.file) choose(o.file);
     return M;
   }
@@ -460,12 +475,21 @@
     const away = offs.length ? ' (' + offs.slice(0, 3).map((x, i) => x.id + (i ? ' ' : ' is ') + IL.fmt(x.mm, 2) + ' mm').join(', ')
       + (offs.length > 3 ? ' and ' + (offs.length - 3) + ' more' : '') + ' away from the board file\'s position' + (offs.length > 1 ? 's' : '')
       + '; the drawing shows KiCad\'s)' : '';
-    const btn = el('button', { type: 'button', class: 'btn btn--primary', id: 'btn-board-import-attach', 'data-board': c.file }, 'Use the drawing for ' + base);
+    // a board file that has a KiCad drawing already: this one replaces it (two presses), as the note says
+    const files = (IL.run && IL.run.boards && IL.run.boards.files) || [];
+    const cur = files.find((x) => x.file === c.file);
+    const had = cur && cur.imported && cur.imported.how === 'attach' ? cur.imported : null;
+    if (had) M.attachReplace = true;
+    const btn = el('button', { type: 'button', class: 'btn btn--primary', id: 'btn-board-import-attach', 'data-board': c.file },
+      (had || M.attachReplace ? 'Replace the drawing of ' : 'Use the drawing for ') + base);
     IL.press2(btn, () => (M && M.attachReplace ? 'replace its drawing' : null), () => attach(c), { refusalIn: n.refusals });
     n.attachBtn = btn;
     n.attach.replaceChildren(
       el('div', {}, el('b', { text: 'This is the board in ' + base + ': ' }), 'all ' + count + ' parts match' + away + '.'),
-      el('div', { class: 'bi-attach__s', text: 'Use this drawing for ' + base + ': nothing else changes (no new packages or parts, its plans stay valid).' }),
+      el('div', { class: 'bi-attach__s', text: had
+        ? base + ' has a KiCad drawing already (added ' + IL.fmtTime(IL.toClient(had.atMs)) + (had.sourceName ? ' from ' + had.sourceName : '')
+          + '): this file\'s drawing replaces it. Nothing else changes.'
+        : 'Use this drawing for ' + base + ': nothing else changes (no new packages or parts, its plans stay valid).' }),
       el('div', { class: 'btn-row' }, btn));
     gateButtons();
   }
@@ -505,7 +529,7 @@
       const sub = [];
       if (p.state === 'suffixed') sub.push(el('div', { class: 'bi-pkg__s', text: (p.why || p.baseId + ' exists in OpenPnP with other pads') + ': saved as a copy.' }));
       if (p.state === 'reuse') sub.push(el('div', { class: 'bi-pkg__s', text: 'Already in OpenPnP with the same pads: used as it is.' }));
-      if (p.padTypesFrom) sub.push(el('div', { class: 'bi-pkg__s', text: 'Uses the pad types of ' + p.padTypesFrom + '.' }));
+      if (p.usesPadTypesOf) sub.push(el('div', { class: 'bi-pkg__s', text: 'Uses the pad types of ' + p.usesPadTypesOf + '.' }));
       const tr = el('tr', { 'data-package': p.id, 'data-state': p.state || 'new', tabindex: '0', class: blocked(p) ? 'bi-pkg--block' : waiting(p) ? 'bi-pkg--wait' : null },
         el('td', { class: 'bi-pkg' }, el('div', { class: 'bi-pkg__id' }, breakable(p.id)), el('div', { class: 'bi-pkg__refs', text: refList(refs, 3), title: refs.join(', ') }), sub),
         el('td', { class: 'r', text: String((p.pads || []).length) }),
@@ -537,7 +561,7 @@
       if (!t.typeKey) return el('div', { class: 'bi-pt__none' }, IL.glyph('block', 'xs'), 'No pad type' + (many ? ' (' + IL.plural(t.pads, 'pad') + ')' : ''));
       const status = t.status ? ' · ' + statusText(t.status) : '';
       return el('div', { class: 'bi-pt__t' + (t.dispensable === false ? ' bi-pt__t--need' : '') },
-        el('div', {}, el('b', { text: shortType(t.name || t.typeKey) }), many ? ' (' + IL.plural(t.pads, 'pad') + ')' : '', el('span', { class: 'muted', text: status })),
+        el('div', {}, el('b', { text: typeLabel(t) }), many ? ' (' + IL.plural(t.pads, 'pad') + ')' : '', el('span', { class: 'muted', text: status })),
         t.sentence ? el('div', { class: 'bi-pt__s', text: t.sentence }) : null,
         t.dispensable === false ? el('div', { class: 'bi-pt__s bi-pt__s--need', text: 'Not characterized yet: dispensing needs a characterized pad type.' }) : null);
     });
@@ -606,9 +630,9 @@
         paint();
         paintName();
         IL.toast(d.reason || 'A board with this name exists: press again to replace it.', 'need');
-      } else if (e.status === 409 && d.error === 'preview-stale' && d.details) {
+      } else if (e.status === 409 && d.error === 'preview-stale' && (d.preview || d.details)) {
         IL.toast('OpenPnP\'s packages or parts changed since the preview: check the new lists, then save.', 'need');
-        showPreview(d.details, { keepName: true, stale: true });
+        showPreview(d.preview || d.details, { keepName: true, stale: true });
       } else if (e.status === 400 && /^Name/.test(d.reason || '')) {
         paint();
         n.name.classList.add('input--invalid');
@@ -684,7 +708,7 @@
     const crows = Array.from(types.values()).map(({ t, refs }) => {
       const b = el('button', { type: 'button', class: 'btn btn--sm board-import-padtype', 'data-type': t.typeKey }, 'Open pad type');
       b.addEventListener('click', () => leaveTo('#profile/pad-types/' + encodeURIComponent(t.typeKey)));
-      return el('li', {}, el('div', { class: 'bi-todo__t' }, el('b', { text: shortType(t.name || t.typeKey) }),
+      return el('li', {}, el('div', { class: 'bi-todo__t' }, el('b', { text: typeLabel(t) }),
         el('span', { class: 'muted', text: ' · ' + (t.status ? statusText(t.status) : 'not characterized') + ' · ' + refList(refs, 3) })), b);
     });
     n.saved.replaceChildren(...[
