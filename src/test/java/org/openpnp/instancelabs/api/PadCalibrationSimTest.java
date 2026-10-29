@@ -571,6 +571,8 @@ public class PadCalibrationSimTest {
         }
         checkBlockStarts();
 
+        assertEquals(0, job.getAsJsonArray("warnings").size(), "the engine steps went as planned (parked too): "
+                + job.getAsJsonArray("warnings"));
         // the operator weighs, wipes and weighs again; the decision and the new plan follow
         JsonObject done = weighAndType(job);
         assertEquals("done", str(done, "state"), done.toString());

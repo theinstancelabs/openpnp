@@ -1047,6 +1047,7 @@ final class PadCalibrationJob {
     /** The camera records of a block step (§7.4): one per block with the job's conditions (§1.7). */
     private List<DoseRecord> records(DoseBlocksResult res, String kind) throws Exception {
         DispenseConfig c = svc.getConfig();
+        warnings.addAll(res.run.warnings);
         LadderStats.Settings set = DoseRecords.settings(c.padCalibration);
         List<DoseRecord> l = new ArrayList<>();
         for (int k = 0; k < res.blocks.size(); k++) {
