@@ -16,7 +16,14 @@ something new from core, ask for it (or add it to your module and propose it for
 | `app.css` | core | Tokens (light + `[data-theme=dark]`), frame, strip, STOP, nav, panel, shared components (§11). |
 | `core.js` | core | The `IL` namespace (this document). Loaded **synchronously** in `<head>`: sets the theme before first paint. |
 | `app.js` | core | `IL.boot()`. Loaded last. Kept because `ApiServerSimTest` fetches `/static/app.js`. |
-| `boardview.js` | Run stage | `IL.boardview`: the to-scale board SVG (hero, probe overlay, Records done-dot map) and the shared geometry (`hull`, `inflate`, `outside`, `bbox`, `planeFit`). |
+| `boardview.js` | Run stage, board import (web-render) | `IL.boardview`: the to-scale board view (hero, probe and fiducial overlay, pad inspector, upload preview, Records done-dot map): two stacked SVGs, the drawing under the job overlay (§5 › Board drawing), and the shared geometry (`hull`, `inflate`, `outside`, `bbox`, `planeFit`, `cased`). |
+| `boardart.js` | board import (web-render) | `IL.boardart`: the board drawing (art JSON) as SVG, thumbnails, the board → machine affine helpers (§5 › Board drawing). |
+| `pathpreview.js` | board import (web-render) | `IL.pathPreview`: the path preview row `#run-preview` (§5 › Board drawing). |
+| `padinspect.js` | board import (web-render) | `IL.padInspect`, panel view `pad`: the pad inspector (§5 › Board drawing). |
+| `board.css` | board import (web-render) | The board palette, `.pv--art` and the casing, picture modes, the preview row, the inspector. Loaded after `run.css`. |
+| `boardflow.js` | board import (web-flow, `il/bi-web-flow`) | `IL.boardFlow`: fills the hooks H1–H5 of `run.js` / `records.js` (§11; §5 › Board drawing). |
+| `boardimport.js` + `boardimport.css` | board import (web-flow, `il/bi-web-flow`) | `IL.boardImport`: the upload dialog `#dlg-board-import` and the page-wide drop guard (§5 › Board drawing). |
+| `padprofile.js` + `padprofile.css` | profile calibration (pc-web, to come) | `IL.padProfile`, the `pad-cal` view, Profile › Needs a profile (`PROFILE_CALIBRATION_DESIGN.md` §13). |
 | `run.js` + `run.css` | Run stage | `#ws-run`, Run panel steps (board, probe, checks, run, result, recovery override), run confirm `#dlg-run`. |
 | `setup.js` + `setup.css` | Setup stage | `#ws-setup` (cards §8.2), default panel `head`. `calibrate.js` may reuse `setup.css`. |
 | `profile.js` + `profile.css` | Profile stage | `#ws-profile` (§8.3), `#dlg-padtype`, `#dlg-history`, panel `pt`. |
@@ -33,7 +40,8 @@ STOP): use `IL.press2`, `IL.dialog.open` / `IL.dialog.showNative`.
 
 ```
 <head>  core.js (sync)  → IL defined, theme applied, F9 / Space / Esc key handlers and the STOP clicks installed
-        boardview.js, run.js, setup.js, profile.js, calibrate.js, records.js (defer, in this order)
+        boardart.js, boardview.js, pathpreview.js, padinspect.js, [boardflow.js, boardimport.js: web-flow],
+        run.js, setup.js, profile.js, calibrate.js, records.js (defer, in this order)
         app.js (defer)  → IL.boot()   (core boots by itself at DOMContentLoaded if app.js never ran)
 boot:   mount(root) of every registered workspace → route applied → show() of the active one
         → poll /api/status (0.7 s chain) → render loop
@@ -67,7 +75,7 @@ Registering after boot works (mounted at once).
 | `planForgotten` | `GET /api/plan/{id}` answered 404 (OpenPnP restarted) → plan chip `Plan forgotten (OpenPnP restarted): plan again` |
 | `planAt` | client ms of the last plan read |
 | `cleanCheck` | newest clean-pad report of the plan shown (from the plan, a subset run, or `lastRun.cleanCheck`) |
-| `newSeatAtMs` | operator answered "re-seated / new board" (readiness item 6 needs a probe after it) |
+| `newSeatAtMs` | the engine's new-seat flag (`status.dispense.newSeatAtMs`, as client ms): readiness item 6 needs Register board after it. `IL.setNewSeat(atMs \| null)` posts `/api/board/new-seat`; `newSeatPending` keeps the answer for 3 s while the post is in flight |
 | `route` | `{ws, section, id, panel, params}` |
 | `recovery` | open recovery or null: `{cause: 'stop'|'aborted'|'error'|'openpnp', atMs, actions (server STOP answer), source ('F9'|'button'|'key'), run: {runId, label, boardName, planId, status, message, phase, dotsDone, dotsPlanned, doneDots, pressureOnS}, message, seenDown, purgeShort}` |
 | `lastStop` | the last recovery after it cleared (Run's board decision: finish the pads left / wipe all) |
@@ -76,8 +84,9 @@ Registering after boot works (mounted at once).
 | `connectedAt`, `homedAt` | client-observed transition times |
 | `runPressureSince` | client stamp of the first poll of a run's pressure session (phase `dispensing` / `shots` / `dispensing calibration dots`) |
 
-Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, `['il.newSeatAtMs']`, (Run:
-`['il.boardloc.<file>']`); `sessionStorage['il.recovery']`.
+Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, (Run: `['il.boardloc.<file>']`);
+`sessionStorage['il.recovery']`, (Run: `['il.run.regResult']`, Setup: `['il.setup.blankRun']`). A value left in
+`localStorage['il.newSeatAtMs']` by an older page is posted to the engine once, then removed.
 
 ## 4. Events (`IL.on(name, fn)` returns the unsubscribe function)
 
@@ -86,7 +95,7 @@ Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, `
 | `status` | `(status, prev)` | every good poll, before rendering |
 | `plan` | `(plan, prev)` | `setPlan`, `loadPlan`, `planRefresh`, 404 (plan null + `S.planForgotten`) |
 | `cleancheck` | `(report)` | a newer clean-pad report of the plan shown was adopted |
-| `taskend` | `(run)` | a task (board, clean-pad check, prime, test dot, touch-off, ladder, shots) ended; core already re-read the plan and runs |
+| `taskend` | `(run)` | a task (board, clean-pad check, prime, test dot, touch-off, ladder, shots, board registration, blank probe, z check) ended; core already re-read the plan and runs |
 | `stop` | `(answer)` | our STOP was confirmed (`answer.actions`) |
 | `recovery` | `(rec or null)` | a recovery opened / cleared |
 | `online` | `(bool)` | offline after 3 s without an answer / back |
@@ -157,6 +166,10 @@ Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, `
 - `IL.stoppedRun(s)`: the status still shows the run our STOP just stopped (≤ 5 s): the strip, the plan chip and Run
   show it as stopped / switching off, never as dispensing. `IL.noDotsReached(run)`: a stopped board run put no dot down
   (one action: run the board again).
+- `IL.regProgress(run)`: where a Register board / blank probe task is, from `status.run.detail`: `{stage, k, n, part
+  ('home' | 'FID 2/3' | 'check 2/3' | 'probe 3/5' | 'plan again'), left (s, counting down between the engine's steps)}`.
+  The strip, the plan chip, the stepper and the foot button share it. `IL.TASK_WORD` maps task labels to words
+  (`board registration` → `Register`, `blank probe`, `z check`).
 - `IL.boardLeftS(run)`: seconds left of a board run, the one number for the strip, tiles, timeline and stepper (the
   live rate blended with the plan estimate over the first 20 dots). `IL.tourProgress` (set by run.js): the camera tour
   progress `{text, left, k, n, approx}` the strip and the Pads clean card share.
@@ -185,9 +198,17 @@ Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, `
   `purge-reset` (two-press), `pressure-on` (two-press unless N2 ≤ 3 mm from the waste), `pressure-off`,
   `attest-regulator`, `attest-paste`, `same-seat`. Run registers `plan-again`, `clean-check` (two-press), `probe`,
   `run-rest` (`{planId, padIds}` → the run confirm for those pads, never one this tab saw pasted), `run-fewer` (I7: a
-  test run of the first N dots that fits the on-time limit); Setup registers `su-go-<card>`, `su-probe-blank`. Every gated fix-it row gets a visible
+  test run of the first N dots that fits the on-time limit), and Register board's (AUTO_REGISTER_DESIGN.md §8.2):
+  `register` (two-press, `probe: auto`), `register-check` (clears the new-seat flag, then registers: the fiducials decide
+  "same seat"), `probe-by-hand` (opens "Do it by hand" on Register), `look-camera` (Setup's Top camera card),
+  `plan-unregistered` (plans the board with `registration: 'none'`), `board-step`, `check-z` (two-press,
+  `POST /api/machine/z-check`); Setup registers `su-go-<card>`, `su-probe-blank`. Every gated fix-it row gets a visible
   `.fix-why` reason line from core (rows marked `[data-own-reason]` show their own).
-  `IL.fixesForCode(code, status, message)`: an I4 refusal that names a place offers `Retake Z with N1` (#setup/places/<name>).
+  `IL.fixesForCode(code, status, message)`: an I4 refusal that names a place offers `Retake Z with N1` (#setup/places/<name>);
+  I4 seat / surface → `Register board`, `Do it by hand`; I4 "measured before the home" → `Check Z`; I4 "Z moved" →
+  Needle Z frame; `REG` → `Look with the camera`, `Change board`, `Plan without fiducial correction`, `Register again`,
+  `Do it by hand`; `PROBE` → `Register again`, `Do it by hand` (+ `Probe the blank…` when it names the blank).
+  `IL.CODE_RE` is the code prefix of an engine text (`I4:`, `MACHINE:`, `CONFIG:`, `PLAN:`, `REG:`, `PROBE:`).
 - `IL.lockReason(status, {connected, homed, idle = true, pressureOff = true, engine})` → the spec's locked-control
   text (`Locked while the board runs`, `Pressure is held: switch it off first`, `Not connected: connect first`, offline)
   or null. `IL.gate(btn, reason, reasonEl?)` disables with the reason (title + optional visible `.reason` line).
@@ -228,13 +249,64 @@ or label: "2,343 ms", "bench 5,490"), `IL.unitText(h)` (header text whose units 
 headers), `IL.eventText(msg)` (OpenPnP event text with UUIDs, fingerprints and JSON folded; full text as title),
 `IL.startAnglesText(profile)` ("297.9° / 117.9° (in whole motor steps)"), `IL.lsJson / lsSet` (localStorage), `IL.ssJson(key, fallback) / IL.ssSet(key, value)` (sessionStorage, JSON).
 Format (display only; real minus `−`): `IL.fmt(n, d=2)`, `fmtSigned`, `fmtInt` (`5,410`), `fmtPsi` (`18`, `18.5`),
-`fmtMm`, `fmtDeg` (`298.0°`), `fmtClock` (`1:15`), `fmtDuration` (`4.0 s`, `5 min 16 s`), `fmtTime` (`13:06`),
+`fmtMm`, `fmtDeg` (`298.0°`), `fmtClock` (`1:15`), `fmtDuration` (`4.0 s`, `5 min 16 s`), `fmtSecs` (an estimate:
+`25 s`, `1 min 25 s`), `fmtTime` (`13:06`),
 `fmtTimeS` (`14:19:42`), `fmtDateTime`, `fmtAgo`, `plural(n, 'dot')`, `turnLabel(800, 1600)` (`½ turn`),
 `recipeParts(profile)`, `recipeEl(profile, {changed, href})` (the `.recipe` token; `aria-label` = parts without the
 name joined by ` · `), `profileText`. Inputs: `IL.inputNum(n, d)` (ASCII; d decimals unless that would lose digits:
 never rounds a stored value), `IL.num(idOrEl)`, `IL.str(idOrEl)`.
 Constants: `IL.STOP_CODES`, `IL.STOP_TITLE`, `IL.STOP_LINE` (the exact §13 texts), `IL.STOP_DID`, `IL.LIMITS`,
 `IL.PRESSURE_PHASES`, `IL.WORD`.
+
+### Board drawing, path preview, pad inspector, upload (BOARD_IMPORT_DESIGN.md §5, 2026-10-29)
+
+The drawing, the preview and the inspector are merged on `il/bench-sync-autoreg`; the upload dialog and the glue
+(`boardflow.js`, `boardimport.js`) are on `il/bi-web-flow` and merge with §11 in the AR + BI integration slice. Nothing
+here moves the machine.
+
+- **`IL.boardview`** (`boardview.js` header has the full API): `create(host, {id, aria, onPad, onPart, lite})` makes
+  two stacked SVGs in `.pv-host`: `svg.pv.pv-art` (the drawing, `aria-hidden`, no pointer events) under
+  `svg#plan-svg.pv` (the job overlay), with the same viewBox. `setPlan(plan)` builds once per plan (reads `plan.board`
+  and `plan.dot.diameterMm`: dots at their real size, never below 1.5 px); `setArt(art)` builds the drawing once per
+  art, a re-plan changes only its transform; `setBoard({art, toMachine})` / `setAffine(m)` draw a board without a
+  plan; `picture('full' | 'quiet' | 'off')`; `update({done, dirty, next, check, needle, n1, probe, fids, cam})` only
+  toggles classes and moves markers; `preview({n, ghost})`; `select({padIds, refs})`; `dotLabels(indexes)`;
+  `fit(box)`, `setView('dots' | 'board' | 'follow')`, `zoomBy`, `destroy()`. `IL.boardview.of(host)`. Test classes kept:
+  `rect.pad`, `rect.pad.dirty`, `circle.dot`, `circle.dot.done` (no art element uses `pad` or `dot`).
+- **`IL.boardart`**: `get(id)` (`GET /api/board-art/<id>` through the browser's HTTP cache: the server marks drawings
+  immutable, so there is no client cache; null on 404), `build(art, {uid})` (one merged path per layer; labels in three
+  size buckets `pv-lb1/2/3`), `thumbUrl(art, {w, h})` (a `blob:` image from `art.thumb`), `toSvgMatrix(m)`,
+  `apply(m, x, y)`, `outlineBox`, `originMarker`.
+- **`IL.pathPreview.create({host, bv, button, before, onChange})`** → `pp`: `setPlan`, `allow(on)` (false while live,
+  stopped or a task runs), `play`, `pause`, `clear`, `seek(v)`, `state`, `destroy`. Times from `plan.dots[i].ta / te`,
+  else illustrative (50 mm/s, 0.6 s per dot, said in the readout). `requestAnimationFrame` only while playing and
+  visible, at most 30 updates per second.
+- **`IL.padInspect.open({padId} | {ref}, {bv})`**, `current()`, view `IL.views.pad` (`#pad-insp-*`): the part's
+  openings and dots, the pad type and the rule sentence (`plan.pads[i].typeRule.sentence`), flags in words, the camera
+  (`#pad-insp-cam`), `Edit pad type …` / `New pad type for <package>`.
+- **`IL.boardFlow`** (web-flow): `mountBoardStep(body, {select, form, setXY, loadBoards})` (H1: `#btn-board-upload`,
+  `#board-thumbs`, `#board-imported`, `#btn-board-use-fid`), `hero(bv, {plan, sel, form, mode, s, hero, stageBar,
+  row})` → `{shown}` (H3: the drawing, `#pv-picture`, the preview, `#btn-pad-inspect`; before planning the chosen
+  board at the form's seat with the live camera, `#board-preplan`), `onPad` / `onPart` (H2), `recordsMap(bv, plan)`
+  (H4), `onImported(saved)`. Keeps the newest 8 drawings; `localStorage['il.pv.picture']` (default Quiet).
+- **`IL.boardImport.open({file, onSaved})`**, `isOpen()` (web-flow): `#dlg-board-import`, states choose → reading
+  (Cancel aborts, 60 s) → preview → saving (Esc and Cancel do nothing) → saved; 12 MB checked before sending; a refused
+  read shows its reason and `Choose another file`. The drop guard: a file dropped outside the drop zone never replaces
+  the page; a `.kicad_pcb` opens the dialog.
+- Tests: `boardview.playwright.cjs` (`run-boardview-test.sh`, devproxy `--fixtures`: the drawing, the overlay, the
+  preview, the inspector, the performance gate at 4× CPU throttling), `board-import.playwright.cjs` (web-flow, 44
+  checks, run after `webui-sim.playwright.cjs` in the same SIM session).
+
+### Profile calibration (to come)
+
+The pc-web slice adds `padprofile.js` + `padprofile.css`, the hooks H-P1 … H-P9 in core, profile, run, records,
+boardimport, padinspect and boardview, `IL.padProfile`, the `pad-cal` view and its sessionStorage key
+(`PROFILE_CALIBRATION_DESIGN.md` §13). The API it codes against (`il/pc-api`) is in `WEB_API.md` §3.4.
+
+### Since §10
+
+`server.simulated` and `server.simulatorConfirmed` now exist (`WEB_API.md` §3.1): §10's fallback (the driver
+connection) is no longer needed.
 
 ## 6. Render rules (§15)
 
@@ -274,6 +346,15 @@ Colour means state only; never green for "off".
 | Tables | `.kv(--wrap) .tbl (td.r) .ptable .headtable (td.hl)` |
 | Dialog | `.scrim .dialog(--sm) .dialog__head/__keys/__body/__foot/__sum .grid2 .tick .tick__t/__d .who .keysheet` |
 | Utility | `.sr .spacer .muted .dim .nowrap .mono .hide-narrow .show-narrow` |
+
+Board picture (`board.css`): one physical palette for both themes, `--pv-a-sub --pv-a-cu --pv-a-mask --pv-a-mask-op
+--pv-a-bare --pv-a-silk --pv-a-hole --pv-a-edge --pv-a-fab --pv-a-ref --pv-a-fabref --pv-a-paste` (only `--pv-a-edge`
+follows the theme); overlay marks on the board `--pv-o-ap --pv-o-dot --pv-o-next --pv-o-block --pv-o-check
+--pv-o-probe --pv-o-path --pv-o-path-q --pv-o-trail-q --pv-o-ghost` with the two-tone casing `--pv-o-case-d
+--pv-o-case-l`. **Casing rule:** a mark drawn on the board (`.pv--art`) gets a casing (`IL.boardview.cased`, class
+`.pv-case`, no state class), so it reads on mask, copper and silkscreen alike; marks off the board keep `run.css`'s
+`.pv` styles. Picture modes: Off hides the art SVG; Quiet sets `.pv-art--quiet` on it and `.pv--quiet` on the
+overlay; the overlay gets `.pv--art` whenever the drawing shows.
 
 Breakpoint ≤ 1360 px: nav rail 84 px, panel 388 px, STOP 216 px. The strip drops `.long` value parts by itself
 when it would run under STOP (`.cells--t1` / `--t2`).
@@ -323,3 +404,45 @@ Never `/dev/ttyACM*`, `/dev/serial/*`, `/dev/video*` or a real-mode OpenPnP.
 - Optional API additions of §17 in place: `GET /api/plans` (plan restore in a fresh browser) and `run.pressureOnAtMs`
   (pressure on-time of a run, also after a reload). Not added (fallbacks in use): `run.checkDone/checkPlanned` (camera
   tour progress is estimated, labelled `≈`), `server.simulated` (inferred from the driver connection).
+
+## 11. Register board, home at run, Z check (AUTO_REGISTER_DESIGN.md §8, 2026-10-29)
+
+- **Run › Register** (key and route stay `probe`): `#reg-correction` (what the plan's dots use: `fiducial check 13:05`,
+  `… (before the last Next board)`, `no fiducial correction`), `#reg-preview` (idle: the seat it expects and the spots),
+  `ol.phases#reg-phases` (live), `table#reg-fids` and `table#reg-probes` (expected / found, Z and state; a refused point
+  gets a row with its reason in words), `div.ri#reg-result` (the result card: its first sentence is machine-readable,
+  `Registered 13:05: …`, `Same seat 13:12: …`, `Re-seated …`, `Not registered: …`, `Registered 13:05, but the probe
+  failed: …`, `Stopped 13:06 during …`), `#probe-tiles` (the points by hand, else the tied surface), and
+  `details#probe-by-hand` (today's guide, targets and untied note, ids unchanged). The foot is built once with both sets:
+  `#register-note`, `#btn-register` (two-press, `Register board · ≈ M:SS` from `registrationTargets.estimatedSeconds`
+  and the live home plan; `Registering… · ≈ 0:41 left` while it runs), `#btn-reg-continue` (`Checks ›` after a good
+  result), `#register-why`; or the by-hand `#probe-live`, `#probe-warn`, `#btn-probe-add`, `#btn-probe-save`,
+  `#probe-why`. `R.byHand` (panel state) chooses. `#btn-reg-again`, `#btn-reg-probe` (`probe: always`) sit in the card.
+- **Run state:** `R.regResultRunId` (sessionStorage `il.run.regResult`; cleared by `Checks ›`, a plan from the Board
+  step, another task), `R.regLoaded` (the run ids whose `nextPlanId` this tab loaded: a reload or a second browser
+  catches up from `status.run`), `R.regDetail` (the last live detail, for the stopped texts). `autoStep` returns
+  `probe` while the plan's registration runs or a result is shown. The by-hand targets are the engine's
+  (`plan.registrationTargets.probes`); the bounding-box targets stay as the fallback. The plan's preview is computed
+  again (`GET /api/plan/{id}/registration-targets`) when the machine is stopped, started or homed.
+- **Hero overlay:** `bv.update({probe, fids})` on the Register step (idle, live, result). `g.pv-l-fids` (boardview.js
+  `drawFids`, cased with the §5.3 overlay tokens): a dashed circle of the search radius at the expected position, a
+  cross there, a filled dot at the found one with a short leg; the name. Probe targets carry their alternates as small
+  rings; a refused target is struck through. The view keeps the search circles in sight.
+- **Home and Z:** the machine item is a note that counts ready (`state: 'info'`) when the engine homes first
+  (`status.machine.home.policy`): `homes first` / `homes first, checks Z`; the verdict reads `Ready to run · homes first
+  (≈ 25 s)`. `need` only when a STOP left N1 low (`home.n1Low`). Homed with Z data that predate the home:
+  `checks Z` with the `check-z` fix. The status I4 "measured before the home" no longer shows as a Place heights
+  blocker (a board run checks Z itself). Recovery's home step is done without a home unless N1 is low. The run confirm
+  shows `#run-confirm-home`; the Run step's phases add Home and Z check rows from `run.detail`.
+- **Board step:** `Board top Z (approximate, ±1 mm)`, prefilled when empty (`#board-z-note` says from where), the
+  plan's frame check under it; copy names Register board.
+- **Setup › Probe the blank** (`probe-blank` view): automatic (`ol.phases#blank-phases`, `table#blank-targets`,
+  `div.ri#blank-result`: `Saved 13:20: 6 points, worst 0.012 mm, covers 15 of 15 spots.` / `Not saved: …` / `Stopped …:
+  nothing was saved.`), the foot `#blank-note`, `#btn-blank-auto` (two-press), `#blank-why`; `details#blank-by-hand`
+  keeps today's table with `#btn-blank-add` / `#btn-blank-save` in the foot. Settings: `#set-homebefore`
+  (`homeBeforeRun`). The JSON editor never sends `boardRegistrations` or `newSeatAtMs` (engine stamps).
+- **Records:** `board-registration` → `Registration · <board>`, `surface-probe` → `Surface probe · <name>`, `z-check`.
+- **Board import hooks** (BOARD_IMPORT_DESIGN.md §5.1.1, no-ops until `boardflow.js` loads): H1 `mountBoardStep` in the
+  Board step, H2 `onPad` / `onPart` of the hero view, H3 `hero(bv, …)` before the empty-state switch (the SVG and the
+  stage bar show with a plan or a drawing), H4 `recordsMap(bv, plan)` after the Records map's `setPlan`, H5 the
+  replaced Records map view is destroyed.

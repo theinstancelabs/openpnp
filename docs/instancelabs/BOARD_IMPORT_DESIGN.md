@@ -2016,3 +2016,46 @@ the check is cited in the section named.
 9. **OQ12:** treat the upstream lumenpnp files as CERN-OHL-W v2 with credit and the Opulo marks removed. Fixtures over
    1 MB are stored gzipped (`*.kicad_pcb.gz`, read with `GZIPInputStream` in the tests).
 10. **OQ13:** AR's web-ui slice adds hooks H1–H5; web-render's boardview.js lands first with `g.pv-l-fids`.
+
+---
+
+## 14. As built (2026-10-29)
+
+Merged on `il/bench-sync-autoreg` (b81d73d21): `kicad`, `art`, `plumbing`, `web-render` (with its visual pass on the
+real art) and `import-api`. Built, not merged yet: `web-flow` on `il/bi-web-flow` (`board-import.playwright.cjs`, 44
+checks against the real import-api in a SIM session); the AR + BI integration slice merges it with AR's web-ui and
+wires the art's keep-outs into `ProbeTargets` (§10.2: until then Register board assumes a mounting hole in each corner
+of a board without art, AR §17). The API as built is in `WEB_API.md` §3.3. Where the code differs from the sections
+above, the code is right:
+
+- **§3.2 preview.** `POST /api/boards/import?file=…[&pasteDnp=1]`: `pasteDnp` is decision 1's checkbox ("Paste
+  do-not-place parts too"; off: DNP footprints are art only). `placements[]` also carry `ref`, `value` and `why`;
+  `exists` also `how` (`import` | `attach`). Each package carries `usesPadTypesOf` (decision 3's carried mapping, not
+  `padTypesFrom`), `lib`, `kicadName`, `bodyW`, `bodyH`, `untypedPads` and its `outcome`.
+- **§3.2 save and attach.** The 409 `preview-stale` carries the new preview as `preview` (not `details`). Attach
+  answers 201 `{slug, name, board, art, maxOffsetMm, offsets, replaced, boards}`. Uploads are refused (409 `refused`,
+  `Upload the board when the run has finished.`) while the engine is busy; that check is made once, at the start of
+  the request (review 1: a run or probe started during a parse is not stopped by it).
+- **§3.2, with the profile check (PC pc-api, built on `il/pc-api`).** Each package also gets `profileCheck` (its
+  groups that need a profile), `profileReason` and `profileShort`; `outcome` becomes `needs-profile` (some pads wait for
+  a profile) or `not-dispensed` (no pad can get paste: the tip, or a part treated whole), and one `NEEDS_PROFILE`
+  warning replaces the `NO_PAD_TYPE` ones (PC §12.6).
+- **§3.8 and §4.5.** `GET /api/boards` entries carry `widthMm`, `heightMm`, `fiducials`, `art` `{id, kind, note}`,
+  `origin`, `imported` and AR's `registration`. A plan carries `board` `{name, file, widthMm, heightMm, side,
+  toMachine, transformStatus, fiducials, art}` with the art id fixed when the plan is made (also Register board's and
+  PC's plan-again), `dot` `{diameterMm, source}`, per pad `padName`, `partId`, `roundness`, `typeRule` `{kind, detail,
+  matched, sentence}`, per dot `ta` / `te` (s from the program start). OpenPnP's board list and packages are read on
+  OpenPnP's thread (`EdtRunner`, 10 s to start). A plan of a board file that is gone answers 404 `Board file not
+  found: …` (`getBoard` would have written an empty file there).
+- **§5.1.1 hooks.** H1–H5 are in AR's web-ui (`il/ar-webui`); `boardflow.js` fills them: H1 the Board step's
+  `#btn-board-upload`, `#board-thumbs`, `#board-imported` and `#btn-board-use-fid`, H2 a pad or part click opens the
+  inspector, H3 the hero's drawing, picture control (`il.pv.picture`: Full, Quiet (default), Off), path preview and
+  `#btn-pad-inspect`, and before planning the chosen board's drawing at the form's seat with the live camera and a
+  5 mm scale bar, H4 the Records map, H5 the replaced map view destroyed.
+- **§5.8 upload dialog** (`boardimport.js`, `IL.boardImport.open({file, onSaved})`): states choose → reading → preview
+  → saving → saved, warnings in the four groups (Blocks dispensing, Registration, Check in the preview, Notes); a file
+  dropped outside the drop zone never replaces the page (a `.kicad_pcb` opens the dialog, anything else gets a toast).
+- **Review 1 minors, not fixed yet** (final fix round): footprints outside the board outline are imported as pasted
+  placements without a warning; a footprint's pad rotation of ±180° from floating-point rounding can split one package
+  into two variants with a false `PACKAGE_VARIANT` warning.
+- **§7** is in `REAL_MACHINE_TODO.md` (items 33–37).
