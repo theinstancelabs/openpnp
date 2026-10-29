@@ -26,8 +26,10 @@
          done   Set|Array of full-plan dot indexes          dirty  Map padId -> bright share (or null)
          next   dot index (energised ring + "Next D9.1")      check  {index, label} amber ring (in progress at STOP)
          needle {x, y} a needle crosshair (optional)          n1     {x, y} live N1 crosshair ("N1 now", probe)
-         probe  {targets: [{x, y, done}], points: [{x, y}], margin}  probe targets + covered area (inflated hull)
-         fids   accepted and ignored here (Register board draws into g.pv-l-fids)
+         probe  {targets: [{x, y, done, next, bad, alts: [{x, y}]}], points: [{x, y}], margin}  probe targets (alternates
+                as small rings, a refused spot struck through) + covered area (inflated hull)
+         fids   [{name, x, y, r, found: {x, y} | null, state}] Register board's fiducials (g.pv-l-fids, cased): a dashed
+                circle of the search radius r at the expected position, a filled dot at the found one, the name
          cam    {x, y} the live top camera: crosshair and a 5 mm scale bar (also without a plan)
      bv.preview({n, ghost: {x, y} | null} | null)  path preview: dots [0, n) get .pv-pre, the ghost needle moves
      bv.select({padIds, refs} | null)   .sel on pads, part outlines in g.pv-l-sel
@@ -238,10 +240,11 @@
       this.selKey = '';
       this.selDrawn = null;
       this.labelIdx = null;
-      for (const g of [this.gBoard, this.gHull, this.gPath, this.gPads, this.gDots, this.gSel, this.gMarks, this.gProbe, this.gGhost, this.gLabels, this.gCall]) g.replaceChildren();
+      for (const g of [this.gBoard, this.gHull, this.gPath, this.gPads, this.gDots, this.gSel, this.gMarks, this.gFids, this.gProbe, this.gGhost, this.gLabels, this.gCall]) g.replaceChildren();
       toggle(this.svg, 'pv--preview', false);
       this.zoomIx = 0;
       this.probeBox = null;
+      this.fidBox = null;
       if (!plan) { this.base = null; this.applyArt(); this.applyViewBox(); return; }
       const pads = plan.pads || [];
       const dots = plan.dots || [];
@@ -445,6 +448,7 @@
           if (bb.y1 - b.y1 > 0 && bb.y1 - b.y1 < NEAR) b.y1 = bb.y1 + 1;
         }
         if (this.probeBox) b = union(b, this.probeBox);
+        if (this.fidBox) b = union(b, this.fidBox);
         if (this.view === 'follow') {
           const n = this.state.needle || this.nextXY();
           const w = 26, h = 18;
@@ -655,6 +659,12 @@
         this.drawProbe(s.probe);
         next.probeKey = pk;
       }
+      // Register board's fiducials: search circles and the fiducials found
+      const fk = s.fids && s.fids.length ? JSON.stringify(s.fids) : '';
+      if (fk !== prev.fidKey) {
+        this.drawFids(s.fids);
+        next.fidKey = fk;
+      }
       if (this.pendingBox) { this.pendingBox = false; this.state = next; this.applyViewBox(); }
       this.state = next;
       const moved = next.needle && (!prev.needle || Math.hypot(next.needle.x - prev.needle.x, next.needle.y - prev.needle.y) > 0.5);
@@ -703,14 +713,53 @@
       }
       const r = 1.25;
       (pr.targets || []).forEach((t, i) => {
-        const g = svg('g', { class: 'pv-probe pv-probe--' + (t.done ? 'done' : t.next ? 'next' : 'todo'), transform: 'translate(' + f(t.x) + ' ' + f(-t.y) + ')' },
-          'Probe target ' + (i + 1) + ': X ' + IL.fmt(t.x, 2) + ' · Y ' + IL.fmt(t.y, 2) + (t.done ? ' (probed)' : ''));
-        caseShapes(g, [svg('circle', { r: f(r) }), svg('path', { d: 'M-2 0H-0.6M0.6 0H2M0 -2V-0.6M0 0.6V2' })], 2);
+        // the spots tried when this one is not bare or gives no contact (small rings, Register board)
+        for (const a of t.alts || []) {
+          this.gProbe.appendChild(caseShapes(svg('g', { class: 'pv-probe-alt', transform: 'translate(' + f(a.x) + ' ' + f(-a.y) + ')' },
+            'Nearby spot for target ' + (i + 1) + ': X ' + IL.fmt(a.x, 2) + ' · Y ' + IL.fmt(a.y, 2)), [svg('circle', { r: '0.45' })], 1.2));
+        }
+        const g = svg('g', { class: 'pv-probe pv-probe--' + (t.bad ? 'bad' : t.done ? 'done' : t.next ? 'next' : 'todo'), transform: 'translate(' + f(t.x) + ' ' + f(-t.y) + ')' },
+          'Probe target ' + (i + 1) + ': X ' + IL.fmt(t.x, 2) + ' · Y ' + IL.fmt(t.y, 2) + (t.bad ? ' (refused)' : t.done ? ' (probed)' : ''));
+        caseShapes(g, [svg('circle', { r: f(r) }), svg('path', { d: t.bad ? 'M-1.6 -1.6L1.6 1.6M-1.6 1.6L1.6 -1.6' : 'M-2 0H-0.6M0.6 0H2M0 -2V-0.6M0 0.6V2' })], 2);
         const tx = svg('text', { x: '1.7', y: '-1.5' });
         tx.textContent = String(i + 1);
         g.appendChild(tx);
         this.gProbe.appendChild(g);
       });
+    }
+
+    /**
+     * Register board's fiducial layer (g.pv-l-fids, AUTO_REGISTER_DESIGN.md §8.1, BOARD_IMPORT_DESIGN.md §10.2 item 3):
+     * per fiducial a dashed circle of the search radius at the expected position and, once found, a filled dot there with
+     * a short leg from the expected centre; the name beside it. Every mark is cased (the circles cross the mask).
+     */
+    drawFids(list) {
+      this.gFids.replaceChildren();
+      // the view keeps the search circles in sight (a fiducial near the board edge)
+      const fb0 = this.fidBox;
+      const ok = (list || []).filter((fd) => Number.isFinite(Number(fd.x)) && Number.isFinite(Number(fd.y)));
+      this.fidBox = ok.length ? bbox(ok.map((fd) => ({ x: fd.x, y: fd.y, r: (fd.r || 8) + 0.6 }))) : null;
+      if (JSON.stringify(fb0) !== JSON.stringify(this.fidBox)) this.pendingBox = true;
+      for (const fd of list || []) {
+        if (!Number.isFinite(Number(fd.x)) || !Number.isFinite(Number(fd.y))) continue;
+        const st = fd.found ? 'found' : fd.state === 'not-found' || fd.state === 'ambiguous' || fd.state === 'not-centred' ? 'bad' : 'todo';
+        const g = svg('g', { class: 'pv-fid pv-fid--' + st },
+          fd.name + ': expected X ' + IL.fmt(fd.x, 2) + ' · Y ' + IL.fmt(fd.y, 2) + ', searched within ' + IL.fmt(fd.r || 8, 1) + ' mm'
+            + (fd.found ? '; found X ' + IL.fmt(fd.found.x, 2) + ' · Y ' + IL.fmt(fd.found.y, 2) : st === 'bad' ? '; not found' : ''));
+        g.appendChild(cased('circle', { cx: f(fd.x), cy: f(-fd.y), r: f(fd.r || 8) }, 'pv-fid-search', 1.4, null, 'fid').g);
+        g.appendChild(cased('path', { d: 'M' + f(fd.x - 1.2) + ' ' + f(-fd.y) + 'H' + f(fd.x + 1.2) + 'M' + f(fd.x) + ' ' + f(-fd.y - 1.2) + 'V' + f(-fd.y + 1.2) }, 'pv-fid-expect', 1.4, null, 'fid').g);
+        const at = fd.found || { x: fd.x, y: fd.y };
+        if (fd.found) {
+          if (Math.hypot(fd.found.x - fd.x, fd.found.y - fd.y) > 0.05) {
+            g.appendChild(cased('line', { x1: f(fd.x), y1: f(-fd.y), x2: f(fd.found.x), y2: f(-fd.found.y) }, 'pv-fid-leg', 1.4, null, 'fid').g);
+          }
+          g.appendChild(cased('circle', { cx: f(fd.found.x), cy: f(-fd.found.y), r: '0.75' }, 'pv-fid-found', 1.4, null, 'fid').g);
+        }
+        const tx = svg('text', { class: 'pv-fid-name', x: f(at.x + 1.6), y: f(-at.y - 1.6) });
+        tx.textContent = fd.name;
+        g.appendChild(tx);
+        this.gFids.appendChild(g);
+      }
     }
 
     /** Callouts (labels with leader lines) sized in screen px: dirty pads (worst 6), next dot, in progress at STOP. */

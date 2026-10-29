@@ -3,12 +3,16 @@
  * Main column: page head (board, seat, Change board / Plan again), the hero card (plan chip, recipe token, the to-scale
  * board from boardview.js, stage bar, session timeline while running) and its footer: plan summary tiles (idle),
  * live tiles (running), result tiles (after a board) or the board decision (after STOP).
- * Context panel: the five-step stepper Board → Probe → Checks → Run → Result, each step a panel view
- * (data-view board|probe|checks|run|result), and Recovery (ownsRecovery) after STOP / ABORTED / ERROR.
- * The run confirm #dlg-run is an in-page dialog (IL.dialog.open), never a native one.
+ * Context panel: the five-step stepper Board → Register → Checks → Run → Result, each step a panel view
+ * (data-view board|probe|checks|run|result: Register keeps the key probe), and Recovery (ownsRecovery) after STOP /
+ * ABORTED / ERROR. Register board (docs/instancelabs/AUTO_REGISTER_DESIGN.md §8): home if needed → fiducials → N1 probe →
+ * plan again, live progress and a result card; "Do it by hand" keeps the manual probe. The run confirm #dlg-run is an
+ * in-page dialog (IL.dialog.open), never a native one.
  *
  * Contract: DEV_NOTES.md (IL.workspace, IL.ready, IL.press2, IL.fix, IL.panel ...). Styles: run.css. Registers the fix-its
- * plan-again, clean-check (two-press) and probe.
+ * plan-again, clean-check (two-press), probe, register, register-check, probe-by-hand, look-camera, plan-unregistered,
+ * board-step and check-z. The board-import hooks (IL.boardFlow, BOARD_IMPORT_DESIGN.md §5.1.1 H1–H3) are no-ops until
+ * boardflow.js loads.
  */
 'use strict';
 (function () {
@@ -18,7 +22,7 @@
   const PER_PAD_S = 1.19;          // camera tour per pad when no measurement exists (bench: 160 pads ≈ 3:10)
   const VENT_S = 1;
   const STEPS = ['board', 'probe', 'checks', 'run', 'result'];
-  const STEP_T = { board: 'Board', probe: 'Probe', checks: 'Checks', run: 'Run', result: 'Result' };
+  const STEP_T = { board: 'Board', probe: 'Register', checks: 'Checks', run: 'Run', result: 'Result' };
   const STATUS_WORD = { OK: 'Finished', ABORTED: 'Stopped', ERROR: 'Ended by an error', REFUSED: 'Refused', RUNNING: 'Running' };
   const lsGet = IL.lsGet, lsSet = IL.lsSet, lsJson = IL.lsJson;
   const ssGet = (k) => IL.ssJson(k, null), ssSet = IL.ssSet;
@@ -41,6 +45,10 @@
     ph: { runId: null, at: {}, firstDotAt: null, endAt: null },
     probe: Object.assign({ seat: null, points: [] }, ssGet('il.run.probe') || {}),
     probeUntied: false,
+    byHand: false,                             // Register step: "Do it by hand" open (panel state, not a route parameter)
+    regResultRunId: ssGet('il.run.regResult') || null,   // the Register board result card shown (until Checks ›, a new plan, another task)
+    regLoaded: {},                             // registration run ids whose new plan this tab loaded
+    regDetail: null,                           // the last live detail of a registration {runId, detail} (stopped texts)
     dlg: null,
     restPending: false,
     decidedAt: Number(ssGet('il.run.decidedAt')) || 0,
@@ -341,6 +349,10 @@
       const rr = resultRun(s);
       if (rr && rr.runId === R.resultRunId) return 'result';
     }
+    // Register board: its live phases and its result (also a same seat whose surface stays tied) show on Register
+    const reg = s && s.run && s.run.label === 'board registration' ? s.run : null;
+    if (reg && reg.running && IL.planMatches(reg.planId)) return 'probe';
+    if (R.regResultRunId) return 'probe';
     if (surfaceNeedsProbe(IL.ready())) return 'probe';
     return 'checks';
   }
@@ -401,6 +413,40 @@
       + IL.fmtClock(tourSeconds((r && r.dots) || 0)) + ').',
   });
   IL.fix('probe', { href: '#run/probe' });
+  // Register board and its fix-its (AUTO_REGISTER_DESIGN.md §8.2)
+  const regGate = (s) => { const w = registerWhy(s); return w ? w.text : null; };
+  IL.fix('register', { press2: 'register board', gate: regGate, run: () => postRegister('auto'), ok: (r) => regOk(r) });
+  // a new seat on a board with fiducials: the fiducials decide (the 0.1 mm rule and the 3-point check), not trust
+  IL.fix('register-check', {
+    press2: 'check the fiducials',
+    gate: regGate,
+    run: async () => { await IL.setNewSeat(null); return postRegister('auto'); },
+    ok: (r) => regOk(r),
+  });
+  IL.fix('probe-by-hand', { run: async () => { R.byHand = true; setRegResult(null); goStep('probe'); IL.render(); return null; } });
+  // Setup's Top camera card: its Snapshot moves nothing (after a refused fiducial check the head is still where it looked)
+  IL.fix('look-camera', { run: async () => { IL.go('#setup/camera'); return null; } });
+  IL.fix('plan-unregistered', {
+    gate: (s) => IL.lockReason(s, { pressureOff: false, engine: true }),
+    run: async () => {
+      const body = planBodyFrom((plan() && plan().source) || lsJson('il.run.source', null));
+      if (!body) throw new Error('No board to plan: choose a board first.');
+      const p = await postPlan(Object.assign(body, { registration: 'none' }));
+      setRegResult(null);
+      goAuto();
+      return p;
+    },
+    ok: 'Planned without fiducial correction: the dots use the board position as entered.',
+  });
+  IL.fix('board-step', { run: async () => { goStep('board'); return null; } });
+  IL.fix('check-z', {
+    press2: 'check Z',
+    gate: (s) => IL.lockReason(s, { connected: true, engine: true }),
+    run: () => IL.api('POST', '/api/machine/z-check', {}),
+    ok: (r) => (r && r.needed === false ? 'Z needs no check: nothing was measured before the last home.'
+      : 'Checking Z: one N1 touch' + (r && r.reference ? ' on the ' + r.reference.name + ' at X ' + IL.fmt(r.reference.x, 1) + ', Y ' + IL.fmt(r.reference.y, 1) : '')
+        + (r && isNum(r.estimatedSeconds) ? ', ≈ ' + IL.fmtSecs(r.estimatedSeconds) : '') + '.'),
+  });
   // I7 on-time: a test run of the first N dots that fits the limit (90 % of it, after settle and purge)
   IL.fix('run-fewer', {
     gate: (s) => IL.lockReason(s, { pressureOff: false }) || (!plan() ? 'Plan a board first' : null),
@@ -485,8 +531,10 @@
     n.hero = el('section', { class: 'card hero', id: 'run-hero', 'aria-label': 'Plan preview' }, n.heroHead, n.stage, n.summary, n.live, n.decide);
     root.append(head, n.headRef, n.hero);
 
+    // H2 (BOARD_IMPORT_DESIGN.md §5.1.1): a pad or part click goes to the pad inspector once boardflow.js loads
     R.bv = IL.boardview.create(n.svgwrap, { id: 'plan-svg', aria: 'Board preview to scale: pads and planned dots',
-      onPad: (padId) => IL.panel.show('camera', IL.views.camera, { title: 'Top camera · pad ' + padId }) });
+      onPad: (padId, ev) => (IL.boardFlow ? IL.boardFlow.onPad(padId, ev) : IL.panel.show('camera', IL.views.camera, { title: 'Top camera · pad ' + padId })),
+      onPart: (ref, ev) => IL.boardFlow && IL.boardFlow.onPart(ref, ev) });
     R.bv.svg.setAttribute('data-testid', 'plan-svg');
     if (S.plan) R.bv.setPlan(S.plan, { origin: originOf(S.plan) });
   }
@@ -579,7 +627,9 @@
       const rem = src.source === 'file' ? remembered(src.file) : null;
       if (rem && rem.atMs && Number(rem.x) === Number(src.x) && Number(rem.y) === Number(src.y)) {
         meta.push(el('span', { title: IL.fmtAgo(rem.atMs) }, 'entered ' + IL.fmtTime(rem.atMs) + ' for this seat'));
-      } else if (seat && seat.job) meta.push(el('span', { text: '(fiducial-corrected position from the OpenPnP job)' }));
+      } else if (seat && seat.job) meta.push(el('span', { text: '(position from the OpenPnP job)' }));
+      meta.push(p.registration ? el('span', { title: fitText(p.registration) }, 'registered ', el('b', { text: IL.fmtTime(p.registration.atMs - S.skewMs) }))
+        : el('span', { class: 'muted', text: 'not registered' }));
     }
     IL.setText(n.eyebrow, eb);
     IL.setClass(n.eyebrow, ebCls);
@@ -607,8 +657,15 @@
         const d = nx !== null ? p.dots[nx] : null;
         text = 'Dispensing · ' + (d ? 'next ' + d.padId : run.dotsDone + ' of ' + run.dotsPlanned);
       } else if (run.phase === 'dispensing') text = 'Pressure on · purge dots';
+      else if (run.detail && run.detail.stage === 'home') text = 'Homing first · pressure off';
+      else if (run.detail && run.detail.stage === 'z check') text = 'Checking Z · one N1 touch';
       else text = 'Starting · waiting for OpenPnP motion';
       title = 'Board run in progress (' + (run.phase || '') + ')';
+    } else if (regLive(s)) {
+      // Register board runs: the plan's dots move with the board when it ends
+      kind = 'live'; glyph = 'live';
+      text = 'Registering · ' + IL.regProgress(regLive(s)).part;
+      title = 'Register board (' + (regLive(s).phase || '') + '): the plan is made again when it ends';
     } else if (mode === 'stopped' && decision(s).cause === 'partial') {
       const rec = decision(s);
       kind = 'need'; glyph = 'need';
@@ -624,14 +681,14 @@
       const it = r.items.find((x) => x.key === 'plan');
       const sf = r.items.find((x) => x.key === 'surface');
       const pt = r.items.find((x) => x.key === 'padtypes');
-      title = 'Made ' + IL.fmtTime(p.createdAtMs) + ' · ' + p.summary.dots + ' dots on ' + p.summary.pads + ' pads';
+      title = 'Made ' + IL.fmtTime(p.createdAtMs) + ' · ' + p.summary.dots + ' dots on ' + p.summary.pads + ' pads · ' + correctionText(p);
       if (it && it.state === 'checking') { kind = 'off'; glyph = 'checking'; text = 'Plan ' + shortId(p) + ' · checking…'; }
       else if (it && it.stale) {
         kind = 'need'; glyph = 'need';
         text = 'Plan ' + shortId(p) + ' · stale: ' + it.stale.map((x) => x.replace(/^the /, '')).join(', ') + ' changed' + (it.staleAt ? ' ' + IL.fmtTime(it.staleAt) : '');
         title = it.detail + ' Plan again.';
       } else if (pt && pt.state === 'block') { kind = 'block'; glyph = 'block'; text = 'Plan ' + shortId(p) + ' · ' + (pt.chip || pt.short); title = pt.detail; }
-      else if (sf && (sf.state === 'need' || sf.state === 'block')) { kind = 'need'; glyph = 'need'; text = 'Plan ' + shortId(p) + " · needs this seat's surface"; title = sf.detail; }
+      else if (sf && (sf.state === 'need' || sf.state === 'block')) { kind = 'need'; glyph = 'need'; text = 'Plan ' + shortId(p) + ' · register this seat'; title = sf.detail; }
       else { text = 'Plan ' + shortId(p) + ' · current'; title += ' with the current profile, surface and start angle'; }
     }
     const sig = kind + '|' + text;
@@ -718,10 +775,14 @@
     const bv = R.bv;
     // empty board: hint instead of the SVG
     const sel = selectedBoard();
-    IL.show(n.empty, !p);
-    IL.show(bv.svg, !!p);
-    IL.keyed(n.empty, !p ? (S.planForgotten ? 'forgot' : sel ? 'sel' : 'none') : '', () => {
-      if (p) return null;
+    // H3 (BOARD_IMPORT_DESIGN.md §5.1.1): the board drawing (also before planning) and its stage-bar controls, once
+    // boardflow.js loads; the SVG and the stage bar show with a plan or a drawing
+    const art = IL.boardFlow ? IL.boardFlow.hero(bv, { plan: p, sel, form: R.form, mode, s, hero: n.hero, stageBar: n.stageBar, row: n.timeline }) : null;
+    const drawn = !!p || !!(art && art.shown);
+    IL.show(n.empty, !drawn);
+    IL.show(bv.svg, drawn);
+    IL.keyed(n.empty, !drawn ? (S.planForgotten ? 'forgot' : sel ? 'sel' : 'none') : '', () => {
+      if (drawn) return null;
       if (S.planForgotten) {
         return el('div', {}, IL.icon('i-refresh'), el('b', { text: 'Plan forgotten (OpenPnP restarted)' }),
           el('span', { text: 'OpenPnP keeps plans in memory. Plan the board again: nothing moves.' }),
@@ -730,7 +791,7 @@
       return el('div', {}, IL.icon('i-run'), el('b', { text: sel ? 'Plan to see the dots' : 'Choose a board on the right' }),
         el('span', { text: sel ? 'Enter where the board sits, then Plan. The board is drawn to scale with every planned dot.' : 'Pick a job board or a board file in the Board step, enter its position, then Plan.' }));
     });
-    if (!p) { IL.show(n.stageBar, false); IL.show(n.timeline, false); return; }
+    if (!p) { IL.show(n.stageBar, drawn); IL.show(n.timeline, false); return; }
     IL.show(n.stageBar, true);
     if (bv.planId !== p.planId) bv.setPlan(p, { origin: originOf(p) });
     // overlays. Paste found by the pad check: only before a run (idle), only from a check newer than the last board run
@@ -745,7 +806,11 @@
     const rec = mode === 'stopped' ? decision(s) : null;
     const chk = rec ? checkMark(rec) : null;
     const pos = IL.positions(s);
-    const probe = step === 'probe' && mode === 'idle' ? probeOverlay(s) : null;
+    // the Register step's overlay (idle, live and its result; also on a part-done board): probe targets and the
+    // fiducials (§8.1 "Hero overlay"); never during a board run
+    const regStep = step === 'probe' && (mode === 'idle' || mode === 'stopped');
+    const probe = regStep ? probeOverlay(s) : null;
+    const fids = regStep && !R.byHand ? fidOverlay(s) : null;
     bv.update({
       done: mode === 'empty' ? [] : R.doneSet,
       dirty: mode === 'live' ? new Map() : dirty,
@@ -753,8 +818,9 @@
       check: chk,
       // the needle is at the next dot: OpenPnP's own N2 position is not updated while the engine streams the board
       needle: null,
-      n1: probe && pos.n1 ? { x: pos.n1.x, y: pos.n1.y } : null,
+      n1: probe && pos.n1 && R.byHand ? { x: pos.n1.x, y: pos.n1.y } : null,
       probe,
+      fids,
     });
     // view switch: Dots | Whole board (idle), Follow needle | Dots (running), none after STOP
     const views = mode === 'live' ? [['follow', 'Follow needle'], ['dots', 'Dots']] : mode === 'stopped' ? [] : [['dots', 'Dots'], ['board', 'Whole board']];
@@ -764,10 +830,10 @@
     IL.show(n.viewSeg, views.length > 0);
     IL.patch(n.zoomIn, { disabled: !bv.canZoomIn });
     IL.patch(n.zoomOut, { disabled: !bv.canZoomOut });
-    renderLegend(s, p, mode, dirty, chk, probe, posWrong && (mode === 'idle' || mode === 'empty'));
+    renderLegend(s, p, mode, dirty, chk, probe, posWrong && (mode === 'idle' || mode === 'empty'), fids);
     renderTimeline(s, p, mode);
   }
-  function renderLegend(s, p, mode, dirty, chk, probe, posWrong) {
+  function renderLegend(s, p, mode, dirty, chk, probe, posWrong, fids) {
     const n = R.n;
     const N = p.dots.length;
     const done = R.doneSet.size;
@@ -779,6 +845,8 @@
     } else if (mode === 'stopped') {
       items.push(layer(null, 'lg-done', 'dispensed · ' + done), layer(null, 'lg-dot', 'not dispensed · ' + Math.max(0, N - done)));
       if (chk) items.push(layer(null, 'lg-check', 'in progress at STOP · 1'));
+      if (fids && fids.length) items.push(layer(null, 'lg-fid', 'fiducial'));
+      if (probe) items.push(layer(null, 'lg-probe', 'probe spot'));
     } else {
       // at most four, by importance: what needs the operator first, the plain layers last
       const blocked = (p.pads || []).filter((x) => x.blocked).length;
@@ -786,7 +854,8 @@
       if (posWrong && !probe) all.push([0, layer(null, 'lg-check', 'pad check: board position looks wrong')]);
       if (dirty.size && !probe) all.push([1, layer('dirty', 'lg-dirty', 'paste found · ' + dirty.size)]);
       if (blocked) all.push([2, layer(null, 'lg-dirty', 'cannot dispense · ' + blocked)]);
-      if (probe) all.push([3, layer(null, 'lg-probe', 'probe target')], [4, layer(null, 'lg-area', 'probed area')]);
+      if (fids && fids.length) all.push([2.5, layer(null, 'lg-fid', 'fiducial · search ' + IL.fmt(fids[0].r, 0) + ' mm')]);
+      if (probe) all.push([3, layer(null, 'lg-probe', 'probe spot')], [4, layer(null, 'lg-area', 'probed area')]);
       all.push([5, layer('dots', 'lg-dot', 'planned dot')]);
       if (done) all.push([6, layer(null, 'lg-done', 'dispensed · ' + done)]);
       all.push([7, layer('pads', 'lg-pad', 'pad')], [8, layer('path', 'lg-path', 'path')]);
@@ -806,7 +875,7 @@
       : el('span', {}, el('i', { class: 'lg ' + x.cls }), x.text))));
     if (rebuilt && mode !== 'live' && mode !== 'stopped' && R.lgMax > 2 && n.legend.clientWidth && n.legend.scrollWidth > n.legend.clientWidth + 1) {
       R.lgMax--;
-      renderLegend(s, p, mode, dirty, chk, probe, posWrong);
+      renderLegend(s, p, mode, dirty, chk, probe, posWrong, fids);
     }
   }
   window.addEventListener('resize', () => { R.lgBase = null; });
@@ -1026,8 +1095,19 @@
     st.board = p ? { kind: 'ok', sub: boardShort(p.boardName) } : { kind: 'num', sub: 'choose' };
     const sf = r.items.find((x) => x.key === 'surface');
     const surf = s.dispense && s.dispense.surfaces && s.dispense.surfaces[s.dispense.boardSurfaceName || 'board'];
-    st.probe = !p ? { kind: 'num', sub: '—' } : sf.state === 'ok' ? { kind: 'ok', sub: 'tied ' + IL.fmtTime(surf && surf.setAtMs ? surf.setAtMs - S.skewMs : null) }
-      : sf.state === 'block' ? { kind: 'block', sub: 'probe again' } : { kind: 'need', sub: 'this seat' };
+    // Register: "registered", "same seat" (the 3-point check kept the surface), "by hand" (the time in the title: the
+    // five steps share about 400 px), "this seat"
+    const reg = p && p.registration;
+    const at = (ms) => IL.fmtTime(ms ? ms - S.skewMs : null);
+    const live = regLive(s);
+    if (!p) st.probe = { kind: 'num', sub: '—' };
+    else if (live) st.probe = { kind: 'live', sub: IL.regProgress(live).part };
+    else if (sf.state === 'ok') {
+      const sameAt = reg && reg.lastCheckedAtMs && surf && surf.setAtMs && reg.lastCheckedAtMs > surf.setAtMs ? reg.lastCheckedAtMs : null;
+      st.probe = sameAt ? { kind: 'ok', sub: 'same seat', title: 'same seat ' + at(sameAt) }
+        : surf && /^Register board/.test(surf.note || '') ? { kind: 'ok', sub: 'registered', title: 'registered ' + at(surf.setAtMs) }
+          : { kind: 'ok', sub: 'by hand', title: 'by hand ' + at(surf && surf.setAtMs) };
+    } else st.probe = sf.state === 'block' ? { kind: 'block', sub: 'register again' } : { kind: 'need', sub: 'this seat' };
     const needs = r.needs.filter((x) => x.state !== 'wait');
     st.checks = !p ? { kind: 'num', sub: '—' } : r.blocked.length ? { kind: 'block', sub: 'blocked' }
       : needs.length ? { kind: 'need', sub: IL.plural(needs.length, 'needs you', 'need you') } : { kind: 'ok', sub: '9 of 9' };
@@ -1068,7 +1148,7 @@
     for (const b of top.querySelectorAll('.step')) {
       const k = b.dataset.step;
       IL.setText(b.querySelector('.step__s'), st[k].sub);
-      IL.setAttr(b, 'title', STEP_T[k] + ': ' + st[k].sub);
+      IL.setAttr(b, 'title', STEP_T[k] + ': ' + (st[k].title || st[k].sub));
     }
   }
 
@@ -1128,11 +1208,15 @@
     if (![...sel.options].some((o) => o.value === want) && !rebuild) { syncSelect(true); return; }
     if (sel.value !== want) sel.value = want;
   }
-  function onBoardSelect() {
-    const v = $('board-select').value;
+  function onBoardSelect() { selectBoard($('board-select').value); }
+  /** Chooses a board (the select, or a board-import thumbnail through H1): its position from the job or remembered. */
+  function selectBoard(v) {
+    const sel = $('board-select');
     R.form.sel = v || null;
+    if (sel && sel.value !== (v || '')) syncSelect(![...sel.options].some((o) => o.value === (v || '')));
     lsSet('il.run.sel', v || null);
     const c = selectedBoard();
+    R.form.zFrom = null;
     if (c && c.kind === 'job' && c.b) {
       Object.assign(R.form, { x: IL.inputNum(c.b.x), y: IL.inputNum(c.b.y), z: IL.inputNum(c.b.z), rot: IL.inputNum(c.b.rotation) });
     } else if (c && c.kind === 'file') {
@@ -1142,6 +1226,28 @@
     R.formDirty = true;
     fillForm();
     IL.render();
+  }
+  /**
+   * An empty Board top Z is prefilled (§8.1 Board step): the last board surface of this board (its plane at the board
+   * centre), else the needle-frame surface. R.form.zFrom says where it came from (shown under the field).
+   */
+  function prefillZ(s) {
+    if (String(R.form.z === undefined ? '' : R.form.z).trim() !== '') return;
+    const c = selectedBoard();
+    if (!c || c.kind === 'job') return;
+    const d = (s && s.dispense) || {};
+    const sf = d.surfaces && d.surfaces[d.boardSurfaceName || 'board'];
+    const p = plan();
+    const same = p && p.source && p.source.file === c.file;
+    if (same && sf && sf.plane && isNum(sf.plane.a)) {
+      const bx = p.board && isNum(p.board.widthMm) ? Number(p.source.x) + p.board.widthMm / 2 : Number(p.source.x);
+      const by = p.board && isNum(p.board.heightMm) ? Number(p.source.y) + p.board.heightMm / 2 : Number(p.source.y);
+      R.form.z = (sf.plane.a + sf.plane.b * bx + sf.plane.c * by).toFixed(2);
+      R.form.zFrom = 'prefilled from the board surface probed ' + IL.fmtTime(sf.setAtMs - S.skewMs);
+    } else if (d.needle && d.needle.anchor && isNum(d.needle.anchor.surfaceZMm)) {
+      R.form.z = Number(d.needle.anchor.surfaceZMm).toFixed(2);
+      R.form.zFrom = 'prefilled from the needle frame (Setup)';
+    }
   }
   function fillForm() {
     for (const [id, k] of [['board-x', 'x'], ['board-y', 'y'], ['board-z', 'z'], ['board-rot', 'rot'], ['board-file', 'file']]) {
@@ -1165,14 +1271,19 @@
     const fileRow = el('div', { class: 'field', id: 'board-file-row' }, el('label', { class: 'field__l', for: 'board-file' }, el('span', { text: 'Board file' }), el('span', { class: 'unit', text: '.board.xml' })), file);
     const pos = el('div', { class: 'board-pos' },
       field('board-x', 'X (board origin)', 'mm', { step: '0.01' }), field('board-y', 'Y (board origin)', 'mm', { step: '0.01' }),
-      field('board-z', 'Board top Z', 'mm', { step: '0.01', placeholder: 'required', title: 'Height of the board top: the N1 nozzle Z touching it (OpenPnP frame). Required.' }), field('board-rot', 'Rotation', '°', { step: '0.1' }));
+      field('board-z', 'Board top Z (approximate, ±1\u00a0mm)', 'mm', { step: '0.01', placeholder: 'required',
+        title: 'Roughly the height of the board top as N1 sees it (OpenPnP frame). Register board measures it; within ±1 mm is enough.' }),
+      field('board-rot', 'Rotation', '°', { step: '0.1' }));
     for (const [id, k] of [['board-x', 'x'], ['board-y', 'y'], ['board-z', 'z'], ['board-rot', 'rot']]) {
-      pos.querySelector('#' + id).addEventListener('input', (e) => { R.form[k] = e.target.value; R.formDirty = true; const er = $(id + '-err'); if (er) er.hidden = true; e.target.classList.remove('input--invalid'); IL.render(); });
+      pos.querySelector('#' + id).addEventListener('input', (e) => { R.form[k] = e.target.value; R.formDirty = true; if (k === 'z') R.form.zFrom = null; const er = $(id + '-err'); if (er) er.hidden = true; e.target.classList.remove('input--invalid'); IL.render(); });
     }
+    // the Board top Z: prefilled when empty (never mistaken for a measurement), and the window / frame check: a full-width
+    // row under the Z and Rotation fields (inside the Z field it pushed Rotation's input out of line)
+    pos.append(el('div', { class: 'field__h', id: 'board-z-note', hidden: true }));
     const useCam = el('button', { type: 'button', class: 'capture', id: 'btn-board-use-cam', title: 'Board origin X/Y = where the top camera is now (jog it onto the board origin in OpenPnP first)' });
     const useZ = el('button', { type: 'button', class: 'capture', id: 'btn-board-use-n1z', title: 'Board top Z = the N1 nozzle Z now (lower N1 until its tip touches the board top in OpenPnP first)' });
     useCam.addEventListener('click', () => { const c = IL.positions().cam; if (!c) return; R.form.x = c.x.toFixed(2); R.form.y = c.y.toFixed(2); R.formDirty = true; fillForm(); IL.render(); });
-    useZ.addEventListener('click', () => { const n1 = IL.positions().n1; if (!n1) return; R.form.z = n1.z.toFixed(2); R.formDirty = true; fillForm(); IL.render(); });
+    useZ.addEventListener('click', () => { const n1 = IL.positions().n1; if (!n1) return; R.form.z = n1.z.toFixed(2); R.form.zFrom = 'live N1 Z'; R.formDirty = true; fillForm(); IL.render(); });
     const seatQ = el('div', { class: 'seat-q', id: 'board-seat-q', hidden: true },
       el('div', { class: 'seat-q__t', id: 'board-seat-t' }),
       el('div', { class: 'seg', role: 'group', 'aria-label': 'Re-seated?' },
@@ -1188,6 +1299,11 @@
       pos,
       el('div', { class: 'capture-row', id: 'board-captures' }, useCam, useZ),
       el('div', { class: 'reason', id: 'board-capture-why', hidden: true }));
+    // H1 (BOARD_IMPORT_DESIGN.md §5.1.1): upload, thumbnails and the origin from the drawing, once boardflow.js loads
+    if (IL.boardFlow) {
+      IL.boardFlow.mountBoardStep(body, { select: (v) => selectBoard(v), form: () => R.form, loadBoards,
+        setXY: (x, y) => { R.form.x = Number(x).toFixed(2); R.form.y = Number(y).toFixed(2); R.formDirty = true; fillForm(); IL.render(); } });
+    }
     return body;
   }
   function buildBoardFoot() {
@@ -1234,11 +1350,13 @@
     }, { ok: (q) => 'Planned ' + q.summary.dots + ' dots on ' + q.summary.pads + ' pads' });
     if (!p) return;
     R.formDirty = false;
-    goAuto();   // Probe when this seat needs its surface (new seat, untied), else Checks
+    setRegResult(null);
+    goAuto();   // Register when this seat needs its surface (new seat, untied), else Checks
   }
   function renderBoardStep(s, parts) {
     const c = selectedBoard();
     syncSelect(false);
+    prefillZ(s);
     fillForm();
     const b = R.boards;
     IL.setText($('board-count'), R.boardsLoading ? 'loading…' : b ? ((b.job || []).length ? (b.job || []).length + ' job · ' : '') + IL.plural((b.files || []).length, 'file') : '');
@@ -1250,8 +1368,8 @@
       if (i.readOnly !== !!job) i.readOnly = !!job;
     }
     const hint = R.boardsErr ? 'Could not list the boards: ' + R.boardsErr
-      : job ? 'Position from the OpenPnP job' + (c.b && c.b.fiducialTransform !== 'NotSet' ? ' (fiducial-corrected).' : '. Run a fiducial check in OpenPnP for the best accuracy.')
-        : c ? 'Enter where the board origin (its 0,0 corner) sits on the machine. A board placed by hand has no fiducial correction.' : 'Choose the board to dispense.';
+      : job ? 'Position from the OpenPnP job. Register board checks the fiducials again with the top camera.'
+        : c ? 'Enter roughly where the board origin (its 0,0 corner) sits. After planning, Register board finds the fiducials with the top camera and probes this seat.' : 'Choose the board to dispense.';
     IL.setText($('board-hint'), hint);
     IL.setClass($('board-hint'), 'reason' + (R.boardsErr ? ' reason--block' : ''));
     // dirty fields: differ from the remembered (or planned) values
@@ -1274,8 +1392,8 @@
       const same = !newSeat && R.seatSame === since;
       IL.setAttr($('board-seat-new'), 'aria-pressed', String(newSeat));
       IL.setAttr($('board-seat-same'), 'aria-pressed', String(same));
-      IL.setText($('board-seat-h'), newSeat ? 'New seat: after planning, probe this seat (Probe step). The last seat\'s points are not used.'
-        : same ? 'Same seat: the board surface probed for it still holds.' : 'Position entered ' + IL.fmtTime(since) + '. A re-seated board must be probed again (one seating was tilted 0.9 mm).');
+      IL.setText($('board-seat-h'), newSeat ? 'New seat: after planning, Register board checks the fiducials and probes this seat.'
+        : same ? 'Same seat: the board surface probed for it still holds.' : 'Position entered ' + IL.fmtTime(since) + '. A re-seated board must be registered again (one seating was tilted 0.9 mm).');
     }
     // capture buttons name the live value they take
     const pos = IL.positions(s);
@@ -1291,7 +1409,19 @@
     // Plan: locked while a task runs
     const lock = IL.lockReason(s, { pressureOff: false }) || (!c ? 'Choose a board first' : null);
     IL.gate($('btn-plan'), lock, $('plan-why'));
-    IL.setText($('plan-next-hint'), S.newSeatAtMs && !job ? 'then: probe this seat' : '');
+    IL.setText($('plan-next-hint'), S.newSeatAtMs && !job ? 'then: register the board' : '');
+    // under the Board top Z: where a prefill came from, and the window and needle-frame check of the plan shown
+    const zn = $('board-z-note');
+    if (zn) {
+      const p1 = plan();
+      const fr = p1 && p1.registrationTargets && p1.registrationTargets.frame;
+      const sameSrc = !!p1 && !!c && !job && p1.source && p1.source.file === c.file && Number(R.form.z) === Number(p1.source.z);
+      const bad = sameSrc && fr && fr.ok === false && fr.message ? String(fr.message).replace(IL.CODE_RE, '$2') : null;
+      const text = bad || (!job && R.form.zFrom ? IL.cap(R.form.zFrom) + ': within ±1 mm is enough, Register board measures it.' : '');
+      IL.setText(zn, text);
+      IL.setClass(zn, 'field__h' + (bad ? ' field__h--block' : ''));
+      IL.show(zn, !!text);
+    }
     // board select and position fields are locked while a task runs (the reason shows under Plan)
     const taskLock = IL.lockReason(s, { pressureOff: false });
     for (const id of ['board-select', 'board-x', 'board-y', 'board-z', 'board-rot', 'board-file']) {
@@ -1301,9 +1431,334 @@
     IL.gate($('btn-board-refresh'), taskLock);
   }
 
-  // ================================================================================== panel: Probe step
+  // ================================================================================== panel: Register step (key probe)
+  // Register board (AUTO_REGISTER_DESIGN.md §8.1): home if needed → fiducials with the top camera → N1 vacuum probe (or
+  // a same-seat re-touch) → plan again, with live progress and a result card. The by-hand path (jog N1 in OpenPnP's
+  // window, add points) stays behind the "Do it by hand" disclosure; R.byHand chooses which foot shows.
+  const REG = 'board registration';
+  const regRun = (s) => (s && s.run && s.run.label === REG ? s.run : null);
+  /** The Register board task of the plan shown while it runs, else null. */
+  function regLive(s) {
+    const r = regRun(s);
+    return r && r.running && IL.planMatches(r.planId) ? r : null;
+  }
+  /** The registration view (§7.2) the result card shows: the plan's registrationRun of R.regResultRunId. */
+  function regView() {
+    const v = plan() && plan().registrationRun;
+    return v && R.regResultRunId && v.runId === R.regResultRunId ? v : null;
+  }
+  /** The last live detail of a registration (status.run.detail): kept for the stopped texts after a reload of the plan. */
+  function regDetailOf(runId) {
+    const r = regRun(S.status);
+    if (r && r.runId === runId && r.detail) return r.detail;
+    return R.regDetail && R.regDetail.runId === runId ? R.regDetail.detail : null;
+  }
+  function setRegResult(runId) {
+    R.regResultRunId = runId || null;
+    ssSet('il.run.regResult', R.regResultRunId);
+  }
+  /** Every status: the live detail cache, the new plan of a finished registration (reload, a second browser). */
+  function trackReg(s) {
+    const r = regRun(s);
+    if (r && r.detail) R.regDetail = { runId: r.runId, detail: r.detail };
+    if (r && !r.running && r.nextPlanId && IL.planMatches(r.planId) && !R.regLoaded[r.runId]) {
+      R.regLoaded[r.runId] = true;
+      adoptRegPlan(r);
+    }
+    // another task clears the result card (it is about the board before that task)
+    if (R.regResultRunId && s.run && s.run.running && s.run.label !== REG) setRegResult(null);
+    const mk = machineKey(s) + '|' + (plan() ? plan().planId : '');
+    if (mk !== R.machineKey) { const had = R.machineKey !== undefined; R.machineKey = mk; if (had && !IL.taskRunning(s)) refreshTargets(); }
+  }
+  /**
+   * The plan's registration preview is made with the plan; its home plan and its checks change with the machine (a STOP,
+   * a home, a reconnect). GET /api/plan/{id}/registration-targets computes it again (and keeps it with the plan).
+   */
+  function refreshTargets() {
+    const p = plan();
+    if (!p || R.targetsBusy === p.planId) return;
+    R.targetsBusy = p.planId;
+    IL.api('GET', '/api/plan/' + encodeURIComponent(p.planId) + '/registration-targets').then((t) => {
+      if (plan() && plan().planId === p.planId && t) { plan().registrationTargets = t; R.targetsFor = null; IL.render(); }
+    }).catch(() => { /* the plan's own preview stays */ }).finally(() => { R.targetsBusy = null; });
+  }
+  function machineKey(s) {
+    const m = (s && s.machine) || {};
+    return [m.enabled, m.homed, s && s.server && s.server.simulatorConfirmed, m.home && m.home.needed].join('|');
+  }
+  /** Shows the plan a registration made (the same physical board: its count and dots carry over, R.alias). */
+  function adoptRegPlan(r) {
+    const p = plan();
+    if (!r.nextPlanId || !p || r.nextPlanId === p.planId) return;
+    R.alias[r.nextPlanId] = R.alias[p.planId] || p.planId;
+    ssSet('il.run.alias', R.alias);
+    IL.loadPlan(r.nextPlanId);
+  }
+  /** Register board: POST /api/plan/{id}/register (probe 'auto': the engine's new-seat flag forces the probe). */
+  async function postRegister(probe) {
+    const p = plan();
+    if (!p) throw new Error('Plan a board first.');
+    const r = await IL.api('POST', '/api/plan/' + encodeURIComponent(p.planId) + '/register', { probe: probe || 'auto' });
+    setRegResult(null);
+    R.byHand = false;
+    if (IL.active() === 'run' && currentStep(S.status) !== 'probe') goStep('probe');
+    return r;
+  }
+  const regOk = (r) => 'Register board started' + (r && r.home && r.home.needed ? ': homes first (≈ ' + IL.fmtSecs(r.home.estimateS) + '), then ' : ': ')
+    + IL.plural(((r && r.fiducials) || []).length, 'fiducial') + ' and ' + IL.plural(((r && r.probeTargets) || []).length, 'N1 spot')
+    + (r && isNum(r.estimatedSeconds) ? ', ≈ ' + IL.fmtSecs(r.estimatedSeconds) : '') + '. STOP stops it at once.';
+  /** Registration targets of the plan (null without them): {fids, probes, frame, window, est, error, count}. */
+  function regTargets(p) {
+    const t = p && p.registrationTargets;
+    if (!t) return null;
+    return { fids: t.fiducials || [], probes: t.probes || [], frame: t.frame || null, window: t.window || null,
+      est: t.estimatedSeconds || {}, error: t.error || null, count: isNum(t.fiducialCount) ? Number(t.fiducialCount) : (t.fiducials || []).length };
+  }
+  /** The home plan now: status.machine.home (the live one), else the plan's preview. */
+  function homePlan(s, p) {
+    const h = s && s.machine && s.machine.home;
+    if (h && s.machine.enabled) return h;
+    const t = p && p.registrationTargets;
+    return (t && t.home) || h || null;
+  }
+  /** Would the next registration be a same seat (the stored registration of this board applies, nobody said new seat)? */
+  function regSameSeatLikely(s, p) {
+    const reg = p && p.registration;
+    if (!reg || reg.beforeNextBoard) return null;
+    if (S.newSeatAtMs && S.newSeatAtMs + S.skewMs > reg.atMs) return null;
+    // the surface must be tied to this plan (and so to this registration): else the engine probes every spot
+    const it = IL.ready().items.find((x) => x.key === 'surface');
+    return it && it.state === 'ok' ? reg : null;
+  }
+  const boardSurface = (s) => (s && s.dispense && s.dispense.surfaces && s.dispense.surfaces[s.dispense.boardSurfaceName || 'board']) || null;
+  const anchorOf = (s) => (s && s.dispense && s.dispense.needle && s.dispense.needle.anchor) || null;
+  const hasCamera = (s) => (((s && s.machine && s.machine.positions) || []).some((t) => t.kind === 'camera'));
+  /** Why Register board cannot start now (first of AUTO_REGISTER_DESIGN.md §8.1 `#register-why`), or null. */
+  function registerWhy(s) {
+    const p = plan();
+    const lock = IL.lockReason(s, { connected: true, engine: true });
+    if (lock) return { text: lock };
+    if (!p) return { text: 'Plan a board first' };
+    const t = regTargets(p);
+    // the plan's own registration no longer applies (registered again elsewhere, a simulator record): plan again first
+    if (t && t.error && /^REG: registration /.test(t.error)) {
+      return { text: String(t.error).replace(IL.CODE_RE, '$2').replace(/: (plan|register) again\.?$/, '') + ': plan again first.', fix: 'plan-again' };
+    }
+    if (t && t.count < 2 && !t.error) return { text: 'This board has ' + IL.plural(t.count, 'fiducial') + ' (2 needed): do it by hand' };
+    if (!hasCamera(s)) return { text: 'No top camera in OpenPnP: do it by hand' };
+    if (t && t.error) return { text: String(t.error).replace(IL.CODE_RE, '$2') };
+    if (!anchorOf(s)) return { text: 'Record the needle Z frame first: the probe checks its heights against it.', href: '#setup/needle', link: 'Open Needle Z frame' };
+    if (t && t.frame && t.frame.ok === false && t.frame.message) return { text: String(t.frame.message).replace(IL.CODE_RE, '$2'), href: '#run/board', link: 'Board step' };
+    return null;
+  }
+  /** Seconds Register board takes now: the plan's estimate with the live home plan (never hard-coded). */
+  function regSeconds(s, p) {
+    const t = regTargets(p);
+    if (!t || t.error) return null;
+    const h = homePlan(s, p);
+    const home = h && h.needed ? Number(h.estimateS) || 0 : 0;
+    const same = regSameSeatLikely(s, p);
+    const body = (Number(t.est.fiducials) || 0) + (same ? Number(t.est.sameSeat) || 0 : Number(t.est.probe) || 0);
+    return home + body;
+  }
+  function names(list) {
+    const n = list.map((f) => f.name);
+    return n.length > 1 ? n.slice(0, -1).join(', ') + ' and ' + n[n.length - 1] : n.join('');
+  }
+  /** The pre-press line of the foot (#register-note, §8.1). */
+  function registerNote(s, p) {
+    const t = regTargets(p);
+    if (!t || t.error || !t.fids.length) return '';
+    const h = homePlan(s, p);
+    const parts = [];
+    if (h && h.needed) {
+      const why = IL.homeWhy(h);
+      parts.push('Homes first' + (why ? ' (' + why + ')' : '') + ', ≈ ' + IL.fmtSecs(h.estimateS) + '.');
+    }
+    const same = regSameSeatLikely(s, p);
+    const sf = boardSurface(s);
+    const probe = same ? 'N1 re-touches 3 points of the ' + IL.fmtTime((sf && sf.setAtMs ? sf.setAtMs : same.atMs) - S.skewMs)
+      + ' surface if the board has not moved (≈ ' + IL.fmtSecs(t.est.sameSeat) + ')'
+      : 'N1 touches the board at ' + IL.plural(t.probes.length, 'bare spot') + ' with its vacuum, after a camera look at each (≈ ' + IL.fmtSecs(t.est.probe) + ')';
+    parts.push((parts.length ? 'Then the' : 'The') + ' top camera finds ' + names(t.fids) + ' (≈ ' + IL.fmtSecs(t.est.fiducials) + ') and ' + probe + '.');
+    parts.push('The paste pressure stays off. Before you press: N1 has its tip, no part on it; hands clear of the head.');
+    return parts.join(' ');
+  }
+  /** What the plan's dots use (#reg-correction): the fiducial check, OpenPnP's (job board), or none. */
+  function correctionText(p) {
+    const reg = p && p.registration;
+    if (reg) {
+      return 'fiducial check ' + IL.fmtTime(reg.atMs - S.skewMs) + (reg.beforeNextBoard ? ' (before the last Next board)'
+        : reg.lastCheckedAtMs && reg.lastCheckedAtMs > reg.atMs ? ', same seat at ' + IL.fmtTime(reg.lastCheckedAtMs - S.skewMs) : '');
+    }
+    const seat = seatOf(p);
+    if (seat && seat.job && seat.fid) return "OpenPnP's fiducial check of the job board";
+    return 'no fiducial correction';
+  }
+
+  // ---------------------------------------------------------------------------------- texts of the result card
+  const strip = (m) => String(m || '').replace(IL.CODE_RE, '$2');
+  const mmText = (v, d) => IL.fmt(v, d === undefined ? 2 : d) + ' mm';
+  /** "Stopped 13:06 during …: what was kept" (§8.1 state 4), from the stage, the seat and the last live detail. */
+  function stoppedText(v, at) {
+    const st = v.stoppedStage || '';
+    const det = regDetailOf(v.runId) || {};
+    const now = (det.probes || []).find((q) => q.state === 'now' || q.state === 'look');
+    const nPts = (det.probes || []).length;
+    const k = now ? now.n : Math.min(nPts, (det.probes || []).filter((q) => q.state === 'contact').length + 1);
+    const head = 'Stopped ' + at + ' during ';
+    if (st === 'home' || !st) return head + 'the home: nothing was saved.';
+    if (st === 'fiducials') {
+      const f = (det.fiducials || v.fiducials || []).find((x) => x.state !== 'found');
+      return head + 'the fiducial check' + (f ? ' (' + f.name + ')' : '') + ': nothing was saved.';
+    }
+    const where = st === 'same-seat' ? 'the same-seat check (point ' + Math.max(1, k) + ' of 3)' : st === 'probe' ? 'probe point ' + Math.max(1, k) + ' of ' + Math.max(1, nPts)
+      : st === 'save' ? 'the save' : 'planning again';
+    if (v.seat === 'same') {
+      const mine = regOf(v);
+      const held = mine ? (mine.lastCheckedAtMs > mine.atMs ? mine.lastCheckedAtMs : mine.atMs) : v.previousAtMs || v.atMs;
+      return head + where + ': the board surface was not changed; the seat checked at ' + IL.fmtTime(held - S.skewMs) + ' still holds.';
+    }
+    return head + where + ': the fiducials' + (isNum(v.movedMm) ? ' (board moved ' + mmText(v.movedMm) + ')' : '') + ' were saved and the board planned again; '
+      + 'the surface was not: Register again to probe.';
+  }
+  /** The registration a result stored or checked again, from the plan shown (the page head and "Dots use" show it). */
+  function regOf(v) {
+    const reg = plan() && plan().registration;
+    return reg && v.registrationId && reg.id === v.registrationId ? reg : null;
+  }
+  /** The machine-readable first sentence of #reg-result (§8.1 state 3). */
+  function regSentence(v, s) {
+    const ended = IL.fmtTime((v.atMs || Date.now() + S.skewMs) - S.skewMs);
+    if (v.status === 'ABORTED') return stoppedText(v, ended);
+    // the registration's own time, as the page head and "Dots use" show it (the task ends a little later)
+    const mine = regOf(v);
+    const at = mine ? IL.fmtTime((v.seat === 'same' && mine.lastCheckedAtMs ? mine.lastCheckedAtMs : mine.atMs) - S.skewMs) : ended;
+    const fids = v.fiducials || [];
+    const pr = v.probe || {};
+    const pts = pr.points || [];
+    const worst = pr.plane && isNum(pr.plane.maxResidualMm) ? ', worst ' + mmText(pr.plane.maxResidualMm, 3) : '';
+    const from = regRun(s) && regRun(s).runId === v.runId ? regRun(s).planId : null;
+    const again = v.newPlanId && v.newPlanId !== from ? '; planned again.' : v.newPlanId ? '; plan unchanged.' : '.';
+    if (!v.ok) {
+      const why = strip(v.message).replace(/([^.!?])$/, '$1.');
+      if (!v.registrationStored) return 'Not registered: ' + why;
+      return 'Registered ' + at + ', but the probe failed: ' + why;
+    }
+    const lim = S.config && S.config.fiducialCheck && isNum(S.config.fiducialCheck.seatToleranceMm) ? S.config.fiducialCheck.seatToleranceMm : 0.1;
+    const since = v.previousAtMs ? ' since ' + IL.fmtTime(v.previousAtMs - S.skewMs) : '';
+    const probed = (n) => (pr.saved ? 'probed ' + IL.plural(n, 'point') + (n ? ' again' : '') + worst : pr.skipped ? 'not probed' : 'the surface was not saved');
+    if (v.seat === 'same') {
+      const ss = v.sameSeat;
+      const moved = 'the board moved ' + mmText(v.movedMm || 0) + since + ' (limit ' + mmText(lim) + ')';
+      if (ss && ss.pass) {
+        const agree = (ss.points || []).reduce((a, q) => Math.max(a, Math.abs(q.deltaMm || 0)), 0);
+        return 'Same seat ' + at + ': ' + moved + ' and 3 re-touched points agree within ' + mmText(Math.max(0.01, agree)) + '; the surface probed then still applies' + again;
+      }
+      if (ss && !ss.pass) {
+        const bad = (ss.points || []).filter((q) => !q.pass).sort((a, b) => Math.abs(b.deltaMm || 9) - Math.abs(a.deltaMm || 9))[0];
+        const off = bad ? 'point ' + bad.n + (isNum(bad.deltaMm) ? ' is ' + mmText(Math.abs(bad.deltaMm)) + ' off' : ' gave no contact') + ' (limit 0.03 mm)' : 'a point is off';
+        return 'Same seat ' + at + ', but the surface changed: ' + off + '; ' + probed(pts.length) + again;
+      }
+      return 'Same seat ' + at + ': ' + moved + '; ' + (pr.why === 'probe: always' ? '' : 'no surface was tied to it: ') + probed(pts.length) + again;
+    }
+    if (v.seat === 'reseated') {
+      const most = fids.filter((f) => isNum(f.movedMm)).sort((a, b) => b.movedMm - a.movedMm)[0];
+      const how = pr.why === 'a new seat was announced' ? ' (you said new seat)' : most ? ' (' + most.name + ' most)' : '';
+      return 'Re-seated ' + at + ': the board moved ' + (isNum(v.movedMm) ? mmText(v.movedMm) : 'more than ' + mmText(lim)) + since + how + '; ' + probed(pts.length) + again;
+    }
+    const off = fids.reduce((a, f) => Math.max(a, Number(f.offsetFromExpectedMm) || 0), 0);
+    const found = fids.filter((f) => f.found).length;
+    const tail = pr.saved ? IL.plural(pts.length, 'point') + worst : pr.skipped ? 'not probed' : 'not probed';
+    return 'Registered ' + at + ': ' + found + ' of ' + fids.length + ' fiducials, board ' + mmText(off) + ' from where it was planned; ' + tail + again;
+  }
+  /** The fit in plain numbers: "rotation +0.20° · scale X +0.20 %, Y −0.30 % · shear +0.10°". */
+  function fitText(fit) {
+    if (!fit) return '';
+    const pct = (v) => IL.fmtSigned((v - 1) * 100, 2) + ' %';
+    return 'Rotation ' + IL.fmtSigned(fit.rotationDeg, 2) + '° · scale X ' + pct(fit.scaleX) + ', Y ' + pct(fit.scaleY) + ' · shear ' + IL.fmtSigned(fit.shearDeg, 2) + '°';
+  }
+  /** A refused probe point in plain words: what the camera or N1 found there, and the fix. */
+  function pointWhy(q) {
+    if (!q) return null;
+    if (q.state === 'not-bare') {
+      const share = q.look && isNum(q.look.foreignShare) ? ' (' + IL.fmt(q.look.foreignShare * 100, 0) + ' % of the spot)' : '';
+      return { what: 'The camera saw paste, a part or print at every spot tried' + share + '.', fix: 'Wipe it or take the part off, then Register again; or do it by hand.' };
+    }
+    if (q.state === 'no-contact') {
+      return { what: 'N1 went down to the floor without a seal: probably a hole or a via there, or the board top Z is wrong.', fix: 'Check the board top Z in the Board step, then Register again; or do it by hand.' };
+    }
+    return null;
+  }
+
+  // ---------------------------------------------------------------------------------- build
+  function buildProbe() {
+    const byHand = el('details', { class: 'disclose reg-byhand', id: 'probe-by-hand' },
+      el('summary', { text: 'Do it by hand: jog N1 in OpenPnP and add points' }),
+      el('div', { class: 'stack reg-byhand__body' },
+        el('div', { class: 'probe-guide', id: 'probe-guide' }),
+        el('table', { class: 'ptargets', id: 'probe-targets' }),
+        el('div', { id: 'probe-untied' })));
+    byHand.open = !!R.byHand;
+    byHand.addEventListener('toggle', () => { if (R.byHand !== byHand.open) { R.byHand = byHand.open; IL.render(); } });
+    return el('div', { class: 'stack reg-body' },
+      el('div', { id: 'probe-banner' }),
+      el('div', { class: 'reg-corr', id: 'reg-corr' }, el('span', { class: 'reg-corr__k', text: 'Dots use' }), el('span', { id: 'reg-correction' })),
+      el('div', { class: 'ri reg-result', id: 'reg-result', role: 'status', 'data-refusals': '', hidden: true }),
+      el('div', { id: 'reg-preview', class: 'reg-preview' }),
+      el('div', { id: 'reg-live', class: 'stack reg-live', hidden: true },
+        el('ol', { class: 'phases', id: 'reg-phases' }),
+        el('p', { class: 'stop-line', id: 'reg-stop-line', text: 'STOP (F9) stops it at once: N1 stays where it stopped, its vacuum off; Home raises it first.' })),
+      el('div', { id: 'reg-tables', class: 'stack reg-tables' },
+        el('table', { class: 'ptargets reg-tbl', id: 'reg-fids' }),
+        el('table', { class: 'ptargets reg-tbl', id: 'reg-probes' })),
+      el('div', { class: 'minis', id: 'probe-tiles' }),
+      byHand);
+  }
+  function buildProbeFoot() {
+    // the register set (R.byHand false)
+    const reg = el('button', { type: 'button', class: 'btn btn--primary btn--lg btn--block', id: 'btn-register',
+      title: 'Home if needed, find the fiducials with the top camera, touch the board with N1 at bare spots, plan again. Press twice.' });
+    IL.press2(reg, 'register board', () => postRegister('auto'), { ok: regOk, what: 'Register board' });
+    const cont = el('button', { type: 'button', class: 'btn btn--primary btn--lg btn--block', id: 'btn-reg-continue', hidden: true }, 'Checks ›');
+    cont.addEventListener('click', () => { setRegResult(null); goStep('checks'); });
+    const regSet = el('div', { class: 'stack reg-foot', id: 'reg-foot', style: 'gap:8px', 'data-refusals': '' },
+      el('div', { class: 'reg-note', id: 'register-note' }), reg, cont, el('div', { class: 'reason', id: 'register-why', hidden: true }));
+    // the by-hand set (R.byHand true): ids and behaviour unchanged
+    const add = el('button', { type: 'button', class: 'btn btn--primary btn--lg btn--block', id: 'btn-probe-add', title: 'Record the live N1 X/Y/Z as a surface point (lower N1 until its tip touches the board first)' });
+    const save = el('button', { type: 'button', class: 'btn btn--lg btn--block', id: 'btn-probe-save', title: "Save the points as this seat's board surface, tied to the plan, and plan the board again (nothing moves)" });
+    // a point far from its target or off the board top asks for a second press (the warning above says why)
+    IL.press2(add, (s) => (probeWarn(s) ? 'add this point anyway' : null), async () => {
+      const s = S.status;
+      const n1 = IL.positions(s).n1;
+      const st = probeState(s);
+      if (!n1 || st.nextT < 0) return null;
+      st.points.push({ target: st.nextT, x: Math.round(n1.x * 1000) / 1000, y: Math.round(n1.y * 1000) / 1000, z: Math.round(n1.z * 1000) / 1000 });
+      saveProbe();
+      IL.render();
+      return { n: st.nextT + 1, n1 };
+    }, { ok: (r) => (r ? 'Point ' + r.n + ': X ' + fmtMmV(r.n1.x) + ' · Y ' + fmtMmV(r.n1.y) + ' · Z ' + IL.fmt(r.n1.z, 3) + ' mm' : 'No point taken') });
+    save.addEventListener('click', () => saveProbeAndPlan(save));
+    const handSet = el('div', { class: 'stack', id: 'probe-foot-hand', style: 'gap:8px', 'data-refusals': '', hidden: true },
+      el('div', { class: 'probe-live', id: 'probe-live' }), el('div', { class: 'notebox notebox--need probe-warn', id: 'probe-warn', role: 'status', hidden: true }),
+      add, save, el('div', { class: 'reason', id: 'probe-why', hidden: true }));
+    return el('div', { class: 'stack', style: 'gap:8px' }, regSet, handSet);
+  }
+
+  // ---------------------------------------------------------------------------------- by hand (targets, points)
   function probeTargets(p, margin) {
     if (!p || !p.dots || !p.dots.length) return [];
+    // the engine's targets (bare spots away from pads, fiducials and holes, through the plan's transform): one set on the
+    // board for both paths; the client's bounding box stays only as the fallback
+    const rt = regTargets(p);
+    if (rt && !rt.error && rt.probes.length) {
+      const key0 = p.planId + '|engine';
+      if (R.targetsFor === key0) return R.targets;
+      R.targetsFor = key0;
+      R.targets = rt.probes.map((q) => ({ x: Math.round(q.x * 100) / 100, y: Math.round(q.y * 100) / 100,
+        alts: (q.alternates || []).map((a) => ({ x: a.x, y: a.y })) }));
+      return R.targets;
+    }
     const seat = seatOf(p) || {};
     const rot = isNum(seat.rot) ? Number(seat.rot) : 0;
     const key = p.planId + '|' + margin + '|' + rot;
@@ -1345,11 +1800,53 @@
     const nextT = targets.findIndex((t, i) => !doneT.has(i));
     return { p, margin, targets, points, doneT, nextT, seat };
   }
+  /**
+   * The hero overlay on the Register step (§8.1 "Hero overlay"): by hand, today's targets and the points taken; else the
+   * engine's targets (their alternates as small rings), the live or found points, and the tied surface's area.
+   */
   function probeOverlay(s) {
     const st = probeState(s);
     if (!st.p) return null;
-    return { margin: st.margin, points: st.points.map((q) => ({ x: q.x, y: q.y })),
-      targets: st.targets.map((t, i) => ({ x: t.x, y: t.y, done: st.doneT.has(i), next: i === st.nextT })) };
+    if (R.byHand) {
+      return { margin: st.margin, points: st.points.map((q) => ({ x: q.x, y: q.y })),
+        targets: st.targets.map((t, i) => ({ x: t.x, y: t.y, done: st.doneT.has(i), next: i === st.nextT })) };
+    }
+    const live = regLive(s);
+    const v = regView();
+    const det = live ? live.detail || {} : null;
+    const pts = det && det.probes && det.probes.length ? det.probes : v && v.probe && v.probe.points && v.probe.points.length ? v.probe.points : null;
+    if (pts) {
+      return { margin: st.margin, points: pts.filter((q) => q.state === 'contact').map((q) => ({ x: q.x, y: q.y })),
+        targets: pts.map((q) => ({ x: q.x, y: q.y, done: q.state === 'contact', next: q.state === 'now' || q.state === 'look',
+          bad: q.state === 'not-bare' || q.state === 'no-contact' })) };
+    }
+    const sf = boardSurface(s);
+    const tied = !!sf && sf.boundToBoard && IL.ready().items.find((x) => x.key === 'surface').state === 'ok';
+    const surfPts = tied ? (sf.points || []).map((q) => (Array.isArray(q) ? { x: q[0], y: q[1] } : { x: q.x, y: q.y })) : [];
+    return { margin: st.margin, points: surfPts, targets: st.targets.map((t) => ({ x: t.x, y: t.y, alts: t.alts || [] })) };
+  }
+  /** The fiducial layer of the hero (g.pv-l-fids): expected search circles and the fiducials found. */
+  function fidOverlay(s) {
+    const p = plan();
+    if (!p) return null;
+    const t = regTargets(p);
+    const r0 = t && t.fids.length && isNum(t.fids[0].searchRadiusMm) ? Number(t.fids[0].searchRadiusMm) : 8;
+    const live = regLive(s);
+    const v = regView();
+    const src = live && live.detail && live.detail.fiducials ? live.detail.fiducials : v && v.fiducials && v.fiducials.length ? v.fiducials : null;
+    if (src) {
+      return src.map((f) => ({ name: f.name, x: f.expected.x, y: f.expected.y, r: isNum(f.searchRadiusMm) ? f.searchRadiusMm : r0,
+        found: f.found ? { x: f.found.x, y: f.found.y } : null, state: f.state }));
+    }
+    const reg = p.registration;
+    const at = new Map(((reg && reg.fiducials) || []).map((f) => [f.name, f]));
+    if (t && t.fids.length) {
+      return t.fids.map((f) => ({ name: f.name, x: f.x, y: f.y, r: isNum(f.searchRadiusMm) ? f.searchRadiusMm : r0,
+        found: at.has(f.name) ? { x: at.get(f.name).x, y: at.get(f.name).y } : null, state: at.has(f.name) ? 'found' : 'todo' }));
+    }
+    // no AR data: the board's fiducials from the plan (board import), expected only
+    return ((p.board && p.board.fiducials) || []).filter((f) => isNum(f.x) && isNum(f.y))
+      .map((f) => ({ name: f.id || f.name, x: f.x, y: f.y, r: r0, found: null, state: 'todo' }));
   }
   function saveProbe() { ssSet('il.run.probe', R.probe); }
   const PROBE_NEAR_MM = 2.0;   // N1 farther than this from the target: ask before taking the point
@@ -1358,7 +1855,7 @@
     const cfg = S.config || {};
     const tol = isNum(cfg.zFrameToleranceMm) ? Number(cfg.zFrameToleranceMm) : 1.0;
     const seat = seatOf(p) || {};
-    const anchor = s && s.dispense && s.dispense.needle && s.dispense.needle.anchor;
+    const anchor = anchorOf(s);
     if (isNum(seat.z)) return { tol, top: Number(seat.z), topName: 'the board top' };
     if (anchor && isNum(anchor.surfaceZMm)) return { tol, top: Number(anchor.surfaceZMm), topName: 'the needle frame surface' };
     return { tol, top: null, topName: '' };
@@ -1378,34 +1875,6 @@
     }
     return null;
   }
-  function buildProbe() {
-    const body = el('div', { class: 'stack' },
-      el('div', { id: 'probe-banner' }),
-      el('div', { class: 'probe-guide', id: 'probe-guide' }),
-      el('table', { class: 'ptargets', id: 'probe-targets' }),
-      el('div', { class: 'minis', id: 'probe-tiles' }),
-      el('div', { id: 'probe-untied' }));
-    return body;
-  }
-  function buildProbeFoot() {
-    const add = el('button', { type: 'button', class: 'btn btn--primary btn--lg btn--block', id: 'btn-probe-add', title: 'Record the live N1 X/Y/Z as a surface point (lower N1 until its tip touches the board first)' });
-    const save = el('button', { type: 'button', class: 'btn btn--lg btn--block', id: 'btn-probe-save', title: "Save the points as this seat's board surface, tied to the plan, and plan the board again (nothing moves)" });
-    // a point far from its target or off the board top asks for a second press (the warning above says why)
-    IL.press2(add, (s) => (probeWarn(s) ? 'add this point anyway' : null), async () => {
-      const s = S.status;
-      const n1 = IL.positions(s).n1;
-      const st = probeState(s);
-      if (!n1 || st.nextT < 0) return null;
-      st.points.push({ target: st.nextT, x: Math.round(n1.x * 1000) / 1000, y: Math.round(n1.y * 1000) / 1000, z: Math.round(n1.z * 1000) / 1000 });
-      saveProbe();
-      IL.render();
-      return { n: st.nextT + 1, n1 };
-    }, { ok: (r) => (r ? 'Point ' + r.n + ': X ' + fmtMmV(r.n1.x) + ' · Y ' + fmtMmV(r.n1.y) + ' · Z ' + IL.fmt(r.n1.z, 3) + ' mm' : 'No point taken') });
-    save.addEventListener('click', () => saveProbeAndPlan(save));
-    return el('div', { class: 'stack', style: 'gap:8px', 'data-refusals': '' },
-      el('div', { class: 'probe-live', id: 'probe-live' }), el('div', { class: 'notebox notebox--need probe-warn', id: 'probe-warn', role: 'status', hidden: true }),
-      add, save, el('div', { class: 'reason', id: 'probe-why', hidden: true }));
-  }
   async function saveProbeAndPlan(btn) {
     const s = S.status;
     const st = probeState(s);
@@ -1423,31 +1892,249 @@
       saveProbe();
       return { sf, plan: q };
     }, { ok: (r) => (r && r.untied ? 'Saved, but not tied to the plan: plan again, then save.' : 'Board surface saved (' + IL.plural(st.points.length, 'point') + ') and the board planned again.') });
-    if (res && !res.untied) goAuto();
+    if (res && !res.untied) { R.byHand = false; goAuto(); }
   }
+
+  // ---------------------------------------------------------------------------------- render
   function renderProbe(s) {
     const st = probeState(s);
     const p = st.p;
-    const pos = IL.positions(s);
-    const n1 = pos.n1;
-    const surf = s.dispense && s.dispense.surfaces && s.dispense.surfaces[s.dispense.boardSurfaceName || 'board'];
+    const live = regLive(s);
+    const v = live ? null : regView();
+    const fin = !live && !!R.regResultRunId && regRun(s) && regRun(s).runId === R.regResultRunId && !regRun(s).running ? regRun(s) : null;
+    const mode = live ? 'live' : v || fin ? 'result' : 'idle';
     const r = IL.ready();
     const sfItem = r.items.find((x) => x.key === 'surface');
-    // banner: probing starts from empty for every seat
-    const tied = sfItem && sfItem.state === 'ok';
-    IL.keyed($('probe-banner'), [!!p, tied, !!S.newSeatAtMs, sfItem && sfItem.detail].join('|'), () => {
-      if (!p) return el('div', { class: 'notebox', text: 'Plan the board first (Board step): the probe targets come from the plan.' });
+    const tied = !!sfItem && sfItem.state === 'ok';
+    const byHand = !!R.byHand && mode !== 'live';
+    const det = $('probe-by-hand');
+    if (det && det.open !== byHand) det.open = byHand;
+    IL.show(det, !!p && mode !== 'live');
+    // banner: the seat state (idle only; the result card and the live phases say the rest)
+    IL.show($('probe-banner'), mode === 'idle');
+    IL.keyed($('probe-banner'), [mode, !!p, tied, !!S.newSeatAtMs, sfItem && sfItem.detail].join('|'), () => {
+      if (mode !== 'idle') return null;
+      if (!p) return el('div', { class: 'notebox', text: 'Plan the board first (Board step): Register board takes its fiducials and probe spots from the plan.' });
       if (tied && !S.newSeatAtMs) {
-        return el('div', { class: 'notebox notebox--info' }, el('b', { text: 'This seat is probed and tied' }),
-          el('div', { class: 'muted', text: (sfItem.detail || '') + ' Probe again only if the board moved. New points start from empty.' }));
+        return el('div', { class: 'notebox notebox--info' }, el('b', { text: p.registration ? 'This seat is registered and tied' : 'This seat is probed and tied' }),
+          el('div', { class: 'muted', text: (sfItem.detail || '') + ' Register again only if the board moved.' }));
       }
+      const fixes = (sfItem && sfItem.fixes || []).filter((f) => f.fix === 'register-check' || f.fix === 'same-seat');
       return el('div', { class: 'notebox notebox--need probe-banner' },
-        el('div', {}, el('b', { text: 'New seat: probing from empty' }), el('div', { class: 'muted', text: sfItem && sfItem.state === 'block' ? sfItem.detail : 'The last seat\'s points are never reused: a re-seated board can sit tilted.' })),
-        S.newSeatAtMs ? fixBtn({ fix: 'same-seat', label: 'Same seat? Keep them' }, 'btn--sm') : null);
+        el('div', {}, el('b', { text: S.newSeatAtMs ? 'New seat: register it' : 'This seat needs its surface' }),
+          el('div', { class: 'muted', text: sfItem && sfItem.state === 'block' ? sfItem.detail : 'The fiducials say where the board sits; then N1 touches it at bare spots. A re-seated board can sit tilted.' })),
+        fixes.map((f) => fixBtn(Object.assign({}, f, { label: f.fix === 'same-seat' ? 'Same seat? Keep them' : f.label }), 'btn--sm')));
     });
-    IL.show($('btn-probe-add'), !!p);
-    IL.show($('btn-probe-save'), !!p);
+    // what the plan's dots use now
+    IL.show($('reg-corr'), !!p);
+    IL.setText($('reg-correction'), p ? correctionText(p) : '');
+    IL.setAttr($('reg-corr'), 'title', p && p.registration ? 'Registration ' + String(p.registration.id || '').slice(0, 4) + ' · ' + fitText(p.registration) : null);
+    renderRegPreview(s, p, mode);
+    renderRegLive(s, p, live);
+    renderRegResult(s, p, mode, v, fin);
+    renderRegTables(s, p, mode, live, v);
+    renderProbeTiles(s, st, tied, mode);
+    renderByHand(s, st);
+    renderProbeFoot(s, st, mode, v, fin, byHand);
+  }
+  /** Idle (§8.1 state 1): the seat it expects and what N1 touches (the fiducials are in #reg-fids, the times in the note). */
+  function renderRegPreview(s, p, mode) {
+    const box = $('reg-preview');
+    const t = regTargets(p);
+    IL.show(box, mode === 'idle' && !!p && !R.byHand);
+    if (mode !== 'idle' || !p || R.byHand) return;
+    const same = regSameSeatLikely(s, p);
+    const sf = boardSurface(s);
+    const key = JSON.stringify([p.planId, !!t, t && t.probes.length, !!same, sf && sf.setAtMs]);
+    IL.keyed(box, key + (t && t.error ? 'e' : ''), () => {
+      if (!t) return el('div', { class: 'notebox', text: 'This plan has no registration preview (an older plan): plan again.' });
+      if (t.error || !t.probes.length) return null;   // the reason is under the button
+      return el('div', { class: 'reg-expect' }, el('span', {}, same
+        ? ['Same seat as ', el('b', { text: IL.fmtTime(same.atMs - S.skewMs) }), ' if every fiducial moved at most 0.10 mm: N1 re-touches 3 points of that surface. Else it probes ',
+          el('b', { text: IL.plural(t.probes.length, 'spot') }), '.']
+        : ['N1 probes ', el('b', { text: IL.plural(t.probes.length, 'bare spot') }), ' (numbered on the board), with up to 2 nearby spots each when one is not bare.']));
+    });
+  }
+  /** Running: the phases (§8.1 state 2) from status.run.detail. */
+  function renderRegLive(s, p, live) {
+    IL.show($('reg-live'), !!live);
+    if (!live) return;
+    const d = live.detail || {};
+    const stage = d.stage || 'home';
+    const order = ['home', 'fiducials', 'fit', 'probe', 'plan'];
+    const at = { home: 0, fiducials: 1, 'same-seat': 3, probe: 3, save: 3, plan: 4 }[stage];
+    const rows = [];
+    const stOf = (i) => (i < at ? 'done' : i === at ? 'now' : 'todo');
+    const home = d.home || {};
+    const est = (p && p.registrationTargets && p.registrationTargets.estimatedSeconds) || {};
+    rows.push({ k: 'home', st: home.needed ? stOf(0) : 'done', t: 'Home', d: home.needed ? (stage === 'home' ? 'the head goes to its home corner · pressure off' : 'done') : 'not needed',
+      v: home.needed && stage === 'home' ? '≈ ' + IL.fmtSecs(home.estimateS) : '' });
+    const fids = d.fiducials || [];
+    const nf = fids.filter((f) => f.state === 'found').length;
+    const ph = String(live.phase || '');
+    const fidNow = /^fiducials: (.+)$/.exec(ph);
+    rows.push({ k: 'fiducials', st: stOf(1), t: 'Fiducials · ' + nf + ' of ' + (fids.length || '…') + ' found',
+      d: stage === 'fiducials' && fidNow ? 'looking at ' + fidNow[1].replace(/ \((\d+) of (\d+)\)/, '').replace(/ · /g, ', ') : at > 1 ? names(fids) + ' found' : 'top camera, light on',
+      v: stage === 'fiducials' ? '≈ ' + IL.fmtSecs(Math.max(0, fids.length - nf) * 5) : '' });
+    const seatTxt = d.seat === 'same' ? 'same seat' + (isNum(d.movedMm) ? ' · moved ' + mmText(d.movedMm) : '') : d.seat === 'reseated' ? 're-seated' + (isNum(d.movedMm) ? ' · moved ' + mmText(d.movedMm) : '')
+      : d.seat === 'first' ? 'first registration of this seat' : '';
+    rows.push({ k: 'fit', st: at > 1 ? 'done' : 'todo', t: 'Fit the board to the fiducials', d: at > 1 ? seatTxt : 'shift, rotation and scale from the fiducials', v: '' });
+    const pr = d.probes || [];
+    const nOk = pr.filter((q) => q.state === 'contact').length;
+    const cur = pr.find((q) => q.state === 'now' || q.state === 'look');
+    const lastC = pr.filter((q) => q.state === 'contact' && isNum(q.z)).pop();
+    const same = stage === 'same-seat';
+    const pd = cur ? (cur.state === 'look' ? 'camera look' : 'N1 touching') + (cur.alternate ? ' at nearby spot ' + cur.alternate : '')
+      + (lastC ? ' · last Z ' + IL.fmt(lastC.z, 3) + ' mm' : '') : lastC ? 'last Z ' + IL.fmt(lastC.z, 3) + ' mm' : at > 3 ? 'done' : 'N1 vacuum touch, pressure off';
+    const nAll = same ? 3 : pr.length || (p && p.registrationTargets ? p.registrationTargets.probes.length : 0);
+    rows.push({ k: 'probe', st: stOf(3), t: (same ? 'Same-seat check' : 'Probe') + (at === 3 && nAll ? ' · point ' + Math.min(nAll, nOk + 1) + ' of ' + nAll : nAll ? ' · ' + nAll + ' points' : ''),
+      d: pd, v: at === 3 ? '≈ ' + IL.fmtSecs(Math.max(0, (same ? 3 : pr.length) - nOk) * ((est.probe && pr.length ? est.probe / pr.length : 17))) : '' });
+    rows.push({ k: 'plan', st: stOf(4), t: 'Plan again', d: '', v: '' });
+    IL.keyed($('reg-phases'), JSON.stringify(rows), () => rows.map((x, i) => el('li', { class: x.st === 'done' ? '' : x.st, 'data-ph': x.k },
+      x.st === 'done' ? IL.glyph('ok', 'sm') : x.st === 'now' ? IL.glyph('live', 'sm') : IL.glyph('num', 'sm', 'Step ' + (i + 1), i + 1),
+      el('div', {}, el('div', { class: 'ph__t', text: x.t }), x.d ? el('div', { class: 'ph__d', text: x.d }) : null),
+      el('span', { class: 'ph__v', text: x.v || '' }))));
+  }
+  /** Result (§8.1 states 3 and 4): the card with its first sentence machine-readable, then the next actions. */
+  function renderRegResult(s, p, mode, v, fin) {
+    const box = $('reg-result');
+    IL.show(box, mode === 'result');
+    if (mode !== 'result') return;
+    const ok = v ? v.ok : fin.status === 'OK';
+    const status = v ? v.status : fin.status;
+    const kind = ok ? 'ok' : status === 'REFUSED' ? 'need' : 'block';
+    IL.setClass(box, 'ri reg-result ri--' + kind);
+    const key = JSON.stringify([v ? [v.runId, v.status, v.newPlanId, v.message] : [fin.runId, fin.status, fin.message], p && p.planId, !!S.config]);
+    IL.keyed(box, key, () => {
+      if (!v) {
+        return [IL.glyph(kind), el('div', {}, el('div', { class: 'ri__t', text: STATUS_WORD[status] || status }),
+          el('div', { class: 'ri__d', text: (fin.message ? strip(fin.message) + ' ' : '') + 'Reading the result…' }))];
+      }
+      const lines = [];
+      const sentence = regSentence(v, s);
+      const pts = (v.probe && v.probe.points) || [];
+      const bad = pts.find((q) => q.state === 'not-bare' || q.state === 'no-contact');
+      if (ok && v.fit && v.seat !== 'same') lines.push(el('div', { class: 'ri__d reg-fit', text: fitText(v.fit) + '.' }));
+      // a registration whose probe failed is kept: the dots already move with the board, only the surface is missing
+      if (!ok && status !== 'ABORTED' && v.registrationStored) {
+        lines.push(el('div', { class: 'ri__d reg-kept', text: 'The fiducial check was saved and the board planned again with it'
+          + (isNum(v.movedMm) && v.movedMm >= 0.005 ? ' (moved ' + mmText(v.movedMm) + ')' : '') + '; the board surface was not.' }));
+      }
+      if (bad && bad.look && bad.look.reason) lines.push(el('div', { class: 'ri__d reg-look', text: 'Camera at point ' + bad.n + ': ' + bad.look.reason + '.' }));
+      for (const w of (v.warnings || []).slice(0, 2)) lines.push(el('div', { class: 'ri__d', text: IL.cap(w) + '.' }));
+      // the fixes (§8.2): REG / PROBE / I4 by the message's code; "Register again" is the foot's button
+      let fixes = [];
+      if (ok) {
+        if (v.seat === 'same' && v.sameSeat && v.sameSeat.pass) fixes.push({ id: 'btn-reg-probe', label: 'Probe again', title: 'Touch the board at every spot again (N1 probe) and save that surface. Press twice.' });
+        fixes.push({ id: 'btn-reg-again', label: 'Register again', title: 'Find the fiducials again (after a move). Press twice.' });
+      } else if (status === 'ABORTED') {
+        fixes = [];
+      } else {
+        const m = IL.CODE_RE.exec(String(v.message || ''));
+        const code = m ? m[1] : null;
+        fixes = (code ? IL.fixesForCode(code, s, m[2]) : [{ fix: 'probe-by-hand', label: 'Do it by hand' }]).filter((f) => f.fix !== 'register');
+        if (code === 'PROBE' && bad && bad.state === 'no-contact') fixes.unshift({ fix: 'board-step', label: 'Check the board top Z' });
+      }
+      const buttons = fixes.map((f) => (f.id ? regActionBtn(f) : fixBtn(f, 'btn--sm')));
+      // one sentence (machine-readable), its lead in bold: "Registered 13:05:", "Not registered:", "Stopped 13:06 during …:"
+      const cut = sentence.indexOf(': ');
+      const title = cut > 0 ? [el('b', { text: sentence.slice(0, cut + 1) }), IL.nb(sentence.slice(cut + 1))] : IL.nb(sentence);
+      return [IL.glyph(ok ? 'ok' : kind), el('div', { class: 'reg-result__main' }, el('div', { class: 'ri__t reg-result__t', id: 'reg-result-t' }, title), lines),
+        buttons.length ? el('div', { class: 'ri__act reg-result__act' }, buttons) : null];
+    });
+  }
+  /** "Register again" / "Probe again" in the result card: two-press, like the foot's button. */
+  function regActionBtn(f) {
+    const b = el('button', { type: 'button', class: 'btn btn--sm', id: f.id, title: f.title }, f.label);
+    if (f.id === 'btn-reg-probe') IL.press2(b, 'probe again', () => postRegister('always'), { ok: regOk, what: 'Probe again' });
+    else IL.press2(b, 'register board', () => postRegister('auto'), { ok: regOk, what: 'Register board' });
+    return b;
+  }
+  /** The fiducials and the probe points: expected / found, Z and state (§8.1 `table#reg-fids`, `table#reg-probes`). */
+  function renderRegTables(s, p, mode, live, v) {
+    const t = regTargets(p);
+    const det = live ? live.detail || {} : null;
+    const fids = det && det.fiducials ? det.fiducials : v && v.fiducials && v.fiducials.length ? v.fiducials
+      : t && !R.byHand ? t.fids.map((f) => ({ name: f.name, expected: { x: f.x, y: f.y }, found: null, state: 'todo' })) : [];
+    const fb = $('reg-fids');
+    IL.show(fb, fids.length > 0 && !R.byHand);
+    // the fiducial the camera looks at now: the engine visits them nearest first, its phase names it
+    const fidNow = det && det.stage === 'fiducials' ? (/^fiducials: (\S+)/.exec(String(live.phase || '')) || [])[1] : null;
+    const fstate = (f) => (f.found ? 'found' : f.state === 'todo' && f.name === fidNow ? 'now' : f.state || 'todo');
+    const fk = JSON.stringify(fids.map((f) => [f.name, f.expected, f.found, f.state, f.offsetFromExpectedMm, f.movedMm, fstate(f)]));
+    const idle = mode === 'idle';
+    const regAt = idle && p && p.registration ? IL.fmtTime(p.registration.atMs - S.skewMs) : null;
+    const rad = t && t.fids.length && isNum(t.fids[0].searchRadiusMm) ? Number(t.fids[0].searchRadiusMm) : 8;
+    IL.keyed(fb, fk + idle, () => (fids.length ? [
+      el('caption', { class: 'reg-tbl__cap' }, IL.unitText(idle ? 'Fiducials · searched within ' + mmText(rad, 0) : 'Fiducials · top camera')),
+      el('thead', {}, el('tr', {}, el('th', { text: 'Name' }), el('th', {}, 'Expected X, Y ', el('span', { class: 'unit-lc', text: 'mm' })),
+        el('th', {}, idle ? 'Found' : 'Off ', idle ? null : el('span', { class: 'unit-lc', text: 'mm' })), el('th', { text: '', 'aria-label': 'State' }))),
+      el('tbody', {}, fids.map((f) => {
+        const off = f.found ? (isNum(f.offsetFromExpectedMm) ? f.offsetFromExpectedMm : Math.hypot(f.found.x - f.expected.x, f.found.y - f.expected.y)) : null;
+        const sx = fstate(f);
+        const bad = sx === 'not-found' || sx === 'ambiguous' || sx === 'not-centred';
+        return el('tr', { class: (sx === 'now' ? 'next' : '') + (bad ? ' bad' : '') || null, 'data-fid': f.name,
+          title: f.found ? f.name + ' found at X ' + fmtMmV(f.found.x) + ', Y ' + fmtMmV(f.found.y) + (isNum(f.movedMm) ? ' · moved ' + mmText(f.movedMm) + ' since the last registration' : '') : f.name },
+        el('td', { text: f.name }), el('td', { text: fmtMmV(f.expected.x) + ', ' + fmtMmV(f.expected.y) }),
+        idle ? el('td', { class: regAt && !S.newSeatAtMs ? '' : 'dim', text: regAt && !S.newSeatAtMs ? regAt : '—' }) : el('td', { class: off === null ? 'dim' : '', text: off === null ? '—' : IL.fmt(off, 2) }),
+        el('td', {}, sx === 'found' ? IL.glyph('ok', 'xs', 'found') : sx === 'now' ? IL.glyph('live', 'xs', 'looking') : bad ? IL.glyph('block', 'xs', sx.replace('-', ' ')) : idle ? null : IL.glyph('num', 'xs', 'not yet', '')));
+      }))] : null));
+    // probe points: live detail, else the result's points
+    const pts = det && det.probes ? det.probes : v && v.probe && v.probe.points && v.probe.points.length ? v.probe.points : v && v.sameSeat ? v.sameSeat.points.map((q) => ({ n: q.n, x: q.x, y: q.y, z: q.z, state: q.pass ? 'contact' : 'off', storedZ: q.storedZ, deltaMm: q.deltaMm })) : [];
+    const pb = $('reg-probes');
+    IL.show(pb, pts.length > 0 && !R.byHand);
+    const pk = JSON.stringify(pts.map((q) => [q.n, q.state, q.z, q.alternate, q.x, q.y, q.failure, q.deltaMm]));
+    const same = !!(det && det.stage === 'same-seat') || !!(v && v.sameSeat && !(v.probe && v.probe.points && v.probe.points.length));
+    const word = (q) => ({ todo: '—', look: 'looking', now: 'touching', contact: q.alternate ? 'alt. ' + q.alternate : 'touched', 'not-bare': 'not bare', 'no-contact': 'no contact', skipped: 'skipped', off: 'moved' }[q.state] || q.state);
+    IL.keyed(pb, pk, () => (pts.length ? [
+      el('caption', { class: 'reg-tbl__cap', text: same ? 'Same-seat check · 3 stored points' : 'N1 probe · vacuum touch' }),
+      el('thead', {}, el('tr', {}, el('th', { text: '#' }), el('th', {}, 'X ', el('span', { class: 'unit-lc', text: 'mm' })), el('th', {}, 'Y ', el('span', { class: 'unit-lc', text: 'mm' })),
+        el('th', {}, 'Z ', el('span', { class: 'unit-lc', text: 'mm' })), el('th', { text: '', 'aria-label': 'State' }))),
+      el('tbody', {}, pts.map((q) => {
+        const bad = q.state === 'not-bare' || q.state === 'no-contact' || q.state === 'off';
+        const rows = [el('tr', { class: ((q.state === 'now' || q.state === 'look') ? 'next' : '') + (bad ? ' bad' : '') || null, 'data-n': q.n,
+          title: (q.notes && q.notes.length ? q.notes.join('\n') : null) },
+        el('td', { text: String(q.n) }), el('td', { text: fmtMmV(q.x) }), el('td', { text: fmtMmV(q.y) }),
+        el('td', { class: isNum(q.z) ? '' : 'dim', text: isNum(q.z) ? IL.fmt(q.z, 3) : '—' }),
+        el('td', { class: 'reg-st' + (bad ? ' bad' : ''), text: word(q) }))];
+        const why = bad ? (q.state === 'off' ? 'stored Z ' + IL.fmt(q.storedZ, 3) + (isNum(q.deltaMm) ? ', ' + IL.fmtSigned(q.deltaMm, 3) + ' mm off (limit 0.03 mm)' : ', no contact')
+          : pointWhy(q) && pointWhy(q).what) : null;
+        if (why) rows.push(el('tr', { class: 'reg-why-row' }, el('td', {}), el('td', { colspan: '4', text: why })));
+        return rows;
+      }))] : null));
+  }
+  /** The tiles: the points being added by hand, else the tied surface (from either path). */
+  function renderProbeTiles(s, st, tied, mode) {
+    const box = $('probe-tiles');
+    const sf = boardSurface(s);
+    const surfPts = tied && sf ? (sf.points || []).map((q) => (Array.isArray(q) ? { x: q[0], y: q[1], z: q[2] } : q)) : [];
+    const pts = R.byHand ? st.points : surfPts;
+    const on = !!st.p && mode !== 'live' && (R.byHand || pts.length > 0);
+    IL.show(box, on);
+    if (!on) return;
+    const fit = IL.boardview.planeFit(pts);
+    const cfg = S.config || {};
+    const lim = isNum(cfg.surfaceMaxResidualMm) ? Number(cfg.surfaceMaxResidualMm) : 0.04;
+    // the worst Z against the board top Z of the plan (else the needle frame), signed (+ above, − below): the engine
+    // checks a board surface against the board's own nominal Z (AUTO_REGISTER_DESIGN.md §16 item 1), as the rows do
+    const lim2 = probeLimits(s, st.p);
+    const tol = lim2.tol;
+    const zDev = lim2.top !== null && pts.length ? pts.map((q) => q.z - lim2.top).reduce((a, b) => (Math.abs(b) > Math.abs(a) ? b : a), 0) : null;
+    const mini = (k, v, u, sub, bad) => el('div', { class: 'mini' + (bad ? ' notebox--block' : '') }, el('div', { class: 'mini__k', text: k }),
+      el('div', { class: 'mini__v' }, v, u ? el('span', { class: 'u', text: u }) : null), el('div', { class: 'mini__s', text: sub }));
+    IL.keyed(box, JSON.stringify([R.byHand, pts.length, st.targets.length, fit && fit.worst.toFixed(4), fit && fit.slope.toFixed(5), zDev !== null && zDev.toFixed(3), lim2.top, tol]), () => [
+      mini('Points', R.byHand ? pts.length + ' of ' + st.targets.length : String(pts.length), '', R.byHand ? (pts.length < 3 ? 'at least 3 to save' : 'enough to save') : 'board surface, tied'),
+      mini('Worst residual', fit ? IL.fmt(fit.worst, 3) : '—', fit ? 'mm' : '', 'limit ' + IL.fmt(lim, 2) + ' mm', fit && fit.worst > lim),
+      mini('Tilt', fit ? IL.fmt(fit.slope * 100, 2) : '—', fit ? 'mm / 100 mm' : '', fit ? 'plane through the points' : 'after 3 points'),
+      mini(lim2.topName === 'the board top' ? 'Z vs the board top' : 'Z vs the frame', zDev !== null ? IL.fmtSigned(zDev, 2) : '—', zDev !== null ? 'mm' : '',
+        'limit ±' + IL.fmt(tol, 2) + ' mm' + (lim2.top !== null ? ' of ' + IL.fmt(lim2.top, 2) : ''), zDev !== null && Math.abs(zDev) > tol),
+    ]);
+  }
+  /** Inside "Do it by hand": the guide, the targets table and the untied note (ids and behaviour as before). */
+  function renderByHand(s, st) {
+    const p = st.p;
     if (!p) return;
+    const n1 = IL.positions(s).n1;
     const tgt = st.nextT >= 0 ? st.targets[st.nextT] : null;
     const dist = tgt && n1 ? Math.hypot(n1.x - tgt.x, n1.y - tgt.y) : null;
     IL.keyed($('probe-guide'), [st.nextT, dist === null ? '' : dist.toFixed(2), st.points.length].join('|'), () => {
@@ -1455,10 +2142,7 @@
       return ['Jog N1 to ', el('b', { text: 'target ' + (st.nextT + 1) }), " in OpenPnP's window and lower it until the tip touches. ",
         dist !== null ? el('span', { class: dist > 2 ? 'reason--need' : '' }, 'N1 is ', el('b', { text: IL.fmt(dist, 2) + ' mm' }), ' from target ' + (st.nextT + 1) + '.') : 'N1 position unknown.'];
     });
-    const rows = st.targets.map((t, i) => {
-      const pt = st.points.find((q) => q.target === i);
-      return { i, t, pt };
-    });
+    const rows = st.targets.map((t, i) => ({ i, t, pt: st.points.find((q) => q.target === i) }));
     // rows: the target until probed, then where the point was taken; a point off its target or the board top is marked
     const plim = probeLimits(s, p);
     const ptBad = (x) => {
@@ -1468,7 +2152,9 @@
       if (plim.top !== null && Math.abs(x.pt.z - plim.top) > plim.tol) return IL.fmtSigned(x.pt.z - plim.top, 2) + ' mm from ' + plim.topName + ' (limit ±' + IL.fmt(plim.tol, 2) + ')';
       return null;
     };
-    IL.keyed($('probe-targets'), JSON.stringify([rows.map((x) => [x.t, x.pt && [x.pt.x, x.pt.y, x.pt.z]]), st.nextT, plim]), () => [
+    st.ptBad = ptBad;
+    st.rows = rows;
+    IL.keyed($('probe-targets'), JSON.stringify([rows.map((x) => [x.t.x, x.t.y, x.pt && [x.pt.x, x.pt.y, x.pt.z]]), st.nextT, plim]), () => [
       el('thead', {}, el('tr', {}, el('th', { text: '#' }), el('th', {}, 'X ', el('span', { class: 'unit-lc', text: 'mm' })), el('th', {}, 'Y ', el('span', { class: 'unit-lc', text: 'mm' })),
         el('th', {}, 'Z ', el('span', { class: 'unit-lc', text: 'mm' })), el('th', { text: '', 'aria-label': 'Delete' }))),
       el('tbody', {}, rows.map((x) => el('tr', { class: (x.i === st.nextT ? 'next' : '') + (ptBad(x) ? ' bad' : '') || null, 'data-target': x.i,
@@ -1478,32 +2164,48 @@
         el('td', {}, x.pt ? el('button', { type: 'button', class: 'btn btn--quiet', title: 'Delete point ' + (x.i + 1), 'aria-label': 'Delete point ' + (x.i + 1), 'data-focus-key': 'del' + x.i,
           onclick: () => { R.probe.points = R.probe.points.filter((q) => q.target !== x.i); saveProbe(); IL.render(); } }, IL.icon('i-close')) : null)))),
     ]);
-    // tiles: points, worst residual, tilt, Z against the needle frame
-    const fit = IL.boardview.planeFit(st.points);
-    const cfg = S.config || {};
-    const lim = isNum(cfg.surfaceMaxResidualMm) ? Number(cfg.surfaceMaxResidualMm) : 0.04;
-    const tol = isNum(cfg.zFrameToleranceMm) ? Number(cfg.zFrameToleranceMm) : 1.0;
-    const anchor = s.dispense && s.dispense.needle && s.dispense.needle.anchor;
-    // the worst Z against the frame, signed (+ above, − below)
-    const zDev = anchor && st.points.length ? st.points.map((q) => q.z - anchor.surfaceZMm).reduce((a, b) => (Math.abs(b) > Math.abs(a) ? b : a), 0) : null;
-    const mini = (k, v, u, sub, bad) => el('div', { class: 'mini' + (bad ? ' notebox--block' : '') }, el('div', { class: 'mini__k', text: k }),
-      el('div', { class: 'mini__v' }, v, u ? el('span', { class: 'u', text: u }) : null), el('div', { class: 'mini__s', text: sub }));
-    IL.keyed($('probe-tiles'), JSON.stringify([st.points.length, st.targets.length, fit && fit.worst.toFixed(4), fit && fit.slope.toFixed(5), zDev !== null && zDev.toFixed(3)]), () => [
-      mini('Points', st.points.length + ' of ' + st.targets.length, '', st.points.length < 3 ? 'at least 3 to save' : 'enough to save'),
-      mini('Worst residual', fit ? IL.fmt(fit.worst, 3) : '—', fit ? 'mm' : '', 'limit ' + IL.fmt(lim, 2) + ' mm', fit && fit.worst > lim),
-      mini('Tilt so far', fit ? IL.fmt(fit.slope * 100, 2) : '—', fit ? 'mm / 100 mm' : '', fit ? 'plane through the points' : 'after 3 points'),
-      mini('Z vs the frame', zDev !== null ? IL.fmtSigned(zDev, 2) : '—', zDev !== null ? 'mm' : '', 'limit ±' + IL.fmt(tol, 2) + ' mm' + (anchor ? ' of ' + IL.fmt(anchor.surfaceZMm, 2) : ''), zDev !== null && Math.abs(zDev) > tol),
-    ]);
     IL.keyed($('probe-untied'), String(R.probeUntied), () => (R.probeUntied ? el('div', { class: 'refusal', role: 'alert' },
       el('div', { class: 'refusal__t', text: 'Not tied: the board or its position changed since this plan. Plan again, then save.' }),
       el('div', { class: 'btn-row' }, fixBtn({ fix: 'plan-again', label: 'Plan again', primary: true }, 'btn--sm'))) : null));
+  }
+  /** The pinned foot: Register board (or Checks › after a good result), or the by-hand buttons. */
+  function renderProbeFoot(s, st, mode, v, fin, byHand) {
+    const p = st.p;
+    IL.show($('reg-foot'), !byHand);
+    IL.show($('probe-foot-hand'), byHand && !!p);
+    if (!byHand) {
+      const live = mode === 'live';
+      const ok = mode === 'result' && (v ? v.ok : fin && fin.status === 'OK');
+      const btn = $('btn-register'), cont = $('btn-reg-continue');
+      IL.show(cont, ok);
+      IL.show(btn, !ok);
+      const note = live || mode === 'result' ? '' : IL.nb(registerNote(s, p));
+      IL.setText($('register-note'), note);
+      IL.show($('register-note'), !!note);
+      const why = live ? null : registerWhy(s);
+      const secs = p ? regSeconds(s, p) : null;
+      const run = live ? regLive(s) : null;
+      const g = run ? IL.regProgress(run) : null;
+      setBtnLabel(btn, live ? ['Registering…' + (g.left !== null ? ' · ≈ ' + IL.fmtClock(g.left) + ' left' : '')]
+        : [IL.icon('i-capture'), (mode === 'result' ? 'Register again' : 'Register board') + (isNum(secs) ? ' · ≈ ' + IL.fmtClock(secs) : '')]);
+      IL.gate(btn, live ? 'Registering: STOP stops it' : why && why.text);
+      IL.keyed($('register-why'), why ? why.text + '|' + (why.href || '') + (why.fix || '') : '', () => (why ? [IL.icon('i-lock'), el('span', {}, why.text,
+        why.href ? [' ', el('button', { type: 'button', class: 'link', onclick: () => IL.go(why.href) }, why.link || 'Open')] : null,
+        why.fix ? [' ', el('button', { type: 'button', class: 'link', 'data-fix': why.fix, onclick: (ev) => IL.runFix(why.fix, ev.currentTarget) }, 'Plan again')] : null)] : null));
+      IL.show($('register-why'), !!why && !live);
+      return;
+    }
+    if (!p) return;
+    const n1 = IL.positions(s).n1;
     // foot: N1 live, Add point n, Save n points and plan again
-    IL.keyed($('probe-live'), n1 ? [n1.x, n1.y, n1.z].map((v) => Number(v).toFixed(2)).join(',') : '-', () => ['X', 'Y', 'Z'].map((k) => el('div', { class: 'mini' },
+    IL.keyed($('probe-live'), n1 ? [n1.x, n1.y, n1.z].map((x) => Number(x).toFixed(2)).join(',') : '-', () => ['X', 'Y', 'Z'].map((k) => el('div', { class: 'mini' },
       el('div', { class: 'mini__k', text: 'N1 ' + k }), el('div', { class: 'mini__v', text: n1 ? fmtMmV(n1[k.toLowerCase()]) : '—' }))));
     const add = $('btn-probe-add'), save = $('btn-probe-save');
     const lock = IL.lockReason(s, { connected: true, homed: true, pressureOff: false });
     // the warning sits in the pinned foot, right above the button it is about (visible without scrolling)
     const warn = lock ? null : probeWarn(s);
+    const rows = st.rows || [];
+    const ptBad = st.ptBad || (() => null);
     const badPts = rows.filter((x) => ptBad(x));
     const wtext = warn || (badPts.length ? 'Point ' + badPts.map((x) => x.i + 1).join(', ') + ': ' + ptBad(badPts[0]) + '. Delete it and probe again.' : '');
     IL.keyed($('probe-warn'), wtext, () => (wtext ? [IL.glyph('need', 'xs'), el('span', { text: wtext })] : null));
@@ -1580,9 +2282,18 @@
       const st = it.state === 'block' ? 'block' : 'need';
       if (sev[it.code] !== 'block') sev[it.code] = st;
     }
-    const c = { ok: 0, need: 0, block: 0, off: 0 };
+    // a run homes first and checks Z after the home by itself: MACHINE "not homed" and I4 "Z not checked" are its own
+    // first steps then, not blockers (the machine item says so). Not when nothing is left to check Z on, or Z moved (the
+    // readiness extra I4-z): that blocks the run
+    const mi = r.items[0] || {};
+    const zBlocked = r.extras.some((x) => x.key === 'I4-z');
+    const runFirst = (i) => (i.id === 'MACHINE' && !!mi.homeFirst) || (i.id === 'I4' && !zBlocked && !!(mi.homeFirst || mi.zCheckFirst)
+      && /were measured before the home/i.test(String(i.text || '')));
+    const c = { ok: 0, need: 0, block: 0, off: 0, first: 0 };
+    const firstNames = [];
     for (const i of list) {
-      let st = i.state === 'blocked' ? 'block' : i.state === 'warning' ? 'need' : i.state === 'off' ? 'off' : 'ok';
+      let st = i.state === 'blocked' ? (runFirst(i) ? 'first' : 'block') : i.state === 'warning' ? 'need' : i.state === 'off' ? 'off' : 'ok';
+      if (st === 'first') firstNames.push(i.id === 'MACHINE' ? 'home' : 'Z check');
       if (st === 'ok' && viol.has(i.id)) st = 'block';
       if (i.id === 'I10' && cc && st === 'ok') st = 'need';   // §9.3 overlay: "ok" only means a camera is there
       if (st === 'block' && sev[i.id] === 'need') st = 'need';
@@ -1592,11 +2303,12 @@
     if (c.ok) parts.push(c.ok + ' ok');
     if (c.need) parts.push(c.need + ' needs you');
     if (c.block) parts.push(c.block + ' blocked');
+    if (c.first) parts.push(firstNames.join(' and ') + ' first');
     if (c.off) parts.push(c.off + ' not fitted');
     const allPass = !!p && p.interlocks && p.interlocks.ok && !c.block && !c.need;
-    return { text: allPass ? 'All interlocks pass for this plan · ' + parts.join(' · ') : list.length + ' interlocks: ' + parts.join(' · '), total: list.length };
+    return { text: allPass ? (c.first ? 'All interlocks pass · ' : 'All interlocks pass for this plan · ') + parts.join(' · ') : list.length + ' interlocks: ' + parts.join(' · '), total: list.length };
   }
-  const SEG_CLASS = { ok: 'ok', you: 'you', off: '', need: 'need', block: 'block', live: 'live', checking: 'checking', wait: 'wait' };
+  const SEG_CLASS = { ok: 'ok', you: 'you', info: 'you', off: '', need: 'need', block: 'block', live: 'live', checking: 'checking', wait: 'wait' };
   const TILE_GO = { machine: { view: 'machine' }, angle: { view: 'angle' }, needle: { href: '#setup/needle' }, regulator: { view: 'pressure' },
     padtypes: { href: '#profile' }, surface: { step: 'probe' }, plan: { view: 'interlocks' }, purge: { view: 'purge' }, clean: { view: 'camera' } };
   function tileGo(key) {
@@ -1663,7 +2375,8 @@
         IL.glyph(it.state, 'xs'), el('span', { class: 'rt__t', text: it.title + (it.state === 'off' ? ' · off' : '') }), btn,
         el('span', { class: 'rt__d', text: cc ? IL.cleanSummary(cc) : it.detail }));
     }
-    return el('button', { type: 'button', class: 'rt rt--one', title: it.tip || it.detail, 'data-key': it.key, onclick: () => tileGo(it.key) },
+    // a note that counts ready ("homes first, checks Z") takes the whole row: its value is longer than a tile
+    return el('button', { type: 'button', class: 'rt rt--one' + (it.state === 'info' ? ' rt--wide rt--note' : ''), title: it.tip || it.detail, 'data-key': it.key, onclick: () => tileGo(it.key) },
       IL.glyph(it.state, 'xs'), el('span', { class: 'rt__t', text: it.title }), el('span', { class: 'rt__v', text: it.value }));
   }
   function renderChecks(s) {
@@ -1676,16 +2389,16 @@
     r.items.forEach((it, i) => IL.setClass(bar.children[i], SEG_CLASS[it.state] || ''));
     IL.setAttr(bar, 'aria-label', 'Readiness in fixed order: ' + r.items.map((it) => it.title + ' ' + (IL.WORD[it.state] || it.state)).join(', '));
     const il = interlockLine(s);
-    IL.keyed($('plan-interlocks'), il.text, () => [el('span', { text: il.text }),
+    IL.keyed($('plan-interlocks'), il.text, () => [el('span', { class: 'ready-sub__t', text: il.text, title: il.text }),
       el('button', { type: 'button', class: 'link', onclick: () => IL.openView('interlocks', { keep: true }) }, 'All ' + il.total)]);
     // a refused board run (409 from the engine, I10): its message and fix-its on top
     const ref = R.refused && p && IL.planMatches(R.refused.planId) ? R.refused : null;
     IL.keyed($('run-refused'), ref ? ref.runId : '', () => {
       if (!ref) return null;
-      const m = /^(I\d+|MACHINE|CONFIG|PLAN):\s*/.exec(ref.message || '');
+      const m = IL.CODE_RE.exec(ref.message || '');
       return el('div', { class: 'card__banner run-refused__b', style: 'margin:0', role: 'alert' },
         el('div', { class: 'run-refused__t', title: ref.message || '' }, el('b', { text: 'Refused ' + IL.fmtTime(ref.finishedAtMs ? ref.finishedAtMs - S.skewMs : Date.now()) + ': ' }), ref.message || 'the run was refused'),
-        m ? el('div', { class: 'btn-row', style: 'margin-top:8px' }, IL.fixesForCode(m[1], s, (ref.message || '').slice(m[0].length)).map((f) => fixBtn(f, 'btn--sm'))) : null);
+        m ? el('div', { class: 'btn-row', style: 'margin-top:8px' }, IL.fixesForCode(m[1], s, m[2]).map((f) => fixBtn(f, 'btn--sm'))) : null);
     });
     // needs you (extras first, fixed order), ready tiles, items known after planning
     const needs = r.needs.filter((x) => x.state !== 'wait');
@@ -1816,7 +2529,17 @@
     const dotsStarted = run.dotsDone > 0;
     const allDots = run.dotsDone >= run.dotsPlanned;
     const ph = [];
-    // states: done | now | todo
+    // states: done | now | todo. A run homes first and checks Z after the home by itself (run.detail, §8.3)
+    const rd = run.detail || {};
+    if (rd.home && rd.home.needed) {
+      ph.push({ st: rd.stage === 'home' ? 'now' : 'done', t: 'Home', d: rd.stage === 'home' ? 'the head goes to its home corner · pressure off' : 'homed',
+        v: rd.stage === 'home' ? '≈ ' + IL.fmtSecs(rd.home.estimateS) : '' });
+    }
+    if (rd.stage === 'z check' || rd.zCheck) {
+      const z = rd.zCheck;
+      ph.push({ st: rd.stage === 'z check' ? 'now' : 'done', t: 'Z check',
+        d: z && isNum(z.z) ? 'N1 touched Z ' + IL.fmt(z.z, 3) + ' mm, ' + IL.fmtSigned(z.deltaMm, 3) + ' mm from ' + IL.fmt(z.refZ, 3) : 'one N1 touch at a stored point', v: '' });
+    }
     if (camKey || inCam || (cleanEnabled(s) && !disp)) {
       const n = run.dotsPlanned;
       const camS = t.cam;
@@ -1876,7 +2599,7 @@
   }
   function askNextBoard() {
     const h = IL.dialog.open({ id: 'dlg-next-board', eyebrow: 'Next board', title: 'Unload this board and load the next. New seat?', size: 'sm',
-      body: el('p', { class: 'run-panel-lead', text: 'A new board sits a little differently every time: the Board step opens with "new seat" answered, and the surface check goes back to needs you until the seat is probed.' }),
+      body: el('p', { class: 'run-panel-lead', text: 'A new board sits a little differently every time: the Board step opens with "new seat" answered, and the surface check goes back to needs you until Register board has checked this seat.' }),
       foot: [el('span', { class: 'spacer' }),
         el('button', { type: 'button', class: 'btn btn--lg', onclick: () => h.close('cancel') }, 'Cancel'),
         el('button', { type: 'button', class: 'btn btn--primary btn--lg', onclick: () => {
@@ -1995,7 +2718,10 @@
     const testLine = el('div', { class: 'testline', id: 'run-test-line', hidden: !mode.test, role: 'note' }, IL.glyph('need', 'sm'), el('span', { text: mode.test || '' }));
     const blockBox = el('div', { id: 'run-confirm-block' });
     const refusals = el('div', { id: 'run-confirm-refusals' });
+    // the run homes first and checks Z after the home by itself (AUTO_REGISTER_DESIGN.md §8.3): said before it starts
+    const homeBox = el('div', { class: 'notebox notebox--info run-confirm-home', id: 'run-confirm-home', role: 'note', hidden: true });
     const body = [
+      homeBox,
       el('div', { class: 'regulator' }, IL.icon('i-gauge'),
         el('div', {}, el('div', { class: 'regulator__big', id: 'run-confirm-psi', text: 'Set the regulator to ' + psi + ' psi (profile ' + (prof.name || '') + ')' }),
           el('div', { class: 'regulator__d', text: 'There is no pressure sensor: read the gauge. 16 psi starved the screw, 20 psi drooled.' })),
@@ -2013,7 +2739,7 @@
     const h = IL.dialog.open({ id: 'dlg-run', eyebrow: 'Run board · ' + p.boardName + ' · plan ' + shortId(p), title: mode.title, keys: true,
       body, foot: [sum, cancel, go], initialFocus: first, onClose: () => { if (R.dlg === h) R.dlg = null; } });
     h.mode = mode;
-    h.n = { gauge, paste, hands, pon, held, sensed, sum, go, refusals, blockBox };
+    h.n = { gauge, paste, hands, pon, held, sensed, sum, go, refusals, blockBox, homeBox };
     h.runId = s.run ? s.run.runId : null;   // the last task this tab knew of when the confirm opened
     R.dlg = h;
     cancel.addEventListener('click', () => h.close('cancel'));
@@ -2107,7 +2833,7 @@
     } else if (cc && !cc.ok) {
       cards.push(['need', IL.plural((cc.dirtyPadIds || IL.dirtyPads(cc)).length, 'pad') + ' had paste at ' + IL.fmtTime(cc.checkedAtMs),
         on ? (m.kind === 'rest' ? 'the pads left are' : 'all pads') + ' checked again first, ' + tour : offNote]);
-    } else if (!on) cards.push(['off', 'Pad check off', IL.isSim(s) ? 'simulator: the camera is a static picture' : 'not checked before the board (Settings)']);
+    } else if (!on) cards.push(['off', 'Pad check off', IL.isSim(s) && !(s.server && s.server.simulatorConfirmed) ? 'simulator: the camera is a static picture' : 'not checked before the board (Settings)']);
     else if (cc && cc.ok) cards.push(['ok', 'All ' + cc.targets + ' pads clean at ' + IL.fmtTime(cc.checkedAtMs), 'checked again first, ' + tour]);
     else cards.push(['need', 'Pads not checked yet', 'the run checks every pad first, ' + tour]);
     // offline: nothing sensed is known now (never a stale green tick, §15)
@@ -2121,11 +2847,37 @@
     const showWhy = why && (!holding || S.online === false) && !S.planPending;
     IL.keyed(n.blockBox, showWhy ? why : '', () => (showWhy ? el('div', { class: 'refusal', role: 'alert' }, el('div', { class: 'refusal__t', text: 'Cannot run now: ' + why })) : null));
     const est = estimate(s, m.n, m.pads);
-    const plan_ = (cleanEnabled(s) ? 'Pad check ' + tour + ', then pressure on, ' : 'Pressure on, ') + ((p.profile && p.profile.purgeDots) || 0) + ' purge dots, the board, vent.';
+    const hf = runHomeFirst(s);
+    IL.keyed(n.homeBox, hf ? hf.text : '', () => (hf ? [IL.glyph('info', 'sm'), el('span', { text: IL.nb(hf.text) })] : null));
+    IL.show(n.homeBox, !!hf);
+    const plan_ = (hf ? (hf.home ? 'Homes first, then ' + (hf.z ? 'checks Z, then ' : '') : 'Checks Z first, then ') : '')
+      + (cleanEnabled(s) ? (hf ? 'pad check ' : 'Pad check ') + tour + ', then pressure on, ' : (hf ? 'pressure on, ' : 'Pressure on, ')) + ((p.profile && p.profile.purgeDots) || 0) + ' purge dots, the board, vent.';
     IL.keyed(n.sum, m.scope + plan_, () => [el('b', { text: m.scope }), ' ' + plan_]);
     setBtnLabel(n.go, ticksLeft ? ['Tick ' + ticksLeft + ' more to run'] : [IL.icon('i-play'), 'Run ' + IL.plural(m.n, 'dot') + (est ? ' · ≈ ' + IL.fmtClock(est.total) : '')]);
     IL.gate(n.go, why || (ticksLeft ? 'Tick ' + ticksLeft + ' more to run' : null));
     IL.setClass(n.go, 'btn btn--lg ' + (m.kind === 'test' ? 'btn--test' : 'btn--primary'));
+  }
+
+  /**
+   * Does the run home first and check Z (status.machine.home / zCheck)? {home, z, text} for #run-confirm-home, or null.
+   * After a home every N1 height predates it: a run that homes first also checks Z when it has one to touch.
+   */
+  function runHomeFirst(s) {
+    const m = (s && s.machine) || {};
+    const h = m.home || null;
+    const zc = m.zCheck || null;
+    const d = (s && s.dispense) || {};
+    const zData = !!(d.needle && d.needle.anchor) || Object.keys(d.surfaces || {}).length > 0;
+    const zS = zc && isNum(zc.estimateS) ? zc.estimateS : 20;
+    if (h && h.needed) {
+      return { home: true, z: zData, text: 'Homes first (' + IL.homeWhy(h) + '), ≈ ' + IL.fmtSecs(h.estimateS) + ': the head goes to its home corner and the top camera finds the homing fiducial. '
+        + 'The pressure stays off until homing is done.' + (zData ? ' Then one N1 touch checks Z (≈ ' + IL.fmtSecs(zS) + ').' : '') };
+    }
+    if (zc && zc.needed && zc.reference) {
+      return { home: false, z: true, text: 'Checks Z first: one N1 touch on the ' + zc.reference.name + ' (≈ ' + IL.fmtSecs(zS) + '), because the N1 heights predate the home at '
+        + IL.fmtTime((zc.homeAtMs || Date.now() + S.skewMs) - S.skewMs) + '.' };
+    }
+    return null;
   }
 
   // ================================================================================== panel host
@@ -2171,6 +2923,7 @@
   IL.on('status', (s, prev) => {
     IL.safe(() => trackPhases(s), 'run phases');
     IL.safe(() => trackDone(s), 'run done');
+    IL.safe(() => trackReg(s), 'register board');
     // a task started while the run confirm is open (another tab or client, or ours): its ticks, "hands clear" above
     // all, and its dot count were for the board before that task, so the confirm closes. A new run id also counts:
     // a short task can start and end between two polls this tab saw (offline, a throttled hidden tab)
@@ -2196,6 +2949,17 @@
   IL.on('stop', () => { if (R.dlg) R.dlg.close('stop'); });
   IL.on('online', () => { if (R.dlg) IL.safe(() => updateDialog(S.status), 'run confirm'); });
   IL.on('taskend', (run) => {
+    // Register board ended: the new plan (the same physical board), and its result card on the Register step
+    if (run && run.label === 'board registration' && IL.planMatches(run.planId)) {
+      R.regLoaded[run.runId] = true;
+      if (run.detail) R.regDetail = { runId: run.runId, detail: run.detail };
+      adoptRegPlan(run);
+      setRegResult(run.runId);
+      R.byHand = false;
+      if (IL.active() === 'run' && R.section && R.section !== 'probe') goStep('probe');
+      IL.render();
+      return;
+    }
     if (!run || run.label !== 'board' || !IL.planMatches(run.planId)) return;
     if (run.status === 'OK') R.resultRunId = run.runId;
     else if (run.status === 'REFUSED') { R.refused = run; R.resultRunId = null; }
