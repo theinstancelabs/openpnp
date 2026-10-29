@@ -4,7 +4,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
+import org.openpnp.model.Abstract2DLocatable.Side;
+import org.openpnp.model.Board;
 import org.openpnp.model.BoardLocation;
+import org.openpnp.model.LengthUnit;
+import org.openpnp.model.Location;
+import org.openpnp.model.Placement;
+import org.openpnp.util.Utils2D;
 
 /**
  * Board -> pads -> dots -> order (nearest neighbour + 2-opt). Every dot is one dot of the active
@@ -47,7 +53,61 @@ public class DispensePlanner {
         plan.boardLocationId = bl.getId();
         plan.boardZMm = bl.getGlobalLocation().convertToUnits(org.openpnp.model.LengthUnit.Millimeters).getZ();
         plan.warnings.addAll(0, r.warnings);
+        boardFrame(plan, bl);
         return plan;
+    }
+
+    /**
+     * The board frame of a plan (the board drawing and the path preview): the board -> machine map,
+     * taken through the call every pad goes through (so the drawing, the pads and the dots agree,
+     * with OpenPnP's fiducial transform or a registration too), the board's file and size, and its
+     * top, enabled fiducials.
+     */
+    private static void boardFrame(DispensePlan plan, BoardLocation bl) {
+        Location o = boardToMachine(bl, 0, 0);
+        Location ex = boardToMachine(bl, 100, 0);
+        Location ey = boardToMachine(bl, 0, 100);
+        plan.boardToMachine = new double[] {(ex.getX() - o.getX()) / 100, (ex.getY() - o.getY()) / 100,
+            (ey.getX() - o.getX()) / 100, (ey.getY() - o.getY()) / 100, o.getX(), o.getY()};
+        plan.boardTransformStatus = String.valueOf(bl.getPlacementsTransformStatus());
+        Board board = bl.getBoard();
+        if (board == null) {
+            return;
+        }
+        plan.boardFile = board.getFile() == null ? null : board.getFile().getAbsolutePath();
+        Location dims = board.getDimensions().convertToUnits(LengthUnit.Millimeters);
+        plan.boardWidthMm = dims.getX();
+        plan.boardHeightMm = dims.getY();
+        for (Placement pl : board.getPlacements()) {
+            if (pl.getType() != Placement.Type.Fiducial || pl.getSide() != Side.Top || !pl.isEnabled()) {
+                continue;
+            }
+            Location l = pl.getLocation().convertToUnits(LengthUnit.Millimeters);
+            Location m = boardToMachine(bl, l.getX(), l.getY());
+            DispensePlan.BoardFiducial f = new DispensePlan.BoardFiducial();
+            f.id = pl.getId();
+            f.partId = pl.getPart() == null ? null : pl.getPart().getId();
+            f.bx = l.getX();
+            f.by = l.getY();
+            f.xMm = m.getX();
+            f.yMm = m.getY();
+            plan.fiducials.add(f);
+        }
+    }
+
+    private static Location boardToMachine(BoardLocation bl, double x, double y) {
+        return Utils2D.calculateBoardPlacementLocation(bl, new Location(LengthUnit.Millimeters, x, y, 0, 0))
+                .convertToUnits(LengthUnit.Millimeters);
+    }
+
+    /** What the pad inspector shows about a pad besides its size: name, part, roundness, type rule. */
+    private static void copyPadDetails(PadGeometry g, DispensePlan.PlannedPad p) {
+        p.padName = g.padName;
+        p.partId = g.partId;
+        p.roundness = g.roundness;
+        p.typeRule = g.typeRule;
+        p.typeRuleDetail = g.typeRuleDetail;
+        p.typeRuleMatched = g.typeRuleMatched;
     }
 
     public DispensePlan plan(String boardName, List<PadGeometry> pads, double startX, double startY) {
@@ -79,6 +139,7 @@ public class DispensePlanner {
             p.rotationDeg = g.rotationDeg;
             p.wMm = g.wMm;
             p.hMm = g.hMm;
+            copyPadDetails(g, p);
             p.surfaceZMm = surface == null ? g.surfaceZMm : surface.z(g.xMm, g.yMm);
             if (surface != null) {
                 worstBoardZDiff = Math.max(worstBoardZDiff, Math.abs(g.surfaceZMm - p.surfaceZMm));

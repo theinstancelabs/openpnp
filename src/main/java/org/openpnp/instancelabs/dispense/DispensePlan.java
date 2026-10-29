@@ -20,6 +20,15 @@ public class DispensePlan {
         public PadTypeStatus typeStatus;
         public PadGeometry.Source source;
         public double xMm, yMm, rotationDeg, wMm, hMm, surfaceZMm;
+        /**
+         * Pad name within the part ("1", "2", ...; null when the whole placement is one pad: no pad type, or
+         * a footprint-only type and no footprint pads); part id.
+         */
+        public String padName, partId;
+        /** How the pad type was chosen ({@link PadTypeResolver.Resolution}: rule, detail, matched text). */
+        public String typeRule, typeRuleDetail, typeRuleMatched;
+        /** Corner roundness of the opening, % (OpenPnP footprint pad). */
+        public double roundness;
         public double areaMm2;
         public double tMm;
         public double k;
@@ -94,6 +103,44 @@ public class DispensePlan {
     public final List<String> warnings = new ArrayList<>();
     public double pathLengthNearestNeighbourMm;
     public double pathLengthMm;
+
+    /** A fiducial of the board planned: board frame (mm, +Y up) and machine (N2) mm. */
+    public static class BoardFiducial {
+        public String id, partId;
+        public double bx, by, xMm, yMm;
+    }
+
+    /**
+     * Board frame (mm, +Y up) to machine (N2) mm, {@code AffineTransform.getMatrix} order m00 m10 m01
+     * m11 m02 m12 (as the registration's affine); null for a plan without a board location.
+     */
+    public double[] boardToMachine;
+    /** Absolute path of the board definition, null if none. */
+    public String boardFile;
+    public double boardWidthMm, boardHeightMm;
+    /** OpenPnP's PlacementsTransformStatus of the board location planned. */
+    public String boardTransformStatus;
+    /** Top, enabled fiducial placements. */
+    public final List<BoardFiducial> fiducials = new ArrayList<>();
+    /**
+     * The board art when the plan was made (never re-resolved: a later replace or edit cannot put
+     * other art under these dots).
+     */
+    public String boardArtId, boardArtKind, boardArtNote;
+
+    /** Copies the board frame, fiducials and art reference to a plan made from this one (a subset). */
+    public void copyBoardFieldsTo(DispensePlan sub) {
+        sub.boardToMachine = boardToMachine == null ? null : boardToMachine.clone();
+        sub.boardFile = boardFile;
+        sub.boardWidthMm = boardWidthMm;
+        sub.boardHeightMm = boardHeightMm;
+        sub.boardTransformStatus = boardTransformStatus;
+        sub.fiducials.clear();
+        sub.fiducials.addAll(fiducials);
+        sub.boardArtId = boardArtId;
+        sub.boardArtKind = boardArtKind;
+        sub.boardArtNote = boardArtNote;
+    }
 
     public List<PlannedPad> blockedPads() {
         List<PlannedPad> l = new ArrayList<>();

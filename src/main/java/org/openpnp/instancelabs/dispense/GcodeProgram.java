@@ -69,6 +69,11 @@ public class GcodeProgram {
      * settles (no host latency, no look-ahead between moves).
      */
     public double estimatedSeconds;
+    /**
+     * Board programs, by plan dot index: estimated seconds from the program start to the needle
+     * arriving over the dot (after its XY move) and to the end of its lift. Same estimate as above.
+     */
+    public double[] dotArriveSeconds, dotEndSeconds;
     /** Board programs: estimated seconds from the cross after the purge to the last dot (bench DPH). */
     public double estimatedWorkSeconds;
     /** Estimated seconds from the pump ON line to the pump OFF line. */

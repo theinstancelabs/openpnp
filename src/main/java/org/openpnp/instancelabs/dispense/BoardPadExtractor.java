@@ -59,7 +59,7 @@ public class BoardPadExtractor {
             Footprint fp = pkg.getFootprint();
             List<double[]> local = new ArrayList<>(); // x, y, rot, w, h, roundness
             List<String> names = new ArrayList<>();
-            List<PadType> types = new ArrayList<>();
+            List<PadTypeResolver.Resolution> types = new ArrayList<>();
             PadGeometry.Source source;
             if (fp != null && fp.getPads() != null && !fp.getPads().isEmpty()) {
                 source = PadGeometry.Source.FOOTPRINT;
@@ -72,17 +72,19 @@ public class BoardPadExtractor {
                     double y = fpad.getY() * f;
                     local.add(new double[] {x, y, fpad.getRotation(), w, h, fpad.getRoundness()});
                     names.add(fpad.getName());
-                    types.add(resolver.resolve(pkg.getId(), x, y, DotMath.padAreaMm2(w, h, fpad.getRoundness())));
+                    types.add(resolver.explain(pkg.getId(), x, y, DotMath.padAreaMm2(w, h, fpad.getRoundness())));
                 }
             }
             else {
                 source = PadGeometry.Source.PAD_TYPE;
-                PadType t = resolver.resolve(pkg.getId(), Double.NaN, Double.NaN, Double.NaN);
+                PadTypeResolver.Resolution how = resolver.explain(pkg.getId(), Double.NaN, Double.NaN, Double.NaN);
+                PadType t = how.type;
                 if (t == null) {
                     PadGeometry g = new PadGeometry();
                     g.padId = p.getId();
                     g.placementId = p.getId();
                     g.packageId = pkg.getId();
+                    describe(g, part, how);
                     Location gl = Utils2D.calculateBoardPlacementLocation(bl, pl);
                     g.xMm = gl.getX();
                     g.yMm = gl.getY();
@@ -99,6 +101,7 @@ public class BoardPadExtractor {
                     g.placementId = p.getId();
                     g.packageId = pkg.getId();
                     g.padType = t;
+                    describe(g, part, how);
                     Location gl = Utils2D.calculateBoardPlacementLocation(bl, pl);
                     g.xMm = gl.getX();
                     g.yMm = gl.getY();
@@ -111,7 +114,7 @@ public class BoardPadExtractor {
                 for (double[] l : lay) {
                     local.add(new double[] {l[0], l[1], 0, t.padWMm, t.padHMm, t.padRoundness});
                     names.add(Integer.toString(i++));
-                    types.add(t);
+                    types.add(how);
                 }
             }
             double rad = Math.toRadians(pl.getRotation());
@@ -138,11 +141,20 @@ public class BoardPadExtractor {
                 g.roundness = l[5];
                 g.surfaceZMm = gl.getZ();
                 g.source = source;
-                g.padType = types.get(i);
+                g.padType = types.get(i).type;
+                describe(g, part, types.get(i));
                 res.pads.add(g);
             }
         }
         return res;
+    }
+
+    /** The part id and the rule that chose the pad type (the pad inspector). */
+    private static void describe(PadGeometry g, Part part, PadTypeResolver.Resolution how) {
+        g.partId = part.getId();
+        g.typeRule = how.rule;
+        g.typeRuleDetail = how.detail;
+        g.typeRuleMatched = how.matched;
     }
 
     /** Pad centres in the part frame for a pad type, or null for footprint-only types. */
