@@ -159,6 +159,22 @@ public final class Texts {
                 + "for " + pkg + ".";
     }
 
+    /**
+     * Decision 14: {@code k} of a group's {@code of} pads whose own neighbour breaks the plan the others
+     * keep; {@code gap} is to the neighbour's dot ({@code byDot}) or copper, null when there is no plan.
+     */
+    public static String near(int k, int of, String neighbour, Double gap, boolean byDot) {
+        String limit = byDot ? " (at least " + mm(Limits.DOT_GAP_MARGINAL_MM) + " mm)"
+                : " (at least " + mm(Limits.COPPER_GAP_MARGINAL_MM) + " mm)";
+        String what = gap == null ? "their dots would come too close to " + neighbour
+                : gap < -0.005 && byDot ? "their dots would overlap the dot of " + neighbour + " by " + mm(-gap) + " mm"
+                        : "their dots would leave " + mm(Math.max(0, gap)) + " mm to " + (byDot ? "the dot of "
+                                + neighbour : neighbour + "'s copper") + limit;
+        return k + " of " + plural(of, "pad", "pads") + (k == 1 ? " is" : " are") + " too close to a neighbour: "
+                + what + ", so " + (k == 1 ? "it gets" : "they get") + " no paste. The other " + (of - k)
+                + " keep the plan.";
+    }
+
     // ---- what Profile can fix -----------------------------------------------------------------
 
     public static String noPadSize(String packageId, String typeName) {

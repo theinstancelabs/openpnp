@@ -320,15 +320,18 @@ public class PlannerDoseTest {
                 Interlocks.check(in).toString());
     }
 
-    /** Decisions 11 and 14: only the pads whose own neighbour is too close get MAY_BRIDGE; the rest keep their dots. */
+    /**
+     * Decisions 11 and 14: only the pads whose own neighbour is too close get MAY_BRIDGE; the rest keep
+     * their dots. (A half turn fits there, so the tip can dispense these pads: the type's one turn is what bridges.)
+     */
     @Test
     public void bridgingPadsAreFlaggedOneByOne() {
         DispenseConfig c = GcodeStreamTest.toyConfig();
-        PadType chip = chip0603();
+        PadType chip = type("chip-0603-one", "0603 one turn", 0.8, 0.95, 1600, 1);
         List<PadGeometry> pads = new ArrayList<>();
         pads.addAll(part("R1", "R_0603_1608Metric", 100, 80, 1.65, 0.8, 0.95, chip));
-        // R3.1 at 101.775: 0.95 mm from R1.2, its 1.16 mm dot overlaps R1.2's
-        pads.addAll(part("R3", "R_0603_1608Metric", 102.6, 80, 1.65, 0.8, 0.95, chip));
+        // R3.1 at 102.275: 1.45 mm from R1.2, the 1.345 mm one-turn dots leave 0.105 mm
+        pads.addAll(part("R3", "R_0603_1608Metric", 103.1, 80, 1.65, 0.8, 0.95, chip));
         pads.addAll(part("R4", "R_0603_1608Metric", 110, 80, 1.65, 0.8, 0.95, chip));
         DispensePlan p = new DispensePlanner(c, new PadTypeResolver(Collections.singletonList(chip), null))
                 .plan("bridge", pads, 77.5, 40);
@@ -346,9 +349,9 @@ public class PlannerDoseTest {
         assertTrue(p.warnings.contains("2 pads may bridge: their dots would come within 0.20 mm of another pad's dots "
                 + "(R1.2 to R3.1, R3.1 to R1.2); they get no paste (MAY_BRIDGE). A pad type for this size avoids it."),
                 p.warnings.toString());
-        // measured dots smaller than the model's: no bridge (0.95 - 0.70 = 0.25 mm)
+        // measured dots smaller than the model's: no bridge (1.45 - 1.20 = 0.25 mm)
         DispensePlan q = new DispensePlanner(c, new PadTypeResolver(Collections.singletonList(chip), null))
-                .withDotDiameters(Collections.singletonMap(800, 0.70)).plan("bridge", pads, 77.5, 40);
+                .withDotDiameters(Collections.singletonMap(1600, 1.20)).plan("bridge", pads, 77.5, 40);
         assertTrue(q.blockedPads().isEmpty(), q.warnings.toString());
     }
 
@@ -396,6 +399,48 @@ public class PlannerDoseTest {
         assertEquals(3, q.dots.size());
         assertNotEquals(plain.fingerprint(), partial.fingerprint());
         assertEquals(plain.fingerprint(), new PadTypeResolver(types, null).withPastePartial(null).fingerprint());
+    }
+
+    /**
+     * Decisions 14 and 4: a 0603 pad 1.10 mm from U1 pin 1 (the tip's smallest dots leave 0.10 mm)
+     * holds back U1 and R9 whole; U2, the same package with nothing near, keeps its paste.
+     */
+    @Test
+    public void aPadTooCloseToANeighbourHoldsBackItsPartNotThePackage() {
+        DispenseConfig c = GcodeStreamTest.toyConfig();
+        PadType pin = type("sot223-pin", "SOT-223 pin", 1.067, 2.083, 1600, 2);
+        PadType tab = type("sot223-tab", "SOT-223 tab", 3.448, 2.048, 800, 4);
+        List<PadGeometry> pads = new ArrayList<>();
+        for (String ref : new String[] {"U1", "U2"}) {
+            double x = ref.equals("U1") ? 100 : 130;
+            for (int i = 0; i < 3; i++) {
+                pads.add(pad(ref, "SOT-223", String.valueOf(i + 1), x - 2.3 + 2.3 * i, 76.85, 0, 1.067, 2.083, pin));
+            }
+            pads.add(pad(ref, "SOT-223", "4", x, 83.15, 0, 3.448, 2.048, tab));
+        }
+        pads.add(pad("R9", "R_0603_1608Metric", "1", 96.6, 76.85, 0, 0.8, 0.95, chip0603()));
+        pads.add(pad("R9", "R_0603_1608Metric", "2", 94.95, 76.85, 0, 0.8, 0.95, chip0603()));
+        List<PadType> types = Arrays.asList(chip0603(), pin, tab);
+        DispensePlan p = new DispensePlanner(c, new PadTypeResolver(types, null)).plan("near", pads, 77.5, 40);
+        for (String id : new String[] {"U2.1", "U2.2", "U2.3", "U2.4"}) {
+            assertTrue(padOf(p, id).flags.isEmpty(), id + " " + padOf(p, id).flagNames());
+            assertEquals(id.equals("U2.4") ? 4 : 2, padOf(p, id).dotCount, id);
+        }
+        for (String id : new String[] {"U1.1", "U1.2", "U1.3", "U1.4", "R9.1", "R9.2"}) {
+            assertEquals(Collections.singletonList("PART_NOT_DISPENSABLE"), padOf(p, id).flagNames(), id);
+        }
+        assertEquals(10, p.dots.size());
+        for (String w : p.warnings) {
+            assertFalse(w.contains("U2"), w);
+        }
+        // SOT-223 pasted partly: U1's other pads get their dots, pin 1 still none
+        DispensePlan q = new DispensePlanner(c, new PadTypeResolver(types, null)
+                .withPastePartial(Collections.singleton("SOT-223"))).plan("near", pads, 77.5, 40);
+        assertEquals(Collections.singletonList("PART_NOT_DISPENSABLE"), padOf(q, "U1.1").flagNames());
+        for (String id : new String[] {"U1.2", "U1.3", "U1.4"}) {
+            assertTrue(padOf(q, id).flags.isEmpty(), id + " " + padOf(q, id).flagNames());
+        }
+        assertEquals(18, q.dots.size());
     }
 
     /**
