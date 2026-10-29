@@ -6,6 +6,11 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.awt.Color;
+import java.awt.MultipleGradientPaint;
+import java.awt.RadialGradientPaint;
+import java.awt.geom.Line2D;
+import java.awt.geom.Point2D;
 import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import java.util.Locale;
@@ -15,27 +20,43 @@ import org.openpnp.instancelabs.vision.BareSpotCheck.Result;
 import org.openpnp.instancelabs.vision.BareSpotCheck.Settings;
 
 /**
- * The camera look on bench frames (raw 1920 x 1080 at 0.01074 x 0.01106 mm/px) and on Java2D
- * frames. Each bench spot is cut out of its frame, centred on the spot, and printed with the
- * prefix "[bare-spot]" together with its margin to the defaults.
+ * The camera look on bench frames (raw 1920 x 1080 at 0.01074 x 0.01106 mm/px), on the real
+ * machine's frames of 2026-10-29 (real/README.md) and on Java2D frames. Each frame is printed with
+ * the prefix "[bare-spot]" together with its margin to the defaults.
  */
 public class BareSpotCheckTest {
     static final double SX = FidScene.BENCH_X, SY = FidScene.BENCH_Y;
+    /** OpenPnP's Top camera units per pixel (the *_openpnp frames). */
+    static final double OPENPNP_X = 0.01068, OPENPNP_Y = 0.01073;
     static final String BARE = "/org/openpnp/instancelabs/vision/bare/";
     static final String FID = "/org/openpnp/instancelabs/vision/fid/";
+    static final String REAL = "/org/openpnp/instancelabs/vision/real/";
+
+    static Result print(String label, Result r) {
+        Settings s = new Settings();
+        System.out.println(String.format(Locale.ROOT,
+                "[bare-spot] %-46s share %5.1f %% (limit %.1f %%, x%.2f; raw %5.1f %%)  spread"
+                        + " %5.1f (limit %.0f, x%.2f)  threshold %5.1f  %s",
+                label, 100 * r.foreignShare, 100 * s.maxForeignShare,
+                r.foreignShare / s.maxForeignShare, 100 * r.rawShare, r.ringSpread,
+                s.maxRingSpread, r.ringSpread / s.maxRingSpread, r.threshold,
+                r.bare ? "bare" : "NOT BARE"));
+        return r;
+    }
 
     /** The look at raw pixel (x, y) of a bench frame: a 560 x 544 px cut centred there. */
     static Result look(String label, String path, int x, int y) throws Exception {
         BufferedImage img = FidScene.resource(path);
-        Result r = BareSpotCheck.check(img.getSubimage(x - 280, y - 272, 560, 544), SX, SY, null);
-        Settings s = new Settings();
-        System.out.println(String.format(Locale.ROOT,
-                "[bare-spot] %-46s share %5.1f %% (limit %.1f %%, x%.2f)  spread %5.1f (limit"
-                        + " %.0f, x%.2f)  %s",
-                label, 100 * r.foreignShare, 100 * s.maxForeignShare,
-                r.foreignShare / s.maxForeignShare, r.ringSpread, s.maxRingSpread,
-                r.ringSpread / s.maxRingSpread, r.bare ? "bare" : "NOT BARE"));
-        return r;
+        return print(label, BareSpotCheck.check(img.getSubimage(x - 280, y - 272, 560, 544), SX,
+                SY, null));
+    }
+
+    /** A real frame, cut +-3.5 mm around the camera's centre (real/README.md). */
+    static Result real(String name) throws Exception {
+        boolean openPnp = name.endsWith("_openpnp");
+        BufferedImage img = FidScene.resource(REAL + name + ".jpg");
+        return print(name, BareSpotCheck.check(img, openPnp ? OPENPNP_X : SX,
+                openPnp ? OPENPNP_Y : SY, null));
     }
 
     /**
@@ -65,32 +86,86 @@ public class BareSpotCheckTest {
         }
     }
 
-    /** Paste, silkscreen, a board edge: each with at least 4x the share limit. */
+    /**
+     * Paste and a board edge: each with at least 4x the share limit. Silkscreen keeps 2.5x: print
+     * strokes thinner than 0.2 mm no longer count, the solid part of the FID1 lettering does.
+     */
     @Test
     public void foreignSpots() throws Exception {
         Object[][] spots = {
-                {"blk7_365 on a purge dot", BARE + "blk7_365.jpg", 950, 767},
-                {"blk7_365 on another purge dot", BARE + "blk7_365.jpg", 1172, 488},
-                {"blk7_365 purge dot 1.2 mm beside", BARE + "blk7_365.jpg", 1062, 767},
-                {"blk_y243_x340 paste on a round pad", BARE + "blk_y243_x340.jpg", 875, 453},
-                {"reflow1_FID1_0 centre (FID1 silkscreen)", FID + "reflow1_FID1_0.jpg", 960, 540},
-                {"board2_FID1_0 centre (board edge across)", FID + "board2_FID1_0.jpg", 960, 540}};
+                {"blk7_365 on a purge dot", BARE + "blk7_365.jpg", 950, 767, 4.0},
+                {"blk7_365 on another purge dot", BARE + "blk7_365.jpg", 1172, 488, 4.0},
+                {"blk7_365 purge dot 1.2 mm beside", BARE + "blk7_365.jpg", 1062, 767, 4.0},
+                {"blk_y243_x340 paste on a round pad", BARE + "blk_y243_x340.jpg", 875, 453, 4.0},
+                {"reflow1_FID1_0 centre (FID1 silkscreen)", FID + "reflow1_FID1_0.jpg", 960, 540, 2.5},
+                {"board2_FID1_0 centre (board edge across)", FID + "board2_FID1_0.jpg", 960, 540, 4.0}};
         Settings s = new Settings();
         for (Object[] p : spots) {
             Result r = look((String) p[0], (String) p[1], (Integer) p[2], (Integer) p[3]);
             assertFalse(r.bare, p[0] + ": " + r);
-            assertTrue(r.foreignShare >= 4 * s.maxForeignShare, p[0] + ": " + r);
+            assertTrue(r.foreignShare >= (Double) p[4] * s.maxForeignShare, p[0] + ": " + r);
             assertTrue(r.reason.contains("paste, a part or print"), r.reason);
         }
     }
 
-    /** At the blank's edge the ring itself is not one surface. */
+    /**
+     * At the blank's edge the ring itself is not one surface (1.5x the spread limit; the spot also
+     * reads 15x the share limit).
+     */
     @Test
     public void blankEdge() throws Exception {
         Result r = look("blank_edge at the edge", BARE + "blank_edge.jpg", 1500, 540);
         assertFalse(r.bare);
-        assertTrue(r.ringSpread >= 2 * new Settings().maxRingSpread, r.toString());
+        assertTrue(r.ringSpread >= 1.5 * new Settings().maxRingSpread, r.toString());
         assertTrue(r.reason.startsWith("the surface around the spot is not uniform"), r.reason);
+    }
+
+    /**
+     * The real machine's bare spots, labelled by eye (real/README.md). The ring median alone
+     * refused four of them: glossy blank in the dark zone between the ring light's reflections
+     * (blank_328, bare_blank_324 twice) and the scratched mask of board 3 (b3_R1, b3_mask_37_37).
+     * Each keeps at least 3x margin on the share and 1.3x on the spread.
+     */
+    @Test
+    public void realBareSpots() throws Exception {
+        String[] spots = {"blank_310_247", "blank_322_249.5", "blank_328_245.5",
+                "bare_blank_324_245.5_bench", "bare_blank_324_245.5_openpnp",
+                "bare_blank_300.32_245.5_bench", "paste_298.647_240.218", "paste_305.389_240.371",
+                "paste_318.473_240.454", "b3_mask_67_67", "b3_mask_8_67", "b3_R1_37.5_42.5",
+                "b3_mask_37_37"};
+        Settings s = new Settings();
+        Result scratched = null;
+        for (String n : spots) {
+            Result r = real(n);
+            assertTrue(r.bare, n + ": " + r);
+            assertTrue(r.foreignShare <= s.maxForeignShare / 3, n + ": " + r);
+            assertTrue(r.ringSpread <= s.maxRingSpread / 1.3, n + ": " + r);
+            if (n.equals("b3_mask_37_37")) {
+                scratched = r;
+            }
+        }
+        // The scratched mask: its own texture sets the threshold, and most of what still differs
+        // is a scratch 0.13 mm wide across the spot.
+        assertTrue(scratched.threshold > 2 * s.colourDelta, scratched.toString());
+        assertTrue(scratched.rawShare > 2 * s.maxForeignShare, scratched.toString());
+    }
+
+    /**
+     * The real machine's paste dots, a mounting hole's ring (twice: b3_mask_8_8, and the corner frame
+     * of the first board probe) and a board edge: at least 6x.
+     */
+    @Test
+    public void realForeignSpots() throws Exception {
+        String[] spots = {"centre_c1_304.11_238.9", "centre_c2_314.54_239.47",
+                "centre_c3_297.62_234.34", "centre_c4_301.94_238.44", "b3_mask_8_8",
+                "b3_mask_67_8", "b3reg_corner_2_2_alt_openpnp"};
+        Settings s = new Settings();
+        for (String n : spots) {
+            Result r = real(n);
+            assertFalse(r.bare, n + ": " + r);
+            assertTrue(r.foreignShare >= 6 * s.maxForeignShare, n + ": " + r);
+            assertTrue(r.reason.contains("paste, a part or print"), r.reason);
+        }
     }
 
     static BufferedImage synth(java.util.function.Consumer<java.awt.Graphics2D> draw) {
@@ -148,6 +223,71 @@ public class BareSpotCheckTest {
         assertEquals(0.16, gr.foreignShare, 0.01);
     }
 
+    /**
+     * The ring light's shading: the mask 40 darker in B and G at the spot than 3.5 mm out, falling
+     * off with the square of the distance (the whole disc reads 21 .. 26 from the ring's median
+     * colour, as the dark zone on glossy blank does).
+     */
+    static void shade(java.awt.Graphics2D g) {
+        float[] at = {0f, 0.25f, 0.5f, 0.75f, 1f};
+        Color[] c = new Color[at.length];
+        for (int i = 0; i < at.length; i++) {
+            int d = (int) Math.round(40 * (1 - at[i] * at[i]));
+            c[i] = FidScene.bgr(142 - d, 59 - d, 0);
+        }
+        g.setPaint(new RadialGradientPaint(new Point2D.Double(0, 0), 3.5f, at, c,
+                MultipleGradientPaint.CycleMethod.NO_CYCLE));
+        g.fill(new Rectangle2D.Double(-10, -10, 20, 20));
+    }
+
+    /**
+     * What the field, the texture threshold and the solid-patch rule each let through, and what
+     * they do not: shading, a thin scratch and a speckled texture are bare; paste or an edge on
+     * the same shaded or rough surface are not.
+     */
+    @Test
+    public void surfaceShadingTextureAndStrokes() {
+        // Shading alone.
+        Result shaded = BareSpotCheck.check(synth(BareSpotCheckTest::shade), SX, SY, null);
+        assertTrue(shaded.bare, shaded.toString());
+        assertEquals(0, shaded.foreignShare, 0);
+        // The SIM's 0.5 mm paste dot on the shaded mask.
+        Result shadedSpeck = BareSpotCheck.check(synth(g -> {
+            shade(g);
+            FidScene.disk(g, 0.5, 0, 0.5, FidScene.PASTE);
+        }), SX, SY, null);
+        assertFalse(shadedSpeck.bare, shadedSpeck.toString());
+        // A board edge 0.3 mm above the spot, on the shaded mask, with the dark bed beyond.
+        Result shadedEdge = BareSpotCheck.check(synth(g -> {
+            shade(g);
+            g.setColor(FidScene.bgr(40, 40, 40));
+            g.fill(new Rectangle2D.Double(-10, 0.3, 20, 10));
+        }), SX, SY, null);
+        assertFalse(shadedEdge.bare, shadedEdge.toString());
+        assertTrue(shadedEdge.foreignShare > 4 * new Settings().maxForeignShare,
+                shadedEdge.toString());
+        // A bright scratch 0.12 mm wide across the spot is not a solid patch.
+        Result scratch = BareSpotCheck.check(synth(g -> {
+            g.setColor(FidScene.bgr(200, 110, 0));
+            g.setStroke(new java.awt.BasicStroke(0.12f));
+            g.draw(new Line2D.Double(-2.5, -0.6, 2.5, 0.4));
+        }), SX, SY, null);
+        assertTrue(scratch.bare, scratch.toString());
+        assertTrue(scratch.rawShare > new Settings().maxForeignShare, scratch.toString());
+        // A rough surface (+-15 per channel) raises the threshold; a dark 0.6 mm dot (paste's
+        // shadowed rim reads 60 .. 100 below the blank) still counts in full.
+        Result rough = BareSpotCheck.check(FidScene.noise(synth(g -> { }), 7, 15), SX, SY, null);
+        assertTrue(rough.bare, rough.toString());
+        assertTrue(rough.threshold > new Settings().colourDelta, rough.toString());
+        Result roughDot = BareSpotCheck.check(FidScene.noise(synth(g -> FidScene.disk(g, 0.2, 0,
+                0.6, FidScene.bgr(60, 0, 0))), 7, 15), SX, SY, null);
+        assertFalse(roughDot.bare, roughDot.toString());
+        assertEquals(0.6 * 0.6 / 4, roughDot.foreignShare, 0.01);
+        for (Result r : new Result[] {shaded, shadedSpeck, shadedEdge, scratch, rough, roughDot}) {
+            print("synthetic", r);
+        }
+    }
+
     @Test
     public void refusals() {
         BufferedImage small = synth(g -> { }).getSubimage(0, 0, 500, 500);
@@ -159,6 +299,9 @@ public class BareSpotCheckTest {
         Settings bad = new Settings();
         bad.ringInnerMm = 0.5;
         assertThrows(IllegalArgumentException.class, () -> BareSpotCheck.check(ok, SX, SY, bad));
+        Settings coarse = new Settings();
+        coarse.solidRadiusMm = 1.0;
+        assertThrows(IllegalArgumentException.class, () -> BareSpotCheck.check(ok, SX, SY, coarse));
         assertThrows(IllegalArgumentException.class, () -> BareSpotCheck.check(ok, 4, 4, null),
                 "4 mm per pixel is too coarse");
     }

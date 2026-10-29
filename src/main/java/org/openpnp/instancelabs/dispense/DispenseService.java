@@ -1676,6 +1676,8 @@ public final class DispenseService {
             l.bare = res.bare;
             l.foreignShare = res.foreignShare;
             l.ringSpread = res.ringSpread;
+            l.rawShare = res.rawShare;
+            l.threshold = res.threshold;
             l.reason = res.reason;
             return l;
         };

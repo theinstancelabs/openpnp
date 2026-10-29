@@ -56,6 +56,8 @@ public final class VacuumProber {
     public static final class Look {
         public boolean bare;
         public double foreignShare, ringSpread;
+        /** Share of the spot over the threshold before the solid-patch rule, and that threshold (the record). */
+        public double rawShare, threshold;
         public String reason;
     }
 
