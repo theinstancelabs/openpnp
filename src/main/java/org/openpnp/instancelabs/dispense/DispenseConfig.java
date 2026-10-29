@@ -261,7 +261,10 @@ public class DispenseConfig {
         public static final int MAX_SEARCH_FRAMES = 9;
 
         public int minFiducials = 2;
-        /** How far from its predicted position a fiducial is searched (bench re-seats moved up to 6.9 mm). */
+        /**
+         * How far from its expected position (the previous registration, else the nominal board) a
+         * fiducial may be found (bench re-seats moved up to 6.9 mm).
+         */
         public double searchRadiusMm = 8.0;
         /** Every fiducial within this of the previous registration: the same seat. */
         public double seatToleranceMm = 0.10;
