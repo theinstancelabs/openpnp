@@ -121,6 +121,9 @@ svg.pv-art.pv-art--quiet { --pv-a-mask: #aab2b1; --pv-a-mask-op: 1; }
 .pv--art .pv-n1 circle:not(.pv-case), .pv--art .pv-n1 path:not(.pv-case) { stroke: var(--pv-o-probe); }
 .pv--art .pv-callout path:not(.pv-case) { stroke-width: 1.5px; }
 .pv--no-path .pv-cased--path, .pv--no-dots .pv-cased--first, .pv--no-dirty .pv-cased--dirty { visibility: hidden; }
+/* the path's core is white, i.e. already the light tone: only the dark casing goes under it (a light one as well drew a
+   five-stripe "rail" that outweighed the dots over the whole board) */
+.pv.pv--art .pv-cased--path:not(.pv-cased--done):not(.pv-cased--pre) > .pv-case--l { display: none; }
 
 /* parts: hit rects (click opens the inspector), selection outlines */
 .pv .pv-l-parts { display: none; }
@@ -139,7 +142,7 @@ svg.pv-art.pv-art--quiet { --pv-a-mask: #aab2b1; --pv-a-mask-op: 1; }
 .pv--preview.pv--art circle.dot.pv-pre { fill: var(--pv-o-dot); stroke: var(--pv-o-dot); }
 .pv--preview .pv-path:not(.pv-path--pre):not(.pv-path--leg) { opacity: .45; }
 .pv--preview .pv-cased--done, .pv--preview .pv-path--done { display: none; }
-.pv .pv-path--pre, .pv .pv-path--leg { fill: none; stroke: var(--pv-path-done); stroke-width: 2px; vector-effect: non-scaling-stroke; stroke-linejoin: round; stroke-linecap: round; }
+.pv .pv-path--pre, .pv .pv-path--leg { fill: none; stroke: var(--pv-path-done); stroke-width: 1.5px; vector-effect: non-scaling-stroke; stroke-linejoin: round; stroke-linecap: round; }
 .pv:not(.pv--preview) .pv-l-ghost { display: none; }
 .pv .pv-ghost circle:not(.pv-case) { fill: none; stroke: var(--ink); stroke-width: 2px; stroke-dasharray: 3 2; vector-effect: non-scaling-stroke; }
 .pv .pv-ghost path:not(.pv-case) { fill: none; stroke: var(--ink); stroke-width: 1.4px; vector-effect: non-scaling-stroke; }
@@ -168,31 +171,39 @@ svg.pv-art.pv-art--quiet { --pv-a-mask: #aab2b1; --pv-a-mask-op: 1; }
 .hero--art .lg-dirty { background: var(--pv-o-block); }
 
 /* ================================================================ path preview row (#run-preview, §5.6) */
-.pv-preview { display: flex; align-items: center; gap: 10px; padding: 6px 14px; margin: 0 14px 8px; background: var(--surface); border: 1px solid var(--line);
-  border-radius: var(--r-md); flex-wrap: nowrap; min-width: 0; flex: none; }
+.pv-preview { display: flex; align-items: center; gap: 10px; row-gap: 0; padding: 3px 14px; margin: 0 14px 8px; background: var(--surface);
+  border: 1px solid var(--line); border-radius: var(--r-md); flex-wrap: wrap; min-width: 0; flex: none; container: pv-preview / inline-size; }
 .pv-preview[hidden] { display: none; }
 .pv-preview__scrub { flex: 1 1 160px; min-width: 120px; accent-color: var(--data); height: 28px; }
 .pv-preview .seg button { height: 34px; padding: 0 10px; }
 .pv-readout { font: 600 13.5px/1.3 var(--font-ui); color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
   flex: 0 1 auto; font-variant-numeric: tabular-nums; }
 .pv-preview .link { flex: none; }
-.pv-preview__toggle { flex: none; }
+.pv-preview .pv-preview__toggle { flex: none; width: 34px; height: 34px; }   /* as tall as the speed buttons: a two-line row stays low */
+/* in the stage bar the button never shrinks into "Preview pat": the legend (overflow hidden in run.css) gives way first */
+#pv-play { flex: none; }
+/* the readout is never cut ("… · 0:48 of 1:36" is what the preview is for): below one line's width it gets its own line
+   under the controls (a query on the row's own width: the stage is narrower than the window by the nav and the panel) */
+@container pv-preview (max-width: 900px) {
+  .pv-readout { order: 9; flex-basis: 100%; }
+}
 @media (max-width: 1100px) {
   #pv-play .pv-play__t { display: none; }
   #pv-play { width: 40px; padding: 0; }
-  .pv-preview { flex-wrap: wrap; row-gap: 4px; }
-  .pv-readout { order: 9; flex-basis: 100%; max-width: none; }
 }
 
 /* ================================================================ pad inspector (panel view `pad`, §5.7) */
 .pad-insp-head { display: flex; align-items: flex-start; gap: 10px; }
 .pad-insp-head__t { flex: 1; min-width: 0; }
 .pad-insp-head__ref { font: 700 19px/1.25 var(--font-ui); }
-.pad-insp-head__s { font-size: 13.5px; color: var(--ink-2); overflow-wrap: anywhere; margin-top: 2px; }
+.pad-insp-head__s { font-size: 13.5px; color: var(--ink-2); overflow-wrap: anywhere; margin-top: 2px; white-space: pre-line; }
 .pad-insp-head .btn { flex: none; }
 #pad-insp-svg { height: 240px; border: 1px solid var(--line); border-radius: 12px; background: var(--pv-bg); margin: 12px 0; overflow: hidden; }
 #pad-insp-pads { width: 100%; }
 #pad-insp-pads td, #pad-insp-dots td { white-space: nowrap; padding: 8px 6px; }
+#pad-insp-pads td.pad-insp-type { white-space: normal; }   /* "QFN / DFN perimeter pad" wraps; the numbers do not */
+#pad-insp-pads.pad-insp-pads--one .pad-insp-type { display: none; }   /* one pad type for all: said once, in #pad-insp-types */
+.pad-insp-types { font-size: 14px; color: var(--ink-2); margin: 0 0 2px; }
 #pad-insp-pads th, #pad-insp-dots th { padding: 8px 6px; }
 #pad-insp-pads tr[data-pad] { cursor: pointer; }
 #pad-insp-pads tr[aria-selected="true"] td { background: var(--accent-tint); }
@@ -204,3 +215,4 @@ svg.pv-art.pv-art--quiet { --pv-a-mask: #aab2b1; --pv-a-mask-op: 1; }
 #pad-insp-dots { width: 100%; }
 .pad-insp-why { font-size: 14px; color: var(--ink-2); margin: 8px 0 0; }
 .pad-insp-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+#pad-insp-edit { white-space: normal; height: auto; min-height: 40px; padding: 6px 12px; line-height: 1.25; text-align: left; max-width: 100%; }

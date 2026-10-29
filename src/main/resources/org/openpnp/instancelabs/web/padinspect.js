@@ -74,10 +74,18 @@
     const r = pad.typeRule || null;
     if (!r) return 'Pad type ' + typeName(pad, t) + ', v' + (t ? t.version : pad.typeVersion) + (status ? ', ' + status : '') + '.';
     if (r.sentence) return String(r.sentence).replace(/[.\s]+$/, '') + tail;
-    if (r.kind === 'pattern') return 'Chosen because the package name contains “' + (r.matched || r.detail || '') + '”' + tail;
+    if (r.kind === 'pattern') return 'Chosen because the package name contains “' + found(r) + '”' + tail;
     if (r.kind === 'package-map') return 'Mapped to this package by hand in Profile › Pad types' + tail;
     if (r.kind === 'centre-pad') return 'Centre pad of a QFN/DFN: it sits at the part centre and is at least 1.0 mm²' + tail;
     return 'No pad type matches the package ' + (pad.packageId || '') + ': it gets no paste until one is added.';
+  }
+  /**
+   * The text a package-name pattern found, without the separators the pattern takes in with it: "(^|[^0-9])0805([^0-9]|$)"
+   * finds "_0805_" in R_0805_2012Metric (Matcher.group()), and the operator reads "0805".
+   */
+  function found(r) {
+    const m = String(r.matched || '').replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, '');
+    return m || r.matched || r.detail || '';
   }
   function ruleDetail(pad, t) {
     const r = pad && pad.typeRule;
@@ -188,9 +196,10 @@
         prev, next),
       host,
       el('p', { class: 'pad-insp-why', id: 'pad-insp-why', hidden: true }),
+      el('p', { class: 'pad-insp-types', id: 'pad-insp-types', hidden: true }),
       el('table', { class: 'tbl', id: 'pad-insp-pads' },
         el('thead', {}, el('tr', {}, el('th', { text: 'Pad' }), el('th', { title: 'Paste opening, width × height' }, IL.unitText('Opening (mm)')),
-          el('th', { text: 'Pad type' }), el('th', { class: 'r', text: 'Dots' }), el('th', { text: 'State' }))),
+          el('th', { class: 'pad-insp-type', text: 'Pad type' }), el('th', { class: 'r', text: 'Dots' }), el('th', { text: 'State' }))),
         el('tbody')),
       el('div', { id: 'pad-insp-rule' }),
       el('dl', { class: 'kv kv--wrap', id: 'pad-insp-kv' }),
@@ -207,6 +216,7 @@
       onPad: (id) => open({ padId: id }),
       onPart: (ref) => open({ ref }) });
     M.view.picture('full');
+    M.view.layers(['path']);   // the path numbers give the order; the path line only crowds a fine-pitch part
     M.planId = null;
   }
 
@@ -221,13 +231,13 @@
     const padIds = new Set(pads.map((x) => x.padId));
     const dots = (p.dots || []).filter((d) => padIds.has(d.padId));
     const padDots = dots.filter((d) => pad && d.padId === pad.padId);
-    // head: R12 · package … · part … · 2 pads
+    // head: R12, then the package and the part on lines of their own (long KiCad names wrap inside a line, not across both)
     const head = $('pad-insp-part');
     IL.setText(head.firstChild, sel.ref);
     const pkg = (pad && pad.packageId) || (part && part.packageId) || (ap && ap.pkg) || '';
     const partId = (pad && pad.partId) || (ap && ap.pkg && ap.value ? ap.pkg + '-' + ap.value : null);
-    IL.setText(head.lastChild, [pkg ? 'package ' + pkg : null, partId ? 'part ' + partId : null,
-      IL.plural(pads.length || (ap ? ap.pads || 0 : 0), 'pad')].filter(Boolean).join(' · '));
+    IL.setText(head.lastChild, [pkg ? 'package ' + pkg : null, [partId ? 'part ' + partId : null,
+      IL.plural(pads.length || (ap ? ap.pads || 0 : 0), 'pad').replace(' ', '\u00a0')].filter(Boolean).join(' · ')].filter(Boolean).join('\n'));
     // the zoomed drawing: the part's box (drawing or pads) and 1 mm around it; its dots numbered in path order
     const v = M.view;
     v.select({ padIds: pad ? [pad.padId] : [], refs: [sel.ref] });
@@ -241,14 +251,22 @@
     const why = !pads.length && ap ? WHY[ap.kind] || 'Not dispensed.' : null;
     IL.setText($('pad-insp-why'), why);
     IL.show($('pad-insp-why'), !!why);
-    // pads table
+    // pads table; one pad type for every pad (the usual case) is said once above it instead of in every row
+    const keys = new Set(pads.map((x) => x.typeKey || ''));
+    const one = pads.length > 1 && keys.size === 1;
+    const k0 = pads.length ? pads[0].typeKey : null;
+    const all = pads.length === 2 ? 'both pads' : 'all ' + pads.length + ' pads';
+    IL.setText($('pad-insp-types'), one ? (k0 ? 'Pad type of ' + all + ': ' + typeName(pads[0], typeOf(k0)) : 'No pad type matches ' + all + '.') : null);
+    IL.show($('pad-insp-types'), one);
+    $('pad-insp-pads').classList.toggle('pad-insp-pads--one', one);
     const body = $('pad-insp-pads').tBodies[0];
     IL.keyed(body, JSON.stringify([p.planId, sel.ref, sel.padId, !!M.types]), () => pads.map((x) => {
       const tt = typeOf(x.typeKey);
       const tr = el('tr', { 'data-pad': x.padId, 'aria-selected': String(x.padId === sel.padId) },
         el('td', {}, el('button', { type: 'button', class: 'link', text: x.padId, 'aria-label': 'Inspect pad ' + x.padId,
           'data-focus-key': 'pad-' + x.padId })),   // the rebuilt table keeps the keyboard focus on this row (IL.keyed)
-        el('td', { text: IL.fmt(x.w, 2) + ' × ' + IL.fmt(x.h, 2), title: opening(x) }), el('td', { text: x.typeKey ? typeName(x, tt) : 'No pad type' }),
+        el('td', { text: IL.fmt(x.w, 2) + ' × ' + IL.fmt(x.h, 2), title: opening(x) }),
+        el('td', { class: 'pad-insp-type', text: x.typeKey ? (tt ? tt.name : x.typeKey) : 'No pad type' }),   // the full name is below
         el('td', { class: 'r', text: String(x.dotCount || 0) }), el('td', { text: x.blocked ? 'Blocked' : (x.flags && x.flags.length ? 'Check' : 'Planned') }));
       tr.addEventListener('click', () => open({ padId: x.padId }));
       return tr;

@@ -14,8 +14,10 @@
  * drawn copper; (3) contrast of the overlay marks and casing over both themes × 8 mask palettes × Full and Quiet, legend
  * swatches on the marks' colours; (4) the preview clock (scrub, readout, 16× play, Clear); (5) picture modes; (6)
  * reference labels (size buckets, never mirrored); (7) a performance gate at 4× CPU throttling with the largest drawing
- * in the fixtures; (8) 20 create/destroy cycles leave no ResizeObserver; plus thumbnails, the pad inspector, the Records
- * map, the preview row's layout at 1280 and 1024 px, the mask as painted in Quiet, the scale bar's size, keyboard focus
+ * in the fixtures and a plan of one pad per paste opening of it (mobo: 261); (8) 20 create/destroy cycles leave no
+ * ResizeObserver; plus thumbnails, the pad inspector (a dot's outer edge is its real size, path numbers that never overlap
+ * on a 48-pin QFP, one pad type said once), the Records map, the preview row's layout at 1440, 1280 and 1024 px with the
+ * readout never cut, no reference label on a pad-less footprint, the mask as painted in Quiet, the scale bar's size, keyboard focus
  * in the inspector table and after Clear, no rebuild when a render repeats the selection, the dirty layer's casing, no
  * JavaScript errors, no native dialogs. Screenshots (1440 and
  * 1280 px, light and dark) of the Run hero (Full and Quiet), the path preview mid-play, the pad inspector and the
@@ -258,21 +260,25 @@ async function glueRecords(page) {
     await page.keyboard.press('Enter');
     const kf = await page.evaluate(() => ({ id: document.activeElement && document.activeElement.id, row: document.getElementById('run-preview').hidden }));
     check('keyboard: Clear collapses the row and gives the focus back to #pv-play', kf.row && kf.id === 'pv-play', kf);
-    // the row fits at 1280 and 1024 px
+    // the row fits at 1440, 1280 and 1024 px, and its readout is never cut (it takes a line of its own when narrow)
     // (at 1024 × 768 the hero stage is at its 280 px minimum before the row opens, run.css: only the overflow is checked)
-    for (const [w, h] of [[1280, 800], [1024, 768]]) {
+    for (const [w, h] of [[1440, 900], [1280, 800], [1024, 768]]) {
       await page.setViewportSize({ width: w, height: h });
       await page.evaluate(() => { window.__pp.seek(40); });
       await sleep(400);
       const lay = await page.evaluate(() => {
         const r = document.getElementById('run-preview'), bar = document.querySelector('#run-hero .stage-bar');
         const hh = (n) => Math.round(n.getBoundingClientRect().height);
+        const ro = document.getElementById('pv-readout'), play = document.getElementById('pv-play');
         return { sw: r.scrollWidth, cw: r.clientWidth, barSw: bar.scrollWidth, barCw: bar.clientWidth, svgH: hh(document.getElementById('plan-svg')),
-          stage: hh(document.querySelector('#run-hero .hero__stage')), row: hh(r) };
+          stage: hh(document.querySelector('#run-hero .hero__stage')), row: hh(r), readSw: ro.scrollWidth, readCw: ro.clientWidth,
+          playSw: play.scrollWidth, playCw: play.clientWidth };
       });
-      await shot(page, 'layout-preview-row-' + w);
+      if (w !== 1440) await shot(page, 'layout-preview-row-' + w);
       check('#run-preview and the stage bar fit at ' + w + ' px' + (w > 1024 ? ', #plan-svg >= 280 px tall' : ''),
         lay.sw <= lay.cw + 1 && lay.barSw <= lay.barCw + 1 && (w <= 1024 || lay.svgH >= 280), lay);
+      check('the readout is never cut at ' + w + ' px ("… · 0:24 of 1:36" stays), #pv-play is not squeezed',
+        lay.readSw <= lay.readCw + 1 && lay.playSw <= lay.playCw + 1, lay);
       await page.evaluate(() => window.__pp.clear());
     }
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -296,6 +302,25 @@ async function glueRecords(page) {
     check('inspector: the stencil-equivalent amount and the edit link', /A 0\.10 mm stencil would print 0\.076 mm³ \(0\.28 mg\) here\./.test(pi.kv.replace(/\u00a0/g, ' '))
       && /^Edit pad type Chip 0603$/.test(pi.edit), { kv: pi.kv, edit: pi.edit });
     check('hero marks the part while the inspector is open', pi.hero >= 1, pi.hero);
+    const pz = await page.evaluate(() => {
+      const host = document.getElementById('pad-insp-svg');
+      const v = IL.boardview.of(host);
+      const c = host.querySelector('circle.dot');
+      const outer = Number(c.getAttribute('r')) + parseFloat(getComputedStyle(c).strokeWidth) / 2 * v.k;
+      const boxes = Array.from(host.querySelectorAll('.pv-dotlabel')).map((n) => n.getBoundingClientRect());
+      const overlap = boxes.some((a, i) => boxes.some((b, j) => j > i && a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom));
+      const ty = document.getElementById('pad-insp-types');
+      const sentence = IL.padInspect.ruleSentence({ typeKey: 'chip-0805', typeVersion: 1, typeStatus: 'characterized', packageId: 'R_0805_2012Metric',
+        typeRule: { kind: 'pattern', detail: '(^|[^0-9])0805([^0-9]|$)', matched: '_0805_' } }, null);
+      return { outer: +outer.toFixed(4), half: IL.S.plan.dot.diameterMm / 2, clamped: v.svg.classList.contains('pv--dots-clamped'), overlap,
+        types: ty.hidden ? null : ty.textContent, one: document.getElementById('pad-insp-pads').classList.contains('pad-insp-pads--one'),
+        typeCol: getComputedStyle(document.querySelector('#pad-insp-pads th.pad-insp-type')).display, sentence };
+    });
+    check('inspector: a dot\'s outer edge (circle + half its ring) is the plan\'s dot diameter', !pz.clamped && Math.abs(pz.outer - pz.half) <= 0.005, pz);
+    check('inspector: path numbers do not overlap', !pz.overlap, pz);
+    check('inspector: one pad type for both pads is said once, not in every row', pz.types === 'Pad type of both pads: Chip 0603' && pz.one
+      && pz.typeCol === 'none', pz);
+    check('inspector: the rule names the text without the pattern\'s separators ("_0805_" → “0805”)', /contains “0805” \(pad type chip-0805/.test(pz.sentence), pz.sentence);
     await page.click('#pad-insp-svg rect.pad[data-pad="R1.2"]');
     await page.waitForFunction(() => document.getElementById('panel-bar-title').textContent === 'Pad R1.2', null, { timeout: 5000 }).catch(() => {});
     check('a pad click in the inspector selects that pad', (await page.textContent('#panel-bar-title')) === 'Pad R1.2', await page.textContent('#panel-bar-title'));
@@ -430,7 +455,8 @@ async function glueRecords(page) {
               const g = core && core.closest('.pv-cased');
               const l = g && g.querySelector('.pv-case--l'), d = g && g.querySelector('.pv-case--d');
               if (!l || !d) { fails.push([sel, 'no casing']); continue; }
-              const cl = parse(cs(l).stroke), cd = parse(cs(d).stroke);
+              // a white-core mark (the path) draws no light casing: its core is the light tone
+              const cl = parse(cs(cs(l).display === 'none' ? core : l).stroke), cd = parse(cs(d).stroke);
               for (const bg of [bare, comp]) {
                 const r = Math.max(ratio(cl, bg), ratio(cd, bg));
                 worstCase = Math.min(worstCase, r);
@@ -485,6 +511,51 @@ async function glueRecords(page) {
     });
     check('the same selection, path numbers and drawing again (a poll) rebuild nothing', ch.kept, ch);
     check('dirty layer hidden: the dirty rings\' casing is hidden too', ch.rings > 0 && ch.shown === 0, ch);
+
+    // ---- path numbers on a fine-pitch row, labels of pad-less footprints ----------------------------------------------
+    const fp = await page.evaluate(() => {
+      const host = document.createElement('div');
+      host.style.cssText = 'position:fixed;left:0;top:0;width:360px;height:240px;opacity:0;pointer-events:none';
+      document.body.appendChild(host);
+      const v = IL.boardview.create(host, { lite: true });
+      // a 48-pin QFP: 4 sides of 12 pads 0.3 × 1.5 mm at 0.5 mm pitch around a 7 mm body, one 0.6 mm dot each (wider than
+      // the pad: the plan's real size), path order around the part
+      const pads = [], dots = [];
+      for (let i = 0; i < 48; i++) {
+        const side = Math.floor(i / 12), t = (i % 12 - 5.5) * 0.5, a = side * Math.PI / 2;
+        const x = 100 + Math.cos(a) * 4.2 - Math.sin(a) * t, y = 100 + Math.sin(a) * 4.2 + Math.cos(a) * t;
+        pads.push({ padId: 'U1.' + (i + 1), placementId: 'U1', x, y, w: 1.5, h: 0.3, rotation: side * 90, dotCount: 1 });
+        dots.push({ index: i, padId: 'U1.' + (i + 1), x, y, dispenseZ: 3, rotationDeg: 180 });
+      }
+      v.setPlan({ planId: 'pw-fine', pads, dots, dot: { diameterMm: 0.6 } }, {});
+      v.fit({ x0: 93, y0: 93, x1: 107, y1: 107 });
+      v.dotLabels(dots.map((d) => d.index));
+      const nodes = Array.from(host.querySelectorAll('.pv-dotlabel'));
+      // the ink of each number: its glyph box's width, the digits' height (0.75 em, not the line box) and the 3 px casing
+      const boxes = nodes.map((n) => {
+        const r = n.getBoundingClientRect(), em = parseFloat(getComputedStyle(n).fontSize) / v.k || 12, cy = (r.top + r.bottom) / 2;
+        const hh = (0.75 * em + 3) / 2;
+        return { left: r.left - 1.5, right: r.right + 1.5, top: cy - hh, bottom: cy + hh };
+      });
+      const overlap = boxes.some((a, i) => boxes.some((b, j) => j > i && a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom));
+      const first = nodes.map((n) => n.textContent);
+      // every number outside the pad ring, next to its own dot (within 1.5 mm)
+      const near = nodes.every((n) => {
+        const d = dots[Number(n.textContent) - 1], x = Number(n.getAttribute('x')), y = -Number(n.getAttribute('y'));
+        return Math.hypot(x - d.x, y - d.y) <= 1.5 && Math.hypot(x - 100, y - 100) > Math.hypot(d.x - 100, d.y - 100);
+      });
+      v.destroy();
+      host.remove();
+      // a footprint without pads and without a KiCad label (a logo) gets no reference; one with pads gets one at its body
+      const b = IL.boardart.build({ size: [10, 10], outline: { d: 'M0 0H10V10H0Z' }, layers: {}, parts: [
+        { ref: 'Silkscreen_Front', kind: 'art', pads: 0, x: 5, y: 5, a: 0, box: [-4, -4, 4, 4], label: null },
+        { ref: 'R9', kind: 'placement', pads: 2, x: 2, y: 2, a: 0, box: [-1, -0.5, 1, 0.5], label: null }] }, {});
+      const refs = Array.from(b.root.querySelectorAll('.pv-a-refs text')).map((n) => n.textContent);
+      return { n: boxes.length, overlap, near, first, refs };
+    });
+    check('fine pitch (48-pin QFP): path numbers outside the pad ring, next to their dots, never overlapping; a number with no free place is left out, the ends kept',
+      !fp.overlap && fp.near && fp.n >= 16 && fp.n < 48 && fp.first.includes('1') && fp.first.includes('48'), fp);
+    check('a pad-less footprint without a KiCad label gets no reference label; a part with pads does', fp.refs.join() === 'R9', fp.refs);
 
     // ---- (8) destroy: no ResizeObserver left after 20 create/destroy cycles ---------------------------------------------
     const ds = await page.evaluate(async () => {
@@ -584,21 +655,66 @@ async function glueRecords(page) {
     const big = largestArt();
     const cdp = await context.newCDPSession(page);
     await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
+    // §5.5: the drawing with a plan of its own size (mobo: 261 pads), not the session's 160-pad ftp plan: one pad per paste
+    // opening of the drawing (its subpaths; size and angle in the frame of the part it sits in), one dot each, nearest-
+    // neighbour order, on the hero's seat. Measured in a view of the hero's size over the page (the page's own polls keep
+    // re-planning the hero with the session's plan).
     const measure = () => page.evaluate(async (id) => {
-      const bv = IL.run.bv;
       const frame = () => new Promise((r) => requestAnimationFrame(() => r(performance.now())));
       const painted = () => new Promise((r) => requestAnimationFrame(() => setTimeout(() => r(performance.now()), 0)));
       const art = await IL.boardart.get(id);
-      const keep = bv.art;
-      bv.setArt(null);
+      const base = IL.S.plan, m = base.board.toMachine;
+      const T = (x, y) => ({ x: m[0] * x + m[2] * y + m[4], y: m[1] * x + m[3] * y + m[5] });
+      const seat = Math.atan2(m[1], m[0]) * 180 / Math.PI;
+      const parts = (art.parts || []).filter((q) => q.kind !== 'bottom' && q.kind !== 'art');
+      const pads = [];
+      for (const sp of String((art.layers.paste || {}).fill || '').split(/(?=M)/).filter(Boolean)) {
+        const pts = [];
+        let x = 0, y = 0, arc = false;
+        for (const [, c, a] of sp.matchAll(/([MLHVAZ])([^MLHVAZ]*)/g)) {
+          const v = (a.match(/-?[\d.]+(?:e-?\d+)?/g) || []).map(Number);
+          if (c === 'M' || c === 'L') for (let i = 0; i + 1 < v.length; i += 2) { x = v[i]; y = v[i + 1]; pts.push([x, y]); }
+          else if (c === 'H') for (const q of v) { x = q; pts.push([x, y]); }
+          else if (c === 'V') for (const q of v) { y = q; pts.push([x, y]); }
+          else if (c === 'A') for (let i = 0; i + 6 < v.length; i += 7) { x = v[i + 5]; y = v[i + 6]; pts.push([x, y]); arc = true; }
+        }
+        if (pts.length < 2) continue;
+        const cx = pts.reduce((a, q) => a + q[0], 0) / pts.length, cy = pts.reduce((a, q) => a + q[1], 0) / pts.length;
+        const part = parts.reduce((b, q) => (!b || Math.hypot(q.x - cx, q.y - cy) < Math.hypot(b.x - cx, b.y - cy) ? q : b), null);
+        const ang = part ? Number(part.a) || 0 : 0, r = -ang * Math.PI / 180;
+        const loc = pts.map(([px, py]) => [(px - cx) * Math.cos(r) - (py - cy) * Math.sin(r), (px - cx) * Math.sin(r) + (py - cy) * Math.cos(r)]);
+        let w = Math.max(...loc.map((q) => q[0])) - Math.min(...loc.map((q) => q[0]));
+        let h = Math.max(...loc.map((q) => q[1])) - Math.min(...loc.map((q) => q[1]));
+        if (arc && (w < 0.01 || h < 0.01)) w = h = Math.max(w, h);   // a circle: M A A Z gives its two ends only
+        const c = T(cx, cy), ref = part ? part.ref : 'P';
+        pads.push({ padId: ref + '.' + (pads.length + 1), placementId: ref, packageId: part ? part.pkg : '', x: c.x, y: c.y, w, h, rotation: ang + seat,
+          typeKey: 'chip-0603', dotCount: 1, flags: [], blocked: false });
+      }
+      const left = pads.slice(), dots = [];
+      let cur = T(0, 0);
+      while (left.length) {
+        let bi = 0;
+        for (let i = 1; i < left.length; i++) if (Math.hypot(left[i].x - cur.x, left[i].y - cur.y) < Math.hypot(left[bi].x - cur.x, left[bi].y - cur.y)) bi = i;
+        cur = left.splice(bi, 1)[0];
+        const i = dots.length;
+        dots.push({ index: i, padId: cur.padId, x: cur.x, y: cur.y, dispenseZ: 3, rotationDeg: 180, ta: 10 + 0.6 * i, te: 10.4 + 0.6 * i });
+      }
+      const plan = { planId: 'pw-perf-' + id, pads, dots, dot: { diameterMm: 0.6 }, profile: base.profile, summary: { estimatedSeconds: 10 + 0.6 * dots.length },
+        board: Object.assign({}, base.board, { widthMm: art.size[0], heightMm: art.size[1], fiducials: [] }) };
+      const hr = IL.run.bv.svg.parentNode.getBoundingClientRect();
+      const host = document.createElement('div');
+      host.style.cssText = 'position:fixed;z-index:60;background:var(--pv-bg);left:' + hr.left + 'px;top:' + hr.top + 'px;width:' + hr.width + 'px;height:' + hr.height + 'px';
+      document.body.appendChild(host);
+      const bv = IL.boardview.create(host, {});
+      bv.setPlan(plan, {});
+      bv.picture('quiet');
       await painted();
       const t0 = performance.now();
       bv.setArt(art);
       const artMs = (await painted()) - t0;
-      bv.setArt(keep);
-      await painted();
       // 16× preview: frame times over 5 s
-      const pp = window.__pp;
+      const pp = IL.pathPreview.create({ host: document.createElement('div'), bv });
+      pp.setPlan(plan);
       pp.setSpeed(16);
       pp.seek(0);
       pp.play();
@@ -606,32 +722,33 @@ async function glueRecords(page) {
       let last = await frame();
       const end = last + 5000;
       while (last < end) { const t = await frame(); gaps.push(t - last); last = t; if (!pp.state.playing) { pp.seek(0); pp.play(); } }
-      pp.clear();
+      pp.destroy();
       gaps.sort((a, b) => a - b);
       const p95 = gaps[Math.floor(gaps.length * 0.95)];
       // a poll: bv.update() and the paint after it (the wait for the next frame itself excluded)
-      const n = IL.S.plan.dots.length;
+      const n = dots.length;
       const polls = [];
       for (let i = 0; i < 10; i++) {
         const done = new Set(Array.from({ length: (i * 7) % n }, (_, j) => j));
         await painted();
         const a0 = performance.now();
-        bv.update({ done });
+        bv.update({ done, next: (i * 7) % n });
         const a1 = performance.now();
         const f0 = await frame();
         const f1 = await new Promise((r) => setTimeout(() => r(performance.now()), 0));
         polls.push((a1 - a0) + (f1 - f0));
       }
-      bv.update({ done: [] });
+      bv.destroy();
+      host.remove();
       polls.sort((a, b) => a - b);
-      return { artMs: +artMs.toFixed(1), p95: +p95.toFixed(1), frames: gaps.length, pollMs: +((polls[4] + polls[5]) / 2).toFixed(1) };
+      return { pads: pads.length, dots: n, artMs: +artMs.toFixed(1), p95: +p95.toFixed(1), frames: gaps.length, pollMs: +((polls[4] + polls[5]) / 2).toFixed(1) };
     }, big.id);
     let perf = await measure();
     const okPerf = (x) => x.artMs <= 1000 && x.p95 <= 33 && x.pollMs <= 16;
     if (!okPerf(perf)) perf = Object.assign(await measure(), { repeated: true });
     await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
-    check('performance at 4× CPU throttling (' + big.file + ', ' + Math.round(big.bytes / 1024) + ' KB): drawing <= 1,000 ms, 16× preview p95 frame <= 33 ms, poll + paint <= 16 ms',
-      okPerf(perf), perf);
+    check('performance at 4× CPU throttling (' + big.file + ', ' + Math.round(big.bytes / 1024) + ' KB, a ' + perf.pads + '-pad plan of its openings): drawing <= 1,000 ms, 16× preview p95 frame <= 33 ms, poll + paint <= 16 ms',
+      okPerf(perf) && perf.pads > 0, perf);
     perf.art = big;
     fs.writeFileSync(path.join(OUT, 'perf.json'), JSON.stringify(perf, null, 2));
 

@@ -125,6 +125,8 @@
       let x, y, a, h;
       if (p.label && Number.isFinite(Number(p.label.x))) {
         x = Number(p.label.x); y = Number(p.label.y); a = upright(p.label.a); h = Number(p.label.h) || 1;
+      } else if (p.pads !== undefined && p.pads !== null && Number(p.pads) === 0) {
+        continue;   // a hidden reference of a pad-less footprint (a logo, nano's "Silkscreen_Front" artwork): nothing to find
       } else {
         const b = p.box || [-0.5, -0.5, 0.5, 0.5];
         const cx = (b[0] + b[2]) / 2, cy = (b[1] + b[3]) / 2;

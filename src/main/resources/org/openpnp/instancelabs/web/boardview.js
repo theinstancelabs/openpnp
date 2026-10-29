@@ -43,6 +43,7 @@
   const ZOOMS = [1, 1.6, 2.5, 4, 6.4];
   const LABEL_PX = 9;        // a reference label size bucket shows once its smallest label is this tall on screen
   const DOT_MIN_PX = 1.2;    // dots at their real size, but never below this radius on screen
+  const DOT_STROKE_PX = 1.6; // circle.dot's ring (run.css): drawn inside the real size, so the outer edge is the dot's edge
   const f = (v) => (Math.round(v * 1000) / 1000).toString();
   const svg = IL.svgEl;   // (tag, attrs, title): falsy attrs skipped, title as <title>
   const VIEWS = new WeakMap();   // host → view
@@ -279,8 +280,8 @@
       if (dots.length > 1) this.gPath.appendChild(cased('path', { d: dFull }, 'pv-path', 1, null, 'path').g);
       this.doneC = cased('path', { d: '' }, 'pv-path pv-path--done', 1.5, null, 'path done');
       this.donePath = this.doneC.el;
-      this.preC = cased('path', { d: '' }, 'pv-path--pre', 2, null, 'path pre');
-      this.legC = cased('line', { x1: 0, y1: 0, x2: 0, y2: 0 }, 'pv-path--leg', 2, null, 'path pre');
+      this.preC = cased('path', { d: '' }, 'pv-path--pre', 1.5, null, 'path pre');
+      this.legC = cased('line', { x1: 0, y1: 0, x2: 0, y2: 0 }, 'pv-path--leg', 1.5, null, 'path pre');
       this.gPath.append(this.doneC.g, this.preC.g, this.legC.g);
       IL.setAttr(this.legC.g, 'visibility', 'hidden');
       // pads to scale (the paste openings): corners from the roundness when the plan has it
@@ -520,12 +521,18 @@
       for (const b of ['lb1', 'lb2', 'lb3']) toggle(this.artSvg, 'pv-art--' + b, Number.isFinite(lm[b]) && lm[b] / k >= LABEL_PX);
     }
     dotRadius() { return Math.max(0.2, Math.min(0.45, 2.3 * (this.k || 0.1))); }
-    /** Dots at the plan's dot size, at least 1.2 px on screen (.pv--dots-clamped while the floor applies). */
+    /**
+     * Dots at the plan's dot size: the ring is drawn inside it, so what the eye sees (the ring's outer edge) is the real
+     * diameter (a 0.6 mm dot on a 0.8 mm pad must not look wider than the pad); the circle never below 1.2 px
+     * (.pv--dots-clamped while that floor applies).
+     */
     resizeDots() {
       if (!this.plan || !this.dotD) return;
-      const floor = DOT_MIN_PX * (this.k || 0.1);
-      const r = Math.max(this.dotD / 2, floor);
-      toggle(this.svg, 'pv--dots-clamped', floor > this.dotD / 2);
+      const k = this.k || 0.1;
+      const floor = DOT_MIN_PX * k;
+      const inner = this.dotD / 2 - DOT_STROKE_PX / 2 * k;
+      const r = Math.max(inner, floor);
+      toggle(this.svg, 'pv--dots-clamped', floor > inner);
       if (this.rReal !== null && Math.abs(r - this.rReal) < 1e-4) return;
       this.rReal = r;
       for (const c of this.dotSeq) c.setAttribute('r', f(r));
@@ -793,6 +800,7 @@
       this.sel = s;
       if (this.padEls) for (const [pid, r] of this.padEls) toggle(r, 'sel', !!s && s.padIds.has(pid));
       this.drawSel();
+      if (this.labelIdx) this.drawDotLabels();   // the selected pad's numbers are placed first
     }
     /** The part outlines of the selection: redrawn only when the selection, the plan, the drawing or its seat changed. */
     drawSel() {
@@ -834,21 +842,58 @@
       this.dotLabelKey = null;
       this.drawDotLabels();
     }
+    /**
+     * Path numbers, each pushed out from the middle of the labelled dots (outside a QFP's pad ring, beside a chip) and
+     * turned up to 80° around its dot until it covers no other number or dot and stays in view. A number with no free place is
+     * left out (the pads table and the dots table list every one): the selected pad's dots first, then the first and the
+     * last dot, then path order, so a fine-pitch row reads 1, 3, 5… instead of a pile of digits.
+     */
     drawDotLabels() {
       if (!this.plan) return;
-      const key = this.labelIdx ? this.labelIdx.join(',') + '|' + (this.k || 0).toFixed(4) : '';
+      const vb = this.vb;
+      const key = this.labelIdx ? [this.labelIdx.join(','), (this.k || 0).toFixed(4), this.selKey,
+        vb ? [vb.x0, vb.y0, vb.x1, vb.y1].map((v) => v.toFixed(2)).join(',') : ''].join('|') : '';
       if (key === this.dotLabelKey) return;
       this.dotLabelKey = key;
       this.gLabels.replaceChildren();
       if (!this.labelIdx) return;
       const k = this.k || 0.1;
-      const r = this.dotD ? Math.max(this.dotD / 2, DOT_MIN_PX * k) : this.rDot;
-      for (const i of this.labelIdx) {
-        const d = this.plan.dots[i];
-        if (!d) continue;
-        const t = svg('text', { class: 'pv-dotlabel', x: f(d.x + r + 3 * k), y: f(-d.y - r - 2 * k), 'font-size': f(12 * k) });
-        t.textContent = String(i + 1);
-        this.gLabels.appendChild(t);
+      const r = this.dotD ? Math.max(this.dotD / 2, (DOT_MIN_PX + DOT_STROKE_PX / 2) * k) : this.rDot + DOT_STROKE_PX / 2 * k;
+      const fs = 12 * k;
+      const dots = this.labelIdx.map((i) => this.plan.dots[i]).filter(Boolean);
+      if (!dots.length) return;
+      const cx = dots.reduce((a, d) => a + d.x, 0) / dots.length, cy = dots.reduce((a, d) => a + d.y, 0) / dots.length;
+      const sel = this.sel ? this.sel.padIds : new Set();
+      const ends = new Set([dots[0].index, dots[dots.length - 1].index]);
+      const rank = (d) => (sel.has(d.padId) ? 0 : ends.has(d.index) ? 1 : 2);
+      const order = dots.slice().sort((a, b) => rank(a) - rank(b) || a.index - b.index);
+      const placed = [];
+      const gap = 1 * k;
+      const hitsDot = (b) => dots.some((q) => {
+        const nx = Math.max(b.x0, Math.min(q.x, b.x1)), ny = Math.max(b.y0, Math.min(q.y, b.y1));
+        return Math.hypot(q.x - nx, q.y - ny) < r;
+      });
+      const hitsLabel = (b) => placed.some((p) => b.x0 < p.x1 + gap && p.x0 < b.x1 + gap && b.y0 < p.y1 + gap && p.y0 < b.y1 + gap);
+      const inView = (b) => !vb || (b.x0 >= vb.x0 && b.x1 <= vb.x1 && b.y0 >= vb.y0 && b.y1 <= vb.y1);
+      for (const d of order) {
+        const text = String(d.index + 1);
+        // the ink: bold digits about 0.64 em wide and 0.75 em tall, plus the 3 px casing (1.5 px a side)
+        const w = (text.length * 0.64 * 12 + 3) * k, h = (0.75 * 12 + 3) * k;
+        let ux = d.x - cx, uy = d.y - cy;
+        const L = Math.hypot(ux, uy);
+        const base = L > 1e-6 ? Math.atan2(uy, ux) : Math.PI / 4;
+        for (const da of [0, 0.45, -0.45, 0.9, -0.9, 1.4, -1.4]) {   // outward only: never between a pad row and the part's middle
+          ux = Math.cos(base + da); uy = Math.sin(base + da);
+          const dist = r + 2 * k + Math.abs(ux) * w / 2 + Math.abs(uy) * h / 2;
+          const bx = d.x + ux * dist, by = d.y + uy * dist;
+          const b = { x0: bx - w / 2, x1: bx + w / 2, y0: by - h / 2, y1: by + h / 2 };
+          if (!inView(b) || hitsLabel(b) || hitsDot(b)) continue;
+          placed.push(b);
+          const t = svg('text', { class: 'pv-dotlabel', x: f(bx), y: f(-by), 'font-size': f(fs), 'text-anchor': 'middle', 'dominant-baseline': 'central' });
+          t.textContent = text;
+          this.gLabels.appendChild(t);
+          break;
+        }
       }
     }
 
