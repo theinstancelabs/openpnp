@@ -51,7 +51,11 @@
   }
   function artP(id) {
     if (M.arts.has(id)) { const a = M.arts.get(id); return a instanceof Promise ? a : Promise.resolve(a); }
-    const pr = IL.boardart.get(id).then((a) => a || null, () => null).then((a) => {
+    const pr = IL.boardart.get(id).then((a) => a || null, () => {
+      // a failed read (OpenPnP restarting), not a drawing that is gone: asked again on a render 5 s later
+      setTimeout(() => { if (M.arts.get(id) === null) { M.arts.delete(id); IL.render(); } }, 5000);
+      return null;
+    }).then((a) => {
       M.arts.set(id, a);
       prune();
       IL.render();
@@ -140,7 +144,7 @@
       const k = im && im.kicadVersion ? ' (KiCad ' + kicadMajor(im.kicadVersion) + ')' : '';
       if (e.art.kind === 'kicad' && im && im.how === 'attach') text = 'KiCad drawing from ' + (im.sourceName || 'a .kicad_pcb') + k + ', added ' + when(im.atMs) + '.';
       else if (e.art.kind === 'kicad' && im) {
-        const size = isNum(e.widthMm) && isNum(e.heightMm) ? IL.nb(IL.fmt(e.widthMm, 1) + ' × ' + IL.fmt(e.heightMm, 1) + ' mm') + ', ' : '';
+        const size = isNum(e.widthMm) && isNum(e.heightMm) ? IL.fmt(e.widthMm, 1) + '\u00a0×\u00a0' + IL.fmt(e.heightMm, 1) + '\u00a0mm' + ', ' : '';
         text = 'Imported ' + when(im.atMs) + ' from ' + (im.sourceName || 'a .kicad_pcb') + k + ': ' + size + IL.plural(partsOf(e), 'part') + ', '
           + IL.plural((e.fiducials || []).length, 'fiducial') + '.';
       } else if (e.art.kind === 'fallback') text = 'Drawn from the board file (no KiCad drawing).' + (e.art.note ? ' ' + e.art.note : '');
@@ -399,8 +403,8 @@
     M.seatKey = key;
     if (bv.pic !== 'full') bv.picture('full');
     // the live top camera, when it is near the board (jogging it onto a fiducial shows on the drawing); a camera far
-    // away would shrink the board to a stamp: the caption says how far instead
-    const cam = IL.positions(s).cam;
+    // away would shrink the board to a stamp: the caption says how far instead. Not connected, OpenPnP reports 0, 0.
+    const cam = s && s.machine && s.machine.enabled ? IL.positions(s).cam : null;
     const box = IL.boardart.outlineBox(a, m);
     const away = known && cam ? Math.hypot(Math.max(box.x0 - cam.x, 0, cam.x - box.x1), Math.max(box.y0 - cam.y, 0, cam.y - box.y1)) : null;
     const near = away !== null && away <= Math.max(10, 0.5 * Math.max(box.x1 - box.x0, box.y1 - box.y0));

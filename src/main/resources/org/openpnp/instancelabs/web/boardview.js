@@ -499,6 +499,7 @@
       this.real = r.width > 20 && r.height > 20;
       const w = this.real ? r.width : 600, h = this.real ? r.height : 360;
       this.k = b ? Math.max((b.x1 - b.x0) / w, (b.y1 - b.y0) / h) : 0.1;
+      this.px = { w, h };
       return this.k;
     }
     relayout() {
@@ -508,6 +509,7 @@
       this.measure();
       const changed = !k0 || Math.abs(this.k - k0) / k0 > 0.04;
       if (changed || real0 !== this.real) this.afterScale();
+      else this.placeScale();   // the visible area's corner moves with the view's size, also at the same scale
       if (!this.plan) return;
       if (!real0 && this.real && this.zoomIx === 0) this.resizeMarks();
       if (changed) this.drawCallouts(true);
@@ -672,12 +674,16 @@
       if (p) IL.setAttr(g, 'transform', 'translate(' + f(p.x) + ' ' + f(-p.y) + ')');
       IL.setAttr(g, 'visibility', p ? 'visible' : 'hidden');   // diff writes: no attribute churn on every poll
     }
-    /** The 5 mm scale bar in the bottom-left corner of the view (shown with the camera crosshair). */
+    /**
+     * The 5 mm scale bar in the bottom-left corner of the view (shown with the camera crosshair): of what shows (meet
+     * leaves room on one side), not of the fitted box, whose corner is the board's own and its origin marker.
+     */
     placeScale() {
       const b = this.vb;
       if (!b) return;
       const k = this.k || 0.1;
-      const x0 = b.x0 + 16 * k, y = b.y0 + 16 * k;
+      const px = this.px || { w: 0, h: 0 };
+      const x0 = Math.min(b.x0, (b.x0 + b.x1 - px.w * k) / 2) + 16 * k, y = Math.min(b.y0, (b.y0 + b.y1 - px.h * k) / 2) + 16 * k;
       const key = [x0, y, k].map((v) => v.toFixed(3)).join('|');
       if (key === this.scaleKey) return;
       this.scaleKey = key;

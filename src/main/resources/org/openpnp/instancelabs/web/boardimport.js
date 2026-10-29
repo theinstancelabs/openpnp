@@ -46,15 +46,19 @@
       if (M.pv && (M.state === 'preview' || M.state === 'saving')) paintPackages(M.pv);
     }, () => { /* the type keys stand in for the names */ });
   }
-  /** The server's slug rule (§3.7): NFKD, ASCII letters and digits lower-cased, every other run → "-", at most 40. */
+  /**
+   * The server's slug rule (§3.7): NFKD, accents dropped, ASCII letters and digits lower-cased, every other run → "-",
+   * at most 40. Empty for a name without ASCII letters or digits (the server then makes "board-" and a digest).
+   */
   function slugOf(name) {
-    const s = String(name || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase()
+    const s = String(name || '').normalize('NFKD').replace(/\p{Mn}/gu, '').toLowerCase()
       .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/g, '');
     return s;
   }
+  /** The server's name rule: 1 to 60 characters, at least one letter or digit of any script. */
   function nameProblem(name) {
     const n = String(name || '').trim();
-    if (!n || n.length > 60 || !/[A-Za-z0-9]/.test(n)) return 'Name: 1 to 60 characters, at least one letter or digit.';
+    if (!n || Array.from(n).length > 60 || !/[\p{L}\p{N}]/u.test(n)) return 'Name: 1 to 60 characters, at least one letter or digit.';
     return null;
   }
   /** "H1–H4, J1": references grouped by prefix with consecutive numbers as ranges; at most max groups, then "…". */
@@ -372,7 +376,7 @@
     const origin = b.origin === 'estimated' ? 'origin estimated: no board outline'
       : b.origin === 'edges' ? 'origin at the bottom-left corner of the board edges (the outline is not closed)'
         : 'origin at the bottom-left corner of the board outline';
-    IL.setText(n.size, IL.nb(IL.fmt(b.widthMm, 1) + ' × ' + IL.fmt(b.heightMm, 1) + ' mm') + ' · KiCad ' + (k.major || '?') + ' · ' + origin);
+    IL.setText(n.size, IL.fmt(b.widthMm, 1) + '\u00a0×\u00a0' + IL.fmt(b.heightMm, 1) + '\u00a0mm' + ' · KiCad ' + (k.major || '?') + ' · ' + origin);
     n.size.classList.toggle('bi-size--need', b.origin === 'estimated');
     n.found.replaceChildren(...foundLines(pv));
     paintAttach(pv);
@@ -469,7 +473,7 @@
     // a board of its own (new packages, no registrations yet) the other one
     n.save.classList.toggle('btn--primary', !c);
     if (!c) { n.attach.replaceChildren(); return; }
-    const base = String(c.file || '').split('/').pop().replace(/^\d+-/, '');
+    const base = String(c.file || '').split('/').pop();
     const count = ((pv.counts && pv.counts.placements) || 0) + ((pv.counts && pv.counts.fiducials) || 0);
     const offs = (c.offsets || []).filter((x) => Number(x.mm) > 0.05);
     const away = offs.length ? ' (' + offs.slice(0, 3).map((x, i) => x.id + (i ? ' ' : ' is ') + IL.fmt(x.mm, 2) + ' mm').join(', ')
@@ -575,7 +579,8 @@
     const pv = M.pv;
     const name = n.name.value.trim();
     const slug = slugOf(name);
-    IL.setText(n.slug, slug ? 'Saved as instancelabs/boards/' + slug + '/' + slug + '.board.xml, with its packages and parts in OpenPnP.' : 'The name needs a letter or a digit.');
+    IL.setText(n.slug, slug ? 'Saved as instancelabs/boards/' + slug + '/' + slug + '.board.xml, with its packages and parts in OpenPnP.'
+      : nameProblem(name) ? 'The name needs a letter or a digit.' : 'Saved in a folder of its own under instancelabs/boards/, with its packages and parts in OpenPnP.');
     // a taken name: the preview's answer for its suggested name, else the board list (imported boards carry their slug)
     let ex = pv && pv.exists && pv.exists.slug === slug ? pv.exists : null;
     if (!ex && slug) {
@@ -583,14 +588,14 @@
       const b = files.find((x) => x.imported && x.imported.slug === slug);
       if (b) ex = { slug, file: b.file, name: b.name, importedAtMs: b.imported.atMs, how: b.imported.how };
     }
-    if (M.existsAnswer && M.existsAnswer.slug === slug) ex = M.existsAnswer;
+    if (M.existsAnswer && (M.existsAnswer.slug === slug || M.existsAnswer.forName === name)) ex = M.existsAnswer;
     M.replace = !!ex;
     IL.show(n.exists, !!ex);
     if (ex) {
       const at = ex.importedAtMs ? IL.fmtTime(IL.toClient(ex.importedAtMs)) : null;
       // the name of a drawing given to a board file (attach) is taken too, but it is not a board of its own
       IL.setText(n.exists, ex.how === 'attach'
-        ? 'The name "' + slug + '" holds the KiCad drawing of ' + String(ex.file || '').split('/').pop().replace(/^\d+-/, '') + (at ? ' (added ' + at + ')' : '')
+        ? 'The name "' + slug + '" holds the KiCad drawing of ' + String(ex.file || '').split('/').pop() + (at ? ' (added ' + at + ')' : '')
           + '. Saving under it replaces that drawing: choose another name to keep it.'
         : 'A board named "' + (ex.name || slug) + '" exists' + (at ? ' (imported ' + at + ')' : '') + '. Saving replaces it: plans made with it must be planned again.');
     }
@@ -626,7 +631,8 @@
       M.state = 'preview';
       const d = e.data || {};
       if (e.status === 409 && d.error === 'exists') {
-        M.existsAnswer = Object.assign({ slug: slugOf(name) }, d.details && d.details.exists ? d.details.exists : d.exists || {});
+        // kept for this name too: the server's slug of a name in another script is not the one slugOf can make
+        M.existsAnswer = Object.assign({ slug: slugOf(name) }, d.details && d.details.exists ? d.details.exists : d.exists || {}, { forName: name });
         paint();
         paintName();
         IL.toast(d.reason || 'A board with this name exists: press again to replace it.', 'need');
