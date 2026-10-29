@@ -470,6 +470,31 @@ public class RegistrationSimTest {
         assertEquals(surfaceAt, ok(get("/api/surfaces")).getAsJsonObject("surfaces").getAsJsonObject("board")
                 .get("setAtMs").getAsLong(), "the surface is kept");
         assertEquals(p1Id, same.get("newPlanId").getAsString(), "the plan already carries both");
+
+        // §10.2 case 3: the same seat, but the board now touches 0.08 mm higher (fiducial X/Y cannot see it):
+        // the 3 touches disagree, so every target is probed again and the board planned on the new surface
+        SimScene raised = scene(s1());
+        raised.boardSurface = new SimScene.Plane(5.43 + 0.08, 0.0006, -0.0009);
+        scene = raised;
+        JsonObject changed = register(p1Id, "{\"wait\":true}");
+        assertEquals("OK", changed.get("status").getAsString(), changed.toString());
+        assertEquals("same", changed.get("seat").getAsString());
+        assertEquals(res.get("registrationId").getAsString(), changed.get("registrationId").getAsString());
+        JsonObject check = changed.getAsJsonObject("sameSeat");
+        assertFalse(check.get("pass").getAsBoolean(), check.toString());
+        for (JsonElement e : check.getAsJsonArray("points")) {
+            assertEquals(0.08, e.getAsJsonObject().get("deltaMm").getAsDouble(), 0.03, e.toString());
+        }
+        JsonObject reprobe = changed.getAsJsonObject("probe");
+        assertEquals("same seat, surface changed: probed again", reprobe.get("why").getAsString());
+        assertTrue(reprobe.get("saved").getAsBoolean(), reprobe.toString());
+        for (JsonElement e : reprobe.getAsJsonArray("points")) {
+            JsonObject pt = e.getAsJsonObject();
+            Point2D b = scene.toBoard(pt.get("x").getAsDouble(), pt.get("y").getAsDouble());
+            assertEquals(scene.boardContactZ(b.getX(), b.getY()), pt.get("z").getAsDouble(), 0.03, pt.toString());
+        }
+        assertTrue(boardSurfaceAt() > surfaceAt, "a new surface");
+        assertNotEquals(p1Id, changed.get("newPlanId").getAsString(), "planned again on the new surface");
     }
 
     /**
