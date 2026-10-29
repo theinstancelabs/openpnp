@@ -109,7 +109,7 @@ public class SimBoardCamera extends ImageCamera {
         Location upp = getUnitsPerPixel().convertToUnits(LengthUnit.Millimeters);
         Board board = sc.findBoard(c);
         List<Object> key = Arrays.asList(sc, board, loc.getX(), loc.getY(), w, h, upp.getX(), upp.getY(), isFlipX(),
-                isFlipY());
+                isFlipY(), SimPaste.version());
         long now = System.currentTimeMillis();
         if (cachedFrame == null || !key.equals(cachedKey) || now - cachedAtMs > CACHE_MS) {
             cachedFrame = preFlip(SimBoardRenderer.render(sc, board, loc.getX(), loc.getY(), w, h, upp.getX(),

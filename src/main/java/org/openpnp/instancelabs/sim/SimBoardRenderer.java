@@ -37,6 +37,11 @@ import org.pmw.tinylog.Logger;
  * <p>Fiducials come from the scene (il_sim_scene.py writes them from the board file's placements) or,
  * when the scene has none, from the board itself; pads from the board's placements and footprints /
  * pad types (BoardPadExtractor on the board placed at the origin). Nothing is specific to one board.</p>
+ *
+ * <p>The SIM needle's paste ({@link SimPaste}) is drawn on top, each dot, thread and smear as a
+ * filled ellipse of its own size: on the blank and the weigh coupons in the bench's paste-on-blank
+ * colour, on the board and the bed in the board paste colour. With the bench blank colour (the
+ * scene's {@code blank.bgr} 206, 25, 0) DotInspector sees it (56 levels of blue).</p>
  */
 public final class SimBoardRenderer {
     /** Colours, BGR measured on runs/board3_FID1_2.jpg (PadCleanCheck), as java.awt.Color(r, g, b). */
@@ -45,7 +50,15 @@ public final class SimBoardRenderer {
     static final Color FIDUCIAL_COPPER = bgr(241, 240, 199);
     static final Color PAD_COPPER = bgr(246, 244, 222);
     static final Color PASTE = bgr(160, 63, 13);
+    /** Today's blank (the scene's default {@code blank.bgr}): 18 levels from PASTE, below DotInspector's 25. */
     static final Color BLANK = bgr(142, 59, 0);
+    /**
+     * The bench blank and paste on it, BGR at the frame centre of runs/p18_half/before_005.jpg,
+     * after_005.jpg, before_006.jpg, after_006.jpg, before_020.jpg, after_020.jpg: blank (204-209,
+     * 0-53, 0), paste (147-155, 36-44, 1).
+     */
+    static final Color BENCH_BLANK = bgr(206, 25, 0);
+    static final Color BLANK_PASTE = bgr(150, 40, 0);
     static final Color OUTSIDE = bgr(40, 40, 40);
     static final Color UNCONFIRMED = bgr(128, 128, 128);
     static final double PASTE_DOT_MM = 1.0;
@@ -65,14 +78,21 @@ public final class SimBoardRenderer {
                 camY, w, h, uppX, uppY);
     }
 
+    /** With the scene's SIM paste ({@link SimPaste#depositsFor}). */
+    public static BufferedImage render(SimScene sc, Board board, List<PadGeometry> boardPads, double camX,
+            double camY, int w, int h, double uppX, double uppY) {
+        return render(sc, board, boardPads, camX, camY, w, h, uppX, uppY, SimPaste.depositsFor(sc));
+    }
+
     /**
      * A board size the scene does not give is filled from the board ({@link SimScene#withBoardSize}).
      *
      * @param boardPads pads in board mm ({@link #boardPads})
+     * @param deposits SIM paste in machine mm, drawn on top
      * @return a TYPE_3BYTE_BGR frame
      */
     public static BufferedImage render(SimScene sc, Board board, List<PadGeometry> boardPads, double camX,
-            double camY, int w, int h, double uppX, double uppY) {
+            double camY, int w, int h, double uppX, double uppY, List<SimPaste.Deposit> deposits) {
         sc.withBoardSize(board);
         BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_3BYTE_BGR);
         Graphics2D g = img.createGraphics();
@@ -87,10 +107,14 @@ public final class SimBoardRenderer {
             boardTx.concatenate(sc.seat);
             if (sc.blankRect != null) {
                 double[] r = sc.blankRect;
-                fill(g, machine, new Rectangle2D.Double(r[0], r[1], r[2] - r[0], r[3] - r[1]), BLANK);
+                fill(g, machine, new Rectangle2D.Double(r[0], r[1], r[2] - r[0], r[3] - r[1]), bgr(sc.blankBgr));
                 for (double[] d : sc.blankDots) {
                     fill(g, machine, disk(d[0], d[1], PASTE_DOT_MM), PASTE);
                 }
+            }
+            for (SimScene.Coupon k : sc.coupons) {
+                double[] r = k.rect;
+                fill(g, machine, new Rectangle2D.Double(r[0], r[1], r[2] - r[0], r[3] - r[1]), bgr(k.bgr));
             }
             if (sc.hasBoardSize()) {
                 fill(g, boardTx, new Rectangle2D.Double(0, 0, sc.boardWidthMm, sc.boardHeightMm), MASK);
@@ -115,6 +139,8 @@ public final class SimBoardRenderer {
             for (double[] d : sc.dirtySpots) {
                 fill(g, boardTx, disk(d[0], d[1], PASTE_DOT_MM), PASTE);
             }
+            drawDeposits(g, machine, deposits, camX, camY, w * uppX * (1 + Math.abs(sc.camera.uppError[0])),
+                    h * uppY * (1 + Math.abs(sc.camera.uppError[1])));
         }
         finally {
             g.dispose();
@@ -125,6 +151,26 @@ public final class SimBoardRenderer {
         addNoise(img, sc.camera.noise, sc.vacuum.seed);
         stamp(img, STAMP, new Color(200, 200, 200));
         return img;
+    }
+
+    /** Deposits that reach into the frame (fwMm × fhMm about the camera), each in its surface's paste colour. */
+    private static void drawDeposits(Graphics2D g, AffineTransform machine, List<SimPaste.Deposit> deposits,
+            double camX, double camY, double fwMm, double fhMm) {
+        for (SimPaste.Deposit d : deposits) {
+            double reach = Math.max(d.aMm, d.bMm);
+            if (Math.abs(d.x - camX) > fwMm / 2 + reach || Math.abs(d.y - camY) > fhMm / 2 + reach) {
+                continue;
+            }
+            AffineTransform t = new AffineTransform(machine);
+            t.translate(d.x, d.y);
+            t.rotate(Math.toRadians(d.angleDeg));
+            boolean onBlank = d.region == SimScene.Region.BLANK || d.region == SimScene.Region.COUPON;
+            fill(g, t, new Ellipse2D.Double(-d.aMm, -d.bMm, 2 * d.aMm, 2 * d.bMm), onBlank ? BLANK_PASTE : PASTE);
+        }
+    }
+
+    static Color bgr(int[] bgr) {
+        return bgr(bgr[0], bgr[1], bgr[2]);
     }
 
     /** A uniform grey frame stamped {@code text}: no marks the vision code could take for anything. */

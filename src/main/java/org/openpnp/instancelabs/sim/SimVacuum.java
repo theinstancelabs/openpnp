@@ -30,7 +30,8 @@ import org.openpnp.spi.Driver;
  * <p>The reading moves toward its target with a time constant on the wall clock: {@code tauS} after a
  * pump or valve change, {@code sealTauS} when a seal forms, {@code releaseTauS} when it breaks. So a
  * baseline read too early is wrong, and a step right after a seal still reads sealed, as on the bench.
- * Sealed: N1's raw Z at or below the contact Z under the tip, with the whole tip disc on that surface;
+ * Sealed: N1's raw Z at or below the contact Z under the tip (board, weigh coupon, blank or bed: SimScene's
+ * regions), with the whole tip disc on that surface;
  * within {@code partialBandMm} above it, half the drop; at a leaky spot or an edge, only {@code leakDrop}.</p>
  */
 public final class SimVacuum {

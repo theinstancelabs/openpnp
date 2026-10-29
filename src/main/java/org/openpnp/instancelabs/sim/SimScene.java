@@ -39,8 +39,9 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 /**
- * The simulated world of the SIM vacuum sensor and the SIM top camera: where the board truly sits,
- * the heights N1 touches, holes and paste. Read from {@code <configDir>/instancelabs/sim-scene.json},
+ * The simulated world of the SIM vacuum sensor, the SIM top camera, the SIM paste and the SIM
+ * balance: where the board truly sits, the heights N1 touches, holes, paste, the needle's paste
+ * model, the weigh coupons and the balance. Read from {@code <configDir>/instancelabs/sim-scene.json},
  * which only the sim scripts write, into a config copy (src/test/sim/il_sim_scene.py). Missing keys
  * take the bench defaults below. Public fields, so tests can build and change a scene in code.
  *
@@ -118,6 +119,75 @@ public final class SimScene {
     }
 
     public static final String[] TIP_STATES = {"normal", "missing", "blocked", "part"};
+    /**
+     * The paste of the SIM needle (SimPaste, PROFILE_CALIBRATION_DESIGN.md §11.2-11.3). Its mass per
+     * turn, footprint law, ripple and noise differ on purpose from the engine's model, so a
+     * calibration has to measure them.
+     */
+    public static final class Paste {
+        /** Mass per screw revolution (mg): on purpose not the engine's 2.11 (tools/lumen.py:97); a weighing finds it. */
+        public double mRevMg = 2.30;
+        /** First-harmonic flow ripple (share of the mean flow) and the physical angle of its peak (deg). */
+        public double ripple = 0.15, ripplePeakDeg = 299;
+        /** Dot-to-dot mass noise (CV); the footprint gets cv / 2 on top. */
+        public double cv = 0.08;
+        public long seed = 11;
+        /** Footprint on the surface: A = c·m^e (mm², mg). */
+        public double footprintC = 0.875, footprintE = 0.77;
+        /** Share of the tip bead plus the new paste that a dot takes; the rest stays on the tip. */
+        public double transferRatio = 0.75;
+        /** The first dots of a session after an idle: f(0) = 1 + oozeFirst·g, f(n) = 1 − refillDip·g·e^(−(n−1)/tau). */
+        public double oozeFirst = 0.40, refillDip = 0.30, refillTauDots = 2;
+        /** g = min(1, idle / idleFullS); after idleDeadS the first two dots lay nothing. */
+        public double idleFullS = 300, idleDeadS = 3600;
+        /** Thread probability on the hop after a dot: threadShare up to threadFullMg, falling to 0 at threadZeroMg. */
+        public double threadShare = 0.5, threadFullMg = 0.35, threadZeroMg = 0.45;
+        /** A deposit below this does not stick (it stays on the tip). */
+        public double missBelowMg = 0.12;
+        /** Needle-to-surface gap above which nothing reaches the surface (D/DispenseProfile.java:53-54). */
+        public double maxGapMm = 0.20;
+        /**
+         * The true needle Z offset (N2 Z touching a surface of N1 contact Z s = s + this), as
+         * DispenseConfig.needleZOffsetMm; null = the configuration's.
+         */
+        public Double needleZOffsetMm;
+        /** The paste the screw can be fed with (mg/s over 5 s); above it every dot shrinks. */
+        public double feedLimitMgS = 3.0;
+        public double landingSdMm = 0.03;
+        public double[] landingBiasMm = {0, 0};
+        /** The needle tip = raw head X/Y + this (the bench N2 head offset). */
+        public double[] n2OffsetMm = {25.291, -75.926};
+        /** M114 reports the B step count ({@code Count ... B:<n>}), as the bench's Marlin does. */
+        public boolean reportCount = true;
+        /** The physical screw angle at count 0 (steps); null = drawn per connection from the seed. */
+        public Integer offsetSteps;
+    }
+
+    /** A weigh coupon: a piece of blank PCB on a named place (machine mm, its top an N1 contact Z). */
+    public static final class Coupon {
+        public String place;
+        /** x0, y0, x1, y1 (machine mm). */
+        public double[] rect;
+        public double z;
+        public int[] bgr = {206, 25, 0};
+        /** The bare coupon's mass on the balance. */
+        public double massMg;
+
+        public boolean contains(double x, double y) {
+            return x >= rect[0] && y >= rect[1] && x <= rect[2] && y <= rect[3];
+        }
+    }
+
+    /** The SIM balance (SimBalance): display = the operator reads it, connected = the job reads it. */
+    public static final class Balance {
+        public String mode = "display";
+        public double resolutionMg = 1, noiseMg = 0.4, settleS = 2;
+        public long seed = 5;
+    }
+
+    public static final String[] BALANCE_MODES = {"display", "connected"};
+    /** Today's blank colour (BGR, the board mask's); padcal scenes use the bench blank (206, 25, 0). */
+    public static final int[] DEFAULT_BLANK_BGR = {142, 59, 0};
 
     /** Matched against the end of each board path of the configuration. */
     public String boardFile;
@@ -154,6 +224,15 @@ public final class SimScene {
     public double tipRadiusMm = 0.35;
     public Vacuum vacuum = new Vacuum();
     public Camera camera = new Camera();
+    /** The blank's colour, BGR. */
+    public int[] blankBgr = DEFAULT_BLANK_BGR.clone();
+    /** Null: no paste model (the needle lays nothing, M114 has no Count). */
+    public Paste paste;
+    public List<Coupon> coupons = new ArrayList<>();
+    /** Null: no SIM balance (the readings are typed). */
+    public Balance balance;
+    /** The file this scene was read from; null for a scene built in code (SimPaste keys its deposits by it). */
+    public File file;
 
     public static SimScene load(File f) throws IOException {
         String text = new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8);
@@ -168,7 +247,9 @@ public final class SimScene {
             throw new IOException("sim scene " + f + " is not a JSON object");
         }
         try {
-            return of(e.getAsJsonObject());
+            SimScene s = of(e.getAsJsonObject());
+            s.file = f;
+            return s;
         }
         catch (RuntimeException ex) {
             throw new IOException("sim scene " + f + ": " + ex.getMessage(), ex);
@@ -233,6 +314,10 @@ public final class SimScene {
                 s.blankSurface = planeOf(bs);
             }
             s.blankDots = points(blank, "dots", "x", "y");
+            int[] bgr = bgr(blank, "bgr");
+            if (bgr != null) {
+                s.blankBgr = bgr;
+            }
         }
         s.bedZ = num(o, "bedZ", s.bedZ);
         double[] n1 = numbers(o, "n1OffsetMm", 2);
@@ -274,6 +359,39 @@ public final class SimScene {
             s.camera.noise = (int) num(c, "noise", s.camera.noise);
             s.camera.blurPx = (int) num(c, "blurPx", s.camera.blurPx);
         }
+        JsonObject p = obj(o, "paste");
+        if (p != null) {
+            s.paste = pasteOf(p);
+        }
+        if (o.has("coupons") && !o.get("coupons").isJsonNull()) {
+            for (JsonElement ce : o.getAsJsonArray("coupons")) {
+                JsonObject co = ce.getAsJsonObject();
+                Coupon k = new Coupon();
+                k.place = co.has("place") ? co.get("place").getAsString() : null;
+                double[] r = numbers(co, "rect", 4);
+                if (r != null) {
+                    k.rect = new double[] {Math.min(r[0], r[2]), Math.min(r[1], r[3]), Math.max(r[0], r[2]),
+                            Math.max(r[1], r[3])};
+                }
+                k.z = num(co, "z", Double.NaN);
+                int[] bgr = bgr(co, "bgr");
+                if (bgr != null) {
+                    k.bgr = bgr;
+                }
+                k.massMg = num(co, "massMg", Double.NaN);
+                s.coupons.add(k);
+            }
+        }
+        JsonObject bal = obj(o, "balance");
+        if (bal != null) {
+            Balance d = new Balance();
+            d.mode = bal.has("mode") ? bal.get("mode").getAsString() : d.mode;
+            d.resolutionMg = num(bal, "resolutionMg", d.resolutionMg);
+            d.noiseMg = num(bal, "noiseMg", d.noiseMg);
+            d.settleS = num(bal, "settleS", d.settleS);
+            d.seed = bal.has("seed") ? bal.get("seed").getAsLong() : d.seed;
+            s.balance = d;
+        }
         s.validate();
         return s;
     }
@@ -291,6 +409,98 @@ public final class SimScene {
                 || vacuum.partialBandMm < 0 || tipRadiusMm < 0 || camera.noise < 0 || camera.blurPx < 0) {
             throw new IllegalArgumentException("negative time constant, noise, band, tip radius or blur");
         }
+        if (paste != null) {
+            Paste p = paste;
+            if (!(p.mRevMg > 0) || !(p.footprintC > 0) || !(p.footprintE > 0) || !(p.transferRatio > 0)
+                    || p.transferRatio > 1 || !(p.refillTauDots > 0) || !(p.idleFullS > 0) || !(p.feedLimitMgS > 0)) {
+                throw new IllegalArgumentException("paste: mRevMg, footprint c and e, refillTauDots, idleFullS and "
+                        + "feedLimitMgS must be > 0, transferRatio in (0, 1]");
+            }
+            if (p.ripple < 0 || p.cv < 0 || p.oozeFirst < 0 || p.refillDip < 0 || p.refillDip > 1 || p.idleDeadS < 0
+                    || p.threadShare < 0 || p.threadShare > 1 || p.threadFullMg < 0
+                    || p.threadZeroMg < p.threadFullMg || p.missBelowMg < 0 || p.landingSdMm < 0) {
+                throw new IllegalArgumentException("paste: negative ripple, cv, transient, idle, miss or landing sd, "
+                        + "refillDip or threadShare above 1, or threadZeroMg below threadFullMg");
+            }
+            if (p.landingBiasMm == null || p.landingBiasMm.length != 2 || p.n2OffsetMm == null
+                    || p.n2OffsetMm.length != 2) {
+                throw new IllegalArgumentException("paste: landingBiasMm and n2OffsetMm need 2 numbers");
+            }
+        }
+        Set<String> places = new HashSet<>();
+        for (Coupon k : coupons) {
+            if (k.place == null || k.place.trim().isEmpty() || !places.add(k.place)) {
+                throw new IllegalArgumentException("coupons: every coupon needs its own place name");
+            }
+            if (k.rect == null || !(k.rect[2] > k.rect[0]) || !(k.rect[3] > k.rect[1]) || !Double.isFinite(k.z)
+                    || !(k.massMg > 0)) {
+                throw new IllegalArgumentException("coupon " + k.place + ": needs a rect, a z and a massMg > 0");
+            }
+            checkBgr(k.bgr, "coupon " + k.place + ".bgr");
+        }
+        checkBgr(blankBgr, "blank.bgr");
+        if (balance != null) {
+            if (!Arrays.asList(BALANCE_MODES).contains(balance.mode)) {
+                throw new IllegalArgumentException("balance.mode '" + balance.mode + "' is not one of "
+                        + String.join(", ", BALANCE_MODES));
+            }
+            if (!(balance.resolutionMg > 0) || balance.noiseMg < 0 || balance.settleS < 0) {
+                throw new IllegalArgumentException("balance: resolutionMg must be > 0, noiseMg and settleS >= 0");
+            }
+        }
+    }
+
+    private static void checkBgr(int[] bgr, String what) {
+        if (bgr == null || bgr.length != 3) {
+            throw new IllegalArgumentException(what + " needs 3 numbers");
+        }
+        for (int v : bgr) {
+            if (v < 0 || v > 255) {
+                throw new IllegalArgumentException(what + " must be 0..255");
+            }
+        }
+    }
+
+    /** The paste block (§11.3); missing keys keep the defaults of {@link Paste}. */
+    static Paste pasteOf(JsonObject o) {
+        Paste p = new Paste();
+        p.mRevMg = num(o, "mRevMg", p.mRevMg);
+        p.ripple = num(o, "ripple", p.ripple);
+        p.ripplePeakDeg = num(o, "ripplePeakDeg", p.ripplePeakDeg);
+        p.cv = num(o, "cv", p.cv);
+        p.seed = o.has("seed") ? o.get("seed").getAsLong() : p.seed;
+        JsonObject f = obj(o, "footprint");
+        if (f != null) {
+            p.footprintC = num(f, "c", p.footprintC);
+            p.footprintE = num(f, "e", p.footprintE);
+        }
+        p.transferRatio = num(o, "transferRatio", p.transferRatio);
+        p.oozeFirst = num(o, "oozeFirst", p.oozeFirst);
+        p.refillDip = num(o, "refillDip", p.refillDip);
+        p.refillTauDots = num(o, "refillTauDots", p.refillTauDots);
+        p.idleFullS = num(o, "idleFullS", p.idleFullS);
+        p.idleDeadS = num(o, "idleDeadS", p.idleDeadS);
+        p.threadShare = num(o, "threadShare", p.threadShare);
+        p.threadFullMg = num(o, "threadFullMg", p.threadFullMg);
+        p.threadZeroMg = num(o, "threadZeroMg", p.threadZeroMg);
+        p.missBelowMg = num(o, "missBelowMg", p.missBelowMg);
+        p.maxGapMm = num(o, "maxGapMm", p.maxGapMm);
+        p.needleZOffsetMm = o.has("needleZOffsetMm") && !o.get("needleZOffsetMm").isJsonNull()
+                ? num(o, "needleZOffsetMm", 0) : null;
+        p.feedLimitMgS = num(o, "feedLimitMgS", p.feedLimitMgS);
+        p.landingSdMm = num(o, "landingSdMm", p.landingSdMm);
+        double[] bias = numbers(o, "landingBiasMm", 2);
+        if (bias != null) {
+            p.landingBiasMm = bias;
+        }
+        double[] n2 = numbers(o, "n2OffsetMm", 2);
+        if (n2 != null) {
+            p.n2OffsetMm = n2;
+        }
+        p.reportCount = o.has("reportCount") ? o.get("reportCount").getAsBoolean() : p.reportCount;
+        p.offsetSteps = o.has("offsetSteps") && !o.get("offsetSteps").isJsonNull()
+                ? Integer.valueOf(Math.floorMod(o.get("offsetSteps").getAsInt(), SimPaste.STEPS_PER_REV)) : null;
+        return p;
     }
 
     /**
@@ -362,15 +572,39 @@ public final class SimScene {
 
     /** What lies under a machine point: the board (on top), the blank, or the bed. */
     public enum Region {
-        BOARD, BLANK, BED
+        BOARD, COUPON, BLANK, BED
     }
 
+    /** The board on top, then a weigh coupon, then the blank, else the bed. */
     public Region regionAt(double x, double y) {
         Point2D.Double b = toBoard(x, y);
         if (onBoard(b.x, b.y)) {
             return Region.BOARD;
         }
+        if (couponAt(x, y) != null) {
+            return Region.COUPON;
+        }
         return onBlank(x, y) ? Region.BLANK : Region.BED;
+    }
+
+    /** The weigh coupon under a machine point, or null. */
+    public Coupon couponAt(double x, double y) {
+        for (Coupon k : coupons) {
+            if (k.contains(x, y)) {
+                return k;
+            }
+        }
+        return null;
+    }
+
+    /** The coupon on a named place, or null. */
+    public Coupon coupon(String place) {
+        for (Coupon k : coupons) {
+            if (k.place.equals(place)) {
+                return k;
+            }
+        }
+        return null;
     }
 
     /** N1 contact Z at a machine point, on the given region. */
@@ -379,6 +613,9 @@ public final class SimScene {
             case BOARD:
                 Point2D.Double b = toBoard(x, y);
                 return boardContactZ(b.x, b.y);
+            case COUPON:
+                Coupon k = couponAt(x, y);
+                return k != null ? k.z : bedZ;
             case BLANK:
                 return blankContactZ(x, y);
             default:
@@ -513,6 +750,14 @@ public final class SimScene {
             throw new IllegalArgumentException(name + " must have " + n + " numbers");
         }
         return r;
+    }
+
+    private static int[] bgr(JsonObject o, String name) {
+        double[] v = numbers(o, name, 3);
+        if (v == null) {
+            return null;
+        }
+        return new int[] {(int) Math.round(v[0]), (int) Math.round(v[1]), (int) Math.round(v[2])};
     }
 
     private static double[] row(JsonArray a) {
