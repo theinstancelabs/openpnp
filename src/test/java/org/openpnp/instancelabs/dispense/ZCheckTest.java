@@ -155,7 +155,7 @@ public class ZCheckTest {
         assertEquals("Z moved -0.70 mm at the home of " + ZCheck.clock(HOME_AT) + ": N1 touched the blank at X 322.00, "
                 + "Y 225.50 at Z 4.920, where it touched 5.620 at " + ZCheck.clock(BLANK_AT) + ". The needle frame, the "
                 + "touch-off and the surfaces are off by this (the needle by about twice). Record the needle frame "
-                + "again (Setup \u203a Needle Z frame), touch off, probe the blank and register the board again.",
+                + "again (Setup \u203a Needle Z frame), probe the blank, touch off and register the board again.",
                 i4.get(0));
         // the failed check stands even when the task would check Z itself
         assertEquals(i4, ZFrameTest.i4(check(c, HOME_AT, moved, true)));
@@ -341,5 +341,56 @@ public class ZCheckTest {
         // a failed check moves nothing
         ZCheck.Result moved = ZCheck.result(refs.get(0), refs.get(0).z + 0.5, home3 + 60_000, home3);
         assertFalse(ZCheck.restamp(c, ZCheck.vouch(moved, refs.get(0), c, null)));
+    }
+
+    /**
+     * Review 1 (machine safety), the way out of "Z moved" without another home: the needle frame recorded again
+     * after the home set the offset again, so it replaces the touch-off (which I4 then asks for, and which may run);
+     * the blank and the board, not measured again, still refuse until they are; after that a run passes.
+     */
+    @Test
+    public void aNeedleFrameRecordedAfterTheHomeReplacesTheTouchOff() {
+        DispenseConfig c = cfg();
+        ZCheck.Reference ref = ZCheck.references(c, ZFrameTest.SEAT, HOME_AT).get(5); // the blank's first point
+        ZCheck.Result moved = ZCheck.result(ref, 4.92, HOME_AT + 60_000, HOME_AT);
+        assertFalse(moved.pass);
+        // before: the touch-off is a stale datum of the touch-off run, and Z moved
+        Interlocks.Scope touchOff = DispenseService.blankScope(c, "blank", false, true, null);
+        assertEquals(java.util.Arrays.asList("the needle frame", "the touch-off", "the 'blank' surface"),
+                whats(ZCheck.stale(c, touchOff, HOME_AT)));
+        // the needle frame recorded again under this home (both contacts 0.70 mm lower)
+        c.needleAnchor = new DispenseConfig.NeedleAnchor(5.5 - 0.70, 2.91 - 0.70, null, null, HOME_AT + 120_000);
+        c.needleAnchor.homeAtMs = HOME_AT;
+        c.needleZOffsetMm = c.needleAnchor.offsetMm();
+        assertFalse(c.isNeedleTouchedOff());
+        assertTrue(ZCheck.touchOffReplaced(c));
+        assertEquals(Collections.singletonList("the 'blank' surface"), whats(ZCheck.stale(c, touchOff, HOME_AT)),
+                "the touch-off the frame replaced is no Z datum any more");
+        // the blank, not probed again, still refuses the touch-off: its Z moved
+        List<String> i4 = ZFrameTest.i4(ZFrameTest.check(c, null, touchOff, HOME_AT, moved));
+        assertEquals(1, i4.size(), i4.toString());
+        assertTrue(i4.get(0).startsWith("Z moved -0.70 mm"), i4.toString());
+        // probed again after the home: the touch-off runs
+        DispenseConfig.SurfaceMap blank = c.surfaces.get("blank");
+        blank.points = ZFrameTest.points(new double[][] {{322.0, 225.5, 5.62}, {360.0, 225.5, 5.60},
+            {340.0, 240.0, 5.61}}, -0.70);
+        blank.setAtMs = HOME_AT + 180_000;
+        blank.homeAtMs = HOME_AT;
+        assertEquals(Collections.emptyList(), ZFrameTest.i4(ZFrameTest.check(c, null, touchOff, HOME_AT, moved)));
+        // touched off: a board run still needs the board, not measured again since Z moved
+        c.needleZOffsetSetAtMs = HOME_AT + 240_000;
+        c.needleZOffsetHomeAtMs = HOME_AT;
+        assertTrue(c.isNeedleTouchedOff());
+        assertFalse(ZCheck.touchOffReplaced(c));
+        i4 = ZFrameTest.i4(check(c, HOME_AT, moved, false));
+        assertEquals(1, i4.size(), i4.toString());
+        assertTrue(i4.get(0).startsWith("Z moved -0.70 mm"), i4.toString());
+        // registered (probed) again: the run passes I4
+        DispenseConfig.SurfaceMap board = c.surfaces.get("board");
+        board.points = ZFrameTest.points(ZFrameTest.ZMAP, -0.70);
+        board.setAtMs = HOME_AT + 300_000;
+        board.homeAtMs = HOME_AT;
+        InterlockReport run = check(c, HOME_AT, moved, false);
+        assertTrue(run.ok(), run.toString());
     }
 }

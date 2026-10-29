@@ -395,6 +395,57 @@ public class DispenseServiceSimTest {
         assertTrue(i.toString().contains("Z moved 0.8"), i.toString());
     }
 
+    /**
+     * Review 1 (machine safety), I4: the way out of "Z moved" without another home. The run's Z check finds
+     * the move; the refusal's remedy then works for this home: the needle frame recorded again replaces
+     * the touch-off it set the offset over, the blank probed again lets the touch-off run (not before:
+     * the blank's stale Z would put the needle 0.8 mm off), and the board registered again lets the run go.
+     */
+    @Test
+    public void afterZMovedTheRemedyRecoversWithoutAnotherHome() throws Exception {
+        homeAgain(); // Z moved 0.80 mm at this home: every surface seals 0.80 mm higher than stored
+        FlatVacuum.install(sim, FlatVacuum.scene(5.45 + 0.80, new double[] {90, 70, 120, 95}, 5.6 + 0.80));
+        DispenseConfig fast = svc.getConfig();
+        FlatVacuum.fastTimings(fast);
+        svc.updateConfig(fast);
+        RunResult r = svc.runPlan(plan()).get(60, TimeUnit.SECONDS);
+        assertEquals(RunResult.Status.REFUSED, r.status, r.toString());
+        assertTrue(r.message.startsWith("I4: Z moved 0.7"), r.message); // the board: 6.375 for 5.600
+        assertTrue(r.message.endsWith("Record the needle frame again (Setup \u203a Needle Z frame), probe the blank, "
+                + "touch off and register the board again."), r.message);
+
+        // 1. the needle frame again: N1 and the needle on the blank, both 0.80 mm higher now
+        svc.setNeedleAnchor(5.5 + 0.80, 2.91 + 0.80, null, null);
+        svc.setDotImager(squashImager());
+        sim.server.mark();
+        RunResult early = svc.runNeedleTouchOff(new NeedleTouchOff.Request(), true).get(60, TimeUnit.SECONDS).run;
+        assertEquals(RunResult.Status.REFUSED, early.status, early.toString());
+        assertTrue(early.message.contains("Z moved 0.7"), "the blank still needs its touch: " + early.message);
+        assertNothingStreamed(sim.server.sinceMark());
+        // 2. the blank probed again after the home
+        svc.setSurface("blank", pts(new double[][] {{85, 35, 6.25}, {130, 35, 6.25}, {85, 50, 6.25},
+            {130, 50, 6.25}}), "probed again after Z moved");
+        // 3. the touch-off runs under its waiver
+        svc.setDotImager(squashImager());
+        DispenseService.TouchOffResult t = svc.runNeedleTouchOff(new NeedleTouchOff.Request(), true)
+                .get(60, TimeUnit.SECONDS);
+        assertEquals(RunResult.Status.OK, t.run.status, t.run.toString() + " " + t.run.interlocks);
+        assertTrue(t.applied && svc.getConfig().isNeedleTouchedOff());
+        // the board not registered again yet: still refused, the move named
+        svc.setDotImager(imager);
+        r = svc.runPlan(plan()).get(60, TimeUnit.SECONDS);
+        assertEquals(RunResult.Status.REFUSED, r.status, r.toString());
+        assertTrue(r.message.contains("Z moved 0.7"), r.message);
+        // 4. the board registered (probed) again: the run passes I4 and runs, with nothing left to check
+        svc.setSurface("board", pts(new double[][] {{95, 75, 6.4}, {115, 75, 6.4}, {95, 90, 6.4}, {115, 90, 6.4}}),
+                "registered again after Z moved", TOY_BOARD);
+        sim.server.mark();
+        r = svc.runPlan(plan()).get(60, TimeUnit.SECONDS);
+        assertEquals(RunResult.Status.OK, r.status, r.toString() + " " + r.interlocks);
+        assertEquals(null, r.zCheck, "every Z datum was measured after the home");
+        assertEquals(1, count(sim.server.sinceMark(), "M106 P2 S255"), "one pressure session");
+    }
+
     /** A plan made on another recipe is stale: anything that changes a dot changes its fingerprint. */
     @Test
     public void profileChangedAfterPlanningIsRefused() throws Exception {
