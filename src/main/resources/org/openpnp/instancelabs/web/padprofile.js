@@ -134,16 +134,18 @@
   /** Something the check depends on changed: plan again (the plan's check follows) or read the board file's again. */
   function refresh() {
     if (P.board) P.board.stale = true;
-    P.est = {};
+    staleEstimates();
     if (S.plan) IL.planRefreshSoon();
     IL.render();
   }
   IL.on('plan', (plan, prev) => {
     // a plan made after the board file was chosen (of any board) is the newer context
     if (P.src && plan && (!prev || prev.planId !== plan.planId) && plan.createdAtMs && IL.toClient(plan.createdAtMs) > P.src.atMs) setSource(null);
-    P.est = {};
+    if (!prev || !plan || prev.planId !== plan.planId) staleEstimates();
   });
-  IL.on('padtypes', () => { if (P.board) P.board.stale = true; P.est = {}; });
+  IL.on('padtypes', () => { if (P.board) P.board.stale = true; staleEstimates(); });
+  /** Read the summaries again, keeping the last answers meanwhile (a Start button never flickers to "Reading…"). */
+  function staleEstimates() { for (const e of Object.values(P.est)) e.at = 0; }
 
   // ================================================================================== actions
   /**

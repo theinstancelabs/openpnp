@@ -77,9 +77,14 @@ async function shoot(page, name, prep) {
 }
 const api = (page, method, p, body) => page.evaluate(([m, x, b]) => IL.api(m, x, b === null ? undefined : b, { timeoutMs: 120000 }), [method, p, body === undefined ? null : body]);
 const status = (page) => page.evaluate(() => IL.api('GET', '/api/status'));
-/** The two presses of a two-press button (§11): the second ≥ 300 ms after the first. */
+/** The two presses of a two-press button (§11): the second ≥ 300 ms after the first, once it asks for it. */
 async function press2(page, sel) {
-  await page.click(sel);
+  await page.waitForSelector(sel + ':enabled', { timeout: 15000 });
+  for (let i = 0; i < 2; i++) {
+    await page.click(sel);
+    if (await page.waitForSelector(sel + '.btn--press', { timeout: 2000 }).then(() => true, () => false)) break;
+    if (i === 1) throw new Error(sel + ' did not ask for a second press');
+  }
   await sleep(450);
   await page.click(sel);
 }
