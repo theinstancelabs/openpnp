@@ -2648,7 +2648,8 @@ Where the code differs from the sections above, the code is right:
   while the quick coarse reads at 5.25 stayed just above the threshold); the guard fired only after the one-step-higher
   release, exactly when that step held a partial seal, and rejected the true contact. A fine contact at or above the
   last open coarse step is now the surface. `VacuumProberTest.aRealProgressiveSealAboveTheLastOpenStepIsTheContact`
-  replays the real readings. On board 3 every point then needed the one-step-higher release and gave a contact.
+  replays the real readings. On board 3 every point then gave a contact (15 of 15 in three full probes), 14 of them
+  after the one-step-higher release.
 - **§4.4, the end of a point (F7, not changed).** Every point still ends with the bench's lift, then the vent
   (`G1 Z<travel>`, `M400`, `M107 P1`, `M107 P0`). On a surface that follows N1 (the loose blank) the lift carries it up.
   Proposal: vent, wait for the seal to let go, then lift; to be verified on the machine first (`REAL_MACHINE_TODO.md`

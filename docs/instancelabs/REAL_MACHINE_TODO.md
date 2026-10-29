@@ -4,9 +4,9 @@ The engine follows the bench recipe (`p18_board1`: 18 psi, half a screw turn per
 F9 Stop), and the simulator acceptance passes on it
 (`/home/lumen/instancelabs/sim-acceptance/bench-sync-20261028-003315/results.json`). Branch `il/bench-sync-autoreg`
 adds Register board (fiducials and the N1 vacuum probe), home at job start and the Z check
-(`AUTO_REGISTER_DESIGN.md`), the KiCad upload and the board drawing (`BOARD_IMPORT_DESIGN.md`), and the profile check
-and per-pad-type doses (`PROFILE_CALIBRATION_DESIGN.md`). The simulator cannot show the items below. Each one says
-why, and how to check it on the machine.
+(`AUTO_REGISTER_DESIGN.md`), the KiCad upload and the board drawing (`BOARD_IMPORT_DESIGN.md`), and per-pad-type
+doses (`PROFILE_CALIBRATION_DESIGN.md`; the profile check's API is built on `il/pc-api`, not merged yet). The
+simulator cannot show the items below. Each one says why, and how to check it on the machine.
 
 ## Next session, in this order
 
@@ -22,16 +22,17 @@ why, and how to check it on the machine.
 ## Real sessions of 2026-10-28/29 (automatic registration, board 3 and the blank)
 
 Session 2 (2026-10-28 23:57 – 10-29 00:22): jar `il/bench-sync-autoreg` 37fe1af46, config copy
-`~/instancelabs/realcfg-sw-20261028b`. Data: `~/instancelabs/runs/sw_session2/` (`register_b3_1.json`,
-`register_b3_2.json`, `blank_probe1.json`, `probe_300.32_245.5.json`, `looks/` with `looks/labels.json`,
-`OpenPnP_session2.log`; `dispense_session2.db` there is the main file without its WAL: it has no tables, so the PROBE
-records are only in the JSON results).
+`~/instancelabs/realcfg-sw-20261028b`. A real-mode start at 22:43 on b126fefb1 came first: the top camera snapshot
+was empty (no JPEG writer in that JVM; now a PNG, f7a8bd712). Data: `~/instancelabs/runs/sw_session2/`
+(`register_b3_1.json`, `register_b3_2.json`, `blank_probe1.json`, `probe_300.32_245.5.json`, `looks/` with
+`looks/labels.json`, `OpenPnP_session2.log`; `dispense_session2.db` there is the main file without its WAL: it has no
+tables, so the PROBE records are only in the JSON results).
 
 Session 3 (2026-10-29 03:00–04:30): jars 2df93ed3d (F1, F2, F4) and bdc9d2d31 (F6), config copy
 `~/instancelabs/realcfg-sw-20261029` (session 2's, with `vacuumProbe.alternates` 4). Data:
-`~/instancelabs/runs/sw_session3/` (`s2_home*.json`, `s3_register_probe*.json`, `s4_register_after_home.json`,
-`s4_register_r12_1.json`, `s4_register_r12_2.json`, `s4_register_z535_auto.json`, `s4_zcheck1.json`,
-`blank_325_2475.jpg`, `blank_305_250.jpg`, `openpnp_log/`).
+`~/instancelabs/runs/sw_session3/` (`s2_home*.json`, `s4_home3.json`, `s3_register_probe*.json`,
+`s4_register_after_home.json`, `s4_register_r12_1.json`, `s4_register_r12_2.json`, `s4_register_z535_auto.json`,
+`s4_zcheck1.json`, `blank_325_2475.jpg`, `blank_305_250.jpg`, `openpnp_log/`).
 
 Everything went through the web API; the live `~/.openpnp2` was not touched. No blank probe, touch-off or paste was
 done in session 3, on purpose.
@@ -40,14 +41,14 @@ done in session 3, on purpose.
 
 | What | Measured | Data |
 |---|---|---|
-| Home through `POST /api/machine/home` | 21 s (session 2), 22 s twice (session 3). Register board's own home first: 23.0 s. The engine's estimate is 25 s until it has timed a home. | session notes, `s2_home*.json`, `register_b3_1.json` (`home.seconds`) |
-| Fiducials of board 3 | 3 of 3 found, 1–3 frames each, centred to 0.2–2.4 px. Fit scale 1.0014 / 0.9940, the bench's fit of the same board 1.0016 / 0.9935. | `register_b3_1.json` |
+| Home through `POST /api/machine/home` | 21 s (session 2), 22 s each of the 3 homes of session 3. Register board's own home first: 23.0 s. The engine's estimate is 25 s until it has timed a home. | session notes (the answers `s2_home*.json` and `s4_home3.json` hold no time), `register_b3_1.json` (`home.seconds` 22.98) |
+| Fiducials of board 3 | Every fiducial within the search radius was found, in all 8 registrations of sessions 2 and 3: 1–3 camera frames each, centred to 0.25–2.9 px. Fit scale 1.0014 / 0.9940, the bench's fit of the same board 1.0016 / 0.9935. | `register_b3_*.json`, `s3_register_probe*.json`, `s4_register_*.json`; the fit `register_b3_1.json` |
 | Same seat | Re-registered without moving the board: fiducials re-found within 0.003–0.04 mm (seat tolerance 0.10 mm). | `register_b3_2.json`, `s3_register_probe2.json`, `s4_register_r12_2.json` |
 | Board 3 probe | 5 of 5 contacts, Z 5.25–5.50, plane residual 0.015 mm (limit 0.04), slope 0.0037 mm/mm, no alternate needed. | `s3_register_probe2.json` |
 | Z across an OpenPnP home | The same 5 points after a home: +0.025, +0.025, +0.025, +0.025, 0.000 mm. OpenPnP's homes repeat to one fine step (0.025 mm). | `s4_register_after_home.json` |
 | Same-seat check | Registered again at the same seat: the 3 stored points re-touched +0.025 mm each (tolerance 0.03): surface kept. | `s4_register_r12_2.json` |
-| N1 open air | Baselines −1.63 M to −1.67 M counts (window −1.90 M to −1.20 M); seal threshold 15 % ≈ 245–251 k counts. | the PROBE points |
-| Release | At every board point the last open coarse step held a partial seal for 1.5 s; each let go one coarse step (0.25 mm) higher, as designed. | the points' notes |
+| N1 open air | Baselines −1.63 M to −1.67 M counts (window −1.90 M to −1.20 M); seal threshold 15 % of the baseline ≈ 244–251 k counts. | the probe points (`baseline`, `drop`) |
+| Release | At 14 of the 15 board-3 contacts (the three full probes of session 3) the last open coarse step still held a partial seal after 1.5 s; each let go one coarse step (0.25 mm) higher, as designed. Point 3 of `s3_register_probe2.json` let go at once. | the points' notes in `s3_register_probe2.json`, `s4_register_after_home.json`, `s4_register_r12_1.json` |
 
 **The bench's Z frame is not OpenPnP's.** Board 3 sealed at about 5.3 in OpenPnP's frame where the bench measured
 4.50–4.55: about +0.8 mm (the bench saw 0.7 mm on 10-28). Since OpenPnP's homes repeat to 0.025 mm, the offset is the
@@ -66,11 +67,11 @@ bench's homing against OpenPnP's, not home to home. So:
 
 | | Finding | What it became | On the machine |
 |---|---|---|---|
-| F1 | The camera look refused 4 of 12 bare spots: glossy blank in the dark zone between the ring light's reflections (89–97 % "foreign") and board 3's scratched mask (54–60 %). It still refused every paste dot, the hole ring and the edge. | Fixed (fix-real1, 2df93ed3d): the spot is compared with a smooth colour field fitted to the ring, the threshold rises with the surface's texture, only solid patches count, and wide patches (0.4 mm across) 22 or more from the field count whatever the texture. All 20 real frames are test fixtures: bare 0–1.3 %, paste, holes and edges 25–87 %. | Session 3: board 3's corner spots read 0.0 %. Still to check: alternates near board 3's corner silkscreen and holes read 17–33 % in the first session-3 run (were they bare?), the blank's purge dots, and paste within ~35 of the mask on a mask as rough as board 3's at (37, 37) (a 0.7 mm dot 40 out reads 12 %; an edge across the spot only 6 %). Each PROBE record's look holds `rawShare`, `threshold` and `wideShare`: send any wrong call with its frame. |
+| F1 | The camera look refused 4 of 12 bare spots: glossy blank in the dark zone between the ring light's reflections (89–97 % "foreign") and board 3's scratched mask (54–60 %). It still refused every paste dot, the hole ring and the edge. | Fixed (fix-real1, 2df93ed3d): the spot is compared with a smooth colour field fitted to the ring, the threshold rises with the surface's texture, only solid patches count, and wide patches (0.4 mm across) 22 or more from the field count whatever the texture. All 20 real frames are test fixtures: bare 0–1.3 %, paste, holes and edges 25–87 %. | Session 3: board 3's corner spots read 0.0 %. Still to check: alternates near board 3's corner silkscreen and holes read 17–33 % in the first session-3 run (were they bare?), the blank's purge dots, and paste on a mask as rough as board 3's at (37, 37), where the threshold for small patches is 57 and only the wide patches see paste (a 0.7 mm dot 40 out of the mask reads 12 %, anything within 22 of the mask is not seen, an edge across the spot only 6 %). Each PROBE record's look holds `rawShare`, `threshold` and `wideShare`: send any wrong call with its frame. |
 | F2 | Without dots the board probe chose corners 2 mm in from the outline; target (2, 2) and both 2 mm alternates sat on ftp's corner mounting hole. | Fixed (2df93ed3d): without dots the corners sit 8 mm in; without board art a mounting hole is assumed in each corner; alternates step 5 mm and spread in direction (2 mm only where 5 mm is not free); `vacuumProbe.alternates` 4 by default. | Session 3: 5 of 5 first spots made contact. A saved `dispense-config.json` keeps its own `alternates` (session 2's had 2): set 4. With KiCad art the drills are kept out (the integration slice wires the art in). |
 | F3 | The loose, bowed blank: N1 sealed slowly from Z 6.5 to 5.5 and did not let go at 6.0 (the blank springs back with N1). The probe refused, correctly. The blank had also slid ~3 mm since the bench's purge records. | Physical: the blank must be held down. No software change. | Session 3: the Z check at the typed anchor on the blank (325, 247.5) refused "N1 did not let go of the surface within 1.5 s": the blank follows N1. It stayed in place afterwards (`blank_325_2475.jpg`). Hold it down, then probe it (item 29). |
 | F4 | FID1 was accepted 9.24 mm from its expected position with `searchRadiusMm` 8: the radius was measured from the prediction (FID2 and FID3 came first). | Fixed (2df93ed3d): the radius bounds the distance from the expected position (the board's last registration, else its nominal seat). | A board seated farther than the radius from its nominal stops with "FID1 not found within 8.0 mm of X …" (`s4_register_z535_auto.json`: board 3 is 9.2 mm off its nominal). Correct the board X/Y (Use camera X/Y on the board origin), or widen `fiducialCheck.searchRadiusMm` (session 3 used 12: FID1 in 3 iterations, 2 frames). |
-| F5 | The needle anchor was typed (5.5, K 64.50) for the d-band, not measured. | Unchanged; the frame offset above makes it wrong in OpenPnP's frame. | Touch off in OpenPnP's frame before any paste (item 7). |
+| F5 | The needle anchor was typed (5.5, K 64.50), not measured (`POST /api/needle/anchor` at 00:13:19): only so the probe had a needle-frame surface to check its contacts against. | Unchanged; the frame offset above makes it wrong in OpenPnP's frame. | Touch off in OpenPnP's frame before any paste (item 7). |
 | F6 | N1 seals build up over Z and time: open at 5.40, 1.78 M at 5.375, sealed at 5.325 / 5.30 on the fine pass, while the quick coarse reads at 5.25 stayed just above the threshold (1.872 vs 1.886 M). The guard "a fine contact must lie below the last open coarse step" rejected the true contact twice: no contact. | Fixed (bdc9d2d31): the guard is gone; a replay test uses the real readings. Likely also session 2's blank. | Session 3 afterwards: 5 of 5 contacts. Item 21 compares the fine contact with a slow manual descent. |
 | F7 | Every point ends with a lift to travel Z, then the vent (valve off, pump off). On a surface that follows N1 (the loose blank) the lift carries it up while N1 still holds it. | Not changed. Proposal: vent, wait for the seal to let go, then lift. | Item 22. |
 | F8 | Planning again with only the board Z changed (as the I4 refusal asks) dropped the stored registration (Z was part of the seat), so the next Register started from the nominal X/Y, and with F4 board 3 (9.2 mm off) failed NOT_FOUND. | Fixed (c2ad33aaf): the board Z is not part of the seat (X/Y, rotation, side and OpenPnP's transform are). The probe window and I4 use the plan's own board Z. | Plan board 3 again at a new Z: Register board must say "same seat". |
@@ -151,6 +152,8 @@ The fork ran in real mode on a **copy** of the config (`~/instancelabs/realcfg-s
      must be unchanged. Do not turn the screw without pressure to test it (it pulls in air). Instead, after the
      first engine session, `Count B` must equal the run's `bCountAtStart` plus the steps the session turned: the
      first purge dot's steps + 167 × 800.
+   - Done in the first session (table above): `G92` leaves `Count B` alone, and run 2 started where run 1's steps
+     ended.
 
 7. **Record the needle frame and touch off, in OpenPnP's frame.**
    - Why: the needle contact comes from the bench relation "needle contact raw Z = K − N1 contact Z" (K 65.59 on
@@ -267,8 +270,8 @@ has since run on the machine (sessions 2 and 3, no STOP during it); 16 is measur
       the tip. That last one confirms the relative limits (50 k, 60 k counts) against the ≥ 80 k of
       `tools/place.py:37`.
 21. **Seal and release.**
-    - Seen: seals build up over Z and time (F6); every board-3 point needed the one-step-higher release; contacts
-      5.25–5.55. The seal drop on mask was well past the 15 % threshold at contact.
+    - Seen: seals build up over Z and time (F6); 14 of the 15 board-3 contacts needed the one-step-higher release;
+      contacts 5.25–5.55. The seal drop on mask was well past the 15 % threshold at contact.
     - Still to check: at one spot, compare the fine contact with a slow manual descent (is the two-in-a-row fine rule
       unbiased?); the drop on bare copper; whether 1.5 s is always enough to let go on a held surface.
 22. **Vent before lift on a surface that follows N1 (F7).**
@@ -349,7 +352,8 @@ web UI (pc-web) are still to come. These items need the job or a test board.
 48. **Image tiles:** dot diameters near the frame edge against the centre (scale error ±3 % in Y, item 18).
 49. **Freshness window** (8 h, `doseRecordMaxAgeH`): does mass per step drift with paste age or barrel level?
 50. **Sustained feed** at 18 psi (2.56 mg/s seen with one-turn dots): where starving begins.
-51. **The coupon surface probe** without the frame check (§16 decision 1's frame rule does not apply to it).
+51. **The coupon surface probe** without the frame check (`AUTO_REGISTER_DESIGN.md` §16 decision 1's frame rule does
+    not apply to it).
 52. **The fine-pitch cap** (0.25 mm print) and the −25 %/+10 % band on SOIC-8, headers and PicoBlade after reflow
     (bridges counted).
 
@@ -381,3 +385,11 @@ ask, but each can explain a surprise on the machine.
   point left to touch (data measured after the home are not references).
 - **A STOP or failure during an engine home** leaves a stale start time: the next clean home from OpenPnP's own Home
   button is classed "a stop came during the last home" and Run homes again (harmless, 22 s).
+- **A run refused after its home and Z check.** The stream check runs last: a board with two pads of one part that
+  share a name (or have none) can be refused there ("a pad's dots are never split") although the plan, the estimate
+  and the interlocks accepted it; so is every run of a two-turn profile (a purge dot is capped at one revolution plus
+  the 20° phase turn), which the settings still accept. Keep the profile at one turn or less.
+- **"Test run with fewer dots" across a multi-dot pad** keeps the pad's full dot count, so the dose check (R6) does not
+  see that the pad gets fewer steps. Weigh or image only whole pads of such a test.
+- **An upload during a run.** The upload checks once, at its start, that the engine is idle; a run or a probe started
+  during the board file's reading (up to 20 s) is not refused. Do not start a run while the upload dialog reads a file.

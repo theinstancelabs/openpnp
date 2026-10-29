@@ -89,7 +89,7 @@ ends (max 10 min) and get `"result"` (RunResult view).
 | `POST /api/calibrations/dot-ladder` | `{rotationsDeg, repeats, pitchMm, locationName?, primeAtWaste?, wait?}` | Engine `runDotLadder` (requires I4 incl. the blank surface, and dot vision). |
 | `POST /api/calibrations/touch-off` | `{startGapMm, stepMm, steps, rotationDeg?, pitchMm?, locationName?, primeAtWaste?, jumpRatio?, apply?, wait?}` | Engine `runNeedleTouchOff` (the named I4 waiver; needs the needle frame and the blank surface). `rotationDeg` left out = one dot of the dispense profile (other partial turns vary with the screw angle and hide the squash). Refused if the lowest gap is below −0.1 mm. |
 | `GET /api/pad-types` | | Grouped by family in the §5.7 order (Chip, Small-outline discretes, Leaded ICs, No-lead ICs, Custom, others, Retired); per type: current version, status, pad, t, k, `dotsPerPad` (1, or a grid if the pad rule allows more dots on a large pad; on `il/pc-api` the type's own when it has a dose), `rotationPerDotDeg` (the profile's net turn, or the type's `dotSteps`) and `profileName`, stencil-equivalent volume/mass (information), pad rule, versions, last validated, whether the §5.7 rule lets it be dispensed. |
-| `POST /api/pad-types` | `{family, name, padWMm, padHMm, padRoundness?, layout?, pitchMm?, tMm?, k?, status?, packagePattern?, notes?, typeKey?}` | New type (key from family + name if not given) → 201. On `il/pc-api` also `dotSteps?`, `dotsPerPad?`, `calAreaMm2?`, `origin?` (`manual` \| `suggested`) and `mapping?` `{packageId, padNames?}` (written with the type); a dose below the tip's smallest is a 400; raising a type with its own dose to characterized needs a fresh camera check and a confirmed weighing at that dose (409 `status-evidence`). |
+| `POST /api/pad-types` | `{family, name, padWMm, padHMm, padRoundness?, layout?, pitchMm?, tMm?, k?, status?, packagePattern?, notes?, typeKey?}` | New type (key from family + name if not given) → 201. On `il/pc-api` also `dotSteps?`, `dotsPerPad?`, `calAreaMm2?`, `origin?` (`manual` \| `suggested`) and `mapping?` `{packageId, padNames?}` (written with the type); a dose below the tip's smallest is a 400; raising a type whose own dose differs from the profile's to characterized needs a fresh camera check and a confirmed weighing at that dose, and to validated a characterized version at that dose (409 `status-evidence`). |
 | `GET /api/pad-types/{key}` | | Current + full history. |
 | `PUT /api/pad-types/{key}` | any of the fields above | Appends version n+1 (nothing is overwritten). On `il/pc-api` a change of the pad or the dose writes origin `manual` and drops the calibration it had (`doseFp`, `massPerPadMg`). |
 | `DELETE /api/pad-types/{key}` | | **Retire** (append-only): new version in family "Retired", status not-started, no package pattern, so it is never matched or dispensed; history kept. |
@@ -331,9 +331,10 @@ Jargon is explained in tooltips (`title`/`abbr`).
   (`mvn -q -T1 -DskipTests package`), openpnp-uinav built, and Playwright in `$PLAYWRIGHT_DIR`
   (`npm i playwright && npx playwright install chromium-headless-shell`, browsers in `$PLAYWRIGHT_BROWSERS_PATH`).
   It drives the element ids of `UI_DESIGN.md` §16 (two-press buttons, the in-page run confirm, Recovery after STOP);
-  on `il/ar-webui` also Register board, the blank probe, home at run and Check Z (184 checks), and on `il/bi-web-flow`
-  `board-import.playwright.cjs` runs after it in the same session (44 checks: upload, save, replace, attach, Camera is
-  on FID1, the drawing under the plan, the inspector, the preview, the Records map, 1280 and 1024 px, dark theme).
+  on `il/ar-webui` also Register board, the blank probe, home at run and Check Z (184 checks in all), and on
+  `il/bi-web-flow` `board-import.playwright.cjs` runs after it in the same session (44 checks: upload, save, replace,
+  attach, Camera is on FID1, the drawing under the plan, the inspector, the preview, the Records map, 1280 and 1024 px,
+  dark theme).
   `boardview.playwright.cjs` (`run-boardview-test.sh`) checks the drawing on devproxy fixtures.
 - `src/test/sim/il_ui_session.py start --jar … --name …`: a seeded SIM session for UI work (machine homed, needle
   frame, blank surface and purge row, start angle, a planned board with its surface tied); `src/test/web/devproxy.py`
