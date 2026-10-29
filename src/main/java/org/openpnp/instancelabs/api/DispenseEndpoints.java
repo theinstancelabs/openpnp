@@ -778,9 +778,9 @@ final class DispenseEndpoints {
 
     /**
      * The board drawing of the plan, fixed now (a later replace or edit cannot put another drawing under these dots),
-     * read where OpenPnP's lists are read.
+     * read where OpenPnP's lists are read. Every place that makes a board plan calls it (also Register board's plan).
      */
-    private void artRef(DispensePlan plan, BoardLocation bl) throws Exception {
+    void artRef(DispensePlan plan, BoardLocation bl) throws Exception {
         Board board = bl.getBoard();
         if (board == null) {
             return;

@@ -148,7 +148,9 @@ final class RegistrationEndpoints {
         }
         Map<String, Object> src = new LinkedHashMap<>(e.source);
         src.put("registrationId", reg.id);
-        DispensePlan plan = svc.planBoard(dispense.baseBoardLocation(src), reg);
+        BoardLocation bl = dispense.baseBoardLocation(src);
+        DispensePlan plan = svc.planBoard(bl, reg);
+        dispense.artRef(plan, bl);
         PlanStore.Entry next = new PlanStore.Entry(plan, src);
         next.registrationRecord = reg;
         next.registrationFuture = e.registrationFuture;

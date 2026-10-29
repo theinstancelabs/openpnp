@@ -765,6 +765,12 @@ public class BoardImportSimTest {
         assertEquals("chip-0805", type.get("typeKey").getAsString());
         assertEquals("package-map", type.get("rule").getAsString());
         assertTrue(codes(pv).contains("PACKAGE_SUFFIXED"));
+        // a save that fails after step 3 takes the carried mapping back with the packages and parts
+        BoardImporter.failAfterStep = 3;
+        refused(saveRes(ftp, "ftp.kicad_pcb", "ftp", false, pv), 500, "internal");
+        BoardImporter.failAfterStep = 0;
+        assertNull(Configuration.get().getPackage("R_0603_1608Metric~2"));
+        assertFalse(svc.getDb().packageMappings().containsKey("R_0603_1608Metric~2"), "the mapping is undone");
         JsonObject saved = ok(saveRes(ftp, "ftp.kicad_pcb", "ftp", false, pv));
         assertEquals("R_0603_1608Metric~2-R_Small", byId(saved.getAsJsonArray("parts"), "id",
                 "R_0603_1608Metric~2-R_Small").get("id").getAsString());

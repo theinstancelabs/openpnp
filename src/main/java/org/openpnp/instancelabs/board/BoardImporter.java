@@ -1184,7 +1184,7 @@ public final class BoardImporter {
 
     /** KiCad's major version: generator_version when the file has it (KiCad 8 on), else the file format date. */
     static int kicadMajor(KicadPcb pcb) {
-        if (pcb.generatorVersion != null && pcb.generatorVersion.matches("\\d+(\\..*)?")) {
+        if (pcb.generatorVersion != null && pcb.generatorVersion.matches("\\d{1,3}(\\..*)?")) {
             return Integer.parseInt(pcb.generatorVersion.replaceFirst("\\..*", ""));
         }
         int v = pcb.version;
