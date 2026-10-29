@@ -33,9 +33,9 @@ import java.util.TreeSet;
  * <li>{@code outside}: what its type was calibrated for does not cover these pads (a note).</li>
  * </ol>
  *
- * <p>Decision 14: when no plan fits every pad of a group, the pads whose own neighbours leave no plan
- * are split off as a sub-group of their own, reason {@code tip} of kind {@link #TIP_NEAR}, and the
- * rest keeps its plan. Only the other pads of those parts become {@code part} (decision 4), not the
+ * <p>Decision 14: when the tip test or no plan fits every pad of a group, the pads whose own neighbours
+ * fail it are split off as a sub-group of their own, reason {@code tip} of kind {@link #TIP_NEAR}, and
+ * the rest keeps its plan. Only the other pads of those parts become {@code part} (decision 4), not the
  * package's.</p>
  *
  * <p>The check never adds or removes a flag: in a plan {@code blocking} is "some pad of the group is
@@ -195,6 +195,8 @@ public final class ProfileCheck {
         final Map<Integer, Suggester.DoseView> views = new HashMap<>();
         final Map<String, List<Anchor>> anchors = new HashMap<>();
         final Set<String> newKeys = new LinkedHashSet<>();
+        /** The openings that fail the tip test (§4.1) on their own. */
+        final Set<Integer> tipFails = new HashSet<>();
         final double dTip;
         final String typesFingerprint;
 
@@ -349,16 +351,15 @@ public final class ProfileCheck {
             if (g.idx.length == 0) {
                 continue;
             }
-            Map<Integer, List<double[]>> centre = new HashMap<>();
+            g.tipEval = tipEval(c, g.idx);
+            g.tipKind = tipKind(g.tipEval);
+            if (g.tipKind == null) {
+                continue;
+            }
             for (int i : g.idx) {
-                centre.put(i, Collections.singletonList(new double[] {0, 0}));
-            }
-            g.tipEval = c.nb.evaluate(g.idx, centre, c.dTip / 2, c.dTip / 2);
-            if (g.tipEval.dotGap < Limits.DOT_GAP_MARGINAL_MM - Limits.EPS) {
-                g.tipKind = TIP_PITCH;
-            }
-            else if (g.tipEval.copperGap < 0) {
-                g.tipKind = TIP_COPPER;
+                if (tipKind(tipEval(c, new int[] {i})) != null) {
+                    c.tipFails.add(i); // decision 14 splits these off when the group's other openings pass
+                }
             }
         }
         // §3.1 the neighbours' own dots: planned, else the usable type's plan, else the suggestion
@@ -440,22 +441,36 @@ public final class ProfileCheck {
         return c;
     }
 
+    /** §4.1 on some openings: their centre dots of the tip's smallest dose against every opening's. */
+    private static Neighbours.Eval tipEval(Ctx c, int[] idx) {
+        Map<Integer, List<double[]>> centre = new HashMap<>();
+        for (int i : idx) {
+            centre.put(i, Collections.singletonList(new double[] {0, 0}));
+        }
+        return c.nb.evaluate(idx, centre, c.dTip / 2, c.dTip / 2);
+    }
+
+    private static String tipKind(Neighbours.Eval e) {
+        return e.dotGap < Limits.DOT_GAP_MARGINAL_MM - Limits.EPS ? TIP_PITCH : e.copperGap < 0 ? TIP_COPPER : null;
+    }
+
     /**
-     * Decision 14: when no plan fits every pad of a group, the pads whose own neighbours leave no plan
-     * of their own become a sub-group ({@link #TIP_NEAR}) if the rest then has a plan; a group with a
-     * plan for every pad keeps its reason (a pad type for this size avoids the bridge, decision 11).
-     * Decision 4 then holds the parts of those pads whole: their other pads become a sub-group of
-     * reason {@code part}, unless the package is pasted partly.
+     * Decision 14: when the tip test (§4.1) or no plan fits every pad of a group, the pads whose own
+     * neighbours fail the tip test or leave no plan of their own become a sub-group ({@link #TIP_NEAR})
+     * if the rest then has a plan; a group with a plan for every pad keeps its reason (a pad type for
+     * this size avoids the bridge, decision 11), and a group whose every pad fails the tip test keeps
+     * it (the package's own pitch). Decision 4 then holds the parts of those pads whole: their other
+     * pads become a sub-group of reason {@code part}, unless the package is pasted partly.
      */
     private static void splitNear(Ctx c, Group g) {
-        if (g.tipKind != null || g.plan != null || g.idx.length < 2 || g.idx.length != g.members.size()) {
+        if (g.plan != null || g.idx.length < 2 || g.idx.length != g.members.size()) {
             return;
         }
         List<PadInstance> near = new ArrayList<>();
         for (int i : g.idx) {
             Group one = newGroup(c, g.key, Collections.singletonList(c.nb.pads.get(i)), g.family, g.allNames, g.split);
             one.target = g.target;
-            if (Suggester.search(c, one) == null) {
+            if (c.tipFails.contains(i) || Suggester.search(c, one) == null) {
                 near.add(c.nb.pads.get(i));
             }
         }
@@ -543,7 +558,7 @@ public final class ProfileCheck {
 
     /** Replaces a group by its sub-groups, in place, in the group list and its package's list. */
     private static void replace(Ctx c, Group g, List<Group> by) {
-        for (List<Group> l : Arrays.asList(c.groups, c.byPackage.get(g.packageIds.get(0)))) {
+        for (List<Group> l : Arrays.asList(c.groups, c.byPackage.get(Objects.toString(g.packageIds.get(0), "")))) {
             int at = l.indexOf(g);
             l.remove(at);
             l.addAll(at, by);

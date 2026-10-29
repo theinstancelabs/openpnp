@@ -613,9 +613,12 @@ public class RegistrationSimTest {
         sim.server.delayBeforeOkMs.clear();
         restart();
 
-        // the run after the STOP: N1 raised (Z only), G28, one Z-check touch, then the dots
+        // the run after the STOP: N1 raised (Z only), G28, one Z-check touch (all heights from one home), the dots
+        JsonObject zc = ok(get("/api/status")).getAsJsonObject("machine").getAsJsonObject("zCheck");
+        assertEquals(1, zc.get("touchesAfterHome").getAsInt(), zc.toString());
         sim.server.mark();
         JsonObject run = ok(post("/api/run", "{\"planId\":\"" + p1 + "\",\"wait\":true}"));
+        assertEquals(1, run.get("zCheckTouches").getAsInt(), run.toString());
         assertTrue(run.get("homeFirst").getAsBoolean(), run.toString());
         assertEquals("stopped", run.get("homeWhyCode").getAsString());
         assertTrue(run.get("zCheckFirst").getAsBoolean(), run.toString());
@@ -695,6 +698,9 @@ public class RegistrationSimTest {
         Res elsewhere = post("/api/plan", planBody(id3).replace("\"x\":" + NX, "\"x\":" + (NX + 1)));
         assertEquals(409, elsewhere.status);
         assertTrue(elsewhere.body.contains("belongs to another board or position"), elsewhere.toString());
+        // F8: only the board Z typed again (as I4 asks) keeps the registration
+        assertEquals(id3, ok(post("/api/plan", planBody("auto").replace("\"z\":" + NZ, "\"z\":" + (NZ - 0.85))))
+                .getAsJsonObject("registration").get("id").getAsString());
 
         // a fiducial moved in the board file: the record no longer applies (auto plans without it)
         org.openpnp.model.Placement fid2 = null;
@@ -843,6 +849,39 @@ public class RegistrationSimTest {
     }
 
     /**
+     * Review 1 (machine safety), I4: home 1 moved Z 0.70 mm; the board was registered (probed) after it,
+     * the needle frame, the touch-off and the blank were not; home 2 repeats home 1. Register board's 3
+     * same-seat touches agree, but they vouch only for the board's Z frame: the run still checks Z on the
+     * blank, which shows the move, and refuses before the pressure goes on.
+     */
+    @Test
+    public void aSameSeatCheckVouchesOnlyForTheBoardsZFrame() throws Exception {
+        ok(post("/api/machine/home", "{\"wait\":true}")); // home 1
+        SimScene shifted = scene(s1());
+        shifted.blankSurface = new SimScene.Plane(BLANK_Z - 0.70, 0, 0);
+        shifted.boardSurface = new SimScene.Plane(5.43 - 0.70, 0.0006, -0.0009);
+        scene = shifted;
+        JsonObject first = register(plan().get("planId").getAsString(), "{\"wait\":true}");
+        assertEquals("OK", first.get("status").getAsString(), first.toString());
+        String p1 = first.get("newPlanId").getAsString();
+        ok(post("/api/machine/home", "{\"wait\":true}")); // home 2 repeats home 1
+        JsonObject same = register(p1, "{\"wait\":true}");
+        assertEquals("same", same.get("seat").getAsString(), same.toString());
+        JsonObject check = same.getAsJsonObject("sameSeat");
+        assertTrue(check.get("pass").getAsBoolean() && check.get("zCheckStamped").getAsBoolean(), check.toString());
+        assertEquals(p1, same.get("newPlanId").getAsString());
+        sim.server.mark();
+        JsonObject result = post("/api/run", "{\"planId\":\"" + p1 + "\",\"wait\":true}").json().getAsJsonObject(
+                "result");
+        assertEquals("REFUSED", result.get("status").getAsString(), result.toString());
+        assertTrue(result.get("message").getAsString().startsWith("I4: Z moved -0.70 mm at the home of"),
+                result.toString());
+        List<String> l = commands(sim.server.sinceMark());
+        assertEquals(1, count(l, ControllerCommands.LEFT_VALVE_ON), "one touch, on the blank: " + l);
+        assertFalse(l.contains("M106 P2 S255") || l.contains("M106 P3 S255"), "the pressure never went on");
+    }
+
+    /**
      * §10.2 cases 9, 10, 11 and 13: a hole under a spot and paste on a spot each cost an alternate; a
      * target with no usable spot, a missing tip, a part on N1 and the simulator's timings on a
      * controller that is not the simulator are refused. A refused probe keeps the registration and the
@@ -861,7 +900,7 @@ public class RegistrationSimTest {
         String regId = first.get("registrationId").getAsString();
         long surfaceAt = boardSurfaceAt();
 
-        // holes under the target and both its alternates: refused, nothing saved, N1 lifted and vented
+        // holes under the target and all its alternates: refused, nothing saved, N1 lifted and vented
         t1 = firstProbeTarget(p1);
         for (JsonElement e : t1.getAsJsonArray("alternates")) {
             JsonObject a = e.getAsJsonObject();

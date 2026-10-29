@@ -223,15 +223,17 @@ public final class Interlocks {
     /**
      * I4, Z after a home: a home can move the Z zero (0.7 mm on 2026-10-28; the needle then moves
      * about twice that on the see-saw). The needle frame, the touch-off and the surfaces the scope
-     * uses, measured before the last home, are accepted only after a passing Z check for that home.
+     * uses, measured before the last home, are accepted only after a passing Z check for that home
+     * that vouches for each of them (touched a point in its Z frame).
      */
     static void checkZAfterHome(Inputs in, InterlockReport r, Scope sc) {
         if (in.homeFirst && in.zCheckFirst) {
             r.notes.add(ZCheck.checksFirstNote(in.lastHomeAtMs, true));
             return;
         }
-        List<ZCheck.Stale> stale = ZCheck.stale(in.cfg, sc, in.lastHomeAtMs);
-        if (stale.isEmpty() || ZCheck.accepts(in.zCheck, in.lastHomeAtMs)) {
+        List<ZCheck.Stale> stale = ZCheck.unchecked(in.zCheck, in.lastHomeAtMs, ZCheck.stale(in.cfg, sc,
+                in.lastHomeAtMs));
+        if (stale.isEmpty()) {
             return;
         }
         if (ZCheck.failed(in.zCheck, in.lastHomeAtMs)) {

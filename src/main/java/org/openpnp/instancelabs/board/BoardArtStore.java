@@ -237,6 +237,11 @@ public final class BoardArtStore {
         return i;
     }
 
+    /** True when the board has a KiCad drawing (its keep-outs and fiducial sizes are known, even if there are none). */
+    public synchronized boolean hasKicadArt(Board b) {
+        return kicadArt(b) != null;
+    }
+
     /** Keep-out circles {x, y, r} in board mm for the automatic probe; empty without KiCad art. */
     public synchronized List<KeepOut> keepOuts(Board b) {
         return KeepOut.of(kicadArt(b));

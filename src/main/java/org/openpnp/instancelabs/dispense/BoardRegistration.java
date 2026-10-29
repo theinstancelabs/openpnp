@@ -141,7 +141,7 @@ public class BoardRegistration {
     }
 
     /**
-     * Same board key, x/y/z/rotation within 1e-4, same side and the same OpenPnP transform, and every
+     * Same board key, x/y/rotation within 1e-4 (not z), same side and the same OpenPnP transform, and every
      * stored fiducial still where the board says ({@link #fiducialsMatch}): a board file replaced or
      * edited by hand that moved a fiducial must not keep planning with the old affine.
      *
@@ -238,9 +238,12 @@ public class BoardRegistration {
         return null;
     }
 
+    /**
+     * X/Y/rotation within 1e-4 and the same side. Not Z (F8): as in {@link DispenseService#boardRegistration},
+     * editing the board's nominal Z does not move the board; the probe and I4 check the plan's own board Z.
+     */
     private boolean sameSeat(Nominal n) {
         return Math.abs(nominal.x - n.x) <= 1e-4 && Math.abs(nominal.y - n.y) <= 1e-4
-                && Math.abs(nominal.z - n.z) <= 1e-4 && Math.abs(nominal.rotation - n.rotation) <= 1e-4
-                && Objects.equals(nominal.side, n.side);
+                && Math.abs(nominal.rotation - n.rotation) <= 1e-4 && Objects.equals(nominal.side, n.side);
     }
 }

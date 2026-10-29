@@ -51,8 +51,8 @@ final class DispenseEndpoints {
     static final String TEST_DOT_LOCATION = "waste-test-dot";
     /** Settings that only the needle endpoints may change (they record a needle_touchoff row). */
     static final java.util.Set<String> PROTECTED_SETTINGS = new java.util.HashSet<>(java.util.Arrays.asList(
-            "needleZOffsetMm", "needleZOffsetSetAtMs", "needleChangedAtMs", "needleAnchor", "surfaces",
-            "schemaVersion", "boardRegistrations", "newSeatAtMs"));
+            "needleZOffsetMm", "needleZOffsetSetAtMs", "needleZOffsetHomeAtMs", "needleChangedAtMs", "needleAnchor",
+            "surfaces", "schemaVersion", "boardRegistrations", "newSeatAtMs"));
     /** Protected settings that Register board and POST /api/board/new-seat stamp (not the needle's). */
     static final java.util.Set<String> REGISTRATION_SETTINGS = new java.util.HashSet<>(java.util.Arrays.asList(
             "boardRegistrations", "newSeatAtMs"));
@@ -134,6 +134,8 @@ final class DispenseEndpoints {
         pressure.put("engineRunActive", svc != null && svc.isBusy());
         out.put("pressure", pressure);
         out.put("run", ctx.tracker.snapshot());
+        PadCalibrationJob pcal = ctx.padCalJobs.current();
+        out.put("padCalibration", pcal == null || svc == null ? null : pcal.view());
         if (svc == null) {
             d.put("running", false);
             d.put("available", false);
@@ -932,7 +934,7 @@ final class DispenseEndpoints {
                 "homeWhyCode", home.whyCode, "homeWhy", home.why, "homeSinceMs", home.sinceMs, "homeEstimateS",
                 home.estimateS, "zCheckFirst", zCheckFirst, "zCheckReference", zc.reference == null ? null
                         : Views.map("name", zc.reference.name, "x", zc.reference.x, "y", zc.reference.y, "z",
-                                zc.reference.z));
+                                zc.reference.z), "zCheckTouches", zc.touches);
         return ApiContext.awaitIf(Json.bool(b, "wait", false), f, rr -> Views.run(rr, false), accepted);
     }
 

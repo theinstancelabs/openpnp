@@ -256,11 +256,15 @@
 
   // ================================================================================== done dots, phases (every poll)
   function saveDone() { ssSet('il.run.done', { planId: R.done.planId, idx: Array.from(R.doneSet), runIds: R.done.runIds.slice(-20), since: R.done.since || 0 }); }
+  /** The done dots belong to one plan: another plan (not carried over by carryBoard) starts with none. */
+  function doneFor(p) {
+    if (R.done.planId !== p.planId) { R.done = { planId: p.planId, idx: [], runIds: [], since: 0 }; R.doneSet = new Set(); saveDone(); }
+  }
   function trackDone(s) {
     const p = plan();
     const run = s.run;
     if (!p) return;
-    if (R.done.planId !== p.planId) { R.done = { planId: p.planId, idx: [], runIds: [], since: 0 }; R.doneSet = new Set(); saveDone(); }
+    doneFor(p);
     if (!run || run.label !== 'board' || !IL.planMatches(run.planId)) return;
     // "Next board" cleared the map: a run that ended before it belongs to the board taken off the machine
     if (R.done.since && run.startedAtMs && run.startedAtMs - S.skewMs < R.done.since) return;
@@ -444,7 +448,8 @@
     gate: (s) => IL.lockReason(s, { connected: true, engine: true }),
     run: () => IL.api('POST', '/api/machine/z-check', {}),
     ok: (r) => (r && r.needed === false ? 'Z needs no check: nothing was measured before the last home.'
-      : 'Checking Z: one N1 touch' + (r && r.reference ? ' on the ' + r.reference.name + ' at X ' + IL.fmt(r.reference.x, 1) + ', Y ' + IL.fmt(r.reference.y, 1) : '')
+      : 'Checking Z: ' + IL.zTouches(r && r.touches) + (r && r.reference ? (r.touches > 1 ? ', the first' : '') + ' on the ' + r.reference.name + ' at X '
+        + IL.fmt(r.reference.x, 1) + ', Y ' + IL.fmt(r.reference.y, 1) : '')
         + (r && isNum(r.estimatedSeconds) ? ', ≈ ' + IL.fmtSecs(r.estimatedSeconds) : '') + '.'),
   });
   // I7 on-time: a test run of the first N dots that fits the limit (90 % of it, after settle and purge)
@@ -658,7 +663,7 @@
         text = 'Dispensing · ' + (d ? 'next ' + d.padId : run.dotsDone + ' of ' + run.dotsPlanned);
       } else if (run.phase === 'dispensing') text = 'Pressure on · purge dots';
       else if (run.detail && run.detail.stage === 'home') text = 'Homing first · pressure off';
-      else if (run.detail && run.detail.stage === 'z check') text = 'Checking Z · one N1 touch';
+      else if (run.detail && run.detail.stage === 'z check') text = 'Checking Z · N1 touch';
       else text = 'Starting · waiting for OpenPnP motion';
       title = 'Board run in progress (' + (run.phase || '') + ')';
     } else if (regLive(s)) {
@@ -855,7 +860,9 @@
       if (dirty.size && !probe) all.push([1, layer('dirty', 'lg-dirty', 'paste found · ' + dirty.size)]);
       if (blocked) all.push([2, layer(null, 'lg-dirty', 'cannot dispense · ' + blocked)]);
       if (fids && fids.length) all.push([2.5, layer(null, 'lg-fid', 'fiducial · search ' + IL.fmt(fids[0].r, 0) + ' mm')]);
-      if (probe) all.push([3, layer(null, 'lg-probe', 'probe spot')], [4, layer(null, 'lg-area', 'probed area')]);
+      // no probe spot when the engine found none (Register board then says why): the legend names only what is drawn
+      if (probe && probe.targets && probe.targets.length) all.push([3, layer(null, 'lg-probe', 'probe spot')]);
+      if (probe) all.push([4, layer(null, 'lg-area', 'probed area')]);
       all.push([5, layer('dots', 'lg-dot', 'planned dot')]);
       if (done) all.push([6, layer(null, 'lg-done', 'dispensed · ' + done)]);
       all.push([7, layer('pads', 'lg-pad', 'pad')], [8, layer('path', 'lg-path', 'path')]);
@@ -873,7 +880,9 @@
         onclick: () => { if (R.hidden.has(x.key)) R.hidden.delete(x.key); else R.hidden.add(x.key); R.bv.layers(R.hidden); IL.render(); } },
       el('i', { class: 'lg ' + x.cls }), x.text)
       : el('span', {}, el('i', { class: 'lg ' + x.cls }), x.text))));
-    if (rebuilt && mode !== 'live' && mode !== 'stopped' && R.lgMax > 2 && n.legend.clientWidth && n.legend.scrollWidth > n.legend.clientWidth + 1) {
+    // down to the most important one: with the stage bar's picture and preview controls, two long items ("cannot dispense ·
+    // 149", "fiducial · search 8 mm") were cut at 1280 and 1440 px
+    if (rebuilt && mode !== 'live' && mode !== 'stopped' && R.lgMax > 1 && n.legend.clientWidth && n.legend.scrollWidth > n.legend.clientWidth + 1) {
       R.lgMax--;
       renderLegend(s, p, mode, dirty, chk, probe, posWrong, fids);
     }
@@ -1823,7 +1832,11 @@
     const sf = boardSurface(s);
     const tied = !!sf && sf.boundToBoard && IL.ready().items.find((x) => x.key === 'surface').state === 'ok';
     const surfPts = tied ? (sf.points || []).map((q) => (Array.isArray(q) ? { x: q[0], y: q[1] } : { x: q.x, y: q.y })) : [];
-    return { margin: st.margin, points: surfPts, targets: st.targets.map((t) => ({ x: t.x, y: t.y, alts: t.alts || [] })) };
+    // the engine found no bare spots (Register board is locked and says where): no numbered spots on the board, the
+    // client's fallback rectangle would draw them on pads or off the outline (by hand still lists them, for a person)
+    const rt = regTargets(st.p);
+    const targets = rt && rt.error ? [] : st.targets;
+    return { margin: st.margin, points: surfPts, targets: targets.map((t) => ({ x: t.x, y: t.y, alts: t.alts || [] })) };
   }
   /** The fiducial layer of the hero (g.pv-l-fids): expected search circles and the fiducials found. */
   function fidOverlay(s) {
@@ -1945,14 +1958,16 @@
     if (mode !== 'idle' || !p || R.byHand) return;
     const same = regSameSeatLikely(s, p);
     const sf = boardSurface(s);
-    const key = JSON.stringify([p.planId, !!t, t && t.probes.length, !!same, sf && sf.setAtMs]);
+    const alts = t ? Math.max(0, ...t.probes.map((q) => (q.alternates || []).length)) : 0;
+    const key = JSON.stringify([p.planId, !!t, t && t.probes.length, alts, !!same, sf && sf.setAtMs]);
     IL.keyed(box, key + (t && t.error ? 'e' : ''), () => {
       if (!t) return el('div', { class: 'notebox', text: 'This plan has no registration preview (an older plan): plan again.' });
       if (t.error || !t.probes.length) return null;   // the reason is under the button
       return el('div', { class: 'reg-expect' }, el('span', {}, same
         ? ['Same seat as ', el('b', { text: IL.fmtTime(same.atMs - S.skewMs) }), ' if every fiducial moved at most 0.10 mm: N1 re-touches 3 points of that surface. Else it probes ',
           el('b', { text: IL.plural(t.probes.length, 'spot') }), '.']
-        : ['N1 probes ', el('b', { text: IL.plural(t.probes.length, 'bare spot') }), ' (numbered on the board), with up to 2 nearby spots each when one is not bare.']));
+        : ['N1 probes ', el('b', { text: IL.plural(t.probes.length, 'bare spot') }), ' (numbered on the board)', alts
+          ? ', with up to ' + IL.plural(alts, 'nearby spot') + ' each when one is not bare.' : '.']));
     });
   }
   /** Running: the phases (§8.1 state 2) from status.run.detail. */
@@ -2538,7 +2553,7 @@
     if (rd.stage === 'z check' || rd.zCheck) {
       const z = rd.zCheck;
       ph.push({ st: rd.stage === 'z check' ? 'now' : 'done', t: 'Z check',
-        d: z && isNum(z.z) ? 'N1 touched Z ' + IL.fmt(z.z, 3) + ' mm, ' + IL.fmtSigned(z.deltaMm, 3) + ' mm from ' + IL.fmt(z.refZ, 3) : 'one N1 touch at a stored point', v: '' });
+        d: z && isNum(z.z) ? 'N1 touched Z ' + IL.fmt(z.z, 3) + ' mm, ' + IL.fmtSigned(z.deltaMm, 3) + ' mm from ' + IL.fmt(z.refZ, 3) : 'N1 touches a stored point', v: '' });
     }
     if (camKey || inCam || (cleanEnabled(s) && !disp)) {
       const n = run.dotsPlanned;
@@ -2869,12 +2884,14 @@
     const d = (s && s.dispense) || {};
     const zData = !!(d.needle && d.needle.anchor) || Object.keys(d.surfaces || {}).length > 0;
     const zS = zc && isNum(zc.estimateS) ? zc.estimateS : 20;
+    const zN = zc && zc.touchesAfterHome > 1 ? zc.touchesAfterHome : 1;
     if (h && h.needed) {
       return { home: true, z: zData, text: 'Homes first (' + IL.homeWhy(h) + '), ≈ ' + IL.fmtSecs(h.estimateS) + ': the head goes to its home corner and the top camera finds the homing fiducial. '
-        + 'The pressure stays off until homing is done.' + (zData ? ' Then one N1 touch checks Z (≈ ' + IL.fmtSecs(zS) + ').' : '') };
+        + 'The pressure stays off until homing is done.' + (zData ? ' Then ' + IL.zTouches(zN) + (zN > 1 ? ' check' : ' checks') + ' Z (≈ ' + IL.fmtSecs(zS * zN) + ').' : '') };
     }
     if (zc && zc.needed && zc.reference) {
-      return { home: false, z: true, text: 'Checks Z first: one N1 touch on the ' + zc.reference.name + ' (≈ ' + IL.fmtSecs(zS) + '), because the N1 heights predate the home at '
+      return { home: false, z: true, text: 'Checks Z first: ' + IL.zTouches(zc.touches) + (zc.touches > 1 ? ', the first' : '') + ' on the ' + zc.reference.name
+        + ' (≈ ' + IL.fmtSecs(zS * Math.max(1, zc.touches || 0)) + '), because the N1 heights predate the home at '
         + IL.fmtTime((zc.homeAtMs || Date.now() + S.skewMs) - S.skewMs) + '.' };
     }
     return null;
@@ -2937,6 +2954,9 @@
   IL.on('plan', (p, prev) => {
     if (p && prev && prev.planId !== p.planId) IL.safe(() => carryBoard(prev, p), 'carry board');
     if (p && (!prev || prev.planId !== p.planId)) {
+      // before the render that follows: the last plan's done dots are not this plan's (the hero drew them on the new
+      // plan's dots, or failed on an index past its last dot, until the next status)
+      doneFor(p);
       formFromPlan(p);
       R.showAllDirty = false;
       if (R.bv) R.bv.setPlan(p, { origin: originOf(p) });

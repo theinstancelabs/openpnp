@@ -79,6 +79,8 @@ final class MachineEndpoints {
         String reason = "STOP pressed in the web UI";
         DispenseService svc = ctx.svcOrNull();
         boolean engineWasBusy = svc != null && svc.isBusy();
+        // a pad calibration first: it queues no further engine step once its stop flag is set (§7.8)
+        ctx.padCalJobs.stop(reason);
         if (svc != null) {
             svc.abort(reason);
             actions.add(engineWasBusy
@@ -257,6 +259,8 @@ final class MachineEndpoints {
             home.put("n1Low", n1 != null && n1[1] > 0);
             s.put("home", home);
             DispenseService.ZCheckPlan zc = svc.zCheckPlan(null, false);
+            // a board run's check after the home it does first (every height predates it): what Run announces
+            DispenseService.ZCheckPlan za = svc.boardRunZCheckPlan(true);
             List<Map<String, Object>> stale = new ArrayList<>();
             for (org.openpnp.instancelabs.dispense.ZCheck.Stale x : zc.stale) {
                 stale.add(Views.map("what", x.what, "atMs", x.atMs));
@@ -264,7 +268,7 @@ final class MachineEndpoints {
             s.put("zCheck", Views.map("needed", zc.needed, "stale", stale, "homeAtMs", zc.homeAtMs, "reference",
                     zc.reference == null ? null : Views.map("name", zc.reference.name, "x", zc.reference.x, "y",
                             zc.reference.y, "z", zc.reference.z), "last", zc.last, "estimateS",
-                    DispenseService.PROBE_POINT_ESTIMATE_S));
+                    DispenseService.PROBE_POINT_ESTIMATE_S, "touches", zc.touches, "touchesAfterHome", za.touches));
         }
         List<Map<String, Object>> drivers = new ArrayList<>();
         for (Driver d : m.getDrivers()) {

@@ -3,6 +3,7 @@ package org.openpnp.instancelabs.dispense;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -52,6 +53,17 @@ public final class BoardFeatures {
     public final List<String> warnings = new ArrayList<>();
 
     public static BoardFeatures of(Board board, PadTypeResolver resolver) {
+        return of(board, resolver, null);
+    }
+
+    /**
+     * The features, with the fiducial sizes of the board's drawing where it has them.
+     *
+     * @param fiducialHints fiducial name -> {copper, mask} diameter in mm from the board's KiCad drawing
+     *        (BOARD_IMPORT_DESIGN.md §10.2 item 4); null, or a name it lacks: from the footprint or the package
+     *        name ({@link #fiducialSize})
+     */
+    public static BoardFeatures of(Board board, PadTypeResolver resolver, Map<String, double[]> fiducialHints) {
         BoardFeatures f = new BoardFeatures();
         f.boardName = board.getName();
         f.fileName = board.getFile() == null ? null : board.getFile().getName();
@@ -67,7 +79,9 @@ public final class BoardFeatures {
             fd.name = p.getId();
             fd.x = l.getX();
             fd.y = l.getY();
-            double[] d = fiducialSize(p.getPart());
+            double[] hint = fiducialHints == null ? null : fiducialHints.get(p.getId());
+            double[] d = hint != null && hint.length >= 2 && hint[0] > 0 ? new double[] {hint[0], Math.max(hint[1],
+                    hint[0])} : fiducialSize(p.getPart());
             fd.diameterMm = d[0];
             fd.maskDiameterMm = d[1];
             f.fiducials.add(fd);

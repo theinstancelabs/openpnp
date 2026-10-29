@@ -104,6 +104,16 @@
     return lim ? 'pad over ' + IL.fmt(lim, 2) + ' mm²: ' + n + ' dots in a grid' : n + ' dots in a grid';
   }
 
+  /**
+   * Text with a line-break chance after each "_": a long KiCad name (VQFN-32-1EP_5x5mm_P0.5mm_EP3.254x3.254mm) wraps between
+   * its fields, not inside "3.254mm"; <wbr> adds nothing to the copied text.
+   */
+  function setBreakable(node, text) {
+    if (!node || node.dataset.t === text) return;
+    node.dataset.t = text;
+    node.replaceChildren(...text.split(/(?<=_)/).flatMap((x, i) => (i ? [el('wbr'), x] : [x])));
+  }
+
   /** Opens the inspector on a pad (or a part: its first pad in path order; drawn-only parts have none). */
   function open(target, opts) {
     const p = plan();
@@ -238,7 +248,7 @@
     IL.setText(head.firstChild, sel.ref);
     const pkg = (pad && pad.packageId) || (part && part.packageId) || (ap && ap.pkg) || '';
     const partId = (pad && pad.partId) || (ap && ap.pkg && ap.value ? ap.pkg + '-' + ap.value : null);
-    IL.setText(head.lastChild, [pkg ? 'package ' + pkg : null, [partId ? 'part ' + partId : null,
+    setBreakable(head.lastChild, [pkg ? 'package ' + pkg : null, [partId ? 'part ' + partId : null,
       IL.plural(pads.length || (ap ? ap.pads || 0 : 0), 'pad').replace(' ', '\u00a0')].filter(Boolean).join(' · ')].filter(Boolean).join('\n'));
     // the zoomed drawing: the part's box (drawing or pads) and 1 mm around it; its dots numbered in path order
     const v = M.view;

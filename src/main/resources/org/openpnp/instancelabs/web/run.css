@@ -325,5 +325,8 @@ body:has(#ws-run:not([hidden])) #panel[data-view="recovery"] li[data-step="decid
 .reg-expect { display: flex; gap: 9px; align-items: flex-start; font-size: 14px; line-height: 1.42; color: var(--ink); }
 .reg-expect .ic { width: 17px; height: 17px; margin-top: 2px; color: var(--ink-3); flex: none; }
 .reg-expect b { font-weight: 650; }
-/* the interlock line under the readiness bar: one line, the full text in its title */
-.ready-sub__t { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* the interlock line under the readiness bar: wraps rather than cut ("… · 3 not fitted" did not fit the panel at
+   1280 or 1440 px), "All 13" stays on its first line */
+#plan-interlocks { align-items: flex-start; }
+.ready-sub__t { min-width: 0; white-space: normal; }
+#plan-interlocks .link { flex: none; }

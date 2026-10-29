@@ -257,6 +257,21 @@ rep.done = true; rep.seconds = …
 
 What it costs: one N1 touch, ≈ 20 s, only after a home, and only when Z data predate that home.
 
+**Z frames (review 1, machine safety).** A touch proves only that the frame its point was measured in equals the
+frame now; a home between two older data may have moved Z (the bench's frame vs OpenPnP's: 0.8 mm). So:
+
+- every Z datum stores the home it was measured under (`needleAnchor.homeAtMs`, `needleZOffsetHomeAtMs`,
+  `SurfaceMap.homeAtMs`; `HomeTracker.frameHomeAtMs()`: the last home seen, else the service start). The touch-off's is
+  protected like `needleZOffsetSetAtMs`;
+- a passing touch vouches for the data of its point's frame and for its own datum (`ZCheck.vouch`, `Result.covers`).
+  A datum of unknown frame (saved before this) vouches only for itself, so a lone touch-off of unknown frame cannot be
+  checked: record the needle frame again and touch off;
+- stale data are accepted only when a pass for this home covers each of them. The check touches one point per frame
+  among them (the first bare one), in the reference order above; a datum with no point of its frame left is refused
+  before anything moves;
+- a passing touch moves the data it vouched for to its home (`ZCheck.restamp`, saved), so after the next home one touch
+  is enough again. The same-seat stamp follows the same rules.
+
 ### 2.5 Where homing happens
 
 `homeIfNeeded` is called from:
@@ -540,7 +555,7 @@ public class BoardRegistration {
   public AffineTransform transform();
   /** A copy of the nominal board location carrying this transform (the original is never changed). */
   public BoardLocation applyTo(BoardLocation nominal) throws NoninvertibleTransformException;
-  public boolean matches(String boardKey, Nominal n);          // key equal, x/y/z/rotation within 1e-4, same side, same openPnpTransform
+  public boolean matches(String boardKey, Nominal n);          // key equal, x/y/rotation within 1e-4 (not z: F8), same side, same openPnpTransform
   public double maxMovedMm(List<Fid> now);                     // max |found now − found here| over common names
 }
 ```
@@ -2602,3 +2617,78 @@ safe zone (an automatic home is then harmless), and stays needed, showing N1's Z
     board art with drills, vias and copper. `ProbeTargets` must accept an optional list of extra keep-out circles
     (`{x, y, r}` in board mm) so the art can feed it later without changing its contract; the SIM renderer must take
     its fiducials and pads from the board (placements/footprints), not from hard-coded ftp geometry.
+
+---
+
+## 17. As built (2026-10-29)
+
+What is merged on `il/bench-sync-autoreg` (b81d73d21): wave 1 (vision, sim, engine-core), tasks-api, the fixes from
+the real sessions of 2026-10-28/29 (F1, F2, F4, F6, F8; `REAL_MACHINE_TODO.md` has the findings) and review 1. The
+web-ui slice is built on `il/ar-webui` (184 Playwright checks) and is merged with BI's web-flow by the AR + BI
+integration slice, which also wires the board art's keep-outs into `ProbeTargets` (§16 item 10; until then the API
+passes none, so a board without art gets the assumed corner holes below). The API as built is in `WEB_API.md` §3.2.
+Where the code differs from the sections above, the code is right:
+
+- **§3.3, the search bound (F4).** `searchRadiusMm` bounds the distance of a mark from the fiducial's **expected**
+  position (the board key's last registration when it still applies, else the nominal seat, §3.7), not from the
+  prediction. The prediction (moved by the first find, then the similarity of two) only places the search frames. A
+  mark that centring carries past the bound is not found either. The failure names the expected position: `REG: FID1
+  not found within 8.0 mm of X 352.11, Y 108.55 (3 camera frames). …`. On the machine a first registration of board 3,
+  which sits 9.2 mm off its nominal, needs the board X/Y corrected or the radius widened (12 worked). §3.7's "from the
+  prediction" reads "from the expected position".
+- **§3.6, the seat (F8).** `BoardRegistration.matches` compares the board key, X/Y/rotation within 1e-4, the side,
+  OpenPnP's transform and the stored fiducials' board coordinates, **not the board Z**, as
+  `DispenseService.boardRegistration` already did. Planning again with only a new board top Z (what the I4 band refusal
+  asks for) keeps the stored registration; the probe window and I4 use the plan's own board Z.
+- **§2.4, Z frames (review 1).** Every Z datum carries the home it was measured under, and a passing touch vouches
+  only for data of its own frame (the paragraph "Z frames" in §2.4). The run, Check Z and the same-seat check all
+  follow it; a datum with no point of its frame left is refused before anything moves.
+- **§4.4, a progressive seal (F6).** The guard "a fine contact must lie below the last open coarse step" is gone. Real
+  N1 seals build up over Z and time (board 3: open at 5.40, 1.78 M at 5.375, sealed at 5.325 / 5.30 on the fine pass,
+  while the quick coarse reads at 5.25 stayed just above the threshold); the guard fired only after the one-step-higher
+  release, exactly when that step held a partial seal, and rejected the true contact. A fine contact at or above the
+  last open coarse step is now the surface. `VacuumProberTest.aRealProgressiveSealAboveTheLastOpenStepIsTheContact`
+  replays the real readings. On board 3 every point then gave a contact (15 of 15 in three full probes), 14 of them
+  after the one-step-higher release.
+- **§4.4, the end of a point (F7, not changed).** Every point still ends with the bench's lift, then the vent
+  (`G1 Z<travel>`, `M400`, `M107 P1`, `M107 P0`). On a surface that follows N1 (the loose blank) the lift carries it up.
+  Proposal: vent, wait for the seal to let go, then lift; to be verified on the machine first (`REAL_MACHINE_TODO.md`
+  item 22).
+- **§4.5, the look (F1).** The reference is no longer the ring's median colour but a smooth colour field fitted to the
+  ring (per BGR channel a quadratic in x and y, least squares over the half of the ring pixels nearest to it, refitted
+  4 times), so the ring light's shading on glossy mask and blank belongs to the surface. Then:
+  - **texture** = the median distance of that nearest half from the field; a pixel differs above
+    max(`colourDelta` 18, `textureFactor` 4 × texture), so on a rough mask only what stands out of the texture counts;
+  - **solid patches**: differing pixels count only in patches that hold a disc of radius 0.10 mm (a 3 × 3 majority
+    vote, then an opening); texture, scratches and thin print drop out;
+  - **wide patches**: pixels 22 or more from the field (`wideDelta`) count whatever the texture in patches that hold a
+    disc of radius 0.20 mm (0.4 mm across), so a rough mask cannot hide a paste dot, a part, a hole's ring or an edge;
+  - not bare above a foreign share of 5 % of the 1.0 mm disc, or a **ring spread** (the median BGR distance of the
+    ring from its median colour) above 50: shading reads up to 24, board 3's scratched mask with two parts in the ring
+    38, the blank's edge 76.
+
+  All 20 labelled real frames of 2026-10-29 are test fixtures: bare spots read 0–1.3 %, paste, holes and edges
+  25–87 %. The PROBE record's look also holds `rawShare`, `threshold` and `wideShare`; the API's `look` stays
+  `{bare, foreignShare, ringSpread, reason}`.
+- **§4.6, board targets (F2).** Without dots the ideal corners sit **8 mm** inside the outline (`CORNER_INSET_MM`, the
+  bench's ftp spots), not on the bbox of nothing. Without board art a mounting hole is **assumed in each corner** of an
+  outline of at least 20 mm: centre 4.5 mm in from both edges, ring radius 3.2 mm, kept out like every feature. Step 7
+  reads: alternates on rings of **5 mm and 2 mm**, every 30°, at least 2 mm from the target and each other; the first
+  on the 5 mm ring (keeping the hull if it can), each next one on the outermost ring left and as far in direction from
+  those taken as it can be, so a hole on one side of a target cannot take every alternate; 2 mm only where 5 mm is not
+  free. Explicit blank targets keep their alternates 2 mm either side in X.
+- **§6.1, settings.** `vacuumProbe.alternates` defaults to **4** (valid 0..4; a saved file keeps its own value). The
+  rest of the table stands. `fiducialCheck.searchRadiusMm` is checked against the 9-frame cap at the default camera
+  size (1920 × 1080 at 0.01068 × 0.01073 mm/px) in `validate()`, and at the real camera's size inside the task.
+- **Departures accepted during the build.** `FiducialDetector` keeps only marks brighter than their ring (contrast > 0:
+  drops dark via centres). `VacuumProber` releases one coarse step higher when the last open step does not let go
+  (verified on `runs/serial.log`). `BoardRegistration.matches` also compares the fiducials' board coordinates (a
+  board file edited to move a fiducial must not keep the old affine). Purge dots keep the anchor's needle floor; work
+  dots use the lower of the anchor and the board's reference (§16 item 1). `POST /api/plan` refuses a board top Z
+  more than 2.0 mm from the needle-frame surface (`MAX_BOARD_Z_FROM_ANCHOR_MM`).
+- **Not built or not covered.** No endpoint clears the needle anchor. §10.2 cases 3 (surface changed by +0.08 → full
+  probe), 6 (5 mm / −4.6° re-seat), 8 (fit against the previous registration), 12 (release lag 0.4 s), 15 (job board:
+  no headless seam) and 22 (a run with a simulated surface on a Marlin link) have no `RegistrationSimTest` case; the
+  engine-core and vision unit tests cover the code paths. Review 1's open minors (the probe floor of a board far below
+  the anchor, frames against the acceptance circle, the rotation-dependent fit check, the camera look's mm/px) are
+  listed in `REAL_MACHINE_TODO.md` for the final fix round.

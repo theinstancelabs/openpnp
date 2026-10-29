@@ -122,7 +122,7 @@
     const labels = { lb1: Infinity, lb2: Infinity, lb3: Infinity };
     for (const p of art.parts || []) {
       if (!p || !p.ref || p.kind === 'bottom') continue;
-      let x, y, a, h;
+      let x, y, a, h, fab = false;
       if (p.label && Number.isFinite(Number(p.label.x))) {
         x = Number(p.label.x); y = Number(p.label.y); a = upright(p.label.a); h = Number(p.label.h) || 1;
       } else if (p.pads !== undefined && p.pads !== null && Number(p.pads) === 0) {
@@ -135,11 +135,12 @@
         y = p.y + cx * Math.sin(r) + cy * Math.cos(r);
         a = upright(Math.abs(b[3] - b[1]) > Math.abs(b[2] - b[0]) ? (Number(p.a) || 0) + 90 : p.a);
         h = Math.max(LABEL_MIN, Math.min(LABEL_MAX, 0.45 * Math.min(Math.abs(b[2] - b[0]), Math.abs(b[3] - b[1]))));
+        fab = true;   // not printed on the board: drawn fainter than the silkscreen (board.css)
       }
       const cls = labelBucket(h);
       const k = cls.slice(3);
       labels[k] = Math.min(labels[k], h);
-      const n = svg('text', { class: cls, transform: textAt(x, y, a), 'font-size': f(h * 1.4), 'data-ref': p.ref });
+      const n = svg('text', { class: cls + (fab ? ' pv-a-ref--fab' : ''), transform: textAt(x, y, a), 'font-size': f(h * 1.4), 'data-ref': p.ref });
       n.textContent = p.ref;
       refs.appendChild(n);
     }

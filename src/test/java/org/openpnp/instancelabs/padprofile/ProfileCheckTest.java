@@ -10,6 +10,8 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 
 import org.junit.jupiter.api.Test;
 
@@ -179,6 +181,59 @@ public class ProfileCheckTest {
         assertEquals("No pad type for " + usb + " (1.63 × 2.13 mm openings, 4 pads on 1 part): these pads get no paste "
                 + "until a pad type is chosen. The other pads of " + usb + " (0.80 mm apart) cannot be dispensed with this "
                 + "tip: paste these only if you solder those pins by hand.", tabs.reasonText);
+    }
+
+    /** Two SOT-223 parts (pins 1-3 and tab 4, nano openings) at (x, y). */
+    static List<PadInstance> sot223(String ref, double x, double y) {
+        List<PadInstance> l = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            l.add(new PadInstance(ref, "SOT-223", String.valueOf(i + 1), x - 2.3 + 2.3 * i, y - 3.15, 0, 1.067, 2.083, 0));
+        }
+        l.add(new PadInstance(ref, "SOT-223", "4", x, y + 3.15, 0, 3.448, 2.048, 0));
+        return l;
+    }
+
+    /**
+     * Decisions 14 and 4: a 0603 pad 1.10 mm from U1 pin 1 fails the tip test there only; U1 pin 1 is
+     * its own sub-group and holds U1 whole, while U2 (same package, nothing near) keeps its plan.
+     */
+    @Test
+    public void aNeighbourTooCloseHoldsBackItsPartNotThePackage() {
+        List<PadInstance> pads = sot223("U1", 100, 80);
+        pads.addAll(sot223("U2", 130, 80));
+        pads.addAll(part("R9", "R_0603_1608Metric", 95.775, 76.85, 0.8, 0.95, 50, 0.825, -0.825));
+        ProfileCheck.Result r = ProfileCheck.of(PadFixtures.inputs(pads));
+        Set<String> near = new TreeSet<>();
+        Set<String> part = new TreeSet<>();
+        for (ProfileCheck.Group g : r.groups) {
+            if (ProfileCheck.TIP.equals(g.reason)) {
+                assertEquals(ProfileCheck.TIP_NEAR, g.tipKind, g.label);
+                assertTrue(g.blocking);
+                near.addAll(g.padIds);
+            }
+            else if (ProfileCheck.PART.equals(g.reason)) {
+                part.addAll(g.padIds);
+            }
+            else {
+                assertEquals(ProfileCheck.NO_TYPE, g.reason, g.label);
+                assertFalse(g.partial, g.label);
+            }
+        }
+        assertEquals(new TreeSet<>(Arrays.asList("U1.1", "R9.1")), near);
+        assertEquals(new TreeSet<>(Arrays.asList("U1.2", "U1.3", "U1.4", "R9.2")), part);
+        ProfileCheck.Group pin = r.groups.stream().filter(g -> g.padIds.equals(Collections.singletonList("U1.1")))
+                .findFirst().get();
+        assertEquals(Integer.valueOf(6), pin.nearOf);
+        assertEquals("R9 pad 1", pin.bridgeTo);
+        assertTrue(pin.reasonText.startsWith("1 of 6 pads is too close to a neighbour: "), pin.reasonText);
+        // the package pasted partly: U1's other pads keep the plan too
+        CheckInputs in = PadFixtures.inputs(pads);
+        in.pastePartialPackages.add("SOT-223");
+        for (ProfileCheck.Group g : ProfileCheck.of(in).groups) {
+            if (g.packageIds.get(0).equals("SOT-223")) {
+                assertEquals(g.padIds.contains("U1.1") ? ProfileCheck.TIP : ProfileCheck.NO_TYPE, g.reason, g.label);
+            }
+        }
     }
 
     @Test

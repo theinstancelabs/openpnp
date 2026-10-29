@@ -26,9 +26,11 @@ import org.openpnp.util.Utils2D;
  *
  * <ul>
  * <li><b>Search.</b> The first frame of each fiducial is centred on its prediction; only marks
- * within searchRadiusMm of the prediction count. If it finds nothing, more frames tile the search
- * circle, nearest first ({@link #searchTiles}); the search stops at the first frame with a
- * mark.</li>
+ * within searchRadiusMm of its expected position count, so the radius the operator sets bounds how
+ * far a board may have moved (a prediction moves the frames, never the bound). If it finds nothing,
+ * more frames tile the circle around the prediction, nearest first ({@link #searchTiles}); the
+ * search stops at the first frame with a mark. A mark that centring carries past the bound is not
+ * found either.</li>
  * <li><b>Centring.</b> The camera moves onto the mark until it sits less than
  * centringTolerancePx from the frame centre, at most centringIterations looks (the search frame
  * that found it is the first). Unlike locate.py, a mark that does not converge is a failure, not
@@ -285,9 +287,14 @@ public final class FiducialLocator {
         }
     }
 
-    /** Search, then centre, one fiducial predicted at (px, py). */
+    /**
+     * Search, then centre, one fiducial predicted at (px, py): frames around the prediction, marks
+     * within searchRadiusMm of the target's expected position.
+     */
     private Found locate(Target t, double px, double py, String label) throws Exception {
         double radius = s.searchRadiusMm;
+        double ex = t.expectedX;
+        double ey = t.expectedY;
         double dMm = t.diameterMm > 0 ? t.diameterMm : s.detector.diameterMm;
         FiducialDetector.Settings ds = s.detector.copy();
         ds.diameterMm = dMm;
@@ -303,24 +310,27 @@ public final class FiducialLocator {
                         label + " · frame " + (k + 1) + " of " + tiles.size());
                 frames++;
             }
-            d = FiducialDetector.detect(f.image, f.mmPerPxX, f.mmPerPxY, px - f.xMm, py - f.yMm,
+            d = FiducialDetector.detect(f.image, f.mmPerPxX, f.mmPerPxY, ex - f.xMm, ey - f.yMm,
                     radius, ds);
             if (d != null) {
                 break;
             }
         }
         if (d == null) {
-            throw notFound(t, px, py, radius, frames);
+            throw notFound(t, radius, frames);
         }
         for (int it = 1;; it++) {
             if (d.isAmbiguous(ds.ambiguousScoreRatio)) {
                 throw new Failure(Failure.AMBIGUOUS, t, String.format(Locale.ROOT,
                         "REG: another round mark near %s (within %.1f mm of X %.2f, Y %.2f): look"
                                 + " with the camera there, then register again",
-                        t.name, radius, px, py));
+                        t.name, radius, ex, ey));
             }
             double fx = f.xMm + d.offsetXMm;
             double fy = f.yMm + d.offsetYMm;
+            if (!(Math.hypot(fx - ex, fy - ey) <= radius)) {
+                throw notFound(t, radius, frames + it - 1);
+            }
             double offPx = Math.hypot(d.xPx - f.image.getWidth() / 2.0,
                     d.yPx - f.image.getHeight() / 2.0);
             if (offPx < s.centringTolerancePx) {
@@ -331,7 +341,7 @@ public final class FiducialLocator {
                 r.iterations = it;
                 r.frames = frames;
                 r.lastOffsetPx = offPx;
-                r.offsetFromExpectedMm = Math.hypot(fx - t.expectedX, fy - t.expectedY);
+                r.offsetFromExpectedMm = Math.hypot(fx - ex, fy - ey);
                 r.detection = d;
                 return r;
             }
@@ -345,7 +355,7 @@ public final class FiducialLocator {
             d = FiducialDetector.detect(f.image, f.mmPerPxX, f.mmPerPxY, fx - f.xMm, fy - f.yMm,
                     s.centringRadiusMm, ds);
             if (d == null) {
-                throw notFound(t, px, py, radius, frames + it);
+                throw notFound(t, radius, frames + it);
             }
         }
     }
@@ -365,13 +375,14 @@ public final class FiducialLocator {
         return f;
     }
 
-    private static Failure notFound(Target t, double x, double y, double radius, int frames) {
+    /** Not found within the radius of the target's expected position. */
+    private static Failure notFound(Target t, double radius, int frames) {
         return new Failure(Failure.NOT_FOUND, t, String.format(Locale.ROOT,
                 "REG: %s not found within %.1f mm of X %.2f, Y %.2f (%d camera frame%s). Is %s"
                         + " clean and uncovered, and does the board sit roughly where it was"
                         + " planned? Check the board X/Y in the Board step (Use camera X/Y on the"
                         + " board origin)" + Failure.FILE_ENDING,
-                t.name, radius, x, y, frames, frames == 1 ? "" : "s", t.name));
+                t.name, radius, t.expectedX, t.expectedY, frames, frames == 1 ? "" : "s", t.name));
     }
 
     /**

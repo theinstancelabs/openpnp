@@ -116,7 +116,8 @@
     const thumbs = el('div', { class: 'board-thumbs', id: 'board-thumbs', role: 'group', 'aria-label': 'Boards with a drawing: press one to choose it', hidden: true });
     const imported = el('div', { class: 'reason bf-imported', id: 'board-imported', hidden: true });
     thumbs.addEventListener('scroll', () => edges(thumbs), { passive: true });
-    // one row: the upload tile first (always in view), then a picture of every board with a drawing
+    // the upload button first (always in view), then one row of pictures of every board with a drawing, two whole
+    // pictures in view at a time
     row.after(el('div', { class: 'bf-boards' }, upload, thumbs), imported);
     const fid = el('button', { type: 'button', class: 'capture', id: 'btn-board-use-fid' }, IL.icon('i-capture'), el('span', { text: 'Camera is on FID1' }));
     fid.addEventListener('click', () => useFid());
@@ -156,6 +157,9 @@
       ? el('span', { class: 'bf-next', text: 'Put the top camera on ' + (M.just.fiducial || 'FID1') + ' and press "Camera is on ' + (M.just.fiducial || 'FID1')
         + '" (or type the origin), then Plan. Register board then finds the fiducials.' }) : null] : null));
     IL.show(st.imported, !!text);
+    // a board just imported: its next step replaces the Board step's general hint (one instruction, not two)
+    const hint = st.body.querySelector('#board-hint');
+    if (hint && !hint.classList.contains('reason--block')) IL.show(hint, !(text && just));
     // Camera is on FID1: origin = camera − R(rotation)·(bx, by) of the board's first fiducial
     const f = firstFid(e);
     const cam = IL.positions(s).cam;

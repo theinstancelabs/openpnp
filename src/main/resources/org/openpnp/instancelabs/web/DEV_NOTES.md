@@ -16,7 +16,14 @@ something new from core, ask for it (or add it to your module and propose it for
 | `app.css` | core | Tokens (light + `[data-theme=dark]`), frame, strip, STOP, nav, panel, shared components (§11). |
 | `core.js` | core | The `IL` namespace (this document). Loaded **synchronously** in `<head>`: sets the theme before first paint. |
 | `app.js` | core | `IL.boot()`. Loaded last. Kept because `ApiServerSimTest` fetches `/static/app.js`. |
-| `boardview.js` | Run stage | `IL.boardview`: the to-scale board SVG (hero, probe overlay, Records done-dot map) and the shared geometry (`hull`, `inflate`, `outside`, `bbox`, `planeFit`). |
+| `boardview.js` | Run stage, board import (web-render) | `IL.boardview`: the to-scale board view (hero, probe and fiducial overlay, pad inspector, upload preview, Records done-dot map): two stacked SVGs, the drawing under the job overlay (§5 › Board drawing), and the shared geometry (`hull`, `inflate`, `outside`, `bbox`, `planeFit`, `cased`). |
+| `boardart.js` | board import (web-render) | `IL.boardart`: the board drawing (art JSON) as SVG, thumbnails, the board → machine affine helpers (§5 › Board drawing). |
+| `pathpreview.js` | board import (web-render) | `IL.pathPreview`: the path preview row `#run-preview` (§5 › Board drawing). |
+| `padinspect.js` | board import (web-render) | `IL.padInspect`, panel view `pad`: the pad inspector (§5 › Board drawing). |
+| `board.css` | board import (web-render) | The board palette, `.pv--art` and the casing, picture modes, the preview row, the inspector. Loaded after `run.css`. |
+| `boardflow.js` | board import (web-flow, `il/bi-web-flow`) | `IL.boardFlow`: fills the hooks H1–H5 of `run.js` / `records.js` (§11; §5 › Board drawing). |
+| `boardimport.js` + `boardimport.css` | board import (web-flow, `il/bi-web-flow`) | `IL.boardImport`: the upload dialog `#dlg-board-import` and the page-wide drop guard (§5 › Board drawing). |
+| `padprofile.js` + `padprofile.css` | profile calibration (pc-web, to come) | `IL.padProfile`, the `pad-cal` view, Profile › Needs a profile (`PROFILE_CALIBRATION_DESIGN.md` §13). |
 | `run.js` + `run.css` | Run stage | `#ws-run`, Run panel steps (board, probe, checks, run, result, recovery override), run confirm `#dlg-run`. |
 | `setup.js` + `setup.css` | Setup stage | `#ws-setup` (cards §8.2), default panel `head`. `calibrate.js` may reuse `setup.css`. |
 | `profile.js` + `profile.css` | Profile stage | `#ws-profile` (§8.3), `#dlg-padtype`, `#dlg-history`, panel `pt`. |
@@ -33,7 +40,8 @@ STOP): use `IL.press2`, `IL.dialog.open` / `IL.dialog.showNative`.
 
 ```
 <head>  core.js (sync)  → IL defined, theme applied, F9 / Space / Esc key handlers and the STOP clicks installed
-        boardview.js, run.js, setup.js, profile.js, calibrate.js, records.js (defer, in this order)
+        boardart.js, boardview.js, pathpreview.js, padinspect.js, [boardflow.js, boardimport.js: web-flow],
+        run.js, setup.js, profile.js, calibrate.js, records.js (defer, in this order)
         app.js (defer)  → IL.boot()   (core boots by itself at DOMContentLoaded if app.js never ran)
 boot:   mount(root) of every registered workspace → route applied → show() of the active one
         → poll /api/status (0.7 s chain) → render loop
@@ -252,6 +260,56 @@ never rounds a stored value), `IL.num(idOrEl)`, `IL.str(idOrEl)`.
 Constants: `IL.STOP_CODES`, `IL.STOP_TITLE`, `IL.STOP_LINE` (the exact §13 texts), `IL.STOP_DID`, `IL.LIMITS`,
 `IL.PRESSURE_PHASES`, `IL.WORD`.
 
+### Board drawing, path preview, pad inspector, upload (BOARD_IMPORT_DESIGN.md §5, 2026-10-29)
+
+The drawing, the preview and the inspector are merged on `il/bench-sync-autoreg`; the upload dialog and the glue
+(`boardflow.js`, `boardimport.js`) are on `il/bi-web-flow` and merge with §11 in the AR + BI integration slice. Nothing
+here moves the machine.
+
+- **`IL.boardview`** (`boardview.js` header has the full API): `create(host, {id, aria, onPad, onPart, lite})` makes
+  two stacked SVGs in `.pv-host`: `svg.pv.pv-art` (the drawing, `aria-hidden`, no pointer events) under
+  `svg#plan-svg.pv` (the job overlay), with the same viewBox. `setPlan(plan)` builds once per plan (reads `plan.board`
+  and `plan.dot.diameterMm`: dots at their real size, never below 1.5 px); `setArt(art)` builds the drawing once per
+  art, a re-plan changes only its transform; `setBoard({art, toMachine})` / `setAffine(m)` draw a board without a
+  plan; `picture('full' | 'quiet' | 'off')`; `update({done, dirty, next, check, needle, n1, probe, fids, cam})` only
+  toggles classes and moves markers; `preview({n, ghost})`; `select({padIds, refs})`; `dotLabels(indexes)`;
+  `fit(box)`, `setView('dots' | 'board' | 'follow')`, `zoomBy`, `destroy()`. `IL.boardview.of(host)`. Test classes kept:
+  `rect.pad`, `rect.pad.dirty`, `circle.dot`, `circle.dot.done` (no art element uses `pad` or `dot`).
+- **`IL.boardart`**: `get(id)` (`GET /api/board-art/<id>` through the browser's HTTP cache: the server marks drawings
+  immutable, so there is no client cache; null on 404), `build(art, {uid})` (one merged path per layer; labels in three
+  size buckets `pv-lb1/2/3`), `thumbUrl(art, {w, h})` (a `blob:` image from `art.thumb`), `toSvgMatrix(m)`,
+  `apply(m, x, y)`, `outlineBox`, `originMarker`.
+- **`IL.pathPreview.create({host, bv, button, before, onChange})`** → `pp`: `setPlan`, `allow(on)` (false while live,
+  stopped or a task runs), `play`, `pause`, `clear`, `seek(v)`, `state`, `destroy`. Times from `plan.dots[i].ta / te`,
+  else illustrative (50 mm/s, 0.6 s per dot, said in the readout). `requestAnimationFrame` only while playing and
+  visible, at most 30 updates per second.
+- **`IL.padInspect.open({padId} | {ref}, {bv})`**, `current()`, view `IL.views.pad` (`#pad-insp-*`): the part's
+  openings and dots, the pad type and the rule sentence (`plan.pads[i].typeRule.sentence`), flags in words, the camera
+  (`#pad-insp-cam`), `Edit pad type …` / `New pad type for <package>`.
+- **`IL.boardFlow`** (web-flow): `mountBoardStep(body, {select, form, setXY, loadBoards})` (H1: `#btn-board-upload`,
+  `#board-thumbs`, `#board-imported`, `#btn-board-use-fid`), `hero(bv, {plan, sel, form, mode, s, hero, stageBar,
+  row})` → `{shown}` (H3: the drawing, `#pv-picture`, the preview, `#btn-pad-inspect`; before planning the chosen
+  board at the form's seat with the live camera, `#board-preplan`), `onPad` / `onPart` (H2), `recordsMap(bv, plan)`
+  (H4), `onImported(saved)`. Keeps the newest 8 drawings; `localStorage['il.pv.picture']` (default Quiet).
+- **`IL.boardImport.open({file, onSaved})`**, `isOpen()` (web-flow): `#dlg-board-import`, states choose → reading
+  (Cancel aborts, 60 s) → preview → saving (Esc and Cancel do nothing) → saved; 12 MB checked before sending; a refused
+  read shows its reason and `Choose another file`. The drop guard: a file dropped outside the drop zone never replaces
+  the page; a `.kicad_pcb` opens the dialog.
+- Tests: `boardview.playwright.cjs` (`run-boardview-test.sh`, devproxy `--fixtures`: the drawing, the overlay, the
+  preview, the inspector, the performance gate at 4× CPU throttling), `board-import.playwright.cjs` (web-flow, 44
+  checks, run after `webui-sim.playwright.cjs` in the same SIM session).
+
+### Profile calibration (to come)
+
+The pc-web slice adds `padprofile.js` + `padprofile.css`, the hooks H-P1 … H-P9 in core, profile, run, records,
+boardimport, padinspect and boardview, `IL.padProfile`, the `pad-cal` view and its sessionStorage key
+(`PROFILE_CALIBRATION_DESIGN.md` §13). The API it codes against (`il/pc-api`) is in `WEB_API.md` §3.4.
+
+### Since §10
+
+`server.simulated` and `server.simulatorConfirmed` now exist (`WEB_API.md` §3.1): §10's fallback (the driver
+connection) is no longer needed.
+
 ## 6. Render rules (§15)
 
 - Build once (mount / `first`), patch on every render. Never `replaceChildren` a region that contains inputs on a
@@ -290,6 +348,15 @@ Colour means state only; never green for "off".
 | Tables | `.kv(--wrap) .tbl (td.r) .ptable .headtable (td.hl)` |
 | Dialog | `.scrim .dialog(--sm) .dialog__head/__keys/__body/__foot/__sum .grid2 .tick .tick__t/__d .who .keysheet` |
 | Utility | `.sr .spacer .muted .dim .nowrap .mono .hide-narrow .show-narrow` |
+
+Board picture (`board.css`): one physical palette for both themes, `--pv-a-sub --pv-a-cu --pv-a-mask --pv-a-mask-op
+--pv-a-bare --pv-a-silk --pv-a-hole --pv-a-edge --pv-a-fab --pv-a-ref --pv-a-fabref --pv-a-paste` (only `--pv-a-edge`
+follows the theme); overlay marks on the board `--pv-o-ap --pv-o-dot --pv-o-next --pv-o-block --pv-o-check
+--pv-o-probe --pv-o-path --pv-o-path-q --pv-o-trail-q --pv-o-ghost` with the two-tone casing `--pv-o-case-d
+--pv-o-case-l`. **Casing rule:** a mark drawn on the board (`.pv--art`) gets a casing (`IL.boardview.cased`, class
+`.pv-case`, no state class), so it reads on mask, copper and silkscreen alike; marks off the board keep `run.css`'s
+`.pv` styles. Picture modes: Off hides the art SVG; Quiet sets `.pv-art--quiet` on it and `.pv--quiet` on the
+overlay; the overlay gets `.pv--art` whenever the drawing shows.
 
 Breakpoint ≤ 1360 px: nav rail 84 px, panel 388 px, STOP 216 px. The strip drops `.long` value parts by itself
 when it would run under STOP (`.cells--t1` / `--t2`).

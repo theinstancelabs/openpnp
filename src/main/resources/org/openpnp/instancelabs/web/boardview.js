@@ -17,7 +17,7 @@
      const bv = IL.boardview.create(hostElement, {id: 'plan-svg', aria, onPad(padId, ev), onPart(ref, ev), lite})
          lite: no callouts and no grid (inspector, dialog); the host gets .pv-host--lite (both SVGs fill it)
      bv.setPlan(plan, {origin: {x, y}})  build once per plan (null clears); reads plan.board (toMachine, size,
-         fiducials) and plan.dot.diameterMm (dots at their real size, never below 1.2 px)
+         fiducials) and plan.dot.diameterMm (dots at their real size, never below 1.5 px, a thin ring when small)
      bv.setArt(art | null)               the board drawing: built once per art; a re-plan only changes its transform
      bv.setBoard({art, toMachine} | null)  art-only mode without a plan (upload preview, the hero before planning)
      bv.setAffine(toMachine)             art-only mode: the seat changed → the transform only
@@ -45,8 +45,9 @@
 (function () {
   const ZOOMS = [1, 1.6, 2.5, 4, 6.4];
   const LABEL_PX = 9;        // a reference label size bucket shows once its smallest label is this tall on screen
-  const DOT_MIN_PX = 1.2;    // dots at their real size, but never below this radius on screen
+  const DOT_MIN_PX = 1.5;    // dots at their real size, but never below this radius on screen
   const DOT_STROKE_PX = 1.6; // circle.dot's ring (run.css): drawn inside the real size, so the outer edge is the dot's edge
+  const DOT_THIN_PX = 3;     // a dot under this radius on screen gets a 1 px ring (.pv--dots-thin), so an undone dot keeps a light centre
   const f = (v) => (Math.round(v * 1000) / 1000).toString();
   const svg = IL.svgEl;   // (tag, attrs, title): falsy attrs skipped, title as <title>
   const VIEWS = new WeakMap();   // host → view
@@ -423,6 +424,7 @@
         IL.setAttr(this.gParts, 'transform', t);
       }
       toggle(this.artSvg, 'pv-art--quiet', this.pic === 'quiet');
+      toggle(this.svg, 'pv--quiet', on && this.pic === 'quiet');   // the overlay's marks on the stage-toned mask
       toggle(this.artSvg, 'pv-art--board', !this.plan && !!this.board);
       if (this.sel) this.drawSel();
     }
@@ -516,7 +518,7 @@
       if (!real0 && this.real && this.zoomIx === 0) this.resizeMarks();
       if (changed) this.drawCallouts(true);
     }
-    /** Everything sized in screen px: label buckets, real-size dots (their 1.2 px floor), path numbers, the scale bar. */
+    /** Everything sized in screen px: label buckets, real-size dots (their 1.5 px floor and thin ring), path numbers, the scale bar. */
     afterScale() {
       this.relabel();
       this.resizeDots();
@@ -531,16 +533,21 @@
     dotRadius() { return Math.max(0.2, Math.min(0.45, 2.3 * (this.k || 0.1))); }
     /**
      * Dots at the plan's dot size: the ring is drawn inside it, so what the eye sees (the ring's outer edge) is the real
-     * diameter (a 0.6 mm dot on a 0.8 mm pad must not look wider than the pad); the circle never below 1.2 px
-     * (.pv--dots-clamped while that floor applies).
+     * diameter (a 0.6 mm dot on a 0.8 mm pad must not look wider than the pad). A dot under 3 px radius on screen (the
+     * whole board) gets a 1 px ring and the circle never goes below 1.5 px (.pv--dots-clamped while that floor applies): with
+     * the 1.6 px ring on a 1.2 px circle an undone dot was a solid disc, the same as a done one.
      */
     resizeDots() {
       if (!this.plan || !this.dotD) return;
       const k = this.k || 0.1;
+      const thin = this.dotD / 2 < DOT_THIN_PX * k;
+      const ring = (thin ? 1 : DOT_STROKE_PX) * k;
       const floor = DOT_MIN_PX * k;
-      const inner = this.dotD / 2 - DOT_STROKE_PX / 2 * k;
+      const inner = this.dotD / 2 - ring / 2;
       const r = Math.max(inner, floor);
+      toggle(this.svg, 'pv--dots-thin', thin);
       toggle(this.svg, 'pv--dots-clamped', floor > inner);
+      this.dotOuter = r + ring / 2;
       if (this.rReal !== null && Math.abs(r - this.rReal) < 1e-4) return;
       this.rReal = r;
       // a dot's own size when the plan gives it (dots[i].diameterMm: a pad type's own turn), else the plan's dot size
@@ -618,8 +625,9 @@
       if (doneKey !== prev.doneKey) {
         for (let i = 0; i < this.dotEls.length; i++) toggle(this.dotEls[i], 'done', done.has(i));
         for (const [pid, idx] of this.padDots) toggle(this.padEls.get(pid), 'pasted', idx.every((i) => done.has(i)));
-        const ord = Array.from(done).sort((a, b) => a - b);
         const dots = this.plan.dots;
+        // an index past the plan's last dot (another plan's done set) draws nothing rather than breaking the render
+        const ord = Array.from(done).filter((i) => !!dots[i]).sort((a, b) => a - b);
         setAll(this.doneC, 'd', ord.length > 1 ? 'M' + ord.map((i) => f(dots[i].x) + ' ' + f(-dots[i].y)).join(' L') : '');
         if (this.firstC) this.firstC.g.setAttribute('visibility', done.size ? 'hidden' : 'visible');
         next.doneKey = doneKey;
@@ -882,7 +890,7 @@
       if (parts.length) {
         const g = svg('g', { transform: IL.boardart.toSvgMatrix(m) });
         for (const p of parts) {
-          const [x0, y0, x1, y1] = p.box.map(Number);
+          const [x0, y0, x1, y1] = this.selBox(p, m);
           const c = cased('rect', { x: f(x0 - 0.3), y: f(y0 - 0.3), width: f(x1 - x0 + 0.6), height: f(y1 - y0 + 0.6), rx: 0.3 }, 'pv-sel', 2, null, 'sel');
           c.g.setAttribute('transform', 'translate(' + f(p.x) + ' ' + f(p.y) + ') rotate(' + f(Number(p.a) || 0) + ')');
           g.appendChild(c.g);
@@ -900,6 +908,29 @@
         const c = cased('rect', { x: f(b.x0 - 0.3), y: f(-b.y1 - 0.3), width: f(b.x1 - b.x0 + 0.6), height: f(b.y1 - b.y0 + 0.6), rx: 0.3 }, 'pv-sel', 2, null, 'sel');
         this.gSel.appendChild(c.g);
       }
+    }
+    /**
+     * A drawn part's outline box in its own frame: the body box (KiCad's fab outline) grown to take in the part's plan pads,
+     * so the outline goes round a QFP's leads instead of between its body and its pads.
+     */
+    selBox(p, m) {
+      let [x0, y0, x1, y1] = p.box.map(Number);
+      const det = m[0] * m[3] - m[1] * m[2];
+      const seat = Math.atan2(m[1], m[0]) * 180 / Math.PI;
+      const pa = Number(p.a) || 0, a = pa * Math.PI / 180, ca = Math.cos(a), sa = Math.sin(a);
+      for (const q of (this.plan && this.plan.pads) || []) {
+        if (q.placementId !== p.ref) continue;
+        // machine → board (the inverse affine) → the part frame; the pad's half extents at its angle to the part
+        const dx = q.x - m[4], dy = q.y - m[5];
+        const bx = (m[3] * dx - m[2] * dy) / det - p.x, by = (m[0] * dy - m[1] * dx) / det - p.y;
+        const lx = bx * ca + by * sa, ly = by * ca - bx * sa;
+        const r = ((Number(q.rotation) || 0) - seat - pa) * Math.PI / 180;
+        const c = Math.abs(Math.cos(r)), s = Math.abs(Math.sin(r)), w = q.w || 0, h = q.h || 0;
+        const ex = (c * w + s * h) / 2, ey = (s * w + c * h) / 2;
+        x0 = Math.min(x0, lx - ex); x1 = Math.max(x1, lx + ex);
+        y0 = Math.min(y0, ly - ey); y1 = Math.max(y1, ly + ey);
+      }
+      return [x0, y0, x1, y1];
     }
     /** Path numbers (1-based, path order) next to the dots with these indexes; null removes them. The same list again does nothing. */
     dotLabels(indexes) {
@@ -925,7 +956,7 @@
       this.gLabels.replaceChildren();
       if (!this.labelIdx) return;
       const k = this.k || 0.1;
-      const r = this.dotD ? Math.max(this.dotD / 2, (DOT_MIN_PX + DOT_STROKE_PX / 2) * k) : this.rDot + DOT_STROKE_PX / 2 * k;
+      const r = this.dotD && this.dotOuter ? this.dotOuter : this.rDot + DOT_STROKE_PX / 2 * k;
       const fs = 12 * k;
       const dots = this.labelIdx.map((i) => this.plan.dots[i]).filter(Boolean);
       if (!dots.length) return;

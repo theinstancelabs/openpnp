@@ -2,12 +2,17 @@ package org.openpnp.instancelabs.api;
 
 import java.awt.geom.AffineTransform;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.Future;
 
+import org.openpnp.instancelabs.board.BoardArt;
+import org.openpnp.instancelabs.board.BoardArtStore;
+import org.openpnp.instancelabs.board.EdtRunner;
+import org.openpnp.instancelabs.board.KeepOut;
 import org.openpnp.instancelabs.dispense.BoardFeatures;
 import org.openpnp.instancelabs.dispense.BoardRegistration;
 import org.openpnp.instancelabs.dispense.DispenseConfig;
@@ -23,10 +28,12 @@ import org.openpnp.instancelabs.dispense.SurfaceProbeRequest;
 import org.openpnp.instancelabs.dispense.SurfaceProbeResult;
 import org.openpnp.instancelabs.dispense.VacuumProber;
 import org.openpnp.model.Abstract2DLocatable.Side;
+import org.openpnp.model.Board;
 import org.openpnp.model.BoardLocation;
 import org.openpnp.model.LengthUnit;
 import org.openpnp.model.Location;
 import org.openpnp.util.Utils2D;
+import org.pmw.tinylog.Logger;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -105,6 +112,9 @@ final class RegistrationEndpoints {
         req.nominalZ = nominalZ;
         req.probe = mode;
         req.replanner = reg -> replan(svc, e, reg);
+        ArtHints art = ArtHints.of(nominal.getBoard());
+        req.fiducialHints = art.fiducials;
+        req.keepOuts = art.keepOuts;
         Map<String, Object> preview = targets(svc, e);
         ctx.tracker.expect("board registration");
         Future<RegistrationResult> f2 = svc.registerBoard(req);
@@ -187,7 +197,8 @@ final class RegistrationEndpoints {
         try {
             BoardLocation bl = dispense.currentBoardLocation(e);
             BoardLocation nominal = dispense.baseBoardLocation(e.source);
-            BoardFeatures f = BoardFeatures.of(bl.getBoard(), svc.padTypeResolver());
+            ArtHints art = ArtHints.of(bl.getBoard());
+            BoardFeatures f = BoardFeatures.of(bl.getBoard(), svc.padTypeResolver(), art.fiducials);
             out.put("fiducialCount", f.fiducials.size());
             for (BoardFeatures.Fiducial fd : f.fiducials) {
                 Location l = Utils2D.calculateBoardPlacementLocation(bl, new Location(LengthUnit.Millimeters, fd.x, fd.y,
@@ -211,7 +222,7 @@ final class RegistrationEndpoints {
             String few = DispenseService.fewFiducials(f, c.fiducialCheck.minFiducials);
             AffineTransform boardToMachine = bl.getLocalToGlobalTransform();
             List<VacuumProber.Target> board = ProbeTargets.forBoard(f, ProbeTargets.dotsBoard(e.plan,
-                    boardToMachine.createInverse()), c);
+                    boardToMachine.createInverse()), c, art.keepOuts);
             for (VacuumProber.Target t : ProbeTargets.map(board, boardToMachine)) {
                 List<Map<String, Object>> alts = new ArrayList<>();
                 for (int k = 0; k < t.alternates.size(); k++) {
@@ -230,6 +241,54 @@ final class RegistrationEndpoints {
         out.put("estimatedSeconds", Views.map("home", homeS, "fiducials", fidS, "sameSeat",
                 3 * DispenseService.PROBE_POINT_ESTIMATE_S, "probe", probeS, "total", homeS + fidS + probeS));
         return out;
+    }
+
+    /**
+     * What the board's KiCad drawing tells Register board (BOARD_IMPORT_DESIGN.md §10.2 item 4, AR §16 item 10): the
+     * fiducials' copper and mask diameters, and the circles N1 must not touch (every hole and via, the outline and
+     * the cut-outs). Both null without a KiCad drawing, or when it cannot be read: the sizes then come from the
+     * package and the probe assumes a mounting hole in each corner (AR §4.6).
+     */
+    static final class ArtHints {
+        /** Fiducial name -> {copper, mask} diameter (mm). */
+        Map<String, double[]> fiducials;
+        List<ProbeTargets.KeepOut> keepOuts;
+
+        /** Read where OpenPnP's lists are read (the art store never reads the configuration itself). */
+        static ArtHints of(Board board) {
+            ArtHints h = new ArtHints();
+            if (board == null) {
+                return h;
+            }
+            try {
+                EdtRunner.call(() -> {
+                    BoardArtStore store = BoardArtStore.get();
+                    if (!store.hasKicadArt(board)) {
+                        return null;
+                    }
+                    Map<String, double[]> fids = new HashMap<>();
+                    for (BoardArt.FidArt fd : store.fiducials(board)) {
+                        if (fd.name != null && fd.copperMm > 0) {
+                            fids.put(fd.name, new double[] {fd.copperMm, fd.maskMm});
+                        }
+                    }
+                    List<ProbeTargets.KeepOut> ko = new ArrayList<>();
+                    for (KeepOut k : store.keepOuts(board)) {
+                        ko.add(new ProbeTargets.KeepOut(k.x, k.y, k.r));
+                    }
+                    h.fiducials = fids;
+                    h.keepOuts = ko;
+                    return null;
+                }, DispenseEndpoints.EDT_START_MS);
+            }
+            catch (Exception x) {
+                Logger.warn(x, "the drawing of board {} cannot be read: corner mounting holes assumed",
+                        board.getName());
+                h.fiducials = null;
+                h.keepOuts = null;
+            }
+            return h;
+        }
     }
 
     private static Object estimatedTotal(Map<String, Object> preview) {
@@ -381,7 +440,7 @@ final class RegistrationEndpoints {
     // Check Z, new seat
     // ------------------------------------------------------------------------------------------
 
-    /** POST /api/machine/z-check {"wait"?}: one N1 touch at a stored point after a home (§5.8). */
+    /** POST /api/machine/z-check {"wait"?}: N1 touches stored points after a home, one per Z frame (§5.8). */
     Object zCheck(ApiServer.Request r) throws Exception {
         JsonObject b = r.json();
         DispenseService svc = ctx.availableSvc();
@@ -394,7 +453,7 @@ final class RegistrationEndpoints {
         return ApiContext.awaitIf(Json.bool(b, "wait", false), f, rr -> Views.run(rr, false), Views.map("kind",
                 "z check", "needed", zp.needed, "reference", zp.reference == null ? null : Views.map("name",
                         zp.reference.name, "x", zp.reference.x, "y", zp.reference.y, "z", zp.reference.z),
-                "estimatedSeconds", zp.needed ? DispenseService.PROBE_POINT_ESTIMATE_S : 0));
+                "touches", zp.touches, "estimatedSeconds", zp.touches * DispenseService.PROBE_POINT_ESTIMATE_S));
     }
 
     /** POST /api/board/new-seat {"newSeat": true | false}: the engine's new-seat flag (§3.6). */

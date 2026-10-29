@@ -365,6 +365,8 @@
     return Math.round(s / 86400) + ' days ago';
   };
   IL.plural = (n, one, many) => n + ' ' + (n === 1 ? one : (many || one + 's'));
+  /** The Z check's touches (status.machine.zCheck.touches…): one per home period the N1 heights were measured in. */
+  IL.zTouches = (n) => (n > 1 ? n + ' N1 touches (heights from ' + n + ' different homes)' : 'one N1 touch');
   /**
    * ASCII number string for an <input> value (fmt uses a real minus that Number() cannot read). d: decimals to show
    * (0.1 → "0.10") unless that would lose digits: a stored 0.125 stays "0.125", so a save never rounds it away.
@@ -940,7 +942,8 @@
     const zc = m.zCheck || null;
     const homeS = hm && isNum(hm.estimateS) ? hm.estimateS : 25;
     const zS = zc && isNum(zc.estimateS) ? zc.estimateS : 20;
-    // after the run's own home every N1 height predates it: one touch checks Z (only when there is one to touch)
+    // after the run's own home every N1 height predates it: one touch per home period checks Z (when there is one)
+    const zN = zc && zc.touchesAfterHome > 1 ? zc.touchesAfterHome : 1;
     const zAfterHome = !!nd.anchor || Object.values(d.surfaces || {}).length > 0;
     const zNow = !!zc && zc.needed && !!zc.reference;
     if (!m.enabled) {
@@ -957,7 +960,7 @@
       add({ key: 'machine', code: 'MACHINE', title: 'Machine', state: 'info', value: zAfterHome ? 'homes first, checks Z' : 'homes first',
         short: 'homes first', homeFirst: true,
         detail: (/^not homed/.test(why) ? IL.cap(why) : 'Not homed' + (why ? ' (' + why + ')' : '')) + ': Register board and Run home first (≈ ' + IL.fmtSecs(homeS) + ')'
-          + (zAfterHome ? ', then one N1 touch checks Z (≈ ' + IL.fmtSecs(zS) + ').' : '.'),
+          + (zAfterHome ? ', then ' + IL.zTouches(zN) + (zN > 1 ? ' check' : ' checks') + ' Z (≈ ' + IL.fmtSecs(zS * zN) + ').' : '.'),
         fixes: [{ fix: 'home', label: 'Home now' }] });
     } else if (!m.homed) {
       add({ key: 'machine', code: 'MACHINE', title: 'Machine', state: 'need', value: 'not homed', short: 'home',
@@ -967,8 +970,9 @@
     } else if (zNow) {
       const ref = zc.reference;
       add({ key: 'machine', code: 'MACHINE', title: 'Machine', state: 'info', value: 'checks Z', short: 'checks Z', zCheckFirst: true,
-        detail: 'Homed' + (c.homedAt ? ' ' + IL.fmtTime(c.homedAt) : '') + '. The N1 heights predate this home: Run checks Z first, one N1 touch on the '
-          + (ref.name || 'surface') + ' at X ' + IL.fmt(ref.x, 1) + ', Y ' + IL.fmt(ref.y, 1) + ' (≈ ' + IL.fmtSecs(zS) + ').',
+        detail: 'Homed' + (c.homedAt ? ' ' + IL.fmtTime(c.homedAt) : '') + '. The N1 heights predate this home: Run checks Z first, '
+          + IL.zTouches(zc.touches) + (zc.touches > 1 ? ', the first' : '') + ' on the ' + (ref.name || 'surface') + ' at X ' + IL.fmt(ref.x, 1)
+          + ', Y ' + IL.fmt(ref.y, 1) + ' (≈ ' + IL.fmtSecs(zS * Math.max(1, zc.touches || 0)) + ').',
         fixes: [{ fix: 'check-z', label: 'Check Z now' }] });
     } else {
       add({ key: 'machine', code: 'MACHINE', title: 'Machine', state: 'ok', value: c.homedAt ? IL.fmtTime(c.homedAt) : 'homed',

@@ -24,7 +24,8 @@
  * at 1280; (13) dark theme: the marks on the board keep their contrast; (14) screenshots to SHOTS_DIR (1440 and 1280,
  * light and dark): the empty dialog, and for nano, ftp and mobo the preview, the saved state with its pad-type actions,
  * the Board step with the board chosen (the hero before planning), the board planned on Run and the pad inspector;
- * (15) no JavaScript errors, no native dialogs.
+ * (15) no JavaScript errors, no native dialogs; (16) the hero draws a plan's dispensed dots on that plan only (another
+ * plan starts with none; a stale index breaks nothing).
  *
  * Env: IL_BASE or IL_API_URL (the UI, trailing / optional), PLAYWRIGHT_DIR, OUT_DIR (results.json), SHOTS_DIR
  * (default OUT_DIR), IL_KICAD_FIXTURES (default src/test/resources/kicad), BI_SHOTS=0 skips (14).
@@ -461,6 +462,27 @@ const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y
     // ---- (14) screenshots ----------------------------------------------------------------------------------------------
     if (process.env.BI_SHOTS !== '0') await screenshots(page, SEAT);
     else skip('(14) screenshots', 'BI_SHOTS=0');
+
+    // ---- (16) the dispensed dots belong to their plan ------------------------------------------------------------------
+    // the shown plan's done set (as a board run leaves it) plus one index past its last dot, then another plan of ftp:
+    // the hero draws the first plan's dots as done and nothing on the second (a stale index used to throw in render)
+    await toBoardStep(page);
+    const dd = await page.evaluate(async ([file, seat]) => {
+      const R = IL.run, p0 = IL.S.plan;
+      const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const n = p0 ? p0.dots.length : 0;
+      R.done = { planId: p0 && p0.planId, idx: [], runIds: [], since: 0 };
+      R.doneSet = new Set(Array.from({ length: n }, (_, i) => i).concat([n + 1000]));
+      IL.render();
+      await frame();
+      const before = document.querySelectorAll('#plan-svg circle.dot.done').length;
+      const q = await IL.api('POST', '/api/plan', Object.assign({ source: 'file', file }, seat));
+      IL.setPlan(q);
+      await frame();
+      return { n, before, after: document.querySelectorAll('#plan-svg circle.dot.done').length, dots: q.dots.length, newPlan: !p0 || q.planId !== p0.planId };
+    }, [ftpFile, { x: 121, y: 119, z, rotation: 15 }]);
+    check('(16) another plan starts with no dispensed dots; a done index past the last dot draws nothing',
+      dd.before === dd.n && dd.after === 0 && dd.dots === 160 && dd.newPlan, dd);
   } catch (e) {
     check('no exception', false, String(e && e.stack || e));
     await page.screenshot({ path: path.join(OUT, 'board-import-failure.png') }).catch(() => {});

@@ -6,12 +6,14 @@ UI development without rebuilding the jar: serves DIR/index.html at / and DIR/<n
 (for example a SIM session from src/test/sim/il_ui_session.py). Listens on 127.0.0.1 only.
 
 --fixtures DIR (board drawings before the server makes them, docs/instancelabs/BOARD_IMPORT_DESIGN.md §6.6):
-  GET /api/board-art/<id>   answered from DIR/art/<id>.json, else from DIR/*.art.json whose id (the first 16 hex
-                            digits of the SHA-256 of the file's bytes) is <id>, with the server's immutable cache header
+  GET /api/board-art/<id>   answered from DIR/art/<id>.json (the art slice's generated drawings), else from
+                            DIR/*.art.json whose id (the first 16 hex digits of the SHA-256 of the file's bytes) is <id>,
+                            with the server's immutable cache header
   POST /api/plan, GET /api/plan/<id>
-                            a plan of a board file listed in DIR/board-map.json ({"ftp.board.xml": "sample.art.json"
-                            or an art id; keys starting with "_" are notes; a uinav "00-" prefix of the file name is
-                            ignored}) gets the plan's "board" block: toMachine = T(x, y)·R(rotation) of the plan's seat,
+                            a plan of a board file listed in DIR/art/board-map-generated.json or DIR/board-map.json
+                            ({"ftp.board.xml": "9626d1aefbbc2ad3"}: an art id or a file in DIR; keys starting with "_"
+                            are notes; board-map.json's entries win; a uinav "00-" prefix of the file name is
+                            ignored) gets the plan's "board" block: toMachine = T(x, y)·R(rotation) of the plan's seat,
                             the drawing's size and fiducials, art {id, kind}; plus synthetic per-dot times (0.6 s per dot:
                             dots[i].ta / .te) and "dot": {"diameterMm": 0.6}. A plan that already has a board block keeps
                             it (the server makes them once the import is merged); everything else goes to the session.
@@ -44,6 +46,7 @@ TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=u
          ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png"}
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 ART_ID = re.compile(r"^/api/board-art/([0-9a-f]{16})$")
+ART_FILE = re.compile(r"^[0-9a-f]{16}\.json$")
 PLAN_PATH = re.compile(r"^/api/plan(/[^/?]+)?$")
 IMMUTABLE = "private, max-age=31536000, immutable"
 LEAD_S, DOT_S, DOT_DWELL_S, DOT_MM = 10.0, 0.6, 0.4, 0.6
@@ -55,12 +58,15 @@ class Fixtures:
     def __init__(self, root):
         self.root = os.path.abspath(root)
         self.arts = {}  # id -> path
-        for p in sorted(glob.glob(os.path.join(self.root, "*.art.json")) + glob.glob(os.path.join(self.root, "art", "*.json"))):
+        drawings = glob.glob(os.path.join(self.root, "*.art.json")) + [
+            p for p in glob.glob(os.path.join(self.root, "art", "*.json")) if ART_FILE.match(os.path.basename(p))]
+        for p in sorted(drawings):
             with open(p, "rb") as fh:
                 self.arts[hashlib.sha256(fh.read()).hexdigest()[:16]] = p
         self.map = {}
-        mp = os.path.join(self.root, "board-map.json")
-        if os.path.isfile(mp):
+        for mp in (os.path.join(self.root, "art", "board-map-generated.json"), os.path.join(self.root, "board-map.json")):
+            if not os.path.isfile(mp):
+                continue
             with open(mp, encoding="utf-8") as fh:
                 for k, v in json.load(fh).items():
                     if k.startswith("_"):
