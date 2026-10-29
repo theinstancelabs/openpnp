@@ -3,6 +3,7 @@ package org.openpnp.instancelabs.dispense;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.openpnp.instancelabs.sim.SimGuard;
 import org.openpnp.machine.reference.driver.GcodeDriver;
 import org.openpnp.machine.reference.driver.GcodeDriver.CommandType;
 import org.pmw.tinylog.Logger;
@@ -22,16 +23,7 @@ public class DriverGcodeChannel implements GcodeChannel {
 
     @Override
     public boolean isLoopbackSimulator() {
-        if (driver.getCommunicationsType() != org.openpnp.machine.reference.driver.AbstractReferenceDriver
-                .CommunicationsType.tcp) {
-            return false;
-        }
-        try {
-            return java.net.InetAddress.getByName(driver.getIpAddress()).isLoopbackAddress();
-        }
-        catch (Exception e) {
-            return false;
-        }
+        return SimGuard.isLoopbackTcp(driver);
     }
 
     /** Prefix of GcodeDriver.bailOnError()'s exception for a pending controller error line. */
