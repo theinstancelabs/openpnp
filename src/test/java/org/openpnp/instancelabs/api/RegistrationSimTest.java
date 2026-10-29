@@ -849,6 +849,17 @@ public class RegistrationSimTest {
         List<String> l = commands(sim.server.sinceMark());
         assertEquals(java.util.Arrays.asList("G1 Z31.5000 F600", "M400", "M107 P1", "M107 P0"),
                 l.subList(l.size() - 4, l.size()), "the end lines follow the last point");
+        // the refused probe is recorded with its readings, for diagnosis on the machine (§5.4)
+        List<Map<String, Object>> rec = svc.getDb().query("SELECT level, message FROM events WHERE run_uuid = ? AND "
+                + "code = 'PROBE'", holed.get("runId").getAsString());
+        assertEquals(1, rec.size(), rec.toString());
+        assertEquals("WARN", rec.get(0).get("level"));
+        JsonObject probed = new JsonParser().parse((String) rec.get(0).get("message")).getAsJsonObject();
+        assertEquals("board probe", probed.get("what").getAsString());
+        JsonObject p1st = probed.getAsJsonArray("points").get(0).getAsJsonObject();
+        assertEquals(3, p1st.get("spotsTried").getAsInt(), p1st.toString()); // the third floor push refused
+        assertTrue(p1st.get("notes").toString().contains("no contact down to the floor"), p1st.toString());
+        assertTrue(p1st.getAsJsonArray("readings").size() > 5, p1st.toString());
         scene.leakySpots.clear();
 
         // paste on the first target: the camera look sends N1 to an alternate

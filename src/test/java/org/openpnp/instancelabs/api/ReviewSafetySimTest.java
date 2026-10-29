@@ -306,4 +306,59 @@ public class ReviewSafetySimTest {
         assertEquals("on", pressure().get("state").getAsString(), "the hold is untouched");
         ok("POST", "/api/pressure/stop", null);
     }
+
+    /**
+     * AUTO_REGISTER_DESIGN §2.7 for POST /api/machine/home: a home that passed its API check, and a hold
+     * started after it, meet on the machine thread. The home looks at the hold again there and does
+     * not start (G28 is never sent) while the hold is on or starting.
+     */
+    @Test
+    public void theWebHomeDoesNotStartWhileTheHoldIsOn() throws Exception {
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        sim.machine.submit(() -> {
+            release.await();
+            return null;
+        });
+        sim.server.mark();
+        String[] homed = {""};
+        int[] status = new int[1];
+        Thread home = new Thread(() -> {
+            try {
+                HttpResponse<String> r = http.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:"
+                        + api.getPort() + "/api/machine/home")).timeout(Duration.ofSeconds(120))
+                        .header("Content-Type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString("{\"wait\":true}")).build(),
+                        HttpResponse.BodyHandlers.ofString());
+                status[0] = r.statusCode();
+                homed[0] = r.body();
+            }
+            catch (Exception e) {
+                homed[0] = String.valueOf(e);
+            }
+        });
+        home.start();
+        Thread.sleep(500); // its API checks passed: the home task waits behind the blocker
+        Thread hold = new Thread(() -> {
+            try {
+                call("POST", "/api/pressure/start", null);
+            }
+            catch (Exception e) {
+                // the state is checked below
+            }
+        });
+        hold.start();
+        long t0 = System.currentTimeMillis();
+        while (!"starting".equals(pressure().get("state").getAsString())) {
+            assertTrue(System.currentTimeMillis() - t0 < 10000, "the hold's start is queued");
+            Thread.sleep(10);
+        }
+        release.countDown();
+        home.join(30000);
+        hold.join(30000);
+        assertEquals(409, status[0], homed[0]);
+        assertTrue(homed[0].contains("the pressure hold came on before the home started"), homed[0]);
+        assertFalse(sim.server.sinceMark().stream().anyMatch(l -> l.startsWith("G28")), "no home under pressure");
+        assertEquals("on", pressure().get("state").getAsString());
+        ok("POST", "/api/pressure/stop", null);
+    }
 }

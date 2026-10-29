@@ -191,7 +191,15 @@ final class MachineEndpoints {
         // With the engine: N1 raised first when a STOP left it low, and a STOP during the home stops the
         // head for good (the drivers are disconnected), as the engine's own homes (§2.3).
         boolean safe = svc != null && svc.isAvailable();
-        Future<HomeReport> f = m.submit(() -> {
+        Object held = new Object();
+        Future<Object> f = m.submit(() -> {
+            // Again on the machine thread, where the hold's start is serialised with this home (§2.7): a
+            // hold queued between the check above and this task must not see the head home under
+            // pressure. Returned, not thrown: OpenPnP drops every task queued behind one that throws.
+            if (ctx.pressure.isActive()) {
+                Logger.info("web home not started: the pressure hold came on before it");
+                return held;
+            }
             if (safe) {
                 return svc.homeSafely();
             }
@@ -201,14 +209,19 @@ final class MachineEndpoints {
         if (!wait) {
             return ApiServer.Response.json(202, Views.map("started", true, "homing", true));
         }
-        HomeReport rep;
+        Object rep;
         try {
             rep = f.get(5, TimeUnit.MINUTES);
         }
         catch (ExecutionException e) {
             throw ApiException.refused("homing failed: " + rootMessage(e));
         }
-        return Views.map("homed", m.isHomed(), "n1RaisedFromZ", rep == null ? null : rep.n1RaisedFromZ);
+        if (rep == held) {
+            throw ApiException.refused("the pressure hold came on before the home started: switch the pressure off "
+                    + "first, then home");
+        }
+        return Views.map("homed", m.isHomed(), "n1RaisedFromZ", rep instanceof HomeReport
+                ? ((HomeReport) rep).n1RaisedFromZ : null);
     }
 
     static String rootMessage(Throwable t) {

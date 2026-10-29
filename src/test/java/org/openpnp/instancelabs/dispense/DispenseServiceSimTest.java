@@ -301,6 +301,30 @@ public class DispenseServiceSimTest {
     }
 
     /**
+     * AUTO_REGISTER_DESIGN tasks-api rule: a STOP is told by the executor's flag, not by the exception.
+     * A STOP that surfaces as another call's failure (here the clean-pad camera, as a home's position
+     * read or an OpenPnP move would) still ends the run ABORTED with the STOP's reason, before the
+     * pressure goes on.
+     */
+    @Test
+    public void aStopThatSurfacesAsAnotherFailureEndsAborted() throws Exception {
+        DispensePlan plan = plan();
+        svc.setDotImager(new FakeImager() {
+            @Override
+            public Frame capture(double x, double y) {
+                svc.abort("STOP pressed in the web UI");
+                throw new IllegalStateException("camera: the machine is stopping");
+            }
+        });
+        sim.server.mark();
+        RunResult r = svc.runPlan(plan).get(60, TimeUnit.SECONDS);
+        assertEquals(RunResult.Status.ABORTED, r.status, r.toString());
+        assertEquals("STOP pressed in the web UI", r.message);
+        assertNothingStreamed(sim.server.sinceMark());
+        assertFalse(svc.isBusy());
+    }
+
+    /**
      * I11: the B step count restarts at a controller power-up, so a start angle set before the last
      * connect is refused until it is confirmed (or measured again).
      */

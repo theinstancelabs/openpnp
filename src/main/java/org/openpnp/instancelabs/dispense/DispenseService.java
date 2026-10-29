@@ -1424,6 +1424,9 @@ public final class DispenseService {
                 at = n1.getDriver().getReportedLocation(c.commandTimeoutMs);
             }
             catch (Exception e) {
+                if (aborted.getAsBoolean()) {
+                    throw new DispenseExecutor.AbortedException(abortReason(exec, "stopped before homing"));
+                }
                 throw refused("MACHINE: homing failed: the controller did not report its position (" + e.getMessage()
                         + "). Nothing else was done; home from the strip and try again.");
             }
@@ -1541,8 +1544,8 @@ public final class DispenseService {
             t.x = ref.x;
             t.y = ref.y;
             t.storedZ = ref.z;
-            VacuumProber.Point p = pr.run(Collections.singletonList(t), VacuumProber.Window.around(ref.z, pr.travelZ,
-                    pr.settings)).get(0);
+            VacuumProber.Point p = pr.run("z check", Collections.singletonList(t), VacuumProber.Window.around(ref.z,
+                    pr.travelZ, pr.settings)).get(0);
             if ("not-bare".equals(p.state)) {
                 s.r.warnings.add("Z check: " + p.failure + " (the next stored point is used)");
                 continue;
@@ -1571,6 +1574,8 @@ public final class DispenseService {
         /** The raw Z the dispense stream travels at, sent as N1 Z. */
         final double travelZ;
         final BooleanSupplier aborted;
+        /** The points the prober reported in the current run: the record of a run that refused or stopped. */
+        private final Map<Integer, VacuumProber.Point> seen = new LinkedHashMap<>();
 
         Probe(Session s, BooleanSupplier aborted, java.util.function.Consumer<VacuumProber.Point> progress)
                 throws Exception {
@@ -1592,7 +1597,12 @@ public final class DispenseService {
             // everything OpenPnP queued must be done before the raw probe lines start
             m.getMotionPlanner().waitForCompletion(null, CompletionType.WaitForStillstand);
             prober = new VacuumProber(settings, n1, VacuumProber.gatedIo(s.exec, s.r), spotLook(imager()), s.r,
-                    aborted, progress, baselineMemory);
+                    aborted, pt -> {
+                        seen.put(pt.n, pt);
+                        if (progress != null) {
+                            progress.accept(pt);
+                        }
+                    }, baselineMemory);
         }
 
         /**
@@ -1600,12 +1610,17 @@ public final class DispenseService {
          * after a STOP or failed end lines (the prober sent the I1 shutdown) the session recovers
          * instead (position read-back, un-home). A STOP is told by the flags, not by the exception:
          * a STOP during the camera look surfaces as the look's exception, which is rethrown as the
-         * STOP so every task records it as stopped.
+         * STOP so every task records it as stopped. However it ended, a PROBE event keeps every
+         * point's readings, release wait and look ({@code what}: the z check, same seat, the probe).
          */
-        List<VacuumProber.Point> run(List<VacuumProber.Target> targets, VacuumProber.Window w) throws Exception {
+        List<VacuumProber.Point> run(String what, List<VacuumProber.Target> targets, VacuumProber.Window w)
+                throws Exception {
             boolean recovered = false;
+            List<VacuumProber.Point> out = null;
+            seen.clear();
             try {
-                return prober.probe(targets, w);
+                out = prober.probe(targets, w);
+                return out;
             }
             catch (Exception e) {
                 boolean stop = aborted.getAsBoolean();
@@ -1625,6 +1640,22 @@ public final class DispenseService {
                 if (!recovered && !prober.needsRecovery()) {
                     n1.resync(prober.finalPlanned(), prober.finalDriver(), n1.currentB());
                 }
+                record(what, w, out);
+            }
+        }
+
+        /** The PROBE event of one run: the real machine needs the readings of a refused probe most (§5.4). */
+        private void record(String what, VacuumProber.Window w, List<VacuumProber.Point> out) {
+            try {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("what", what);
+                m.put("window", w);
+                m.put("points", out != null ? out : new ArrayList<>(seen.values()));
+                db.event(s.r.runId, out != null && VacuumProber.refusal(out) == null ? "INFO" : "WARN", "PROBE",
+                        new Gson().toJson(m));
+            }
+            catch (RuntimeException e) {
+                Logger.warn(e, "dispense: the probe record was not written");
             }
         }
     }
@@ -2045,7 +2076,7 @@ public final class DispenseService {
             t.points.put(x.n, todo);
         }
         t.send();
-        List<VacuumProber.Point> pts = p.run(targets, pr.window);
+        List<VacuumProber.Point> pts = p.run("board probe", targets, pr.window);
         pr.points = pts;
         String why = VacuumProber.refusal(pts);
         if (why != null) {
@@ -2115,8 +2146,8 @@ public final class DispenseService {
         }
         t.stepsPlanned = t.stepsDone + 3 + 1;
         t.secondsLeft = 3 * PROBE_POINT_ESTIMATE_S;
-        List<VacuumProber.Point> pts = p.run(targets, VacuumProber.Window.around(targets.get(0).storedZ, p.travelZ,
-                p.settings));
+        List<VacuumProber.Point> pts = p.run("same seat", targets, VacuumProber.Window.around(targets.get(0).storedZ,
+                p.travelZ, p.settings));
         boolean pass = true;
         SameSeatReport.Point worst = null;
         for (int k = 0; k < 3; k++) {
@@ -2226,7 +2257,7 @@ public final class DispenseService {
         Probe p = new Probe(s, t::aborted, pt -> t.point("probe", targets.size(), pt));
         String what = "the '" + req.surfaceName + "' place Z";
         res.window = VacuumProber.preflight(c, false, what, req.nominalZ, p.travelZ, p.settings, p.n1.getNozzle());
-        List<VacuumProber.Point> pts = p.run(targets, res.window);
+        List<VacuumProber.Point> pts = p.run("'" + req.surfaceName + "' probe", targets, res.window);
         res.points = pts;
         String why = VacuumProber.refusal(pts);
         if (why != null) {
@@ -2278,7 +2309,6 @@ public final class DispenseService {
                 ZCheck.clock(System.currentTimeMillis()), sp.size(), shortRun(r.runId));
         setSurface(req.surfaceName, sp, note, null, sim ? Boolean.TRUE : null);
         res.saved = true;
-        db.event(r.runId, "INFO", "PROBE", new Gson().toJson(res.points));
         phase(r, "surface: saved");
         t.stepsDone = t.stepsPlanned;
         t.send();
@@ -2571,12 +2601,7 @@ public final class DispenseService {
                     return body.call();
                 }
                 catch (Exception e) {
-                    if (r.status == RunResult.Status.RUNNING) {
-                        r.status = e instanceof RunRefusedException ? RunResult.Status.REFUSED
-                                : e instanceof DispenseExecutor.AbortedException ? RunResult.Status.ABORTED
-                                        : RunResult.Status.ERROR;
-                        r.message = String.valueOf(e.getMessage());
-                    }
+                    classifyFailure(r, e);
                     Logger.error(e, "dispense {} failed", r.kind);
                     return r;
                 }
@@ -2607,12 +2632,7 @@ public final class DispenseService {
                     body.run();
                 }
                 catch (Exception e) {
-                    if (r.status == RunResult.Status.RUNNING) {
-                        r.status = e instanceof RunRefusedException ? RunResult.Status.REFUSED
-                                : e instanceof DispenseExecutor.AbortedException ? RunResult.Status.ABORTED
-                                        : RunResult.Status.ERROR;
-                        r.message = String.valueOf(e.getMessage());
-                    }
+                    classifyFailure(r, e);
                     Logger.error(e, "dispense {} failed", r.kind);
                 }
                 finally {
@@ -2625,6 +2645,23 @@ public final class DispenseService {
             busy.set(false);
             throw e;
         }
+    }
+
+    /**
+     * The status of a task that ended by an exception. A STOP is told by the executor's abort flag,
+     * not by the exception: a STOP during a home, a camera move or a position read surfaces as that
+     * call's exception, and must still end ABORTED (the UI opens Recovery) with the STOP's reason.
+     */
+    private void classifyFailure(RunResult r, Exception e) {
+        if (r.status != RunResult.Status.RUNNING) {
+            return;
+        }
+        DispenseExecutor x = activeExecutor;
+        boolean stop = e instanceof DispenseExecutor.AbortedException || (x != null && x.isAbortRequested());
+        r.status = stop ? RunResult.Status.ABORTED
+                : e instanceof RunRefusedException ? RunResult.Status.REFUSED : RunResult.Status.ERROR;
+        r.message = stop && !(e instanceof DispenseExecutor.AbortedException)
+                ? abortReason(x, String.valueOf(e.getMessage())) : String.valueOf(e.getMessage());
     }
 
     /**
