@@ -2631,7 +2631,8 @@ Where the code differs from the sections above, the code is right:
 
 - **§3.3, the search bound (F4).** `searchRadiusMm` bounds the distance of a mark from the fiducial's **expected**
   position (the board key's last registration when it still applies, else the nominal seat, §3.7), not from the
-  prediction. The prediction (moved by the first find, then the similarity of two) only places the search frames. A
+  prediction. The prediction (moved by the first find, then the similarity of two) only orders the search frames, which
+  tile the circle around the expected position (at most 9), the one nearest the prediction first (final fix round). A
   mark that centring carries past the bound is not found either. The failure names the expected position: `REG: FID1
   not found within 8.0 mm of X 352.11, Y 108.55 (3 camera frames). …`. On the machine a first registration of board 3,
   which sits 9.2 mm off its nominal, needs the board X/Y corrected or the radius widened (12 worked). §3.7's "from the
@@ -2690,5 +2691,6 @@ Where the code differs from the sections above, the code is right:
   probe), 6 (5 mm / −4.6° re-seat), 8 (fit against the previous registration), 12 (release lag 0.4 s), 15 (job board:
   no headless seam) and 22 (a run with a simulated surface on a Marlin link) have no `RegistrationSimTest` case; the
   engine-core and vision unit tests cover the code paths. Review 1's open minors (the probe floor of a board far below
-  the anchor, frames against the acceptance circle, the rotation-dependent fit check, the camera look's mm/px) are
-  listed in `REAL_MACHINE_TODO.md` for the final fix round.
+  the anchor, the camera look's mm/px) are listed in `REAL_MACHINE_TODO.md` for the final fix round; the frames
+  against the acceptance circle and the rotation-dependent fit check are fixed (the fit against the previous
+  registration compares the machine-frame stretch, `FiducialLocator.machineFrame`).
