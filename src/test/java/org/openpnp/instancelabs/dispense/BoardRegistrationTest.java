@@ -156,6 +156,28 @@ public class BoardRegistrationTest {
         assertTrue(Double.isNaN(file.maxMovedMm(Arrays.asList(fid("FID9", 0, 0)))));
     }
 
+    /**
+     * F8: a plan made again with only the board Z changed (4.50 → 5.35 after I4) keeps the registration, as
+     * {@link DispenseService#boardRegistration} does: editing the nominal Z does not move the board.
+     */
+    @Test
+    public void theBoardZIsNotPartOfTheSeat() throws Exception {
+        BoardLocation bl = nominal();
+        bl.setLocation(new Location(LengthUnit.Millimeters, 296.0, 114.5, 4.50, 0));
+        BoardLocation z = new BoardLocation(bl);
+        z.setLocation(new Location(LengthUnit.Millimeters, 296.0, 114.5, 5.35, 0));
+        for (boolean job : new boolean[] {false, true}) {
+            String key = job ? "job:Brd1" : "file:/a.board.xml";
+            BoardRegistration r = reg(bl, key, job);
+            BoardRegistration.Nominal n = BoardRegistration.Nominal.of(z, job);
+            assertTrue(r.matches(key, n, bl.getBoard()), key);
+            assertNull(r.refusal(key, n, bl.getBoard(), () -> false), key);
+            assertEquals(5.35, r.applyTo(z).getGlobalLocation().convertToUnits(LengthUnit.Millimeters).getZ(), 1e-9,
+                    "the plan's own board Z");
+        }
+        assertEquals(DispenseService.boardRegistration(bl), DispenseService.boardRegistration(z));
+    }
+
     @Test
     public void aSimulatorRecordIsRefusedUnlessTheGuardSaysSimulator() {
         BoardLocation bl = nominal();

@@ -695,6 +695,9 @@ public class RegistrationSimTest {
         Res elsewhere = post("/api/plan", planBody(id3).replace("\"x\":" + NX, "\"x\":" + (NX + 1)));
         assertEquals(409, elsewhere.status);
         assertTrue(elsewhere.body.contains("belongs to another board or position"), elsewhere.toString());
+        // F8: only the board Z typed again (as I4 asks) keeps the registration
+        assertEquals(id3, ok(post("/api/plan", planBody("auto").replace("\"z\":" + NZ, "\"z\":" + (NZ - 0.85))))
+                .getAsJsonObject("registration").get("id").getAsString());
 
         // a fiducial moved in the board file: the record no longer applies (auto plans without it)
         org.openpnp.model.Placement fid2 = null;
