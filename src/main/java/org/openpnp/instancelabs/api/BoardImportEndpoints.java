@@ -8,7 +8,8 @@ import org.openpnp.instancelabs.dispense.DispenseService;
 
 /**
  * KiCad board upload (BOARD_IMPORT_DESIGN.md §3.2): preview, save and attach take the raw file (up to 12 MB) and are
- * refused while a dispense task runs; the board drawings are served by id with an immutable cache header (§4.4).
+ * refused while a dispense task runs (and no task starts while they read it); the board drawings are served by id with
+ * an immutable cache header (§4.4).
  */
 final class BoardImportEndpoints {
     static final String ART_CACHE = "private, max-age=31536000, immutable";
@@ -79,13 +80,18 @@ final class BoardImportEndpoints {
         return ApiServer.Response.bytes(200, "application/json; charset=utf-8", b).header("Cache-Control", ART_CACHE);
     }
 
-    /** The importer, once the engine is idle (no file is read while a dispense, registration or probe task runs). */
+    /**
+     * The importer: once it holds the pipeline, the engine must be idle (no file is read while a dispense,
+     * registration or probe task runs, or a pad calibration is between its steps), and while it holds it no such
+     * task starts ({@link ApiContext#requireEngineIdle}).
+     */
     private BoardImporter importer() throws ApiException {
         DispenseService svc = ctx.availableSvc();
-        if (svc.isBusy()) {
-            throw ApiException.refused("Upload the board when the run has finished.");
-        }
-        return new BoardImporter(ctx.configuration, svc);
+        return new BoardImporter(ctx.configuration, svc, () -> {
+            if (svc.isBusy() || ctx.padCalJobs.lockReason() != null) {
+                throw ApiException.refused("Upload the board when the run has finished.");
+            }
+        });
     }
 
     private static boolean flag(ApiServer.Request r, String name) throws ApiException {

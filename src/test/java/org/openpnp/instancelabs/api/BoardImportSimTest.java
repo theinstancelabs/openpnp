@@ -740,6 +740,69 @@ public class BoardImportSimTest {
         assertFalse(new File(boardsRoot(), "ftp").exists());
     }
 
+    /**
+     * Review 1: an upload checked once, at its start, that the engine was idle, then read the file for up to 20 s
+     * while a run, a registration or a probe could start (§3.4: no parse while one streams). They now refuse while
+     * an upload holds the pipeline.
+     */
+    @Test
+    public void runsAndProbesWaitForTheUploadToFinish() throws Exception {
+        setUpBoardRuns();
+        ok(send("PUT", "/api/pad-types/chip-0603", "{\"status\":\"characterized\"}".getBytes(StandardCharsets.UTF_8),
+                "Content-Type", "application/json"));
+        JsonObject plan = planTied(writeBoard(new double[][] {{2, 2, 0}, {6, 2, 0}}));
+        assertTrue(plan.getAsJsonObject("interlocks").get("ok").getAsBoolean(), plan.toString());
+        String run = "{\"planId\":\"" + plan.get("planId").getAsString() + "\"}";
+        byte[] ftp = fixture(FTP);
+        CountDownLatch inside = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        BoardImporter.inPipeline = () -> {
+            inside.countDown();
+            try {
+                release.await(20, TimeUnit.SECONDS);
+            }
+            catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        };
+        AtomicReference<Res> uploaded = new AtomicReference<>();
+        Thread t = new Thread(() -> {
+            try {
+                uploaded.set(upload("/api/boards/import?file=ftp.kicad_pcb", ftp));
+            }
+            catch (Exception e) {
+                // asserted below
+            }
+        });
+        t.start();
+        try {
+            assertTrue(inside.await(20, TimeUnit.SECONDS));
+            BoardImporter.inPipeline = null;
+            String why = "a board file is being read (an upload takes up to about 20 s): wait for it to finish";
+            assertEquals(why, refused(postJson("/api/run", run), 409, "refused").get("reason").getAsString());
+            assertEquals(why, refused(postJson("/api/surfaces/blank/probe", "{}"), 409, "refused").get("reason")
+                    .getAsString());
+            assertFalse(svc.isBusy(), "nothing started");
+        }
+        finally {
+            release.countDown();
+            t.join(60_000);
+        }
+        assertEquals(200, uploaded.get().status, String.valueOf(uploaded.get()));
+        sim.server.delayBeforeOkMs.put("G4", 60L);
+        try {
+            assertEquals(202, postJson("/api/run", run).status, "the upload has finished");
+        }
+        finally {
+            ok(postJson("/api/stop", null));
+            sim.server.delayBeforeOkMs.clear();
+            long t0 = System.currentTimeMillis();
+            while (svc.isBusy() && System.currentTimeMillis() - t0 < 30_000) {
+                Thread.sleep(20);
+            }
+        }
+    }
+
     // ------------------------------------------------------------------------------------------
     // 11: ids and cleaning
     // ------------------------------------------------------------------------------------------

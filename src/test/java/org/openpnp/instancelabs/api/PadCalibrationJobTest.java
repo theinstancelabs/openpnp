@@ -367,6 +367,9 @@ public class PadCalibrationJobTest {
                 "/api/run", "{\"planId\":\"" + planId + "\"}"), "refused"));
         assertEquals("a pad calibration is running (coupons): wait for it or press STOP", refused(call("PUT",
                 "/api/calibration-area", "{}"), "refused"));
+        // no board file is read between its engine steps either (BI §3.4)
+        assertEquals("Upload the board when the run has finished.", refused(call("POST",
+                "/api/boards/import?file=x.kicad_pcb", "(kicad_pcb (version 20240108))"), "refused"));
         engine.release.countDown();
         JsonObject waiting = awaitState("awaiting-reading");
         assertEquals(List.of("probe coupon1", "probe coupon2", "pad-ladder", "pad-weigh"), engine.calls);
