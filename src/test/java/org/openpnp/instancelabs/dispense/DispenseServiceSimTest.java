@@ -354,6 +354,47 @@ public class DispenseServiceSimTest {
         assertFalse(r.homedFirst, "homed by the test: no home of its own");
     }
 
+    /** A disable and a home (a new connect: the start angle is confirmed again, I11). */
+    void homeAgain() throws Exception {
+        Thread.sleep(5);
+        sim.machine.setEnabled(false);
+        sim.enableAndHome();
+        svc.setStartAngle(null, "not power-cycled");
+    }
+
+    /**
+     * Review 1 (machine safety), I4: home 1 moved Z by 0.80 mm (the bench's frame vs OpenPnP's); the board
+     * was probed again after it, the needle frame, the touch-off and the blank were not; home 2 repeats
+     * home 1. The run's Z check agrees on the board, but that board point was measured after home 1 and
+     * vouches only for data of its frame: the check also touches the blank, which shows the move, and the
+     * run is refused before the pressure goes on (the needle would be about 2 x 0.8 mm off).
+     */
+    @Test
+    public void aBoardProbedAfterAHomeDoesNotVouchForTheNeedleFrameFromBeforeIt() throws Exception {
+        homeAgain(); // home 1: every surface now seals 0.80 mm higher than stored
+        FlatVacuum.install(sim, FlatVacuum.scene(5.45 + 0.80, new double[] {90, 70, 120, 95}, 5.6 + 0.80));
+        DispenseConfig fast = svc.getConfig();
+        FlatVacuum.fastTimings(fast);
+        svc.updateConfig(fast);
+        svc.setSurface("board", pts(new double[][] {{95, 75, 6.4}, {115, 75, 6.4}, {95, 90, 6.4}, {115, 90, 6.4}}),
+                "probed after home 1", TOY_BOARD);
+        homeAgain(); // home 2 repeats home 1
+        DispensePlan plan = plan();
+        phases.clear();
+        sim.server.mark();
+        RunResult r = svc.runPlan(plan).get(60, TimeUnit.SECONDS);
+        assertEquals(RunResult.Status.REFUSED, r.status, r.toString());
+        assertTrue(r.message.startsWith("I4: Z moved 0.8"), r.message);
+        assertTrue(phases.contains("z check: the board") && phases.contains("z check: the blank"), phases.toString());
+        List<String> sent = sim.server.sinceMark();
+        assertFalse(sent.contains(ControllerCommands.PUMP_ON) || sent.contains(ControllerCommands.VALVE_ON),
+                "the pressure never went on");
+        assertTrue(sent.stream().noneMatch(l -> l.startsWith("G1 B")), "the screw never turned");
+        assertTrue(svc.zCheckPlan(plan, false).needed);
+        InterlockReport i = svc.checkInterlocks(plan, 1);
+        assertTrue(i.toString().contains("Z moved 0.8"), i.toString());
+    }
+
     /** A plan made on another recipe is stale: anything that changes a dot changes its fingerprint. */
     @Test
     public void profileChangedAfterPlanningIsRefused() throws Exception {

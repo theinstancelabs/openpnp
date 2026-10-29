@@ -957,6 +957,9 @@ public class ApiServerSimTest {
         // I4 state cannot be forged through the settings; an unchanged round-trip is accepted
         Res forge = call("PUT", "/api/config", "{\"needleZOffsetSetAtMs\":" + System.currentTimeMillis() + "}");
         assertEquals(400, forge.status, forge.toString());
+        // nor the Z frame of the touch-off (the home it was measured under, ZCheck)
+        forge = call("PUT", "/api/config", "{\"needleZOffsetHomeAtMs\":" + System.currentTimeMillis() + "}");
+        assertEquals(400, forge.status, forge.toString());
         JsonObject all = ok(get("/api/config"));
         assertEquals(200, call("PUT", "/api/config", all.toString()).status);
         assertEquals(404, get("/static/..").status);

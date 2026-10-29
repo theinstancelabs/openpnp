@@ -81,6 +81,8 @@ public class DispenseConfig {
     public double needleZOffsetMm = 0.0;
     /** Epoch ms of the last needle touch-off; null = never (I4). */
     public Long needleZOffsetSetAtMs = null;
+    /** The Z frame of the touch-off ({@link ZCheck}: the home it was measured or last checked under); null = unknown. */
+    public Long needleZOffsetHomeAtMs = null;
     /** Epoch ms of the last needle change; I4 requires a touch-off after it. */
     public Long needleChangedAtMs = null;
     /**
@@ -376,6 +378,8 @@ public class DispenseConfig {
         /** Where (informational). */
         public Double xMm, yMm;
         public long setAtMs;
+        /** Its Z frame ({@link ZCheck}: the home it was measured or last checked under); null = unknown. */
+        public Long homeAtMs;
         /**
          * Set when the needle contact came from the bench relation "needle contact raw Z = K - N1
          * contact Z" (side camera): K, else null (needle touched the surface).
@@ -416,6 +420,8 @@ public class DispenseConfig {
     public static class SurfaceMap {
         public java.util.List<SurfacePoint> points = new java.util.ArrayList<>();
         public Long setAtMs;
+        /** Its Z frame ({@link ZCheck}: the home it was measured or last checked under); null = unknown. */
+        public Long homeAtMs;
         public String note;
         /**
          * Board surfaces: the board registration the points were probed on (board X/Y/rotation, side
