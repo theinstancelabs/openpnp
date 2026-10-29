@@ -67,7 +67,7 @@ Registering after boot works (mounted at once).
 | `planForgotten` | `GET /api/plan/{id}` answered 404 (OpenPnP restarted) → plan chip `Plan forgotten (OpenPnP restarted): plan again` |
 | `planAt` | client ms of the last plan read |
 | `cleanCheck` | newest clean-pad report of the plan shown (from the plan, a subset run, or `lastRun.cleanCheck`) |
-| `newSeatAtMs` | operator answered "re-seated / new board" (readiness item 6 needs a probe after it) |
+| `newSeatAtMs` | the engine's new-seat flag (`status.dispense.newSeatAtMs`, as client ms): readiness item 6 needs Register board after it. `IL.setNewSeat(atMs \| null)` posts `/api/board/new-seat`; `newSeatPending` keeps the answer for 3 s while the post is in flight |
 | `route` | `{ws, section, id, panel, params}` |
 | `recovery` | open recovery or null: `{cause: 'stop'|'aborted'|'error'|'openpnp', atMs, actions (server STOP answer), source ('F9'|'button'|'key'), run: {runId, label, boardName, planId, status, message, phase, dotsDone, dotsPlanned, doneDots, pressureOnS}, message, seenDown, purgeShort}` |
 | `lastStop` | the last recovery after it cleared (Run's board decision: finish the pads left / wipe all) |
@@ -76,8 +76,9 @@ Registering after boot works (mounted at once).
 | `connectedAt`, `homedAt` | client-observed transition times |
 | `runPressureSince` | client stamp of the first poll of a run's pressure session (phase `dispensing` / `shots` / `dispensing calibration dots`) |
 
-Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, `['il.newSeatAtMs']`, (Run:
-`['il.boardloc.<file>']`); `sessionStorage['il.recovery']`.
+Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, (Run: `['il.boardloc.<file>']`);
+`sessionStorage['il.recovery']`, (Run: `['il.run.regResult']`, Setup: `['il.setup.blankRun']`). A value left in
+`localStorage['il.newSeatAtMs']` by an older page is posted to the engine once, then removed.
 
 ## 4. Events (`IL.on(name, fn)` returns the unsubscribe function)
 
@@ -86,7 +87,7 @@ Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, `
 | `status` | `(status, prev)` | every good poll, before rendering |
 | `plan` | `(plan, prev)` | `setPlan`, `loadPlan`, `planRefresh`, 404 (plan null + `S.planForgotten`) |
 | `cleancheck` | `(report)` | a newer clean-pad report of the plan shown was adopted |
-| `taskend` | `(run)` | a task (board, clean-pad check, prime, test dot, touch-off, ladder, shots) ended; core already re-read the plan and runs |
+| `taskend` | `(run)` | a task (board, clean-pad check, prime, test dot, touch-off, ladder, shots, board registration, blank probe, z check) ended; core already re-read the plan and runs |
 | `stop` | `(answer)` | our STOP was confirmed (`answer.actions`) |
 | `recovery` | `(rec or null)` | a recovery opened / cleared |
 | `online` | `(bool)` | offline after 3 s without an answer / back |
@@ -157,6 +158,10 @@ Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, `
 - `IL.stoppedRun(s)`: the status still shows the run our STOP just stopped (≤ 5 s): the strip, the plan chip and Run
   show it as stopped / switching off, never as dispensing. `IL.noDotsReached(run)`: a stopped board run put no dot down
   (one action: run the board again).
+- `IL.regProgress(run)`: where a Register board / blank probe task is, from `status.run.detail`: `{stage, k, n, part
+  ('home' | 'FID 2/3' | 'check 2/3' | 'probe 3/5' | 'plan again'), left (s, counting down between the engine's steps)}`.
+  The strip, the plan chip, the stepper and the foot button share it. `IL.TASK_WORD` maps task labels to words
+  (`board registration` → `Register`, `blank probe`, `z check`).
 - `IL.boardLeftS(run)`: seconds left of a board run, the one number for the strip, tiles, timeline and stepper (the
   live rate blended with the plan estimate over the first 20 dots). `IL.tourProgress` (set by run.js): the camera tour
   progress `{text, left, k, n, approx}` the strip and the Pads clean card share.
@@ -185,9 +190,17 @@ Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, `
   `purge-reset` (two-press), `pressure-on` (two-press unless N2 ≤ 3 mm from the waste), `pressure-off`,
   `attest-regulator`, `attest-paste`, `same-seat`. Run registers `plan-again`, `clean-check` (two-press), `probe`,
   `run-rest` (`{planId, padIds}` → the run confirm for those pads, never one this tab saw pasted), `run-fewer` (I7: a
-  test run of the first N dots that fits the on-time limit); Setup registers `su-go-<card>`, `su-probe-blank`. Every gated fix-it row gets a visible
+  test run of the first N dots that fits the on-time limit), and Register board's (AUTO_REGISTER_DESIGN.md §8.2):
+  `register` (two-press, `probe: auto`), `register-check` (clears the new-seat flag, then registers: the fiducials decide
+  "same seat"), `probe-by-hand` (opens "Do it by hand" on Register), `look-camera` (Setup's Top camera card),
+  `plan-unregistered` (plans the board with `registration: 'none'`), `board-step`, `check-z` (two-press,
+  `POST /api/machine/z-check`); Setup registers `su-go-<card>`, `su-probe-blank`. Every gated fix-it row gets a visible
   `.fix-why` reason line from core (rows marked `[data-own-reason]` show their own).
-  `IL.fixesForCode(code, status, message)`: an I4 refusal that names a place offers `Retake Z with N1` (#setup/places/<name>).
+  `IL.fixesForCode(code, status, message)`: an I4 refusal that names a place offers `Retake Z with N1` (#setup/places/<name>);
+  I4 seat / surface → `Register board`, `Do it by hand`; I4 "measured before the home" → `Check Z`; I4 "Z moved" →
+  Needle Z frame; `REG` → `Look with the camera`, `Change board`, `Plan without fiducial correction`, `Register again`,
+  `Do it by hand`; `PROBE` → `Register again`, `Do it by hand` (+ `Probe the blank…` when it names the blank).
+  `IL.CODE_RE` is the code prefix of an engine text (`I4:`, `MACHINE:`, `CONFIG:`, `PLAN:`, `REG:`, `PROBE:`).
 - `IL.lockReason(status, {connected, homed, idle = true, pressureOff = true, engine})` → the spec's locked-control
   text (`Locked while the board runs`, `Pressure is held: switch it off first`, `Not connected: connect first`, offline)
   or null. `IL.gate(btn, reason, reasonEl?)` disables with the reason (title + optional visible `.reason` line).
@@ -228,7 +241,8 @@ or label: "2,343 ms", "bench 5,490"), `IL.unitText(h)` (header text whose units 
 headers), `IL.eventText(msg)` (OpenPnP event text with UUIDs, fingerprints and JSON folded; full text as title),
 `IL.startAnglesText(profile)` ("297.9° / 117.9° (in whole motor steps)"), `IL.lsJson / lsSet` (localStorage), `IL.ssJson(key, fallback) / IL.ssSet(key, value)` (sessionStorage, JSON).
 Format (display only; real minus `−`): `IL.fmt(n, d=2)`, `fmtSigned`, `fmtInt` (`5,410`), `fmtPsi` (`18`, `18.5`),
-`fmtMm`, `fmtDeg` (`298.0°`), `fmtClock` (`1:15`), `fmtDuration` (`4.0 s`, `5 min 16 s`), `fmtTime` (`13:06`),
+`fmtMm`, `fmtDeg` (`298.0°`), `fmtClock` (`1:15`), `fmtDuration` (`4.0 s`, `5 min 16 s`), `fmtSecs` (an estimate:
+`25 s`, `1 min 25 s`), `fmtTime` (`13:06`),
 `fmtTimeS` (`14:19:42`), `fmtDateTime`, `fmtAgo`, `plural(n, 'dot')`, `turnLabel(800, 1600)` (`½ turn`),
 `recipeParts(profile)`, `recipeEl(profile, {changed, href})` (the `.recipe` token; `aria-label` = parts without the
 name joined by ` · `), `profileText`. Inputs: `IL.inputNum(n, d)` (ASCII; d decimals unless that would lose digits:
@@ -323,3 +337,45 @@ Never `/dev/ttyACM*`, `/dev/serial/*`, `/dev/video*` or a real-mode OpenPnP.
 - Optional API additions of §17 in place: `GET /api/plans` (plan restore in a fresh browser) and `run.pressureOnAtMs`
   (pressure on-time of a run, also after a reload). Not added (fallbacks in use): `run.checkDone/checkPlanned` (camera
   tour progress is estimated, labelled `≈`), `server.simulated` (inferred from the driver connection).
+
+## 11. Register board, home at run, Z check (AUTO_REGISTER_DESIGN.md §8, 2026-10-29)
+
+- **Run › Register** (key and route stay `probe`): `#reg-correction` (what the plan's dots use: `fiducial check 13:05`,
+  `… (before the last Next board)`, `no fiducial correction`), `#reg-preview` (idle: the seat it expects and the spots),
+  `ol.phases#reg-phases` (live), `table#reg-fids` and `table#reg-probes` (expected / found, Z and state; a refused point
+  gets a row with its reason in words), `div.ri#reg-result` (the result card: its first sentence is machine-readable,
+  `Registered 13:05: …`, `Same seat 13:12: …`, `Re-seated …`, `Not registered: …`, `Registered 13:05, but the probe
+  failed: …`, `Stopped 13:06 during …`), `#probe-tiles` (the points by hand, else the tied surface), and
+  `details#probe-by-hand` (today's guide, targets and untied note, ids unchanged). The foot is built once with both sets:
+  `#register-note`, `#btn-register` (two-press, `Register board · ≈ M:SS` from `registrationTargets.estimatedSeconds`
+  and the live home plan; `Registering… · ≈ 0:41 left` while it runs), `#btn-reg-continue` (`Checks ›` after a good
+  result), `#register-why`; or the by-hand `#probe-live`, `#probe-warn`, `#btn-probe-add`, `#btn-probe-save`,
+  `#probe-why`. `R.byHand` (panel state) chooses. `#btn-reg-again`, `#btn-reg-probe` (`probe: always`) sit in the card.
+- **Run state:** `R.regResultRunId` (sessionStorage `il.run.regResult`; cleared by `Checks ›`, a plan from the Board
+  step, another task), `R.regLoaded` (the run ids whose `nextPlanId` this tab loaded: a reload or a second browser
+  catches up from `status.run`), `R.regDetail` (the last live detail, for the stopped texts). `autoStep` returns
+  `probe` while the plan's registration runs or a result is shown. The by-hand targets are the engine's
+  (`plan.registrationTargets.probes`); the bounding-box targets stay as the fallback. The plan's preview is computed
+  again (`GET /api/plan/{id}/registration-targets`) when the machine is stopped, started or homed.
+- **Hero overlay:** `bv.update({probe, fids})` on the Register step (idle, live, result). `g.pv-l-fids` (boardview.js
+  `drawFids`, cased with the §5.3 overlay tokens): a dashed circle of the search radius at the expected position, a
+  cross there, a filled dot at the found one with a short leg; the name. Probe targets carry their alternates as small
+  rings; a refused target is struck through. The view keeps the search circles in sight.
+- **Home and Z:** the machine item is a note that counts ready (`state: 'info'`) when the engine homes first
+  (`status.machine.home.policy`): `homes first` / `homes first, checks Z`; the verdict reads `Ready to run · homes first
+  (≈ 25 s)`. `need` only when a STOP left N1 low (`home.n1Low`). Homed with Z data that predate the home:
+  `checks Z` with the `check-z` fix. The status I4 "measured before the home" no longer shows as a Place heights
+  blocker (a board run checks Z itself). Recovery's home step is done without a home unless N1 is low. The run confirm
+  shows `#run-confirm-home`; the Run step's phases add Home and Z check rows from `run.detail`.
+- **Board step:** `Board top Z (approximate, ±1 mm)`, prefilled when empty (`#board-z-note` says from where), the
+  plan's frame check under it; copy names Register board.
+- **Setup › Probe the blank** (`probe-blank` view): automatic (`ol.phases#blank-phases`, `table#blank-targets`,
+  `div.ri#blank-result`: `Saved 13:20: 6 points, worst 0.012 mm, covers 15 of 15 spots.` / `Not saved: …` / `Stopped …:
+  nothing was saved.`), the foot `#blank-note`, `#btn-blank-auto` (two-press), `#blank-why`; `details#blank-by-hand`
+  keeps today's table with `#btn-blank-add` / `#btn-blank-save` in the foot. Settings: `#set-homebefore`
+  (`homeBeforeRun`). The JSON editor never sends `boardRegistrations` or `newSeatAtMs` (engine stamps).
+- **Records:** `board-registration` → `Registration · <board>`, `surface-probe` → `Surface probe · <name>`, `z-check`.
+- **Board import hooks** (BOARD_IMPORT_DESIGN.md §5.1.1, no-ops until `boardflow.js` loads): H1 `mountBoardStep` in the
+  Board step, H2 `onPad` / `onPart` of the hero view, H3 `hero(bv, …)` before the empty-state switch (the SVG and the
+  stage bar show with a plan or a drawing), H4 `recordsMap(bv, plan)` after the Records map's `setPlan`, H5 the
+  replaced Records map view is destroyed.

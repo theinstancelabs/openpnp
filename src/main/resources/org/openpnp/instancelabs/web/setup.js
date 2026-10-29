@@ -21,9 +21,10 @@
   const STATUS_LABELS = { 'not-started': 'not started', provisional: 'provisional', characterized: 'characterized', validated: 'validated on a board' };
   const PLACE_RE = /^[A-Za-z0-9_-]{1,40}$/;
   /** Settings only their own actions may change: never sent by the JSON editor (WEB_API.md, PUT /api/config). */
-  const STAMPED_TOP = new Set(['needleZOffsetMm', 'needleZOffsetSetAtMs', 'needleChangedAtMs', 'needleAnchor', 'surfaces', 'schemaVersion']);
+  const STAMPED_TOP = new Set(['needleZOffsetMm', 'needleZOffsetSetAtMs', 'needleChangedAtMs', 'needleAnchor', 'surfaces', 'schemaVersion',
+    'boardRegistrations', 'newSeatAtMs']);
   const STAMPED_NESTED = new Set(['profile.startAngleSetAtMs', 'needleXyTrim.setAtMs', 'purgeRow.resetAtMs', 'purgeRow.usedSpots']);
-  const NESTED = new Set(['profile', 'purgeRow', 'cleanPadCheck', 'needleXyTrim']);
+  const NESTED = new Set(['profile', 'purgeRow', 'cleanPadCheck', 'needleXyTrim', 'fiducialCheck', 'vacuumProbe']);
   /** Maps PUT /api/config replaces whole: the editor diffs them per entry and Save sends the server's map as it is then
    *  with only the edited entries changed (a place saved meanwhile on the Places card is kept). */
   const BY_ENTRY = new Set(['locations']);
@@ -899,20 +900,125 @@
   }
 
   // ---------------------------------------------------------------------------------- probe the blank (panel view)
-  const PB = { points: [], name: null };
+  // Automatic (AUTO_REGISTER_DESIGN.md §8.4): N1 touches the blank beside the purge row with its vacuum, after a camera
+  // look at each spot; the plane is saved only when every point touched and it is flat. "Do it by hand" keeps today's
+  // table (ids unchanged); its open state chooses the foot. The panel stays open after the probe to show the result.
+  const PB = { points: [], name: null, byHand: false, prev: null, prevKey: null, prevBusy: false, runId: IL.ssJson('il.setup.blankRun', null), lastDetail: null };
+  const BLANK = 'blank probe';
+  const stripCode = (m) => String(m || '').replace(IL.CODE_RE, '$2');
+  /** The N1 contact Z the probe window is built around: the place's own Z, else (no place) the saved surface or the frame. */
+  function blankZ(s, name) {
+    const d = disp(s);
+    if (d.locations && d.locations[name]) return null;
+    const pts = surfPts((d.surfaces || {})[name]);
+    if (pts.length) return Math.round(pts.reduce((a, q) => a + q.z, 0) / pts.length * 1000) / 1000;
+    const an = d.needle && d.needle.anchor;
+    return an && isNum(an.surfaceZMm) ? Number(an.surfaceZMm) : null;
+  }
+  /** GET /api/surfaces/{name}/probe-targets: the spots, the window, the coverage, the home plan and the time (§7.4). */
+  function loadBlankPreview(s, name) {
+    const d = disp(s), pr = d.purgeRow || {}, m = (s && s.machine) || {};
+    const z = blankZ(s, name);
+    const key = [name, z, pr.x0Mm, pr.y0Mm, pr.pitchXMm, pr.pitchYMm, pr.spots, pr.usedSpots, m.enabled, m.homed, d.needle && d.needle.anchor && d.needle.anchor.setAtMs,
+      s && s.server && s.server.simulatorConfirmed].join('|');
+    if (key === PB.prevKey || PB.prevBusy) return;
+    PB.prevBusy = true;
+    IL.api('GET', '/api/surfaces/' + encodeURIComponent(name) + '/probe-targets' + (z !== null ? '?z=' + z : ''))
+      .then((t) => { PB.prev = t; PB.prevKey = key; }, (e) => { PB.prev = { error: IL.errorText(e), targets: [] }; PB.prevKey = key; })
+      .finally(() => { PB.prevBusy = false; IL.render(); });
+  }
+  IL.on('taskend', (run) => {
+    if (!run || run.label !== BLANK) return;
+    PB.runId = run.runId;
+    PB.lastDetail = run.detail || PB.lastDetail;
+    IL.ssSet('il.setup.blankRun', PB.runId);
+    PB.prevKey = null;   // the used spots and the surface changed: the preview again
+  });
+  /** Why the automatic probe cannot start now, or null: {text, href?, link?}. */
+  function blankWhy(s, name) {
+    const lock = IL.lockReason(s, { connected: true, engine: true });
+    if (lock) return { text: lock };
+    const d = disp(s);
+    if (!(d.needle && d.needle.anchor)) return { text: 'Record the needle Z frame first: the probe checks its heights against it', href: '#setup/needle', link: 'Open Needle Z frame' };
+    if (!PB.prev) return { text: 'Working out the spots…' };
+    if (PB.prev.error) {
+      const t = stripCode(PB.prev.error);
+      return /needle z frame/i.test(t) ? { text: t, href: '#setup/needle', link: 'Open Needle Z frame' }
+        : /purge row/i.test(t) ? { text: t, href: '#setup/purge', link: 'Open Purge row' } : { text: t };
+    }
+    if (!(PB.prev.targets || []).length) return { text: 'No spots to probe: set the purge row first', href: '#setup/purge', link: 'Open Purge row' };
+    return null;
+  }
+  function blankNote(s, name) {
+    const t = PB.prev;
+    if (!t || t.error || !(t.targets || []).length) return '';
+    const h = t.home || {};
+    const pr = disp(s).purgeRow || {};
+    const homeS = h.needed ? Number(h.estimateS) || 0 : 0;
+    const used = pr.defined && pr.usedSpots ? ' (clear of the ' + IL.plural(pr.usedSpots, 'used spot') + ')' : '';
+    const where = pr.defined && pr.surfaceName === name ? 'beside the purge row' + used : 'around the ' + name + ' place';
+    return IL.nb((h.needed ? 'Homes first' + (h.whyCode === 'stopped' && isNum(h.sinceMs) ? ' (stopped at ' + tm(h.sinceMs) + ')' : '') + ', ≈ ' + IL.fmtSecs(homeS) + '. Then N1' : 'N1')
+      + ' touches the ' + name + ' at ' + IL.plural(t.targets.length, 'spot') + ' ' + where + ', after a camera look at each. ≈ ' + IL.fmtSecs(t.estimatedSeconds)
+      + '. The paste pressure stays off; hands clear of the head.');
+  }
+  /** The result card's first sentence (§8.4): "Saved 13:20: …", "Not saved: …", "Stopped 13:21 during point 3 of 6: …". */
+  function blankSentence(run, s, name) {
+    const at = tm(run.finishedAtMs);
+    if (run.status === 'OK') {
+      const sf = (disp(s).surfaces || {})[name];
+      const pts = surfPts(sf);
+      const pr = disp(s).purgeRow || {};
+      const cov = sf ? coverage(sf, pr, []) : null;
+      return 'Saved ' + at + ': ' + IL.plural(pts.length, 'point') + (sf && sf.plane ? ', worst ' + fmt(sf.plane.maxResidualMm, 3) + ' mm' : '')
+        + (cov && cov.spots ? ', covers ' + (cov.spots - cov.spotsOut) + ' of ' + cov.spots + ' spots' : '') + '.';
+    }
+    if (run.status === 'ABORTED') {
+      const det = run.detail || PB.lastDetail || {};
+      const pts = det.probes || [];
+      const cur = pts.find((q) => q.state === 'now' || q.state === 'look');
+      const k = cur ? cur.n : Math.min(pts.length, pts.filter((q) => q.state === 'contact').length + 1);
+      return 'Stopped ' + at + (det.stage === 'home' ? ' during the home' : pts.length ? ' during point ' + Math.max(1, k) + ' of ' + pts.length : '') + ': nothing was saved.';
+    }
+    return 'Not saved: ' + stripCode(run.message || run.status);
+  }
   IL.view('probe-blank', {
     title: (s) => 'Probe the ' + ((disp(s).purgeRow || {}).surfaceName || 'blank'),
     render(p, s, first) {
       const d = disp(s), pr = d.purgeRow || {};
       const name = pr.surfaceName || d.blankLocationName || 'blank';
-      if (PB.name !== name) { PB.name = name; PB.points = []; }
+      if (PB.name !== name) { PB.name = name; PB.points = []; PB.prevKey = null; }
       const saved = surfPts((d.surfaces || {})[name]);
       if (first) {
         PB.banner = el('div', { class: 'notebox notebox--info' });
+        PB.phases = el('ol', { class: 'phases', id: 'blank-phases', hidden: true });
+        PB.targets = el('table', { class: 'ptargets su-blank-tbl', id: 'blank-targets' });
+        PB.result = el('div', { class: 'ri su-blank-result', id: 'blank-result', role: 'status', 'data-refusals': '', hidden: true });
         PB.live = el('table', { class: 'headtable su-live-n1' }, el('thead', {}, el('tr', {}, ['N1 now', 'X', 'Y', 'Z'].map((h) => el('th', { text: h })))),
           el('tbody', {}, el('tr', {}, el('td', { text: 'mm' }), el('td'), el('td'), el('td', { class: 'hl' }))));
         PB.table = el('div', {});
         PB.fit = el('div', {});
+        PB.handBox = el('details', { class: 'disclose su-blank-hand', id: 'blank-by-hand' },
+          el('summary', { text: "Do it by hand: jog N1 in OpenPnP's window and add points" }),
+          el('div', { class: 'stack' }, PB.banner,
+            el('p', { class: 'panel__lead', text: "Jog N1 over a spot on the " + name + " in OpenPnP's window and lower it until the tip touches, then add the point. Spread at least 3 points (5 is better) around the purge row and the places on it." }),
+            PB.live, PB.table, PB.fit));
+        PB.handBox.open = PB.byHand;
+        PB.handBox.addEventListener('toggle', () => { if (PB.byHand !== PB.handBox.open) { PB.byHand = PB.handBox.open; IL.render(); } });
+        // the automatic foot
+        PB.note = el('div', { class: 'su-blank-note', id: 'blank-note' });
+        PB.auto = el('button', { type: 'button', class: 'btn btn--primary btn--lg btn--block', id: 'btn-blank-auto',
+          title: 'N1 touches the blank at each spot with its vacuum (a camera look first), then the plane is saved. Press twice.' }, IL.icon('i-capture'), el('span', { class: 'lbl', text: 'Probe the ' + name }));
+        IL.press2(PB.auto, 'probe the ' + name, async () => {
+          const z = blankZ(S.status, PB.name);
+          const r = await IL.api('POST', '/api/surfaces/' + encodeURIComponent(PB.name) + '/probe', z !== null ? { z } : {});
+          PB.runId = null;
+          IL.ssSet('il.setup.blankRun', null);
+          return r;
+        }, { ok: (r) => 'Probing the ' + PB.name + ': ' + IL.plural(((r && r.targets) || []).length, 'spot') + (r && r.home && r.home.needed ? ', homes first' : '')
+          + (r && isNum(r.estimatedSeconds) ? ', ≈ ' + IL.fmtSecs(r.estimatedSeconds) : '') + '. STOP stops it at once.', what: 'Probe the ' + name });
+        PB.why = el('div', { class: 'reason', id: 'blank-why', hidden: true });
+        PB.autoFoot = el('div', { class: 'stack su-pb-foot', 'data-refusals': '' }, PB.note, PB.auto, PB.why);
+        // the by-hand foot (ids unchanged)
         PB.add = el('button', { type: 'button', class: 'btn btn--primary btn--block', id: 'btn-blank-add' }, IL.icon('i-capture'), el('span', { class: 'lbl', text: 'Add point · N1 tip touching' }));
         PB.save = btn('Save points', { class: 'btn btn--block', id: 'btn-blank-save' });
         PB.reason = el('div', { class: 'reason', hidden: true });
@@ -931,43 +1037,139 @@
           setTimeout(() => IL.panel.close(), 0);
           return n;
         }, { refusalIn: p.foot, ok: (n) => 'Surface ' + PB.name + ' saved from ' + n + ' points.' }));
-        p.body.append(PB.banner,
-          el('p', { class: 'panel__lead', text: "Jog N1 over a spot on the " + name + " in OpenPnP's window and lower it until the tip touches, then add the point. Spread at least 3 points (5 is better) around the purge row and the places on it." }),
-          PB.live, PB.table, PB.fit);
-        p.foot.append(el('div', { class: 'stack su-pb-foot', 'data-refusals': '' }, PB.add, PB.save), PB.reason);
+        PB.handFoot = el('div', { class: 'stack su-pb-foot', 'data-refusals': '', hidden: true }, PB.add, PB.save, PB.reason);
+        p.body.append(PB.result, PB.phases, PB.targets, PB.handBox);
+        p.foot.append(PB.autoFoot, PB.handFoot);
       }
-      IL.keyed(PB.banner, PB.points.length ? 'n' : 'e' + saved.length, () => (PB.points.length ? [el('b', { text: 'New probe: ' }), 'saving replaces the ' + IL.plural(saved.length, 'saved point') + '.']
-        : [el('b', { text: 'Probing from empty. ' }), 'Saving replaces the ' + IL.plural(saved.length, 'saved point') + '. ',
-          saved.length ? el('button', { type: 'button', class: 'link', text: 'Start from the saved points', onclick: () => { PB.points = saved.map((q) => Object.assign({}, q)); IL.render(); } }) : null]));
-      const n1 = IL.positions(s).n1;
-      const cells = PB.live.tBodies[0].rows[0].cells;
-      IL.setText(cells[1], n1 ? fmt(n1.x, 2) : '—');
-      IL.setText(cells[2], n1 ? fmt(n1.y, 2) : '—');
-      IL.setText(cells[3], n1 ? fmt(n1.z, 2) : '—');
-      const fit = planeFit(PB.points);
-      IL.keyed(PB.table, JSON.stringify(PB.points), () => (PB.points.length ? el('table', { class: 'tbl su-pts' },
-        el('thead', {}, el('tr', {}, ['#', 'X', 'Y', 'Z', 'Resid.', ''].map((h, i) => el('th', { class: i && i < 5 ? 'r' : null, text: h })))),
-        el('tbody', {}, PB.points.map((q, i) => el('tr', {}, el('td', { text: String(i + 1) }), el('td', { class: 'r', text: fmt(q.x, 2) }), el('td', { class: 'r', text: fmt(q.y, 2) }),
-          el('td', { class: 'r', text: fmt(q.z, 3) }),
-          el('td', { class: 'r' + (fit && Math.abs(fit.residuals[i]) > surfLimit() ? ' su-bad' : ''), text: fit ? IL.fmtSigned(fit.residuals[i], 3) : '—' }),
-          el('td', {}, el('button', { type: 'button', class: 'btn btn--sm btn--icon btn--quiet', title: 'Delete point ' + (i + 1), 'aria-label': 'Delete point ' + (i + 1),
-            onclick: () => { PB.points.splice(i, 1); IL.render(); } }, IL.icon('i-close'))))))) : null));
-      const locs = d.locations || {};
-      const cov = fit ? coverage({ points: PB.points }, pr, Object.keys(locs).filter((n) => n !== 'waste-test-dot').map((n) => ({ name: n, loc: locs[n] }))) : null;
-      IL.keyed(PB.fit, JSON.stringify(PB.points) + '|' + JSON.stringify([pr.spots, pr.x0Mm, pr.y0Mm]), () => el('div', { class: 'tiles su-pb-tiles' },
-        tile('Points', String(PB.points.length), '', PB.points.length < 3 ? 'at least 3' : 'enough for a plane'),
-        tile('Worst', fit ? fmt(fit.worst, 3) : '—', 'mm', 'limit ' + fmt(surfLimit(), 2) + ' mm', fit && fit.worst > surfLimit()),
-        tile('Tilt', fit ? fmt(fit.slope * 1000, 0) : '—', 'µm/mm', fit ? 'Z ' + fmt(fit.minZ, 2) + ' to ' + fmt(fit.maxZ, 2) : ''),
-        tile('Covers', cov ? (cov.spots ? (cov.spots - cov.spotsOut) + '/' + cov.spots : '—') : '—', 'spots', cov ? (cov.placesIn.length ? cov.placesIn.join(', ') : 'no place') : '', cov && cov.spotsOut > 0)));
-      IL.gate(PB.add, IL.lockReason(s, { connected: true, idle: false, pressureOff: false }) || (n1 ? null : 'No N1 position'));
-      setLabel(PB.add, 'Add point ' + (PB.points.length + 1) + ' · N1 tip touching');
-      const lock = IL.lockReason(s, { pressureOff: false, engine: true });
-      IL.gate(PB.save, lock || (PB.points.length < 3 ? 'Add at least 3 points first' : null), PB.reason);
-      setLabel(PB.save, PB.points.length >= 3 ? 'Save ' + PB.points.length + ' points' : 'Save points');
-      PB.save.classList.toggle('btn--primary', PB.points.length >= 3);
-      PB.add.classList.toggle('btn--primary', PB.points.length < 3);
+      const run = s.run && s.run.label === BLANK ? s.run : null;
+      const live = !!run && run.running;
+      if (run && run.detail) PB.lastDetail = run.detail;
+      const fin = !live && run && PB.runId && run.runId === PB.runId ? run : null;
+      if (!live) loadBlankPreview(s, name);
+      const byHand = PB.byHand && !live;
+      if (PB.handBox.open !== byHand) PB.handBox.open = byHand;
+      IL.show(PB.handBox, !live);
+      IL.show(PB.autoFoot, !byHand);
+      IL.show(PB.handFoot, byHand);
+      renderBlankAuto(s, name, run, live, fin, byHand);
+      renderBlankHand(p, s, name, saved);
     },
   });
+  /** The automatic probe: phases while it runs, the spots, the result card, the foot. */
+  function renderBlankAuto(s, name, run, live, fin, byHand) {
+    const det = live ? run.detail || {} : fin ? run.detail || PB.lastDetail || {} : null;
+    // phases (§8.4 ol.phases#blank-phases): home, the points, save
+    IL.show(PB.phases, live);
+    if (live) {
+      const st = det.stage || 'home';
+      const pts = det.probes || [];
+      const nOk = pts.filter((q) => q.state === 'contact').length;
+      const cur = pts.find((q) => q.state === 'now' || q.state === 'look');
+      const lastC = pts.filter((q) => q.state === 'contact' && isNum(q.z)).pop();
+      const home = det.home || {};
+      const rows = [];
+      if (home.needed) rows.push({ st: st === 'home' ? 'now' : 'done', t: 'Home', d: st === 'home' ? 'pressure off' : 'homed', v: st === 'home' ? '≈ ' + IL.fmtSecs(home.estimateS) : '' });
+      rows.push({ st: st === 'probe' ? 'now' : st === 'save' ? 'done' : 'todo', t: 'Probe' + (pts.length ? ' · point ' + Math.min(pts.length, nOk + 1) + ' of ' + pts.length : ''),
+        d: cur ? (cur.state === 'look' ? 'camera look' : 'N1 touching') + (cur.alternate ? ' at nearby spot ' + cur.alternate : '') + (lastC ? ' · last Z ' + fmt(lastC.z, 3) + ' mm' : '') : 'N1 vacuum touch, pressure off',
+        v: isNum(det.estimatedSecondsLeft) ? '≈ ' + IL.fmtSecs(det.estimatedSecondsLeft) : '' });
+      rows.push({ st: st === 'save' ? 'now' : 'todo', t: 'Save the plane', d: 'only when every point touched and it is flat', v: '' });
+      IL.keyed(PB.phases, JSON.stringify(rows), () => rows.map((x, i) => el('li', { class: x.st === 'done' ? '' : x.st },
+        x.st === 'done' ? IL.glyph('ok', 'sm') : x.st === 'now' ? IL.glyph('live', 'sm') : IL.glyph('num', 'sm', 'Step ' + (i + 1), i + 1),
+        el('div', {}, el('div', { class: 'ph__t', text: x.t }), x.d ? el('div', { class: 'ph__d', text: x.d }) : null), el('span', { class: 'ph__v', text: x.v || '' }))));
+    }
+    // the spots: the preview, then the live points, then the result's
+    const prev = PB.prev && !PB.prev.error ? PB.prev.targets || [] : [];
+    const rows = det && det.probes && det.probes.length ? det.probes : prev.map((q) => ({ n: q.n, x: q.x, y: q.y, z: null, state: 'todo' }));
+    IL.show(PB.targets, rows.length > 0 && !byHand);
+    const word = (q) => ({ todo: '—', look: 'looking', now: 'touching', contact: q.alternate ? 'nearby ' + q.alternate : 'touched', 'not-bare': 'not bare', 'no-contact': 'no contact', skipped: 'skipped' }[q.state] || q.state);
+    IL.keyed(PB.targets, JSON.stringify(rows.map((q) => [q.n, q.x, q.y, q.z, q.state, q.alternate])), () => (rows.length ? [
+      el('caption', { class: 'su-tbl-cap' }, IL.unitText(det ? 'N1 probe · vacuum touch' : 'Spots · N1 looks, then touches')),
+      el('thead', {}, el('tr', {}, el('th', { text: '#' }), el('th', {}, 'X ', el('span', { class: 'unit-lc', text: 'mm' })), el('th', {}, 'Y ', el('span', { class: 'unit-lc', text: 'mm' })),
+        el('th', {}, 'Z ', el('span', { class: 'unit-lc', text: 'mm' })), el('th', { text: '', 'aria-label': 'State' }))),
+      el('tbody', {}, rows.map((q) => {
+        const bad2 = q.state === 'not-bare' || q.state === 'no-contact';
+        return el('tr', { class: ((q.state === 'now' || q.state === 'look') ? 'next' : '') + (bad2 ? ' bad' : '') || null },
+          el('td', { text: String(q.n) }), el('td', { text: fmt(q.x, 2) }), el('td', { text: fmt(q.y, 2) }),
+          el('td', { class: isNum(q.z) ? '' : 'dim', text: isNum(q.z) ? fmt(q.z, 3) : '—' }), el('td', { class: 'su-blank-st' + (bad2 ? ' bad' : ''), text: word(q) }));
+      }))] : null));
+    // the result card (§8.4 #blank-result): first sentence machine-readable, the tiles of the saved plane
+    IL.show(PB.result, !!fin && !live);
+    if (fin && !live) {
+      const ok = fin.status === 'OK';
+      const kind = ok ? 'ok' : fin.status === 'REFUSED' ? 'need' : 'block';
+      IL.setClass(PB.result, 'ri su-blank-result ri--' + kind);
+      const sf = (disp(s).surfaces || {})[name];
+      const sentence2 = blankSentence(fin, s, name);
+      IL.keyed(PB.result, JSON.stringify([fin.runId, fin.status, sentence2, sf && sf.setAtMs]), () => {
+        const cut = sentence2.indexOf(': ');
+        const pts = surfPts(sf);
+        const fit = ok ? planeFit(pts) : null;
+        const cov = ok && sf ? coverage(sf, disp(s).purgeRow || {}, []) : null;
+        const m = IL.CODE_RE.exec(String(fin.message || ''));
+        const fixes = ok || fin.status === 'ABORTED' ? [] : (m ? IL.fixesForCode(m[1], s, m[2]) : []).filter((f) => f.fix !== 'register' && f.fix !== 'probe-by-hand' && f.view !== 'probe-blank');
+        return [IL.glyph(ok ? 'ok' : kind), el('div', { class: 'reg-result__main' },
+          el('div', { class: 'ri__t su-blank-result__t' }, cut > 0 ? [el('b', { text: sentence2.slice(0, cut + 1) }), IL.nb(sentence2.slice(cut + 1))] : IL.nb(sentence2)),
+          ok && fit ? el('div', { class: 'tiles su-pb-tiles su-blank-tiles' },
+            tile('Points', String(pts.length), '', 'N1 vacuum touch'),
+            tile('Worst', fmt(fit.worst, 3), 'mm', 'limit ' + fmt(surfLimit(), 2) + ' mm', fit.worst > surfLimit()),
+            tile('Tilt', fmt(fit.slope * 1000, 0), 'µm/mm', 'Z ' + fmt(fit.minZ, 2) + ' to ' + fmt(fit.maxZ, 2)),
+            tile('Covers', cov && cov.spots ? (cov.spots - cov.spotsOut) + '/' + cov.spots : '—', 'spots', 'of the purge row', cov && cov.spotsOut > 0)) : null,
+          !ok && fin.status !== 'ABORTED' ? el('div', { class: 'ri__d su-blank-fix', text: 'Nothing was saved: the ' + name + ' keeps its surface of ' + (sf && sf.setAtMs ? tm(sf.setAtMs) : 'before') + '.' }) : null),
+        fixes.length ? el('div', { class: 'ri__act' }, fixes.map((f) => IL.fixButton(f, { cls: 'btn--sm' }))) : null];
+      });
+    }
+    // the foot: the note, the button (its time from the preview), why it is locked
+    if (byHand) return;
+    const why = live ? null : blankWhy(s, name);
+    const okDone = !!fin && fin.status === 'OK';
+    const note = live || okDone ? '' : blankNote(s, name);
+    // after a good probe the panel's job is done: Probe again stays, but no longer as the primary action
+    PB.auto.classList.toggle('btn--primary', !okDone);
+    IL.setText(PB.note, note);
+    IL.show(PB.note, !!note);
+    const t = PB.prev && !PB.prev.error ? PB.prev : null;
+    const g = live ? IL.regProgress(run) : null;
+    setLabel(PB.auto, live ? 'Probing…' + (g.left !== null ? ' · ≈ ' + IL.fmtClock(g.left) + ' left' : '')
+      : (fin ? 'Probe again' : 'Probe the ' + name) + (t ? ' · ' + IL.plural(t.targets.length, 'spot') + (isNum(t.estimatedSeconds) ? ' ≈ ' + IL.fmtClock(t.estimatedSeconds) : '') : ''));
+    IL.gate(PB.auto, live ? 'Probing: STOP stops it' : why && why.text);
+    IL.keyed(PB.why, why ? why.text + (why.href || '') : '', () => (why ? [IL.icon('i-lock'), el('span', {}, why.text,
+      why.href ? [' ', el('button', { type: 'button', class: 'link', onclick: () => IL.go(why.href) }, why.link)] : null)] : null));
+    IL.show(PB.why, !!why && !live);
+  }
+  /** "Do it by hand": today's table, live N1 and the plane tiles; the foot's Add / Save. */
+  function renderBlankHand(p, s, name, saved) {
+    const pr = disp(s).purgeRow || {};
+    IL.keyed(PB.banner, PB.points.length ? 'n' : 'e' + saved.length, () => (PB.points.length ? [el('b', { text: 'New probe: ' }), 'saving replaces the ' + IL.plural(saved.length, 'saved point') + '.']
+      : [el('b', { text: 'Probing from empty. ' }), 'Saving replaces the ' + IL.plural(saved.length, 'saved point') + '. ',
+        saved.length ? el('button', { type: 'button', class: 'link', text: 'Start from the saved points', onclick: () => { PB.points = saved.map((q) => Object.assign({}, q)); IL.render(); } }) : null]));
+    const n1 = IL.positions(s).n1;
+    const cells = PB.live.tBodies[0].rows[0].cells;
+    IL.setText(cells[1], n1 ? fmt(n1.x, 2) : '—');
+    IL.setText(cells[2], n1 ? fmt(n1.y, 2) : '—');
+    IL.setText(cells[3], n1 ? fmt(n1.z, 2) : '—');
+    const fit = planeFit(PB.points);
+    IL.keyed(PB.table, JSON.stringify(PB.points), () => (PB.points.length ? el('table', { class: 'tbl su-pts' },
+      el('thead', {}, el('tr', {}, ['#', 'X', 'Y', 'Z', 'Resid.', ''].map((h, i) => el('th', { class: i && i < 5 ? 'r' : null, text: h })))),
+      el('tbody', {}, PB.points.map((q, i) => el('tr', {}, el('td', { text: String(i + 1) }), el('td', { class: 'r', text: fmt(q.x, 2) }), el('td', { class: 'r', text: fmt(q.y, 2) }),
+        el('td', { class: 'r', text: fmt(q.z, 3) }),
+        el('td', { class: 'r' + (fit && Math.abs(fit.residuals[i]) > surfLimit() ? ' su-bad' : ''), text: fit ? IL.fmtSigned(fit.residuals[i], 3) : '—' }),
+        el('td', {}, el('button', { type: 'button', class: 'btn btn--sm btn--icon btn--quiet', title: 'Delete point ' + (i + 1), 'aria-label': 'Delete point ' + (i + 1),
+          onclick: () => { PB.points.splice(i, 1); IL.render(); } }, IL.icon('i-close'))))))) : null));
+    const locs = disp(s).locations || {};
+    const cov = fit ? coverage({ points: PB.points }, pr, Object.keys(locs).filter((n) => n !== 'waste-test-dot').map((n) => ({ name: n, loc: locs[n] }))) : null;
+    IL.keyed(PB.fit, JSON.stringify(PB.points) + '|' + JSON.stringify([pr.spots, pr.x0Mm, pr.y0Mm]), () => el('div', { class: 'tiles su-pb-tiles' },
+      tile('Points', String(PB.points.length), '', PB.points.length < 3 ? 'at least 3' : 'enough for a plane'),
+      tile('Worst', fit ? fmt(fit.worst, 3) : '—', 'mm', 'limit ' + fmt(surfLimit(), 2) + ' mm', fit && fit.worst > surfLimit()),
+      tile('Tilt', fit ? fmt(fit.slope * 1000, 0) : '—', 'µm/mm', fit ? 'Z ' + fmt(fit.minZ, 2) + ' to ' + fmt(fit.maxZ, 2) : ''),
+      tile('Covers', cov ? (cov.spots ? (cov.spots - cov.spotsOut) + '/' + cov.spots : '—') : '—', 'spots', cov ? (cov.placesIn.length ? cov.placesIn.join(', ') : 'no place') : '', cov && cov.spotsOut > 0)));
+    IL.gate(PB.add, IL.lockReason(s, { connected: true, idle: false, pressureOff: false }) || (n1 ? null : 'No N1 position'));
+    setLabel(PB.add, 'Add point ' + (PB.points.length + 1) + ' · N1 tip touching');
+    const lock = IL.lockReason(s, { pressureOff: false, engine: true });
+    IL.gate(PB.save, lock || (PB.points.length < 3 ? 'Add at least 3 points first' : null), PB.reason);
+    setLabel(PB.save, PB.points.length >= 3 ? 'Save ' + PB.points.length + ' points' : 'Save points');
+    PB.save.classList.toggle('btn--primary', PB.points.length >= 3);
+    PB.add.classList.toggle('btn--primary', PB.points.length < 3);
+  }
   function tile(k, n, u, sub, warn) {
     return el('div', { class: 'tile' + (warn ? ' su-tile--warn' : '') }, el('div', { class: 'tile__k', text: k }),
       el('div', { class: 'tile__v' }, el('span', { class: 'n', text: n }), u ? el('span', { class: 'u', text: u }) : null), sub ? el('div', { class: 'tile__s', text: sub }) : null);
@@ -1598,6 +1800,8 @@
   }
   function renderCamera(s) {
     const c = C.camera;
+    // the SIM top camera draws the board at its true seat once the simulator answered as one (server.simulatorConfirmed)
+    IL.setText(c.simTag, s && s.server && s.server.simulatorConfirmed ? 'simulator: drawn board' : 'simulator: static picture');
     IL.show(c.simTag, IL.isSim(s) && !c.img.hidden);
     IL.gate(c.bSnap, S.online === false ? IL.lockReason(s) : null);
   }
@@ -1644,6 +1848,11 @@
     F.pump = fld(input('set-pumpsettle', { inputmode: 'numeric' }), {});
     F.minstatus = fld(el('select', { class: 'input', id: 'set-minstatus' }, Object.keys(STATUS_LABELS).map((k) => el('option', { value: k, text: STATUS_LABELS[k] }))));
     F.minstatus.kind = 'select';
+    // AUTO_REGISTER_DESIGN.md §8.5: when Register board, Probe the blank and Run home by themselves
+    F.homebefore = fld(el('select', { class: 'input', id: 'set-homebefore' },
+      el('option', { value: 'whenNeeded', text: 'Home first when needed (not homed, or stopped since the last home)' }),
+      el('option', { value: 'always', text: 'Always home first' })));
+    F.homebefore.kind = 'select';
     F.clean = fld(el('input', { type: 'checkbox', id: 'set-clean' }));
     F.gray = fld(input('set-gray', { inputmode: 'numeric' }), {});
     F.bright = fld(input('set-minbright'), {});
@@ -1662,6 +1871,7 @@
       field('Valve settle', 'ms', F.valve.el, { hint: 'valve open → first dot (valveSettleMs)' }),
       field('Pump settle', 'ms', F.pump.el, { hint: 'pump on → valve open (pumpToValveSettleMs)' }),
       field('Lowest pad-type status allowed on a board', null, F.minstatus.el, { hint: 'pads below it are not dispensed: plan again after a change' }),
+      field('Before Register board, Probe and Run', null, F.homebefore.el, { hint: 'they home by themselves (pressure off) and say so before they start; nothing else homes' }),
       el('div', { class: 'field su-span2' }, el('div', { class: 'field__l' }, el('span', {}, 'Clean-pad check before each board (', abbr('I10', 'Interlock I10: pads clean before the pressure goes on'), ')')), c.cleanTick, c.cleanHint));
     c.setErr = el('div', { class: 'field__err su-set-err', id: 'settings-err', role: 'status', hidden: true });
     c.body.append(c.grid, c.i10, c.setErr, buildJson(c));
@@ -1680,6 +1890,7 @@
       if (dirty(F.valve)) patch.valveSettleMs = need(F.valve, 'the valve settle time in ms');
       if (dirty(F.pump)) patch.pumpToValveSettleMs = need(F.pump, 'the pump settle time in ms');
       if (dirty(F.minstatus)) patch.minPadTypeStatus = val(F.minstatus);
+      if (dirty(F.homebefore)) patch.homeBeforeRun = val(F.homebefore);
       const cp = {};
       if (dirty(F.clean)) cp.enabled = F.clean.el.checked;
       if (dirty(F.gray)) cp.grayLevel = need(F.gray, 'the gray level (0 to 255)');
@@ -1689,7 +1900,7 @@
       if (Object.keys(cp).length) patch.cleanPadCheck = cp;
       if (!Object.keys(patch).length) throw bad('No unsaved changes.');
       const r = await IL.api('PUT', '/api/config', patch);
-      clean(F.maxon, F.valve, F.pump, F.minstatus, F.clean, F.gray, F.bright, F.boxw, F.boxh);
+      clean(F.maxon, F.valve, F.pump, F.minstatus, F.homebefore, F.clean, F.gray, F.bright, F.boxw, F.boxh);
       await IL.loadConfig();
       IL.planRefreshSoon();
       return r;
@@ -1827,6 +2038,7 @@
     sync(F.valve, cfg ? cfg.valveSettleMs : null);
     sync(F.pump, cfg ? cfg.pumpToValveSettleMs : null);
     sync(F.minstatus, src.minPadTypeStatus || 'characterized');
+    sync(F.homebefore, (cfg && cfg.homeBeforeRun) || d.homeBeforeRun || 'whenNeeded');
     sync(F.clean, !!cpc.enabled);
     sync(F.gray, cpc.grayLevel);
     sync(F.bright, cpc.minBrightFraction);
@@ -1840,7 +2052,7 @@
       : sim ? 'Simulator: the camera is a static picture, so every pad would read dirty.' : 'The run does not look at the pads: wipe them by eye before each board.');
     c.cleanTick.classList.toggle('on', on);
     const lock = IL.lockReason(s, { pressureOff: false });
-    const any = [F.maxon, F.valve, F.pump, F.minstatus, F.clean, F.gray, F.bright, F.boxw, F.boxh].some(dirty);
+    const any = [F.maxon, F.valve, F.pump, F.minstatus, F.homebefore, F.clean, F.gray, F.bright, F.boxw, F.boxh].some(dirty);
     const errs = settingsErrors();
     IL.setText(c.setErr, errs.join(' '));
     IL.show(c.setErr, errs.length > 0);
