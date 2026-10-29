@@ -20,8 +20,8 @@ import com.google.gson.reflect.TypeToken;
  * §5.3, §7.4-7.6): a camera record per laid block with every dot it saw ({@code dots_json}), and the
  * pooled evidence of every fresh record of a dose. Pooling recomputes the statistics on the dots of
  * all fresh records, failed ones included, so a later pass cannot erase an earlier failure; a record
- * without dots (typed in, or made before dots were kept) adds its own verdict. Weighings are pooled
- * the same way: a mass is confirmed by any two fresh readings that agree (§7.5).
+ * without dots (typed in, or made before dots were kept) adds its own verdict, when it has one. Weighings
+ * are pooled the same way: a mass is confirmed by any two fresh readings that agree (§7.5).
  */
 public final class DoseRecords {
     private static final Gson GSON = new Gson();
@@ -236,9 +236,10 @@ public final class DoseRecords {
             if (dots != null && !dots.isEmpty()) {
                 pooled.computeIfAbsent(r.steps, k -> new ArrayList<>()).add(record(r.id, r.steps, r.kind, dots));
             }
-            else {
+            else if (r.pass != null) {
                 verdicts.computeIfAbsent(r.steps, k -> new ArrayList<>()).add(r);
             }
+            // a record with neither dots nor a verdict (a coupon weighed without the camera) says nothing optical
         }
         Map<Integer, DoseEvidence> m = new TreeMap<>();
         for (Map.Entry<Integer, List<LadderStats.Record>> e : pooled.entrySet()) {

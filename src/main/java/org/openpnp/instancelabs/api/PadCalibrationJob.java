@@ -10,6 +10,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
@@ -226,11 +227,12 @@ final class PadCalibrationJob {
     volatile String step;
     volatile long awaitingSinceMs;
     volatile long endedAtMs;
-    final List<String> runs = new ArrayList<>();
-    final List<Long> recordIds = new ArrayList<>();
+    // written by the job's thread, read by the status (the maps and the coupons under the lock)
+    final List<String> runs = new CopyOnWriteArrayList<>();
+    final List<Long> recordIds = new CopyOnWriteArrayList<>();
     final Map<String, DoseBlocksResult.Crop> crops = new LinkedHashMap<>();
     final Map<String, Integer> cropSteps = new LinkedHashMap<>();
-    final List<String> warnings = new ArrayList<>();
+    final List<String> warnings = new CopyOnWriteArrayList<>();
     Boolean controlPass;
     String controlText;
     Double controlMedianMm2;
@@ -241,7 +243,7 @@ final class PadCalibrationJob {
     Balance balance;
     PadCalibrationJobs.Engine engine;
     /** The block steps' results (P7 reads the dots after each block switch). */
-    final List<DoseBlocksResult> results = new ArrayList<>();
+    final List<DoseBlocksResult> results = new CopyOnWriteArrayList<>();
 
     private PadCalibrationJob(ApiContext ctx, PadProfileEndpoints profile, DispenseEndpoints dispense,
             DispenseService svc, Request req) {
@@ -952,8 +954,10 @@ final class PadCalibrationJob {
                 }, x -> x.run, x -> x.ok, x -> x.message);
                 results.add(res);
                 List<DoseRecord> written = records(res, DoseRecord.COUPON);
-                for (int i = 0; i < written.size() && i < coupons.size(); i++) {
-                    coupons.get(i).record = written.get(i);
+                synchronized (lock) {
+                    for (int i = 0; i < written.size() && i < coupons.size(); i++) {
+                        coupons.get(i).record = written.get(i);
+                    }
                 }
                 done(WEIGH, weighWords());
                 begin("readings");
@@ -1056,10 +1060,12 @@ final class PadCalibrationJob {
             recordIds.add(r.id);
             l.add(r);
         }
-        for (DoseBlocksResult.Crop cr : res.crops) {
-            String cid = (DoseRecord.COUPON.equals(kind) ? "w" : "l") + cr.id;
-            crops.put(cid, cr);
-            cropSteps.put(cid, res.blocks.get(cr.block).netSteps);
+        synchronized (lock) {
+            for (DoseBlocksResult.Crop cr : res.crops) {
+                String cid = (DoseRecord.COUPON.equals(kind) ? "w" : "l") + cr.id;
+                crops.put(cid, cr);
+                cropSteps.put(cid, res.blocks.get(cr.block).netSteps);
+            }
         }
         svc.getDb().event(res.run.runId, "INFO", "PCAL", new Gson().toJson(Views.map("job", id, "step",
                 DoseRecord.COUPON.equals(kind) ? WEIGH : LADDER, "records", ids(l))));
@@ -1170,11 +1176,13 @@ final class PadCalibrationJob {
         }
         WeighPlan.Allocation a = WeighPlan.allocate(l, c.profile.netStepsPerDot,
                 massConfirmed(c.profile.netStepsPerDot), places.size());
-        coupons.clear();
-        notWeighed.clear();
-        notWeighed.addAll(a.notWeighed);
-        for (int k = 0; k < a.coupons.size(); k++) {
-            coupons.add(coupon(c, places.get(k), a.coupons.get(k)));
+        synchronized (lock) {
+            coupons.clear();
+            notWeighed.clear();
+            notWeighed.addAll(a.notWeighed);
+            for (int k = 0; k < a.coupons.size(); k++) {
+                coupons.add(coupon(c, places.get(k), a.coupons.get(k)));
+            }
         }
         warnings.add("the ladder changed a group's dose: the weighing weighs " + couponWords());
     }
@@ -1192,7 +1200,9 @@ final class PadCalibrationJob {
             }
             l.add(new Reading(k.place, r[0].mg / 1000, r[1].mg / 1000));
         }
-        saveReadings(l, true, "sim");
+        synchronized (lock) {
+            saveReadings(l, true, "sim");
+        }
     }
 
     /** One coupon's two readings in grams (with paste, wiped). */
@@ -1987,6 +1997,12 @@ final class PadCalibrationJob {
 
     /** status.padCalibration (§12.3). */
     Map<String, Object> view() {
+        synchronized (lock) {
+            return viewLocked();
+        }
+    }
+
+    private Map<String, Object> viewLocked() {
         DispenseConfig c = svc.getConfig();
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", id);
@@ -2086,7 +2102,10 @@ final class PadCalibrationJob {
     byte[] crop(String name) {
         boolean after = name.endsWith("-after");
         String cid = name.replaceAll("-(before|after)$", "");
-        DoseBlocksResult.Crop cr = crops.get(cid);
+        DoseBlocksResult.Crop cr;
+        synchronized (lock) {
+            cr = crops.get(cid);
+        }
         return cr == null ? null : after ? cr.afterPng : cr.beforePng;
     }
 

@@ -494,6 +494,41 @@ public class PadCalibrationJobTest {
         assertEquals(List.of("probe coupon1"), engine.calls, "the job's submit after the STOP does not happen");
     }
 
+    @Test
+    public void theEngineWritesCharacterizedOnlyWithEveryCheckAndNeverValidated() throws Exception {
+        org.openpnp.instancelabs.dispense.PadType t = svc.getDb().currentPadType("chip-0805").copy();
+        t.status = org.openpnp.instancelabs.dispense.PadTypeStatus.CHARACTERIZED;
+        org.openpnp.instancelabs.dispense.PadCalibrationRecord rec = new org.openpnp.instancelabs.dispense
+                .PadCalibrationRecord();
+        rec.jobId = "pc-test";
+        rec.typeKey = "chip-0805";
+        rec.outcome = org.openpnp.instancelabs.dispense.PadCalibrationRecord.CHARACTERIZED;
+        rec.checks.add(new org.openpnp.instancelabs.dispense.PadCalibrationRecord.Check("optical", true, "ok"));
+        rec.checks.add(new org.openpnp.instancelabs.dispense.PadCalibrationRecord.Check("mass", false, "weighed once"));
+        int before = svc.getDb().currentPadType("chip-0805").version;
+        try {
+            svc.applyPadCalibration(rec, t);
+            throw new AssertionError("a failed check cannot write characterized");
+        }
+        catch (IllegalArgumentException e) {
+            assertEquals("characterized needs every check of the calibration passed", e.getMessage());
+        }
+        rec.checks.get(1).pass = true;
+        t.status = org.openpnp.instancelabs.dispense.PadTypeStatus.VALIDATED;
+        try {
+            svc.applyPadCalibration(rec, t);
+            throw new AssertionError("a calibration never writes validated");
+        }
+        catch (IllegalArgumentException e) {
+            assertTrue(e.getMessage().startsWith("a pad calibration never writes validated"), e.getMessage());
+        }
+        assertEquals(before, svc.getDb().currentPadType("chip-0805").version, "nothing was written");
+        t.status = org.openpnp.instancelabs.dispense.PadTypeStatus.CHARACTERIZED;
+        org.openpnp.instancelabs.dispense.PadCalibrationRecord stored = svc.applyPadCalibration(rec, t);
+        assertEquals(Integer.valueOf(before + 1), stored.versionTo);
+        assertEquals("characterized", svc.getDb().currentPadType("chip-0805").status.dbName);
+    }
+
     // ------------------------------------------------------------------------------------------
     // §12.2: the refusals before the start, in order
     // ------------------------------------------------------------------------------------------

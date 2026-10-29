@@ -630,6 +630,26 @@ public class PadCalibrationSimTest {
         assertEquals("Nothing to calibrate: every chosen group cannot be dispensed with the 22G tip.",
                 str(again.json(), "reason"));
 
+        // the by-hand weighing (§8) on a connected SIM balance: the coupons the operator wiped look clean again, the job
+        // reads the balance itself and the emulated human wipes the coupons between the readings
+        ok(call("POST", "/api/purge-row/reset", null)); // the operator wiped the purge row
+        JsonObject connected = scene("connected");
+        writeScene(connected);
+        Thread.sleep(400); // the scene file is read again when it changed (250 ms)
+        JsonObject weighed = ok(call("POST", "/api/pad-calibrations", "{\"steps\":[\"weigh\"],\"doseSteps\":800,"
+                + "\"typeKeys\":[\"chip-0603\"]," + attest() + ",\"wait\":true}")).getAsJsonObject("result");
+        assertEquals("done", str(weighed, "state"), weighed.toString());
+        assertEquals("sim", str(weighed.getAsJsonObject("balance"), "kind"));
+        assertTrue(weighed.getAsJsonObject("balance").get("connected").getAsBoolean());
+        assertTrue(str(result(weighed), "sentence").startsWith("Weighed "), weighed.toString());
+        assertTrue(str(result(weighed), "sentence").endsWith("; the mass is confirmed."), weighed.toString());
+        assertTrue(round(SimPaste.Store.forFile(sceneFile).deposits("coupon")).isEmpty(), "the human wiped them");
+        int simRows = 0;
+        for (JsonElement e : ok2(get("/api/dose-records?freshOnly=true"))) {
+            simRows += "sim".equals(str(e.getAsJsonObject(), "method")) ? 1 : 0;
+        }
+        assertEquals(2, simRows, "the connected balance's readings");
+
         // the board, U skipped: blocks 800 (R, T, J, S) and 400 (Q), each Q pad's 2 dots in a row, deposits as predicted
         ok(call("POST", "/api/purge-row/reset", null));
         ok(call("PUT", "/api/config", "{\"refuseFlaggedPads\":false}"));
