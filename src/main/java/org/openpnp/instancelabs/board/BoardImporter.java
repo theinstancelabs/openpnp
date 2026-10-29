@@ -336,8 +336,10 @@ public final class BoardImporter {
             String slug = BoardStore.slug(suggested);
             map.put("file", map("name", parsed.fileName, "bytes", parsed.bytes.length, "sha256", parsed.sha256));
             map.put("decisions", ids.decisions());
-            map.put("kicad", map("version", parsed.pcb.version, "generator", parsed.pcb.generator, "generatorVersion",
-                    parsed.pcb.generatorVersion, "major", kicadMajor(parsed.pcb)));
+            KicadPcb pcb = parsed.pcb;
+            map.put("kicad", map("version", pcb.version, "generator", pcb.generator == null ? null
+                    : KText.clean(pcb.generator, 60), "generatorVersion", pcb.generatorVersion == null ? null
+                            : KText.clean(pcb.generatorVersion, 60), "major", kicadMajor(pcb)));
             map.put("board", map("widthMm", p.widthMm, "heightMm", p.heightMm, "outline", p.outline, "origin",
                     p.origin, "originKicad", map("x", p.minX, "y", p.maxY)));
             map.put("suggestedName", suggested);
@@ -903,7 +905,9 @@ public final class BoardImporter {
             if (existing != null) {
                 String old = existing.artId != null ? existing.artId : "displaced-" + atMs;
                 File history = store.historyDir(slug);
-                Files.createDirectories(history.toPath());
+                if (art.isFile() || kicad.isFile()) {
+                    Files.createDirectories(history.toPath());
+                }
                 if (art.isFile()) {
                     move(art, new File(history, old + ".art.json"));
                 }
