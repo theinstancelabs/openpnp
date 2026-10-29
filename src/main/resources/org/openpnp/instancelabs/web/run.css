@@ -34,6 +34,7 @@
 .lg-probe { border: 2px solid var(--accent); border-radius: 50%; }
 .lg-path { height: 2px; width: 14px; background: var(--pv-path); }
 .lg-area { border: 1.5px dashed var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); border-radius: 3px; }
+.lg-fid { border: 1.5px dashed var(--accent); border-radius: 50%; background: radial-gradient(circle, var(--ok-dot) 0 28%, transparent 30%); }
 .zoom { display: flex; gap: 6px; flex: none; }
 .zoom .btn { width: 44px; height: 44px; padding: 0; }
 .stage-bar .seg { flex: none; }
@@ -156,6 +157,9 @@
 /* board step */
 .board-pos { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; }
 .board-pos .field__l .ro { color: var(--ink-3); font-weight: 600; }
+/* a label that wraps (Board top Z (approximate, ±1 mm)) keeps the inputs of its row in line: labels end at the input */
+.board-pos > .field > .field__l { flex: 1 0 auto; align-items: flex-end; }
+#board-z-note { grid-column: 1 / -1; margin-top: -4px; }
 .capture-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .capture-row .capture { flex: 1 1 auto; justify-content: center; }
 .seat-q { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border-radius: 12px; background: var(--tile); border: 1px solid var(--line); }
@@ -256,3 +260,70 @@ body:has(#ws-run:not([hidden])) #panel[data-view="recovery"] li[data-step="decid
 #clean-result .ri__act > [data-fix] { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #clean-result .ri__act--pos { display: flex; margin-top: 8px; }
 #clean-result .ri__act--pos + .ri__act { margin-top: 8px; }
+
+/* ================================================================ Register board (AUTO_REGISTER_DESIGN.md §8.1) */
+/* the fiducial layer of the hero (g.pv-l-fids): search circle, expected cross, found dot; colour means state only */
+.pv .pv-fid-search { fill: none; stroke: var(--accent); stroke-width: 1.4px; stroke-dasharray: 5 4; vector-effect: non-scaling-stroke; }
+.pv .pv-fid-expect { fill: none; stroke: var(--accent); stroke-width: 1.4px; vector-effect: non-scaling-stroke; }
+.pv .pv-fid-leg { stroke: var(--ink-2); stroke-width: 1.4px; vector-effect: non-scaling-stroke; }
+.pv .pv-fid-found { fill: var(--ok-dot); stroke: var(--surface); stroke-width: 1.4px; vector-effect: non-scaling-stroke; }
+.pv .pv-fid--bad .pv-fid-search, .pv .pv-fid--bad .pv-fid-expect { stroke: var(--block); }
+.pv .pv-fid--found .pv-fid-search { stroke-opacity: .55; }
+.pv .pv-fid-name { font: 700 2px var(--font-ui); fill: var(--accent-ink); paint-order: stroke; stroke: var(--surface); stroke-width: .5px; }
+.pv .pv-fid--bad .pv-fid-name { fill: var(--block); }
+/* on the board drawing: the overlay tokens of board.css (the same in both themes), cased */
+.pv--art .pv-fid-search, .pv--art .pv-fid-expect { stroke: var(--pv-o-probe); }
+.pv--art .pv-fid-leg { stroke: var(--pv-o-case-l); }
+.pv--art .pv-fid-found { fill: var(--pv-o-probe); stroke: var(--pv-o-case-l); }
+.pv--art .pv-fid--bad .pv-fid-search, .pv--art .pv-fid--bad .pv-fid-expect { stroke: var(--pv-o-block); }
+.pv--art .pv-fid-name { fill: var(--pv-o-case-d); stroke: var(--pv-o-case-l); }
+.pv--art .pv-fid--bad .pv-fid-name { fill: var(--pv-o-block); }
+/* probe spots: the nearby spots tried when one is not bare (small rings), a refused spot struck through */
+.pv .pv-probe-alt circle:not(.pv-case) { fill: none; stroke: var(--accent); stroke-width: 1.2px; stroke-dasharray: 2 2; vector-effect: non-scaling-stroke; }
+.pv .pv-probe--bad circle:not(.pv-case) { fill: var(--block-bg); stroke: var(--block); }
+.pv .pv-probe--bad path:not(.pv-case) { stroke: var(--block); stroke-width: 2px; }
+.pv .pv-probe--bad text { fill: var(--block); }
+.pv--art .pv-probe-alt circle:not(.pv-case) { stroke: var(--pv-o-probe); }
+.pv--art .pv-probe--bad circle:not(.pv-case) { stroke: var(--pv-o-block); fill: var(--pv-o-case-l); }
+.pv--art .pv-probe--bad path:not(.pv-case) { stroke: var(--pv-o-block); }
+
+/* the panel */
+.reg-corr { display: flex; gap: 8px; align-items: baseline; font-size: 14px; line-height: 1.35; padding: 0 2px; }
+.reg-corr__k { font: 700 11.5px/1 var(--font-ui); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); flex: none; }
+#reg-correction { font-weight: 650; color: var(--ink); }
+.reg-plan li { padding: 8px 10px; }
+.reg-plan .ph__d { color: var(--ink-2); }
+.reg-tables { gap: 14px; }
+.reg-tbl caption { caption-side: top; text-align: left; font: 700 11.5px/1 var(--font-ui); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); padding: 2px 0 6px; }
+.reg-tbl td { height: 38px; font-variant-numeric: tabular-nums; }
+.reg-tbl#reg-fids th:nth-child(2), .reg-tbl#reg-fids td:nth-child(2) { width: auto; }
+.reg-tbl#reg-fids th:first-child, .reg-tbl#reg-fids td:first-child { width: 52px; }
+.reg-tbl#reg-fids th:nth-child(3), .reg-tbl#reg-fids td:nth-child(3) { width: 74px; white-space: nowrap; }
+.reg-tbl th:last-child, .reg-tbl td:last-child { width: 86px; }
+.reg-tbl#reg-fids th:last-child, .reg-tbl#reg-fids td:last-child { width: 40px; text-align: center; }
+.reg-tbl td.reg-st { font-weight: 600; color: var(--ink-2); }
+.reg-tbl td.reg-st.bad { color: var(--block); }
+.reg-tbl tr.bad td { background: var(--block-bg); }
+.reg-tbl tr.reg-why-row td { height: auto; border-top: 0; background: var(--block-bg); color: var(--block); white-space: normal; text-align: left; font-weight: 600; font-size: 13px; line-height: 1.35; padding: 0 8px 8px; }
+.ri--ok { background: var(--ok-bg); border-color: var(--ok-line); }
+.reg-result .reg-result__t { font: 500 15px/1.42 var(--font-ui); display: block; }
+.reg-result .reg-result__t b { font-weight: 700; }
+.reg-result .reg-kept, .reg-result .reg-look { color: var(--ink-2); font-size: 13.5px; }
+.reg-result .reg-fit { color: var(--ink-2); font-size: 13.5px; }
+.reg-result .reg-why { margin-top: 6px; font-size: 14px; line-height: 1.42; }
+.reg-result .reg-why b { font-weight: 650; }
+.reg-result__main { min-width: 0; }
+.reg-result .ri__act { margin-top: 10px; }
+.reg-note { font-size: 13.5px; line-height: 1.42; color: var(--ink-2); }
+#register-why .link { font: inherit; font-weight: 650; }
+.reg-byhand > summary { padding: 10px 0 6px; }
+.reg-byhand__body { margin-top: 8px; }
+.field__h--block { color: var(--block); }
+#btn-register, #btn-reg-continue { text-wrap: balance; }
+.run-confirm-home { display: flex; gap: 10px; align-items: flex-start; }
+.run-confirm-home .st { margin-top: 1px; flex: none; }
+.reg-expect { display: flex; gap: 9px; align-items: flex-start; font-size: 14px; line-height: 1.42; color: var(--ink); }
+.reg-expect .ic { width: 17px; height: 17px; margin-top: 2px; color: var(--ink-3); flex: none; }
+.reg-expect b { font-weight: 650; }
+/* the interlock line under the readiness bar: one line, the full text in its title */
+.ready-sub__t { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
