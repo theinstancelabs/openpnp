@@ -40,7 +40,7 @@ public class AutoregConfigTest {
         assertEquals(1.5, c.vacuumProbe.floorBelowMm, 0);
         assertEquals(-1900000, c.vacuumProbe.openAirMinCounts);
         assertEquals(-1200000, c.vacuumProbe.openAirMaxCounts);
-        assertEquals(2, c.vacuumProbe.alternates);
+        assertEquals(4, c.vacuumProbe.alternates);
         assertEquals(1.4, c.vacuumProbe.padKeepOutMm, 0);
         assertEquals(1500, c.vacuumProbe.vacuumSettleMs);
         assertEquals(70, c.vacuumProbe.readDelayMs);

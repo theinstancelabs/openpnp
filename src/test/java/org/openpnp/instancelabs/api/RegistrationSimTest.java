@@ -856,7 +856,7 @@ public class RegistrationSimTest {
         String regId = first.get("registrationId").getAsString();
         long surfaceAt = boardSurfaceAt();
 
-        // holes under the target and both its alternates: refused, nothing saved, N1 lifted and vented
+        // holes under the target and all its alternates: refused, nothing saved, N1 lifted and vented
         t1 = firstProbeTarget(p1);
         for (JsonElement e : t1.getAsJsonArray("alternates")) {
             JsonObject a = e.getAsJsonObject();

@@ -324,8 +324,11 @@ public class DispenseConfig {
         /** Open-air baseline window (counts): toward 0 = no tip, a leak or the pump off; below = blocked. */
         public int openAirMinCounts = -1900000;
         public int openAirMaxCounts = -1200000;
-        /** Nearby spots tried when a spot gives no contact or is not bare. */
-        public int alternates = 2;
+        /**
+         * Nearby spots tried when a spot gives no contact or is not bare (board targets: 5 mm away and
+         * spread in direction, so a mounting hole's ring cannot take them all).
+         */
+        public int alternates = 4;
         /** Target centre to pad edge (1.0 mm plus N1's measured 0.4 mm offset error). */
         public double padKeepOutMm = 1.4;
         /** Pump + valve ON -> first read (probe.py G4 P1500). */

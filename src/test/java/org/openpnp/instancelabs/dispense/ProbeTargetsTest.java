@@ -78,11 +78,30 @@ public class ProbeTargetsTest {
         assertEquals(5, t.get(4).n);
     }
 
+    /**
+     * A mounting hole's copper ring (radius {@link ProbeTargets#ASSUMED_HOLE_RADIUS_MM}) that the target's
+     * look sees in its 1.0 mm disc: some alternate keeps the ring 1.4 mm (disc + N1's offset error) away,
+     * wherever around the target the hole sits.
+     */
+    static void assertSomeAlternateLeavesAnyHole(VacuumProber.Target t) {
+        double ring = ProbeTargets.ASSUMED_HOLE_RADIUS_MM;
+        for (double d = 0; d <= ring + 1.0 + 1e-9; d += 0.2) {
+            for (int a = 0; a < 360; a += 5) {
+                double hx = t.bx + d * Math.cos(Math.toRadians(a)), hy = t.by + d * Math.sin(Math.toRadians(a));
+                boolean left = false;
+                for (double[] alt : t.alternatesBoard) {
+                    left |= Math.hypot(alt[0] - hx, alt[1] - hy) >= ring + 1.4 - 1e-9;
+                }
+                assertTrue(left, "target " + t.n + ": a hole " + d + " mm away at " + a + " deg takes every alternate");
+            }
+        }
+    }
+
     @Test
-    public void alternatesAreTwoMillimetresApart() throws Exception {
+    public void alternatesSpreadToLeaveAMountingHole() throws Exception {
         DispenseConfig c = new DispenseConfig();
         for (VacuumProber.Target x : ProbeTargets.forBoard(ftp, dots, c)) {
-            assertEquals(2, x.alternatesBoard.size(), "target " + x.n);
+            assertEquals(4, x.alternatesBoard.size(), "target " + x.n);
             List<double[]> all = new ArrayList<>(x.alternatesBoard);
             all.add(new double[] {x.bx, x.by});
             for (int i = 0; i < all.size(); i++) {
@@ -90,9 +109,81 @@ public class ProbeTargetsTest {
                     assertTrue(Math.hypot(all.get(i)[0] - all.get(j)[0], all.get(i)[1] - all.get(j)[1]) >= 2.0 - 1e-9);
                 }
             }
+            if (x.n < 5) {
+                // the corners: clear of pads 5 mm out; the centre sits in a ring of resistors (2 mm steps)
+                assertSomeAlternateLeavesAnyHole(x);
+            }
+        }
+        // two (the count a saved config may still hold) leave in opposite directions
+        c.vacuumProbe.alternates = 2;
+        for (VacuumProber.Target x : ProbeTargets.forBoard(ftp, dots, c)) {
+            double[] a = x.alternatesBoard.get(0), b = x.alternatesBoard.get(1);
+            double between = Math.toDegrees(Math.abs(Math.atan2(a[1] - x.by, a[0] - x.bx)
+                    - Math.atan2(b[1] - x.by, b[0] - x.bx)));
+            assertEquals(180, Math.min(between, 360 - between), 30.0 + 1e-6, "target " + x.n);
         }
         c.vacuumProbe.alternates = 0;
         assertTrue(ProbeTargets.forBoard(ftp, dots, c).get(0).alternatesBoard.isEmpty());
+    }
+
+    /**
+     * 2026-10-29, the first real registration: the plan had no dots, so the corners came from the outline
+     * 2 mm in. The look refused target (2, 2) and its alternates (4, 2) and (3, 3.73): ftp's corner mounting
+     * hole, a 5.6 mm copper ring around about (5.0, 4.5) (looks/b3reg_corner_2_2_alt_openpnp.png). The
+     * corners now sit 8 mm in, as the bench's spots that worked, clear of a mounting hole assumed in each
+     * corner, and the alternates step 5 mm.
+     */
+    @Test
+    public void withoutDotsTheCornersStayOffTheMountingHoles() throws Exception {
+        DispenseConfig c = new DispenseConfig();
+        double[] seen = {5.0, 4.5};
+        double seenRing = 2.8;
+        List<VacuumProber.Target> t = ProbeTargets.forBoard(ftp, new ArrayList<>(), c);
+        double[][] expected = {{8, 8}, {67, 8}, {67, 67}, {8, 67}, {37.5, 37.5}};
+        assertEquals(5, t.size());
+        List<ProbeTargets.KeepOut> holes = ProbeTargets.assumedHoles(ftp);
+        assertEquals(4, holes.size());
+        for (int i = 0; i < 5; i++) {
+            VacuumProber.Target x = t.get(i);
+            assertEquals(expected[i][0], x.bx, 1e-9);
+            assertEquals(expected[i][1], x.by, 1e-9);
+            List<double[]> spots = new ArrayList<>(x.alternatesBoard);
+            spots.add(new double[] {x.bx, x.by});
+            for (double[] p : spots) {
+                assertClear(ftp, p[0], p[1], 1.4, "target " + x.n);
+                for (ProbeTargets.KeepOut h : holes) {
+                    assertTrue(Math.hypot(p[0] - h.x, p[1] - h.y) >= h.r + 1.4 - 1e-9, "target " + x.n + " near a hole");
+                }
+            }
+            assertTrue(Math.hypot(x.bx - seen[0], x.by - seen[1]) >= seenRing + 1.4, "target " + x.n);
+            if (x.n < 5) {
+                assertSomeAlternateLeavesAnyHole(x); // the centre sits in a ring of resistors (2 mm steps)
+            }
+        }
+    }
+
+    /** Board art (its drills as keep-outs) replaces the assumed corner holes; a small board assumes none. */
+    @Test
+    public void boardArtReplacesTheAssumedHoles() throws Exception {
+        BoardFeatures f = bare(75, 75);
+        DispenseConfig c = new DispenseConfig();
+        List<double[]> d = Arrays.asList(new double[] {6, 6}, new double[] {69, 6}, new double[] {69, 69},
+                new double[] {6, 69}, new double[] {37.5, 37.5});
+        // no art: the dots' corner (6, 6) lies on the assumed hole at (4.5, 4.5): the target moves off it
+        VacuumProber.Target noArt = ProbeTargets.forBoard(f, d, c).get(0);
+        assertTrue(Math.hypot(noArt.bx - 4.5, noArt.by - 4.5) >= 3.2 + 1.4 - 1e-9, noArt.bx + ", " + noArt.by);
+        // art without holes there: the target is the dots' corner
+        VacuumProber.Target art = ProbeTargets.forBoard(f, d, c, new ArrayList<>()).get(0);
+        assertEquals(6, art.bx, 1e-9);
+        assertEquals(6, art.by, 1e-9);
+        // art with a 3.2 mm hole and its ring at (8, 4): kept 1.4 mm from the ring
+        List<ProbeTargets.KeepOut> hole = Arrays.asList(new ProbeTargets.KeepOut(8, 4, 2.8));
+        VacuumProber.Target drilled = ProbeTargets.forBoard(f, d, c, hole).get(0);
+        assertTrue(Math.hypot(drilled.bx - 8, drilled.by - 4) >= 2.8 + 1.4 - 1e-9);
+        for (double[] a : drilled.alternatesBoard) {
+            assertTrue(Math.hypot(a[0] - 8, a[1] - 4) >= 2.8 + 1.4 - 1e-9);
+        }
+        assertTrue(ProbeTargets.assumedHoles(bare(15, 40)).isEmpty(), "too small for corner holes");
     }
 
     @Test
