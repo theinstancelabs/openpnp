@@ -40,6 +40,8 @@ public final class SimVacuum {
     static final double MISSING_TIP_OPEN_AIR = -400_000, BLOCKED_TIP_OPEN_AIR = -2_100_000;
     /** A held 0603 reads >= 80 k below open air (tools/place.py); it seals 0.45 mm high. */
     static final double PART_EXTRA_COUNTS = -100_000, PART_HEIGHT_MM = 0.45;
+    /** A controller's M400 may return this much before the planned arrival (GcodeServer waits whole milliseconds). */
+    static final long ARRIVAL_SLACK_NS = 2_000_000;
     private static final Pattern WORD = Pattern.compile("([A-Z])\\s*([-+]?(?:\\d+\\.?\\d*|\\.\\d+))");
 
     private enum Seal {
@@ -110,8 +112,8 @@ public final class SimVacuum {
             noise = new Random(sc.vacuum.seed);
         }
         long now = clockNs.getAsLong();
-        if (arriving != null && arrivesAtNs <= now) {
-            advance(arrivesAtNs);
+        if (arriving != null && arrivesAtNs <= now + ARRIVAL_SLACK_NS) {
+            advance(Math.min(arrivesAtNs, now));
             head = arriving;
             arriving = null;
             retarget(sc, false);

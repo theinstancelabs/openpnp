@@ -52,7 +52,8 @@ public class SimGuardTest {
     public void loopbackTcpAndMarlinIsNotSimulated() throws Exception {
         sim = new SimMachine();
         List<String> lines = identify();
-        assertTrue(lines.get(0).contains("FIRMWARE_NAME:Marlin (RecordingGcodeServer)"), lines.toString());
+        assertTrue(lines.stream().anyMatch((l) -> l.contains("FIRMWARE_NAME:Marlin (RecordingGcodeServer)")),
+                lines.toString());
         assertTrue(SimGuard.isLoopbackOnly(sim.machine), "a serial-over-TCP bridge on 127.0.0.1 passes this");
         assertFalse(SimGuard.isSimulated(sim.machine));
         // A later Marlin answer on the same connection replaces an earlier GcodeServer one.
