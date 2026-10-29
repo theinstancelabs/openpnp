@@ -611,8 +611,9 @@
       if (doneKey !== prev.doneKey) {
         for (let i = 0; i < this.dotEls.length; i++) toggle(this.dotEls[i], 'done', done.has(i));
         for (const [pid, idx] of this.padDots) toggle(this.padEls.get(pid), 'pasted', idx.every((i) => done.has(i)));
-        const ord = Array.from(done).sort((a, b) => a - b);
         const dots = this.plan.dots;
+        // an index past the plan's last dot (another plan's done set) draws nothing rather than breaking the render
+        const ord = Array.from(done).filter((i) => !!dots[i]).sort((a, b) => a - b);
         setAll(this.doneC, 'd', ord.length > 1 ? 'M' + ord.map((i) => f(dots[i].x) + ' ' + f(-dots[i].y)).join(' L') : '');
         if (this.firstC) this.firstC.g.setAttribute('visibility', done.size ? 'hidden' : 'visible');
         next.doneKey = doneKey;

@@ -256,11 +256,15 @@
 
   // ================================================================================== done dots, phases (every poll)
   function saveDone() { ssSet('il.run.done', { planId: R.done.planId, idx: Array.from(R.doneSet), runIds: R.done.runIds.slice(-20), since: R.done.since || 0 }); }
+  /** The done dots belong to one plan: another plan (not carried over by carryBoard) starts with none. */
+  function doneFor(p) {
+    if (R.done.planId !== p.planId) { R.done = { planId: p.planId, idx: [], runIds: [], since: 0 }; R.doneSet = new Set(); saveDone(); }
+  }
   function trackDone(s) {
     const p = plan();
     const run = s.run;
     if (!p) return;
-    if (R.done.planId !== p.planId) { R.done = { planId: p.planId, idx: [], runIds: [], since: 0 }; R.doneSet = new Set(); saveDone(); }
+    doneFor(p);
     if (!run || run.label !== 'board' || !IL.planMatches(run.planId)) return;
     // "Next board" cleared the map: a run that ended before it belongs to the board taken off the machine
     if (R.done.since && run.startedAtMs && run.startedAtMs - S.skewMs < R.done.since) return;
@@ -856,7 +860,9 @@
       if (dirty.size && !probe) all.push([1, layer('dirty', 'lg-dirty', 'paste found · ' + dirty.size)]);
       if (blocked) all.push([2, layer(null, 'lg-dirty', 'cannot dispense · ' + blocked)]);
       if (fids && fids.length) all.push([2.5, layer(null, 'lg-fid', 'fiducial · search ' + IL.fmt(fids[0].r, 0) + ' mm')]);
-      if (probe) all.push([3, layer(null, 'lg-probe', 'probe spot')], [4, layer(null, 'lg-area', 'probed area')]);
+      // no probe spot when the engine found none (Register board then says why): the legend names only what is drawn
+      if (probe && probe.targets && probe.targets.length) all.push([3, layer(null, 'lg-probe', 'probe spot')]);
+      if (probe) all.push([4, layer(null, 'lg-area', 'probed area')]);
       all.push([5, layer('dots', 'lg-dot', 'planned dot')]);
       if (done) all.push([6, layer(null, 'lg-done', 'dispensed · ' + done)]);
       all.push([7, layer('pads', 'lg-pad', 'pad')], [8, layer('path', 'lg-path', 'path')]);
@@ -874,7 +880,9 @@
         onclick: () => { if (R.hidden.has(x.key)) R.hidden.delete(x.key); else R.hidden.add(x.key); R.bv.layers(R.hidden); IL.render(); } },
       el('i', { class: 'lg ' + x.cls }), x.text)
       : el('span', {}, el('i', { class: 'lg ' + x.cls }), x.text))));
-    if (rebuilt && mode !== 'live' && mode !== 'stopped' && R.lgMax > 2 && n.legend.clientWidth && n.legend.scrollWidth > n.legend.clientWidth + 1) {
+    // down to the most important one: with the stage bar's picture and preview controls, two long items ("cannot dispense ·
+    // 149", "fiducial · search 8 mm") were cut at 1280 and 1440 px
+    if (rebuilt && mode !== 'live' && mode !== 'stopped' && R.lgMax > 1 && n.legend.clientWidth && n.legend.scrollWidth > n.legend.clientWidth + 1) {
       R.lgMax--;
       renderLegend(s, p, mode, dirty, chk, probe, posWrong, fids);
     }
@@ -1824,7 +1832,11 @@
     const sf = boardSurface(s);
     const tied = !!sf && sf.boundToBoard && IL.ready().items.find((x) => x.key === 'surface').state === 'ok';
     const surfPts = tied ? (sf.points || []).map((q) => (Array.isArray(q) ? { x: q[0], y: q[1] } : { x: q.x, y: q.y })) : [];
-    return { margin: st.margin, points: surfPts, targets: st.targets.map((t) => ({ x: t.x, y: t.y, alts: t.alts || [] })) };
+    // the engine found no bare spots (Register board is locked and says where): no numbered spots on the board, the
+    // client's fallback rectangle would draw them on pads or off the outline (by hand still lists them, for a person)
+    const rt = regTargets(st.p);
+    const targets = rt && rt.error ? [] : st.targets;
+    return { margin: st.margin, points: surfPts, targets: targets.map((t) => ({ x: t.x, y: t.y, alts: t.alts || [] })) };
   }
   /** The fiducial layer of the hero (g.pv-l-fids): expected search circles and the fiducials found. */
   function fidOverlay(s) {
@@ -2942,6 +2954,9 @@
   IL.on('plan', (p, prev) => {
     if (p && prev && prev.planId !== p.planId) IL.safe(() => carryBoard(prev, p), 'carry board');
     if (p && (!prev || prev.planId !== p.planId)) {
+      // before the render that follows: the last plan's done dots are not this plan's (the hero drew them on the new
+      // plan's dots, or failed on an index past its last dot, until the next status)
+      doneFor(p);
       formFromPlan(p);
       R.showAllDirty = false;
       if (R.bv) R.bv.setPlan(p, { origin: originOf(p) });
