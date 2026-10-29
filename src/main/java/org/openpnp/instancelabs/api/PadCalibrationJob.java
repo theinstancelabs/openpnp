@@ -1722,9 +1722,10 @@ final class PadCalibrationJob {
      * logged with its stack, and named in plain words.
      */
     private void fail(Throwable e) {
-        String why = e instanceof ApiException ? e.getMessage() : e instanceof Exception ? MachineEndpoints.rootMessage(e)
-                : "an internal error stopped the calibration (" + e.getClass().getSimpleName() + (e.getMessage() == null
-                        ? "" : ": " + e.getMessage()) + "); see the OpenPnP log";
+        String why = e instanceof ApiException ? e.getMessage()
+                : e instanceof Exception ? MachineEndpoints.rootMessage(e)
+                : "an internal error stopped the calibration (" + e.getClass().getSimpleName()
+                        + (e.getMessage() == null ? "" : ": " + e.getMessage()) + "); see the OpenPnP log";
         if (e instanceof Exception) {
             Logger.warn("pad calibration {} failed: {}", id, why);
         }

@@ -2366,8 +2366,8 @@ public final class DispenseService {
         Probe p = new Probe(s, t::aborted, pt -> t.point("probe", targets.size(), pt));
         String what = "the '" + req.surfaceName + "' place Z";
         // a surface off the needle frame (a weigh coupon) is checked as a board is: against its own Z only
-        res.window = VacuumProber.preflight(c, !req.frameCheck, what, req.nominalZ, req.windowMm, p.travelZ, p.settings,
-                p.n1.getNozzle());
+        res.window = VacuumProber.preflight(c, !req.frameCheck, what, req.nominalZ, req.windowMm, p.travelZ,
+                p.settings, p.n1.getNozzle());
         List<VacuumProber.Point> pts = p.run("'" + req.surfaceName + "' probe", targets, res.window);
         res.points = pts;
         String why = VacuumProber.refusal(pts);
