@@ -11,6 +11,7 @@ import org.openpnp.model.Board;
 import org.openpnp.model.LengthUnit;
 import org.openpnp.model.Location;
 import org.openpnp.model.Placement;
+import org.pmw.tinylog.Logger;
 
 /**
  * What GET /api/boards adds per board (BOARD_IMPORT_DESIGN.md §3.8): size, fiducials, the drawing ({@code art}: kicad
@@ -36,11 +37,20 @@ final class BoardListView {
             }
         }
         entry.put("fiducials", fids);
-        BoardArtStore store = BoardArtStore.get();
-        BoardArtStore.ArtRef art = store.refFor(b);
-        BoardArtStore.Imported imp = BoardArt.KIND_KICAD.equals(art.kind) ? store.imported(b) : null;
+        BoardArtStore.ArtRef art;
+        BoardArtStore.Imported imp;
+        try {
+            BoardArtStore store = BoardArtStore.get();
+            art = store.refFor(b);
+            imp = BoardArt.KIND_KICAD.equals(art.kind) ? store.imported(b) : null;
+        }
+        catch (RuntimeException e) {
+            Logger.warn(e, "no drawing for board {}", b.getFile()); // one odd board must not break the list
+            art = null;
+            imp = null;
+        }
         entry.put("origin", imp == null ? null : imp.origin);
-        entry.put("art", Views.map("id", art.id, "kind", art.kind, "note", art.note));
+        entry.put("art", art == null ? null : Views.map("id", art.id, "kind", art.kind, "note", art.note));
         entry.put("imported", imp == null ? null : Views.map("slug", imp.slug, "name", imp.name, "atMs", imp.atMs,
                 "sourceName", imp.sourceName, "kicadVersion", imp.kicadVersion, "how", imp.how, "board", imp.board));
     }

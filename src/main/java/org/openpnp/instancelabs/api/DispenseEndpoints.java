@@ -36,6 +36,7 @@ import org.openpnp.model.LengthUnit;
 import org.openpnp.model.Location;
 import org.openpnp.model.Package;
 import org.openpnp.spi.Machine;
+import org.pmw.tinylog.Logger;
 
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -784,8 +785,14 @@ final class DispenseEndpoints {
         if (board == null) {
             return;
         }
-        BoardArtStore.ArtRef ref = EdtRunner.call(() -> BoardArtStore.get().refFor(board),
-                EDT_START_MS);
+        BoardArtStore.ArtRef ref;
+        try {
+            ref = EdtRunner.call(() -> BoardArtStore.get().refFor(board), EDT_START_MS);
+        }
+        catch (RuntimeException e) {
+            Logger.warn(e, "plan {} has no board drawing", plan.planId); // the plan stands without it
+            return;
+        }
         plan.boardArtId = ref.id;
         plan.boardArtKind = ref.kind;
         plan.boardArtNote = ref.note;

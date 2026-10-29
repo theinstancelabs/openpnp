@@ -567,8 +567,9 @@ public class BoardImportSimTest {
     // ------------------------------------------------------------------------------------------
 
     /**
-     * The answer to a raw request that declares a body of contentLength bytes and sends only its first 128 KB: the
-     * status line, the headers and the body.
+     * The answer to a raw request that declares a body of contentLength bytes and sends only its first 16 KB (less
+     * than the server drains before it closes, so the answer is never cut by a reset): the status line, the headers
+     * and the body.
      */
     String rawAnswer(String path, long contentLength) throws Exception {
         try (Socket s = new Socket(InetAddress.getLoopbackAddress(), api.getPort())) {
@@ -577,7 +578,7 @@ public class BoardImportSimTest {
             out.write(("POST " + path + " HTTP/1.1\r\nHost: 127.0.0.1:" + api.getPort() + "\r\nContent-Type: "
                     + "application/octet-stream\r\nContent-Length: " + contentLength + "\r\n\r\n")
                             .getBytes(StandardCharsets.US_ASCII));
-            out.write(new byte[128 * 1024]);
+            out.write(new byte[16 * 1024]);
             out.flush();
             InputStream in = s.getInputStream();
             StringBuilder head = new StringBuilder();
@@ -612,8 +613,9 @@ public class BoardImportSimTest {
         assertTrue(big.startsWith("HTTP/1.1 413"), big);
         assertTrue(big.contains("The file is larger than 12 MB."), big);
         // the other routes keep the 2 MiB cap
-        Res plan3 = postJson("/api/plan", "{\"x\":\"" + "a".repeat(3 * 1024 * 1024) + "\"}");
-        assertEquals(413, plan3.status);
+        String plan3 = rawAnswer("/api/plan", 3 * 1024 * 1024);
+        assertTrue(plan3.startsWith("HTTP/1.1 413"), plan3);
+        assertTrue(plan3.contains("request body larger than 2097152 bytes"), plan3);
         // what is not a board
         refused(upload("/api/boards/import?file=x.json", "{\"file\":\"ftp\"}".getBytes(StandardCharsets.UTF_8)), 400,
                 "bad-request");
@@ -624,8 +626,10 @@ public class BoardImportSimTest {
         JsonObject cut = refused(upload("/api/boards/import?file=cut.kicad_pcb", Arrays.copyOf(ftp, ftp.length / 2)),
                 400, "kicad-syntax");
         assertTrue(cut.get("reason").getAsString().matches("Line \\d+, column \\d+: .*"), cut.toString());
-        // browser safety
-        assertEquals(403, send("POST", "/api/boards/import?file=ftp.kicad_pcb", ftp, "Origin", "http://evil.example")
+        // browser safety (a small body: the refusal comes before the body is read, and the server drains only
+        // 64 KB of a body it does not read before it closes the connection)
+        byte[] small = BoardImporterTest.board(BoardImporterTest.outline(20, 10));
+        assertEquals(403, send("POST", "/api/boards/import?file=x.kicad_pcb", small, "Origin", "http://evil.example")
                 .status);
         // name and file checks of the save
         JsonObject pv = preview(ftp, "ftp.kicad_pcb");
