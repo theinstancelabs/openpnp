@@ -380,13 +380,12 @@ ask, but each can explain a surprise on the machine.
   refuses while OpenPnP is busy, and the web home returns its failure instead of throwing it. A task of OpenPnP's own
   (its Home or jog buttons) that fails can still drop an engine task queued in the moment between the check and the
   queue: do not press OpenPnP's own buttons while an engine task is starting.
-- **Pressure hold race.** The machine-thread pressure-hold guard is in runs, Register board, the blank probe and Check
-  Z, but not in prime, test dot, shots, dot ladder, touch-off or the clean check.
-- **After a failed Z check** the refusal's own remedy leads nowhere for that home: recording the needle frame again
-  does not renew the touch-off's stamp, the touch-off run is still refused by the failed check, and Check Z has no
-  point left to touch (data measured after the home are not references).
-- **A STOP or failure during an engine home** leaves a stale start time: the next clean home from OpenPnP's own Home
-  button is classed "a stop came during the last home" and Run homes again (harmless, 22 s).
+- **Pressure hold race** (fixed in the final round). Every engine task now looks at the hold again on the machine
+  thread, prime, the test dot, shots, the dot ladder, the touch-off and the clean check included.
+- **After a failed Z check** (fixed in the final round) the remedy works under the same home, in this order: record
+  the needle frame again, probe the blank, touch off, register the board. Places carry no time: retake the waste
+  place's Z with N1 too, as nothing checks it against the move (the frame tolerance is 1.0 mm).
+- **A STOP or failure during an engine home** (fixed in the final round) no longer leaves a stale start time behind.
 - **A run refused after its home and Z check.** The stream check runs last: a board with two pads of one part that
   share a name (or have none) can be refused there ("a pad's dots are never split") although the plan, the estimate
   and the interlocks accepted it; so is every run of a two-turn profile (a purge dot is capped at one revolution plus
