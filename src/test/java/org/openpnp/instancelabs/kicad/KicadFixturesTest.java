@@ -17,11 +17,14 @@ public class KicadFixturesTest {
             "ftp.board.xml"};
 
     @Test
-    public void noMarksInTheBoards() throws Exception {
-        for (String f : Fixtures.BOARDS) {
+    public void noMarksInTheFixtures() throws Exception {
+        for (String f : ALL) { // the boards, the oracles and ftp.board.xml: only LICENSE.txt names the projects
             String s = new String(Fixtures.bytes(f), StandardCharsets.UTF_8).toLowerCase(Locale.ROOT);
             assertFalse(s.contains("opulo"), f);
             assertFalse(s.contains("lumenpnp"), f);
+        }
+        for (String f : Fixtures.BOARDS) {
+            String s = new String(Fixtures.bytes(f), StandardCharsets.UTF_8);
             if (!f.equals(Fixtures.NANO) && !f.equals(Fixtures.MOBO)) {
                 assertFalse(s.contains("(model "), f + ": the 3-D model references are removed");
             }
