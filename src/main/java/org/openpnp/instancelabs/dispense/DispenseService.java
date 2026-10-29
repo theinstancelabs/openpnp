@@ -2455,6 +2455,9 @@ public final class DispenseService {
             }
             double[] at = k.looks.get(i);
             DotImager.Frame f = im.captureLit(at[0], at[1], req.nominalZ);
+            if (f == null || f.image == null) {
+                throw refused(NO_CAMERA_PCAL);
+            }
             // where its edges are: the margin around the weigh grid must lie on the coupon
             double shift = k.rect == null ? Double.NaN : PadLadder.couponEdgeShift(f, k.rect, ref);
             if (shift > k.slackMm + COUPON_SHIFT_MM) {
