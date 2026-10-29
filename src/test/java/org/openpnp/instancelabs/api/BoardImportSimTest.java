@@ -1043,11 +1043,17 @@ public class BoardImportSimTest {
     @Test
     public void theBoardDrawingScriptsAreServed() throws Exception {
         String index = get("/").body;
-        for (String f : new String[] {"board.css", "boardart.js", "pathpreview.js", "padinspect.js"}) {
-            assertTrue(index.contains(f), f);
+        for (String f : new String[] {"board.css", "boardart.js", "pathpreview.js", "padinspect.js", "boardflow.js",
+                "boardimport.js", "boardimport.css"}) {
+            assertTrue(index.contains("/static/" + f), "index.html loads " + f);
             Res r = get("/static/" + f);
             assertEquals(200, r.status, f);
+            assertFalse(r.body.isEmpty(), f);
         }
+        // the board-import glue loads after the drawing it builds on, and before app.js boots (the Run and Records
+        // hooks read IL.boardFlow from the first render on)
+        assertTrue(index.indexOf("/static/boardview.js") < index.indexOf("/static/boardflow.js"), "boardview.js first");
+        assertTrue(index.indexOf("/static/boardimport.js") < index.indexOf("/static/app.js"), "before app.js");
     }
 
     @Test

@@ -626,13 +626,13 @@
       M.state = 'preview';
       const d = e.data || {};
       if (e.status === 409 && d.error === 'exists') {
-        M.existsAnswer = Object.assign({ slug: slugOf(name) }, d.details && d.details.exists ? d.details.exists : d.exists || {});
+        M.existsAnswer = Object.assign({ slug: slugOf(name) }, d.exists || {});
         paint();
         paintName();
         IL.toast(d.reason || 'A board with this name exists: press again to replace it.', 'need');
-      } else if (e.status === 409 && d.error === 'preview-stale' && (d.preview || d.details)) {
+      } else if (e.status === 409 && d.error === 'preview-stale' && d.preview) {
         IL.toast('OpenPnP\'s packages or parts changed since the preview: check the new lists, then save.', 'need');
-        showPreview(d.preview || d.details, { keepName: true, stale: true });
+        showPreview(d.preview, { keepName: true, stale: true });
       } else if (e.status === 400 && /^Name/.test(d.reason || '')) {
         paint();
         n.name.classList.add('input--invalid');
