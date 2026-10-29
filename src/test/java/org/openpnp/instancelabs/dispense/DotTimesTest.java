@@ -65,6 +65,14 @@ public class DotTimesTest {
         for (int i = 2; i < n; i++) {
             assertEquals(p.dotEndSeconds[1] - p.dotArriveSeconds[1], p.dotEndSeconds[i] - p.dotArriveSeconds[i], 1e-9);
         }
+        // between a lift and the next arrival there is only the XY move at the lift height
+        for (int i = 0; i + 1 < n; i++) {
+            DispensePlan.PlannedDot a = plan.dots.get(i);
+            DispensePlan.PlannedDot b = plan.dots.get(i + 1);
+            double xy = GcodeStreamBuilder.moveSeconds(Math.hypot(b.xMm - a.xMm, b.yMm - a.yMm), c.travelFeedMmS,
+                    c.travelAccelMmS2);
+            assertEquals(xy, p.dotArriveSeconds[i + 1] - p.dotEndSeconds[i], 1e-9, "dot " + i + " -> " + (i + 1));
+        }
     }
 
     @Test

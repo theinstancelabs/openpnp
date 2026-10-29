@@ -166,6 +166,14 @@ public class PlanBoardFrameTest {
             assertEquals(m[0], p.xMm, 1e-9, p.padId);
             assertEquals(m[1], p.yMm, 1e-9, p.padId);
         }
+        // what the render draws: every dot (one per pad here) on the affine image of its pad's centre
+        assertEquals(6, plan.dots.size());
+        for (DispensePlan.PlannedDot d : plan.dots) {
+            double[] b = centres.get(d.padId);
+            double[] m = apply(plan.boardToMachine, b[0], b[1]);
+            assertEquals(m[0], d.xMm, 1e-9, d.padId);
+            assertEquals(m[1], d.yMm, 1e-9, d.padId);
+        }
 
         assertEquals(2, plan.fiducials.size(), "top, enabled fiducials only");
         DispensePlan.BoardFiducial f1 = plan.fiducials.get(0);

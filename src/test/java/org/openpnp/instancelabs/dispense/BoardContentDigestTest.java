@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
 import java.io.File;
+import java.util.List;
+import java.util.function.Consumer;
 
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -97,6 +99,25 @@ public class BoardContentDigestTest {
         // the fiducial's footprint counts too
         b.getPlacements().get(2).getPart().getPackage().getFootprint().getPads().get(0).setWidth(1.5);
         assertNotEquals(before, BoardContentDigest.of(b));
+    }
+
+    /** Each pad field the digest names (name, x, y, w, h, rotation, roundness) and the pad count. */
+    @Test
+    public void everyPadFieldChangesIt() {
+        List<Consumer<Footprint.Pad>> edits = List.of(p -> p.setName("9"), p -> p.setX(p.getX() + 0.001),
+                p -> p.setY(p.getY() + 0.001), p -> p.setWidth(p.getWidth() + 0.001),
+                p -> p.setHeight(p.getHeight() + 0.001), p -> p.setRotation(p.getRotation() + 90),
+                p -> p.setRoundness(p.getRoundness() + 1));
+        String before = BoardContentDigest.of(ftpLike());
+        for (int i = 0; i < edits.size(); i++) {
+            Board b = ftpLike();
+            edits.get(i).accept(b.getPlacements().get(0).getPart().getPackage().getFootprint().getPads().get(1));
+            assertNotEquals(before, BoardContentDigest.of(b), "pad edit " + i);
+        }
+        Board b = ftpLike();
+        b.getPlacements().get(0).getPart().getPackage().getFootprint()
+                .addPad(PlanBoardFrameTest.pad("3", 0, 0, 0.5, 0.5, 0, 0));
+        assertNotEquals(before, BoardContentDigest.of(b), "an added pad");
     }
 
     @Test

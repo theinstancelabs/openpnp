@@ -20,7 +20,10 @@ public class DispensePlan {
         public PadTypeStatus typeStatus;
         public PadGeometry.Source source;
         public double xMm, yMm, rotationDeg, wMm, hMm, surfaceZMm;
-        /** Pad name within the part ("1", "2", ...; null when the whole placement is one unresolved pad); part id. */
+        /**
+         * Pad name within the part ("1", "2", ...; null when the whole placement is one pad: no pad type, or
+         * a footprint-only type and no footprint pads); part id.
+         */
         public String padName, partId;
         /** How the pad type was chosen ({@link PadTypeResolver.Resolution}: rule, detail, matched text). */
         public String typeRule, typeRuleDetail, typeRuleMatched;
