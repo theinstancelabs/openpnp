@@ -1067,7 +1067,10 @@ async function runFirstDots(page, n) {
       l = lines(gcode(g1));
       const iH = l.findIndex((x) => /^G28\b/.test(x)), iPress = l.indexOf('M106 P2 S255');
       const touches = l.slice(Math.max(0, iH), iPress < 0 ? undefined : iPress).filter((x) => x === 'M106 P1 S180').length;
-      check('run: G28, then one Z-check touch, before the dispenser pump (M106 P2 S255)', iH >= 0 && iPress > iH && touches === 1, { iH, iPress, touches });
+      // a touch vouches only for the Z data of its own home period (review 1, ZCheck): the board surface saved by hand
+      // above is from a later home than the needle frame and the blank, so one touch on the board and one on the blank
+      check('run: G28, then two Z-check touches (the board\'s Z frame and the blank\'s), before the dispenser pump (M106 P2 S255)',
+        iH >= 0 && iPress > iH && touches === 2, { iH, iPress, touches });
       check('run after the home and the Z check: OK, homed', rr.run.status === 'OK' && rr.machine.homed, { status: rr.run.status, message: rr.run.message });
       await waitText(page, 'pill-homed', /^Homed$/, 15000).catch(() => {});
 
