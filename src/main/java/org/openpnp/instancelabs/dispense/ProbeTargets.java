@@ -69,6 +69,11 @@ public final class ProbeTargets {
     public static final double PLACE_RADIUS_MM = 3.0;
     /** Blank: below this row length only its two ends are probed (mm). */
     public static final double ROW_SPLIT_MM = 6.0;
+    /**
+     * Blank: targets stay this far from the band of the calibration area earlier pad-calibration
+     * ladders laid their dots in (the calibration job's blank step keeps the same distance).
+     */
+    public static final double USED_BAND_MARGIN_MM = 1.0;
 
     /**
      * An extra keep-out circle in board mm (board art: drills with their copper rings, vias, copper).
@@ -207,8 +212,9 @@ public final class ProbeTargets {
     /**
      * Blank targets in machine mm around the purge row: s (along the row) at its ends and middle (only
      * the ends below {@link #ROW_SPLIT_MM}), t at {@link #ROW_OFFSET_MM} either side of the spots; each
-     * moved along the row first off the used spots and the waste / test-dot places. The cover set is
-     * every purge spot, used or not, plus the blank place when this surface is the blank.
+     * moved along the row first off the used spots, the waste / test-dot places and the calibration
+     * area's used band ({@link #usedBand}). The cover set is every purge spot, used or not, plus the
+     * blank place when this surface is the blank.
      */
     public static List<VacuumProber.Target> forRow(DispenseConfig cfg, String surfaceName)
             throws DispenseService.RunRefusedException {
@@ -259,6 +265,10 @@ public final class ProbeTargets {
             circles.add(new double[] {waste.x + cfg.testDotOffsetXMm, waste.y + cfg.testDotOffsetYMm, PLACE_RADIUS_MM});
         }
         Area g = Area.open(circles);
+        double[] band = usedBand(cfg);
+        if (band != null) {
+            g.boxes.add(band);
+        }
         List<double[]> pts = new ArrayList<>();
         List<Double> outward = new ArrayList<>();
         for (double t : new double[] {t0 - ROW_OFFSET_MM, t1 + ROW_OFFSET_MM}) {
@@ -272,8 +282,8 @@ public final class ProbeTargets {
                 if (q == null) {
                     double[] ideal = add(scale(u, s), scale(nv, t));
                     throw refused(String.format(Locale.ROOT, "PROBE: no free spot within %.1f mm of X %.2f, Y %.2f "
-                            + "(used purge spots, the waste or the test-dot place all round): give the targets, or "
-                            + "probe by hand", SEARCH_MM, ideal[0], ideal[1]));
+                            + "(used purge spots, the waste or the test-dot place, or the calibration area's used band "
+                            + "all round): give the targets, or probe by hand", SEARCH_MM, ideal[0], ideal[1]));
                 }
                 if (!near(pts, q, DUPLICATE_MM)) {
                     pts.add(q);
@@ -314,6 +324,23 @@ public final class ProbeTargets {
         return l;
     }
 
+    /**
+     * Blank: the band of the calibration area that pad-calibration ladders have laid dots in since the
+     * blank was last wiped (from y0 up by {@link CalibrationArea#usedMm}), grown by
+     * {@link #USED_BAND_MARGIN_MM}: {x0, y0, x1, y1} in machine mm, or null when none is used. The
+     * default area starts at the blank place, so the target past the blank place lies in it whenever
+     * the purge row lies below the blank place; the camera look refuses those spots once a ladder ran.
+     */
+    static double[] usedBand(DispenseConfig cfg) {
+        CalibrationArea a = cfg.calibrationArea == null ? null : cfg.calibrationArea.effective(cfg);
+        if (a == null || !(a.usedMm > 0)) {
+            return null;
+        }
+        double m = USED_BAND_MARGIN_MM;
+        return new double[] {a.x0Mm - m, a.y0Mm - m, a.x0Mm + a.widthMm + m,
+                a.y0Mm + Math.min(a.usedMm, a.heightMm) + m};
+    }
+
     /** Explicit N1 tip targets (machine mm); their alternates are 2 mm either side in X. */
     public static List<VacuumProber.Target> explicit(List<double[]> xy, int alternates) {
         List<VacuumProber.Target> l = new ArrayList<>();
@@ -334,11 +361,15 @@ public final class ProbeTargets {
 
     // ------------------------------------------------------------------------------------------
 
-    /** Allowed rectangle and keep-outs (circles {x, y, radius} and grown pad rectangles). */
+    /**
+     * Allowed rectangle and keep-outs (circles {x, y, radius}, grown pad rectangles and boxes {x0, y0,
+     * x1, y1}).
+     */
     static final class Area {
         double x0 = -Double.MAX_VALUE, y0 = -Double.MAX_VALUE, x1 = Double.MAX_VALUE, y1 = Double.MAX_VALUE;
         final List<double[]> circles = new ArrayList<>();
         final List<BoardFeatures.Pad> rects = new ArrayList<>();
+        final List<double[]> boxes = new ArrayList<>();
         double rectKeepOut;
 
         static Area of(BoardFeatures f, double keepOut, List<KeepOut> extra) {
@@ -405,6 +436,11 @@ public final class ProbeTargets {
             }
             for (BoardFeatures.Pad p : rects) {
                 if (padDistance(p, x, y) < rectKeepOut - 1e-9) {
+                    return false;
+                }
+            }
+            for (double[] b : boxes) {
+                if (x > b[0] + 1e-9 && x < b[2] - 1e-9 && y > b[1] + 1e-9 && y < b[3] - 1e-9) {
                     return false;
                 }
             }

@@ -365,6 +365,58 @@ public class ProbeTargetsTest {
         assertEquals(242.0, t.get(5).y, 1e-9);
     }
 
+    /**
+     * Review fix round: with the purge row below the blank place the target 2 mm past the blank place
+     * lies in the default calibration area (it starts at the blank place). Once a pad-calibration
+     * ladder has used the area, the camera look refuses that spot and the plain blank probe failed. No
+     * target or alternate comes within 1 mm of the used band; the row and the blank place stay covered.
+     */
+    @Test
+    public void rowTargetsStayOffTheCalibrationAreasUsedBand() throws Exception {
+        DispenseConfig c = rowConfig();
+        c.locations.put("blank", new DispenseConfig.NamedLocation(322.0, 250.0, 5.62));
+        CalibrationArea area = c.calibrationArea.effective(c);
+        assertEquals(322.0, area.x0Mm, 1e-9, "the default area starts at the blank place");
+        assertEquals(250.0, area.y0Mm, 1e-9, "the row is clear of it");
+        boolean inArea = false;
+        for (VacuumProber.Target x : ProbeTargets.forRow(c, "blank")) {
+            inArea |= area.distanceTo(x.x, x.y) == 0;
+        }
+        assertTrue(inArea, "without a used band a target lies 2 mm past the blank place, in the area");
+
+        c.calibrationArea.usedMm = 11; // an earlier ladder's dots: X 322..362, Y 250..261
+        List<VacuumProber.Target> t = ProbeTargets.forRow(c, "blank");
+        List<double[]> pts = new ArrayList<>();
+        for (VacuumProber.Target x : t) {
+            pts.add(new double[] {x.x, x.y});
+            assertOffBand(x.x, x.y, "target " + x.n);
+            for (double[] a : x.alternates) {
+                assertOffBand(a[0], a[1], "alternate of " + x.n);
+            }
+        }
+        for (int i = 0; i < c.purgeRow.spots; i++) {
+            assertTrue(ProbeTargets.distanceOutside(pts, c.purgeRow.spot(i)) <= c.surfaceMarginMm - 0.5 + 1e-9);
+        }
+        assertTrue(ProbeTargets.distanceOutside(pts, new double[] {322.0, 250.0}) <= c.surfaceMarginMm - 0.5 + 1e-9,
+                "the blank place is covered");
+        // an area set by hand under the row: its band (X 300..350, Y 232..238) holds the targets 2 mm below the row
+        c.calibrationArea.x0Mm = 300.0;
+        c.calibrationArea.y0Mm = 232.0;
+        c.calibrationArea.widthMm = 50.0;
+        c.calibrationArea.heightMm = 8.0;
+        c.calibrationArea.usedMm = 6;
+        for (VacuumProber.Target x : ProbeTargets.forRow(c, "blank")) {
+            assertTrue(x.y >= 239 - 1e-9 || x.x <= 299 + 1e-9 || x.x >= 351 - 1e-9,
+                    "target " + x.n + " at X " + x.x + ", Y " + x.y + " is within 1 mm of the band Y 232..238");
+        }
+    }
+
+    static void assertOffBand(double x, double y, String what) {
+        // the band X 322..362, Y 250..261, and 1 mm round it
+        assertTrue(x <= 321 + 1e-9 || x >= 363 - 1e-9 || y <= 249 + 1e-9 || y >= 262 - 1e-9,
+                what + " at X " + x + ", Y " + y + " is within 1 mm of the calibration area's used band");
+    }
+
     @Test
     public void aShortRowIsProbedAtItsEndsAtLeastSixMillimetresApart() throws Exception {
         DispenseConfig c = rowConfig();
