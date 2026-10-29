@@ -114,7 +114,8 @@ public class FiducialLocatorTest {
             assertTrue(f.iterations <= 3, "at most 2 moves after the first look");
             assertEquals(err == 0 ? 2 : 3, f.iterations, "a scale error costs one more move");
             assertTrue(f.lastOffsetPx < 3);
-            assertEquals(cam.captures.size(), f.frames);
+            assertEquals(1, f.frames, "found in the first search frame");
+            assertEquals(cam.captures.size(), f.frames + f.iterations - 1);
             assertEquals("fiducials: FID1 (1 of 1)", steps.get(0));
             if (steps.size() > 1) {
                 assertEquals("fiducials: FID1 (1 of 1) · move 2", steps.get(1));
@@ -155,6 +156,7 @@ public class FiducialLocatorTest {
                 .get(0);
         assertEquals(300.3, f.x, 0.005);
         assertEquals(157.0, f.y, 0.005);
+        assertEquals(2, f.frames);
         assertArrayEquals(new double[] {300, 150 + tile}, up.captures.get(1), 1e-9);
         assertEquals("fiducials: FID1 (1 of 1) · frame 2 of 3", steps.get(1));
         // -7 mm: frame 3.
@@ -162,6 +164,7 @@ public class FiducialLocatorTest {
         Found g = locator(down, new ArrayList<>())
                 .locateAll(Arrays.asList(target("FID1", 0, 0, 300, 150))).get(0);
         assertEquals(143.0, g.y, 0.005);
+        assertEquals(3, g.frames);
         assertArrayEquals(new double[] {300, 150 - tile}, down.captures.get(2), 1e-9);
         // 9 mm off: frame 2 sees it, but it lies outside the 8 mm search radius.
         FakeCamera far = new FakeCamera().mark(300.0, 159.0);
@@ -231,6 +234,54 @@ public class FiducialLocatorTest {
         assertArrayEquals(Arrays.copyOf(e, 4), Arrays.copyOf(m, 4), 2e-4, name);
         assertEquals(e[4], m[4], 0.02);
         assertEquals(e[5], m[5], 0.02);
+    }
+
+    /**
+     * A re-seat the 8 mm search reaches only through the prediction updates: moved (-5, -3) mm and
+     * turned 6 deg about FID1, FID3 and FID2 lie 12.3 and 14.4 mm from their first predictions.
+     * FID1's offset brings FID3 within reach (the turn still leaves it 6.8 mm off); FID2 is still
+     * 8.6 mm off after that translation, and the similarity of FID1 and FID3 puts it into its
+     * first frame.
+     */
+    @Test
+    public void predictionsFollowTheFirstFinds() throws Exception {
+        AffineTransform prev = affine(BOARD2);
+        double[] fid1 = apply(prev, FTP[0][0], FTP[0][1]);
+        AffineTransform truth = AffineTransform.getTranslateInstance(-5, -3);
+        truth.rotate(Math.toRadians(6), fid1[0], fid1[1]);
+        truth.concatenate(prev);
+        FakeCamera cam = new FakeCamera();
+        List<Target> targets = new ArrayList<>();
+        double[][] t = new double[3][];
+        double[][] e = new double[3][];
+        for (int i = 0; i < 3; i++) {
+            t[i] = apply(truth, FTP[i][0], FTP[i][1]);
+            e[i] = apply(prev, FTP[i][0], FTP[i][1]);
+            cam.mark(t[i][0], t[i][1]);
+            targets.add(target(NAMES[i], FTP[i][0], FTP[i][1], e[i][0], e[i][1]));
+        }
+        double dx = t[0][0] - e[0][0];
+        double dy = t[0][1] - e[0][1];
+        assertTrue(Math.hypot(t[2][0] - e[2][0], t[2][1] - e[2][1]) > 8, "FID3 needs the update");
+        assertTrue(Math.hypot(t[2][0] - e[2][0] - dx, t[2][1] - e[2][1] - dy) < 8);
+        assertTrue(Math.hypot(t[1][0] - e[1][0] - dx, t[1][1] - e[1][1] - dy) > 8,
+                "FID2 needs more than the translation");
+        List<String> order = new ArrayList<>();
+        List<Found> got = new FiducialLocator(new Settings(), cam, () -> false,
+                f -> order.add(f.target.name), null).locateAll(targets);
+        assertEquals(Arrays.asList("FID1", "FID3", "FID2"), order);
+        for (int i = 0; i < 3; i++) {
+            assertEquals(t[i][0], got.get(i).x, 0.005, NAMES[i]);
+            assertEquals(t[i][1], got.get(i).y, 0.005, NAMES[i]);
+        }
+        Found fid2 = got.get(1);
+        assertEquals(1, fid2.frames, "FID2 predicted by the similarity of FID1 and FID3");
+        double[] firstLook = cam.captures.get(cam.captures.size() - fid2.iterations);
+        assertTrue(Math.hypot(firstLook[0] - t[1][0], firstLook[1] - t[1][1]) < 1.0,
+                Arrays.toString(firstLook));
+        Fit previous = Fit.of(prev, "affine-3", null);
+        Fit fit = FiducialLocator.fit(got, previous, new Settings());
+        assertEquals(previous.rotationDeg + 6, fit.rotationDeg, 0.01);
     }
 
     @Test

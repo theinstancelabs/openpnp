@@ -110,7 +110,10 @@ public final class FiducialLocator {
     public static final class Found {
         public Target target;
         public double x, y;
-        /** Centring looks (1 = the search frame was already centred); frames incl. the search. */
+        /**
+         * Centring looks (1 = the search frame was already centred); search frames up to the one
+         * that found it. Captures = frames + iterations - 1.
+         */
         public int iterations, frames;
         public double lastOffsetPx, offsetFromExpectedMm;
         public FiducialDetector.Detection detection;
@@ -339,11 +342,10 @@ public final class FiducialLocator {
                         t.name, offPx, it, t.name));
             }
             f = capture(fx, fy, label + " · move " + (it + 1));
-            frames++;
             d = FiducialDetector.detect(f.image, f.mmPerPxX, f.mmPerPxY, fx - f.xMm, fy - f.yMm,
                     s.centringRadiusMm, ds);
             if (d == null) {
-                throw notFound(t, px, py, radius, frames);
+                throw notFound(t, px, py, radius, frames + it);
             }
         }
     }
