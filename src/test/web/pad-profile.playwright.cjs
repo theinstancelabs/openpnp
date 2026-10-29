@@ -243,7 +243,8 @@ async function weighCoupon(page, place) {
       rows: document.querySelectorAll('#board-import-packages tbody tr').length,
       needs: Array.from(document.querySelectorAll('li[data-code="NEEDS_PROFILE"]')).map((l) => l.textContent) }));
     check('nano preview: a profile badge on every package row and one NEEDS_PROFILE warning', nano.badges === nano.rows && nano.rows > 0 && nano.needs.length === 1, nano);
-    await shoot(page, 'nano-preview', () => page.evaluate(() => { const t = document.getElementById('board-import-packages'); if (t) t.scrollIntoView({ block: 'start' }); }));
+    // the profile split: the one NEEDS_PROFILE warning above the packages and their Profile column
+    await shoot(page, 'nano-preview', () => page.evaluate(() => { const t = document.querySelector('#dlg-board-import .bi-wg--1') || document.getElementById('board-import-packages'); if (t) t.scrollIntoView({ block: 'start' }); }));
     await page.click('#btn-board-import-cancel').catch(() => page.keyboard.press('Escape'));
     await page.waitForSelector('#dlg-board-import', { state: 'detached', timeout: 10000 }).catch(() => null);
 
