@@ -4,6 +4,8 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -15,6 +17,13 @@ import java.util.Objects;
  * maps z2 = 63 - z1, so the needle relation moves by 2 x the zero error). So Z data measured before
  * the last home (the needle frame, the touch-off, the surfaces a task uses) are accepted only after
  * one N1 touch at a stored point agrees within {@link #TOLERANCE_MM}. Pure; no OpenPnP state.
+ *
+ * <p>A touch vouches only for the data in the reference's Z frame: each datum carries the home it was
+ * measured under ({@code homeAtMs}, {@link HomeTracker#frameHomeAtMs()}), and a home between two data
+ * may have moved Z. So a point measured after an earlier home never clears older data, and a check
+ * touches one point per frame among the stale data. A passing touch moves the data it vouched for to
+ * the frame of the home it checked ({@link #restamp}). A datum of unknown frame is vouched for only
+ * by a touch of its own point.</p>
  */
 public final class ZCheck {
     private ZCheck() {
@@ -38,6 +47,13 @@ public final class ZCheck {
         public double x, y, z;
         /** When it was measured. */
         public Long atMs;
+        /** Its Z frame (the home it was measured or last checked under), or null (unknown). */
+        public Long homeAtMs;
+
+        /** The datum it belongs to ({@link Stale#what}). */
+        public String what() {
+            return NEEDLE_FRAME.equals(name) ? NEEDLE_FRAME_DATUM : surfaceDatum(name);
+        }
     }
 
     /** The latest Z check (memory only). */
@@ -50,17 +66,40 @@ public final class ZCheck {
         public boolean pass;
         /** When the reference was measured. */
         public Long refAtMs;
+        /** The reference's Z frame (the home it was measured or last checked under), or null. */
+        public Long refHomeAtMs;
+        /**
+         * Passed: the Z data measured before the home that this check vouches for (those in the frame of
+         * the points it touched, and the reference's own datum), with what a pass for the same home
+         * vouched for already.
+         */
+        public List<Stale> covers = new ArrayList<>();
     }
 
     /** A Z datum of a task's scope, with the time it was measured. */
     public static final class Stale {
         public String what;
         public Long atMs;
+        /** Its Z frame (the home it was measured or last checked under), or null (unknown). */
+        public Long homeAtMs;
 
-        public Stale(String what, Long atMs) {
+        public Stale(String what, Long atMs, Long homeAtMs) {
             this.what = what;
             this.atMs = atMs;
+            this.homeAtMs = homeAtMs;
         }
+
+        /** The same datum (what, and when it was measured). */
+        boolean same(Stale o) {
+            return what.equals(o.what) && Objects.equals(atMs, o.atMs);
+        }
+    }
+
+    static final String NEEDLE_FRAME_DATUM = "the needle frame";
+    static final String TOUCH_OFF_DATUM = "the touch-off";
+
+    static String surfaceDatum(String name) {
+        return "the '" + name + "' surface";
     }
 
     /**
@@ -87,6 +126,7 @@ public final class ZCheck {
             r.y = a.yMm;
             r.z = a.surfaceZMm;
             r.atMs = a.setAtMs;
+            r.homeAtMs = a.homeAtMs;
             l.add(r);
         }
         return l;
@@ -105,6 +145,7 @@ public final class ZCheck {
             r.y = p.y;
             r.z = p.z;
             r.atMs = m.setAtMs;
+            r.homeAtMs = m.homeAtMs;
             l.add(r);
         }
     }
@@ -132,12 +173,122 @@ public final class ZCheck {
         r.deltaMm = z - ref.z;
         r.pass = verdict(ref, z);
         r.refAtMs = ref.atMs;
+        r.refHomeAtMs = ref.homeAtMs;
         return r;
     }
 
-    /** True when {@code check} is a passing check for this home. */
-    public static boolean accepts(Result check, Long lastHomeAtMs) {
-        return check != null && check.pass && lastHomeAtMs != null && lastHomeAtMs.equals(check.homeAtMs);
+    /**
+     * Whether a passing touch of {@code ref} vouches for {@code d}: the same Z frame (no home between
+     * them), or {@code d} is the reference's own datum.
+     */
+    public static boolean vouches(Reference ref, Stale d) {
+        return (ref.homeAtMs != null && ref.homeAtMs.equals(d.homeAtMs))
+                || (ref.what().equals(d.what) && Objects.equals(ref.atMs, d.atMs));
+    }
+
+    /**
+     * {@code r} (a touch of {@code ref}) with what it vouches for when it passed: every Z datum of
+     * {@code cfg} measured before its home that {@code ref} vouches for, and what {@code prev}, a pass
+     * for the same home, vouched for already.
+     */
+    public static Result vouch(Result r, Reference ref, DispenseConfig cfg, Result prev) {
+        if (!r.pass) {
+            return r;
+        }
+        if (prev != null && prev.pass && r.homeAtMs != null && r.homeAtMs.equals(prev.homeAtMs)) {
+            r.covers.addAll(prev.covers);
+        }
+        Collection<String> surfaces = cfg.surfaces == null ? new ArrayList<String>() : cfg.surfaces.keySet();
+        for (Stale d : staleOf(cfg, surfaces, r.homeAtMs)) {
+            if (vouches(ref, d) && !contains(r.covers, d)) {
+                r.covers.add(d);
+            }
+        }
+        return r;
+    }
+
+    /**
+     * After a passing touch: the data it vouched for are in the frame of the home it checked, so the
+     * next home needs one touch for them. Returns whether {@code c} changed.
+     */
+    public static boolean restamp(DispenseConfig c, Result r) {
+        if (r == null || !r.pass || r.homeAtMs == null) {
+            return false;
+        }
+        boolean changed = false;
+        DispenseConfig.NeedleAnchor a = c.needleAnchor;
+        if (a != null && contains(r.covers, new Stale(NEEDLE_FRAME_DATUM, a.setAtMs, null))) {
+            changed |= !r.homeAtMs.equals(a.homeAtMs);
+            a.homeAtMs = r.homeAtMs;
+        }
+        if (c.needleZOffsetSetAtMs != null && contains(r.covers, new Stale(TOUCH_OFF_DATUM, c.needleZOffsetSetAtMs,
+                null))) {
+            changed |= !r.homeAtMs.equals(c.needleZOffsetHomeAtMs);
+            c.needleZOffsetHomeAtMs = r.homeAtMs;
+        }
+        if (c.surfaces != null) {
+            for (Map.Entry<String, DispenseConfig.SurfaceMap> e : c.surfaces.entrySet()) {
+                DispenseConfig.SurfaceMap m = e.getValue();
+                if (m != null && contains(r.covers, new Stale(surfaceDatum(e.getKey()), m.setAtMs, null))) {
+                    changed |= !r.homeAtMs.equals(m.homeAtMs);
+                    m.homeAtMs = r.homeAtMs;
+                }
+            }
+        }
+        return changed;
+    }
+
+    private static boolean contains(List<Stale> l, Stale d) {
+        for (Stale x : l) {
+            if (x.same(d)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The data of {@code stale} that {@code check}, a pass for this home, does not vouch for (all without one). */
+    public static List<Stale> unchecked(Result check, Long lastHomeAtMs, List<Stale> stale) {
+        if (check == null || !check.pass || lastHomeAtMs == null || !lastHomeAtMs.equals(check.homeAtMs)) {
+            return stale;
+        }
+        List<Stale> l = new ArrayList<>();
+        for (Stale d : stale) {
+            if (!contains(check.covers, d)) {
+                l.add(d);
+            }
+        }
+        return l;
+    }
+
+    /** The first reference that vouches for one of {@code open}, or null. */
+    public static Reference first(List<Reference> refs, List<Stale> open) {
+        for (Reference ref : refs) {
+            if (vouchesForAny(ref, open)) {
+                return ref;
+            }
+        }
+        return null;
+    }
+
+    public static boolean vouchesForAny(Reference ref, List<Stale> open) {
+        for (Stale d : open) {
+            if (vouches(ref, d)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The data of {@code open} no reference vouches for: nothing measured in their frame is left to touch. */
+    public static List<Stale> unreachable(List<Reference> refs, List<Stale> open) {
+        List<Stale> l = new ArrayList<>();
+        for (Stale d : open) {
+            if (first(refs, Collections.singletonList(d)) == null) {
+                l.add(d);
+            }
+        }
+        return l;
     }
 
     /** True when {@code check} is a failed check for this home. */
@@ -151,18 +302,8 @@ public final class ZCheck {
      * the same check covers them. Empty without a home.
      */
     public static List<Stale> stale(DispenseConfig cfg, Interlocks.Scope sc, Long lastHomeAtMs) {
-        List<Stale> l = new ArrayList<>();
-        if (lastHomeAtMs == null) {
-            return l;
-        }
-        if (cfg.needleAnchor != null && cfg.needleAnchor.setAtMs < lastHomeAtMs) {
-            l.add(new Stale("the needle frame", cfg.needleAnchor.setAtMs));
-        }
-        if (cfg.needleZOffsetSetAtMs != null && cfg.needleZOffsetSetAtMs < lastHomeAtMs) {
-            l.add(new Stale("the touch-off", cfg.needleZOffsetSetAtMs));
-        }
+        List<String> names = new ArrayList<>();
         if (sc != null) {
-            List<String> names = new ArrayList<>();
             if (sc.surfaceName != null) {
                 names.add(sc.surfaceName);
             }
@@ -171,11 +312,25 @@ public final class ZCheck {
                     names.add(e.getKey());
                 }
             }
-            for (String n : names) {
-                DispenseConfig.SurfaceMap m = cfg.surface(n);
-                if (m != null && (m.setAtMs == null || m.setAtMs < lastHomeAtMs)) {
-                    l.add(new Stale("the '" + n + "' surface", m.setAtMs));
-                }
+        }
+        return staleOf(cfg, names, lastHomeAtMs);
+    }
+
+    private static List<Stale> staleOf(DispenseConfig cfg, Collection<String> surfaces, Long lastHomeAtMs) {
+        List<Stale> l = new ArrayList<>();
+        if (lastHomeAtMs == null) {
+            return l;
+        }
+        if (cfg.needleAnchor != null && cfg.needleAnchor.setAtMs < lastHomeAtMs) {
+            l.add(new Stale(NEEDLE_FRAME_DATUM, cfg.needleAnchor.setAtMs, cfg.needleAnchor.homeAtMs));
+        }
+        if (cfg.needleZOffsetSetAtMs != null && cfg.needleZOffsetSetAtMs < lastHomeAtMs) {
+            l.add(new Stale(TOUCH_OFF_DATUM, cfg.needleZOffsetSetAtMs, cfg.needleZOffsetHomeAtMs));
+        }
+        for (String n : surfaces) {
+            DispenseConfig.SurfaceMap m = cfg.surface(n);
+            if (m != null && (m.setAtMs == null || m.setAtMs < lastHomeAtMs)) {
+                l.add(new Stale(surfaceDatum(n), m.setAtMs, m.homeAtMs));
             }
         }
         return l;
@@ -191,11 +346,7 @@ public final class ZCheck {
 
     /** I4 violation (without the code): stale Z data and no passing check since the home. */
     public static String notCheckedMessage(List<Stale> stale, long lastHomeAtMs) {
-        List<String> parts = new ArrayList<>();
-        for (Stale s : stale) {
-            parts.add(s.what + (s.atMs == null ? "" : " (" + clock(s.atMs) + ")"));
-        }
-        return join(parts) + (parts.size() == 1 ? " was" : " were") + " measured before the home at "
+        return named(stale) + (stale.size() == 1 ? " was" : " were") + " measured before the home at "
                 + clock(lastHomeAtMs) + ", and Z has not been checked since: Check Z (one N1 touch, ≈ 20 s); "
                 + "Run does it by itself";
     }
@@ -215,6 +366,25 @@ public final class ZCheck {
         return "Z must be checked after the home at " + (lastHomeAtMs == null ? "?" : clock(lastHomeAtMs))
                 + ", but no point measured before it is left to touch (no blank or board surface, no needle-frame "
                 + "X/Y): record the needle frame again";
+    }
+
+    /**
+     * Refusal (without the code): Z must be checked, but nothing measured in the frame of {@code d} (the
+     * same home) is left to touch, and a point from another frame does not vouch for them.
+     */
+    public static String noFrameReferenceMessage(Long lastHomeAtMs, List<Stale> d) {
+        return "Z must be checked after the home at " + (lastHomeAtMs == null ? "?" : clock(lastHomeAtMs))
+                + ", but no point measured under the same home as " + named(d) + " is left to touch, and a "
+                + "home in between may have moved Z: record the needle frame again and touch off";
+    }
+
+    /** "the needle frame (13:02), the touch-off (13:05) and the 'board' surface (13:40)". */
+    private static String named(List<Stale> l) {
+        List<String> parts = new ArrayList<>();
+        for (Stale s : l) {
+            parts.add(s.what + (s.atMs == null ? "" : " (" + clock(s.atMs) + ")"));
+        }
+        return join(parts);
     }
 
     /** "the blank", "the board", "the needle-frame spot". */

@@ -257,6 +257,21 @@ rep.done = true; rep.seconds = …
 
 What it costs: one N1 touch, ≈ 20 s, only after a home, and only when Z data predate that home.
 
+**Z frames (review 1, machine safety).** A touch proves only that the frame its point was measured in equals the
+frame now; a home between two older data may have moved Z (the bench's frame vs OpenPnP's: 0.8 mm). So:
+
+- every Z datum stores the home it was measured under (`needleAnchor.homeAtMs`, `needleZOffsetHomeAtMs`,
+  `SurfaceMap.homeAtMs`; `HomeTracker.frameHomeAtMs()`: the last home seen, else the service start). The touch-off's is
+  protected like `needleZOffsetSetAtMs`;
+- a passing touch vouches for the data of its point's frame and for its own datum (`ZCheck.vouch`, `Result.covers`).
+  A datum of unknown frame (saved before this) vouches only for itself, so a lone touch-off of unknown frame cannot be
+  checked: record the needle frame again and touch off;
+- stale data are accepted only when a pass for this home covers each of them. The check touches one point per frame
+  among them (the first bare one), in the reference order above; a datum with no point of its frame left is refused
+  before anything moves;
+- a passing touch moves the data it vouched for to its home (`ZCheck.restamp`, saved), so after the next home one touch
+  is enough again. The same-seat stamp follows the same rules.
+
 ### 2.5 Where homing happens
 
 `homeIfNeeded` is called from:

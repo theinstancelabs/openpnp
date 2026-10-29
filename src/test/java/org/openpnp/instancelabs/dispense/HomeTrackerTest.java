@@ -157,4 +157,18 @@ public class HomeTrackerTest {
         t.setZCheck(r);
         assertTrue(t.getZCheck().pass);
     }
+
+    /** The Z frame of data measured now: the service start until a home is seen, then the last home. */
+    @Test
+    public void theZFrameIsTheLastHome() {
+        HomeTracker t = tracker(true);
+        long start = now;
+        now += 500;
+        assertEquals(start, t.frameHomeAtMs());
+        t.machineHomed(machine(), true);
+        assertEquals(start + 500, t.frameHomeAtMs());
+        now += 500;
+        t.machineHomed(machine(), true);
+        assertEquals(start + 1000, t.frameHomeAtMs());
+    }
 }

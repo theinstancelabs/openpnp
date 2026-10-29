@@ -151,6 +151,16 @@ public final class HomeTracker extends MachineListener.Adapter {
         return lastHomeAtMs;
     }
 
+    /**
+     * The Z frame of data measured now ({@link ZCheck}): the last home seen, or the service start when
+     * none was seen since (the home in effect then, of unknown time). No home lies between data with
+     * the same value; a home between others may have moved Z.
+     */
+    public long frameHomeAtMs() {
+        Long lh = lastHomeAtMs;
+        return lh != null ? lh : serviceStartMs;
+    }
+
     public boolean isHomeUnconfirmed() {
         return homeUnconfirmed;
     }

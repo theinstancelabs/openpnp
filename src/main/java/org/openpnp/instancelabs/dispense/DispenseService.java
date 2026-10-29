@@ -396,6 +396,7 @@ public final class DispenseService {
         c.needleZOffsetMm = offsetMm;
         c.needleZOffsetSetAtMs = Math.max(System.currentTimeMillis(),
                 c.needleChangedAtMs == null ? 0 : c.needleChangedAtMs);
+        c.needleZOffsetHomeAtMs = homeTracker.frameHomeAtMs();
         updateConfig(c);
         db.insertTouchOff(method, offsetMm, prev, details, null);
     }
@@ -418,6 +419,7 @@ public final class DispenseService {
         long now = Math.max(System.currentTimeMillis(), c.needleChangedAtMs == null ? 0 : c.needleChangedAtMs);
         c.needleAnchor = new DispenseConfig.NeedleAnchor(surfaceZMm, needleContactZMm, xMm, yMm, now);
         c.needleAnchor.rawSumMm = rawSumMm;
+        c.needleAnchor.homeAtMs = homeTracker.frameHomeAtMs();
         c.needleZOffsetMm = c.needleAnchor.offsetMm();
         updateConfig(c);
         db.insertTouchOff("needle-frame (N1 + needle contact)", c.needleZOffsetMm, prev, new com.google.gson.Gson()
@@ -467,6 +469,7 @@ public final class DispenseService {
         DispenseConfig.SurfaceMap m = new DispenseConfig.SurfaceMap();
         m.points = new ArrayList<>(points);
         m.setAtMs = System.currentTimeMillis();
+        m.homeAtMs = homeTracker.frameHomeAtMs();
         m.note = note;
         m.boardFingerprint = boardFingerprint;
         m.simulated = simulated;
@@ -1332,7 +1335,10 @@ public final class DispenseService {
         public boolean needed;
         public List<ZCheck.Stale> stale = new ArrayList<>();
         public Long homeAtMs;
-        /** The first stored point the check would touch, or null (none left: the check is refused). */
+        /**
+         * The first stored point the check would touch, or null: not needed, or some stale datum has no
+         * point in its Z frame left (the check is refused).
+         */
         public ZCheck.Reference reference;
         public ZCheck.Result last;
     }
@@ -1348,10 +1354,11 @@ public final class DispenseService {
         p.homeAtMs = homeTracker.getLastHomeAtMs();
         Interlocks.Scope sc = plan == null ? needleTasksScope(c) : boardScope(c, plan);
         p.stale = ZCheck.stale(c, sc, homeFirst ? Long.valueOf(Long.MAX_VALUE) : p.homeAtMs);
-        p.needed = !p.stale.isEmpty() && (homeFirst || !ZCheck.accepts(p.last, p.homeAtMs));
+        List<ZCheck.Stale> open = homeFirst ? p.stale : ZCheck.unchecked(p.last, p.homeAtMs, p.stale);
+        p.needed = !open.isEmpty();
         List<ZCheck.Reference> refs = ZCheck.references(c, plan == null ? null : plan.boardRegistration,
                 homeFirst ? null : p.homeAtMs);
-        p.reference = refs.isEmpty() ? null : refs.get(0);
+        p.reference = ZCheck.unreachable(refs, open).isEmpty() ? ZCheck.first(refs, open) : null;
         return p;
     }
 
@@ -1553,22 +1560,31 @@ public final class DispenseService {
 
     /**
      * The Z check of a task (§2.4): when Z data of its scope predate the last home and no passing
-     * check for that home exists, one N1 touch at the first stored point whose spot is bare. Returns
-     * the check, or null when none was needed. Refused when no point is left, when it does not touch,
-     * and when it fails ("Z moved").
+     * check for that home vouches for them, one N1 touch at the first stored point whose spot is bare,
+     * per Z frame among those data (a point vouches only for data measured under its home). Returns
+     * the last touch, or null when none was needed. Refused when no point is left, when it does not
+     * touch, and when it fails ("Z moved").
      */
     private ZCheck.Result zCheckIfNeeded(Session s, String planRegistration, Interlocks.Scope scope,
             BooleanSupplier aborted) throws Exception {
         Long home = homeTracker.getLastHomeAtMs();
-        if (ZCheck.stale(s.c, scope, home).isEmpty() || ZCheck.accepts(homeTracker.getZCheck(), home)) {
+        List<ZCheck.Stale> open = ZCheck.unchecked(homeTracker.getZCheck(), home, ZCheck.stale(s.c, scope, home));
+        if (open.isEmpty()) {
             return null;
         }
         List<ZCheck.Reference> refs = ZCheck.references(s.c, planRegistration, home);
         if (refs.isEmpty()) {
             throw refused("I4: " + ZCheck.noReferenceMessage(home));
         }
+        List<ZCheck.Stale> unreachable = ZCheck.unreachable(refs, open);
+        if (!unreachable.isEmpty()) {
+            throw refused("I4: " + ZCheck.noFrameReferenceMessage(home, unreachable));
+        }
         Probe pr = new Probe(s, aborted, null);
         for (ZCheck.Reference ref : refs) {
+            if (!ZCheck.vouchesForAny(ref, open)) {
+                continue; // its frame is checked already
+            }
             phase(s.r, "z check: " + ZCheck.describe(ref.name));
             VacuumProber.Target t = new VacuumProber.Target();
             t.n = 1;
@@ -1584,16 +1600,37 @@ public final class DispenseService {
             if (p.z == null) {
                 throw refused(p.failure);
             }
-            ZCheck.Result res = ZCheck.result(ref, p.z, System.currentTimeMillis(), home);
+            ZCheck.Result res = ZCheck.vouch(ZCheck.result(ref, p.z, System.currentTimeMillis(), home), ref, s.c,
+                    homeTracker.getZCheck());
             homeTracker.setZCheck(res);
             db.event(s.r.runId, res.pass ? "INFO" : "WARN", "ZCHECK", new Gson().toJson(res));
             if (!res.pass) {
                 throw refused("I4: " + ZCheck.movedMessage(res));
             }
-            return res;
+            restampZFrame(res);
+            open = ZCheck.unchecked(res, home, open);
+            if (open.isEmpty()) {
+                return res;
+            }
         }
         throw refused("I4: Z must be checked after the home at " + ZCheck.clock(home) + ", but something lies on every "
                 + "stored point (paste, a part or print seen): wipe one of them, or record the needle frame again");
+    }
+
+    /**
+     * A passing Z check: the data it vouched for are in its home's Z frame from now on ({@link ZCheck#restamp}).
+     * Not saved: they keep their older frame, and the next home touches one more point.
+     */
+    private synchronized void restampZFrame(ZCheck.Result res) {
+        DispenseConfig c = cfg.copy();
+        try {
+            if (ZCheck.restamp(c, res)) {
+                updateConfig(c);
+            }
+        }
+        catch (Exception e) {
+            Logger.warn(e, "dispense: the Z frames checked at the home were not saved");
+        }
     }
 
     /** The N1 vacuum probe of a task: N1's mapper and checks, the settings and the prober over the session's gate. */
@@ -2212,9 +2249,12 @@ public final class DispenseService {
             ref.y = worst.y;
             ref.z = worst.storedZ;
             ref.atMs = surf.setAtMs;
-            ZCheck.Result zc = ZCheck.result(ref, worst.z, System.currentTimeMillis(), home);
+            ref.homeAtMs = surf.homeAtMs;
+            ZCheck.Result zc = ZCheck.vouch(ZCheck.result(ref, worst.z, System.currentTimeMillis(), home), ref, cfg,
+                    homeTracker.getZCheck());
             homeTracker.setZCheck(zc);
             db.event(t.r.runId, "INFO", "ZCHECK", new Gson().toJson(zc));
+            restampZFrame(zc);
             rep.zCheckStamped = true;
         }
         return rep;
