@@ -966,6 +966,30 @@ async function runFirstDots(page, n) {
       check('#reg-result after the STOP: the surface was not changed, the seat still holds',
         /^Stopped \d\d:\d\d during probe point \d\sof\s\d: the board surface was not changed; the seat checked at/.test(stoppedText), stoppedText);
 
+      // 7b. The board moved (the scene's seat 0.40 / 0.30 mm further): Register board says re-seated and probes again
+      {
+        const movedScene = JSON.parse(JSON.stringify(scene));
+        movedScene.board.seat.affine[0][2] += 0.40;
+        movedScene.board.seat.affine[1][2] += 0.30;
+        fs.writeFileSync(SIM_SCENE + '.tmp', JSON.stringify(movedScene));
+        fs.renameSync(SIM_SCENE + '.tmp', SIM_SCENE);
+        await page.waitForTimeout(600);
+        const regBefore = await page.evaluate(() => IL.S.plan.registration && IL.S.plan.registration.id);
+        const surfBefore = await surfAt();
+        g1 = gcodeNext();
+        const t6 = Date.now() + (await page.evaluate(() => IL.S.skewMs));
+        await press2(page, '#btn-register');
+        rs = await regEnd(t6);
+        await page.waitForFunction((id) => { const v = IL.S.plan && IL.S.plan.registrationRun; return v && v.runId === id; }, rs.run.runId, { timeout: 20000 }).catch(() => {});
+        await waitText(page, 'reg-result', /^Re-seated/, 15000).catch(() => {});
+        const rsText = await textOf(page, 'reg-result');
+        check('moved seat: #reg-result "Re-seated hh:mm: the board moved 0.5 mm"', rs.run.status === 'OK' && /^Re-seated \d\d:\d\d: the board moved 0\.(4[5-9]|5\d)\smm/.test(rsText), rsText);
+        l = lines(gcode(g1));
+        const regAfter = await page.evaluate(() => IL.S.plan.registration && IL.S.plan.registration.id);
+        check('moved seat: a new registration, every spot touched again, a new surface', regAfter && regAfter !== regBefore
+          && l.filter((x) => x === 'M106 P1 S180').length >= 5 && (await surfAt()) !== surfBefore, { regBefore, regAfter, touches: l.filter((x) => x === 'M106 P1 S180').length });
+      }
+
       // 8. Do it by hand on Run: the engine's targets, three points, save ties the surface and plans again
       await page.evaluate(() => { IL.run.byHand = true; IL.render(); });
       await page.waitForSelector('#btn-probe-add', { state: 'visible', timeout: 10000 });
@@ -973,7 +997,9 @@ async function runFirstDots(page, n) {
         engine: IL.S.plan.registrationTargets.probes.map((q) => [Math.round(q.x * 100) / 100, Math.round(q.y * 100) / 100]) }));
       check('by hand: the foot shows Add point, the targets are the engine\'s', tgt.rows.length === tgt.engine.length
         && tgt.rows.every((rw, i) => Math.abs(rw[0] - tgt.engine[i][0]) < 0.011 && Math.abs(rw[1] - tgt.engine[i][1]) < 0.011), tgt);
-      for (let i = 0; i < 3; i++) {
+      // every target: a surface must cover the dots (3 points over one corner would leave most of them outside)
+      const nTargets = tgt.rows.length;
+      for (let i = 0; i < nTargets; i++) {
         await page.waitForSelector('#btn-probe-add:enabled', { timeout: 10000 });
         await page.click('#btn-probe-add');
         if (await page.waitForSelector('#btn-probe-add.btn--press', { timeout: 1500 }).then(() => true, () => false)) {
@@ -982,7 +1008,7 @@ async function runFirstDots(page, n) {
         }
         await page.waitForFunction((n) => IL.run.probe.points.length === n, i + 1, { timeout: 5000 });
       }
-      check('by hand: three points added', await page.evaluate(() => IL.run.probe.points.length) === 3);
+      check('by hand: a point at every target added (' + nTargets + ')', await page.evaluate(() => IL.run.probe.points.length) === nTargets);
       // the simulated operator lowers N1 onto the board at each target (no jog in this test): the Z the scene gives there
       await page.evaluate((sc) => {
         const a = sc.board.seat.affine, sf = sc.board.surface;
@@ -1008,25 +1034,35 @@ async function runFirstDots(page, n) {
       await page.click('#btn-start');
       await waitText(page, 'pill-conn', /^Connected$/, 60000);
       await answerI11();
+      await page.waitForFunction(() => IL.ready().items.find((x) => x.key === 'angle').ready, null, { timeout: 15000 }).catch(() => {});
       await post('api/purge-row/reset');
       await page.evaluate(() => IL.attest.set('regulator', IL.S.status.dispense.profile.pressurePsi));
       await page.waitForFunction(() => !IL.recoveryActive(), null, { timeout: 15000 }).catch(() => {});
-      await page.waitForFunction(() => IL.ready().items[0].state === 'info', null, { timeout: 15000 }).catch(() => {});
+      // the plan is read again after the reconnect ("checking"): wait for it
+      await page.waitForFunction(() => IL.ready().items[0].state === 'info' && IL.ready().canRun && !IL.S.planPending, null, { timeout: 20000 }).catch(() => {});
       const mach = await page.evaluate(() => { const r = IL.ready(); const it = r.items[0]; return { state: it.state, value: it.value, canRun: r.canRun, verdict: r.verdict.text }; });
       check('Run readiness: the machine item is a note "homes first", and a board can run', mach.state === 'info' && /^homes first/.test(mach.value) && mach.canRun, mach);
       check('Run readiness: the verdict reads "Ready to run · homes first"', /^Ready to run · homes first/.test(mach.verdict), mach.verdict);
       await page.evaluate(() => IL.go('#run/checks'));
       await page.waitForSelector('#btn-run', { timeout: 15000 });
       await page.screenshot({ path: path.join(OUT, 'run-checks-home-first.png') });
-      await page.click('#btn-run');
+      // this board has paste on part of its pads (the stopped runs above): a run of two of the pads left, through the
+      // run confirm as Records › Finish opens it (a whole board would take minutes in the simulator)
+      await page.evaluate(() => {
+        const p = IL.S.plan;
+        const left = IL.run.padsLeft && IL.run.padsLeft.length ? IL.run.padsLeft
+          : Array.from(new Set(p.dots.filter((d) => !IL.run.doneSet.has(d.index)).map((d) => d.padId)));
+        IL.runFix('run-rest', null, { planId: p.planId, padIds: left.slice(0, 2) });
+      });
       await page.waitForSelector('#dlg-run', { timeout: 10000 });
       const hf = await textOf(page, 'run-confirm-home').catch(() => '');
       check('run confirm: #run-confirm-home says it homes first, then checks Z', /^Homes first/.test(hf) && /checks Z/.test(hf), hf);
       await page.screenshot({ path: path.join(OUT, 'run-confirm-home-first.png') });
-      await page.click('#btn-run-cancel');
-      await page.waitForSelector('#dlg-run', { state: 'detached', timeout: 5000 });
       g1 = gcodeNext();
-      await runFirstDots(page, 4);
+      for (const t of ['#run-tick-gauge', '#run-tick-paste', '#run-tick-hands']) if (!(await page.isChecked(t))) await page.check(t);
+      await page.waitForSelector('#btn-run-go:enabled', { timeout: 10000 });
+      await page.click('#btn-run-go');
+      await page.waitForSelector('#dlg-run', { state: 'detached', timeout: 15000 });
       const rr = await waitStatus(page, (x) => x.run && x.run.label === 'board' && !x.run.running, 300000);
       l = lines(gcode(g1));
       const iH = l.findIndex((x) => /^G28\b/.test(x)), iPress = l.indexOf('M106 P2 S255');
@@ -1054,9 +1090,13 @@ async function runFirstDots(page, n) {
       check('blank probe: at least 4 points, none within 1.9 mm of a used purge spot', bp.length >= 4 && near.length === 0, { n: bp.length, near });
       const bh = await page.evaluate(() => { const d = document.getElementById('blank-by-hand'); return !!d && !!d.closest('#panel-body'); });
       await openDetails(page, 'blank-by-hand');
+      await page.waitForSelector('#btn-blank-add', { state: 'visible', timeout: 5000 }).catch(() => {});
       const bhFoot = await page.evaluate(() => ['btn-blank-add', 'btn-blank-save'].every((id) => { const b = document.getElementById(id); return b && !!b.closest('#panel-foot') && b.offsetParent !== null; }));
       check('blank by hand: in the body; open, the foot shows Add and Save', bh && bhFoot, { bh, bhFoot });
-      for (let i = 0; i < 3; i++) await page.click('#btn-blank-add');
+      for (let i = 0; i < 3; i++) {
+        await page.click('#btn-blank-add');
+        await page.waitForFunction((n) => /Add point (\d+)/.exec(document.getElementById('btn-blank-add').textContent)[1] === String(n), i + 2, { timeout: 5000 }).catch(() => {});
+      }
       check('blank by hand: three points added, Save offered', /Save 3 points/.test(await textOf(page, 'btn-blank-save')), await textOf(page, 'btn-blank-save'));
       await page.evaluate(() => IL.panel.close());
 
@@ -1064,7 +1104,10 @@ async function runFirstDots(page, n) {
       await page.evaluate(() => IL.go('#setup/settings'));
       await page.waitForSelector('#set-homebefore', { timeout: 10000 });
       for (const v of ['always', 'whenNeeded']) {
+        // the save before re-reads the settings: change the field once it has
+        await page.waitForFunction(() => !document.getElementById('btn-settings').hasAttribute('aria-busy') && IL.S.config, null, { timeout: 30000 });
         await page.selectOption('#set-homebefore', v);
+        await page.waitForSelector('#btn-settings:enabled', { timeout: 10000 });
         await page.click('#btn-settings');
         const c = await waitStatus(page, (x) => x.dispense.homeBeforeRun === v, 10000).then(() => true, () => false);
         check('Settings: "Before Register board, Probe and Run" saves ' + v, c);

@@ -979,7 +979,7 @@
       const k = cur ? cur.n : Math.min(pts.length, pts.filter((q) => q.state === 'contact').length + 1);
       return 'Stopped ' + at + (det.stage === 'home' ? ' during the home' : pts.length ? ' during point ' + Math.max(1, k) + ' of ' + pts.length : '') + ': nothing was saved.';
     }
-    return 'Not saved: ' + stripCode(run.message || run.status);
+    return 'Not saved: ' + stripCode(run.message || run.status).replace(/([^.!?])$/, '$1.');
   }
   IL.view('probe-blank', {
     title: (s) => 'Probe the ' + ((disp(s).purgeRow || {}).surfaceName || 'blank'),
@@ -1069,7 +1069,8 @@
       const home = det.home || {};
       const rows = [];
       if (home.needed) rows.push({ st: st === 'home' ? 'now' : 'done', t: 'Home', d: st === 'home' ? 'pressure off' : 'homed', v: st === 'home' ? '≈ ' + IL.fmtSecs(home.estimateS) : '' });
-      rows.push({ st: st === 'probe' ? 'now' : st === 'save' ? 'done' : 'todo', t: 'Probe' + (pts.length ? ' · point ' + Math.min(pts.length, nOk + 1) + ' of ' + pts.length : ''),
+      const nAll = IL.regProgress(run).n || pts.length;
+      rows.push({ st: st === 'probe' ? 'now' : st === 'save' ? 'done' : 'todo', t: 'Probe' + (nAll ? ' · point ' + Math.min(nAll, nOk + 1) + ' of ' + nAll : ''),
         d: cur ? (cur.state === 'look' ? 'camera look' : 'N1 touching') + (cur.alternate ? ' at nearby spot ' + cur.alternate : '') + (lastC ? ' · last Z ' + fmt(lastC.z, 3) + ' mm' : '') : 'N1 vacuum touch, pressure off',
         v: isNum(det.estimatedSecondsLeft) ? '≈ ' + IL.fmtSecs(det.estimatedSecondsLeft) : '' });
       rows.push({ st: st === 'save' ? 'now' : 'todo', t: 'Save the plane', d: 'only when every point touched and it is flat', v: '' });
@@ -1079,7 +1080,9 @@
     }
     // the spots: the preview, then the live points, then the result's
     const prev = PB.prev && !PB.prev.error ? PB.prev.targets || [] : [];
-    const rows = det && det.probes && det.probes.length ? det.probes : prev.map((q) => ({ n: q.n, x: q.x, y: q.y, z: null, state: 'todo' }));
+    // the probe reports its points as it reaches them: the spots not reached yet come from the preview
+    const reached = det && det.probes ? det.probes : [];
+    const rows = reached.concat(prev.filter((q) => !reached.some((r) => r.n === q.n)).map((q) => ({ n: q.n, x: q.x, y: q.y, z: null, state: 'todo' })));
     IL.show(PB.targets, rows.length > 0 && !byHand);
     const word = (q) => ({ todo: '—', look: 'looking', now: 'touching', contact: q.alternate ? 'nearby ' + q.alternate : 'touched', 'not-bare': 'not bare', 'no-contact': 'no contact', skipped: 'skipped' }[q.state] || q.state);
     IL.keyed(PB.targets, JSON.stringify(rows.map((q) => [q.n, q.x, q.y, q.z, q.state, q.alternate])), () => (rows.length ? [
@@ -1850,7 +1853,7 @@
     F.minstatus.kind = 'select';
     // AUTO_REGISTER_DESIGN.md §8.5: when Register board, Probe the blank and Run home by themselves
     F.homebefore = fld(el('select', { class: 'input', id: 'set-homebefore' },
-      el('option', { value: 'whenNeeded', text: 'Home first when needed (not homed, or stopped since the last home)' }),
+      el('option', { value: 'whenNeeded', text: 'Home first when needed' }),
       el('option', { value: 'always', text: 'Always home first' })));
     F.homebefore.kind = 'select';
     F.clean = fld(el('input', { type: 'checkbox', id: 'set-clean' }));
@@ -1871,7 +1874,7 @@
       field('Valve settle', 'ms', F.valve.el, { hint: 'valve open → first dot (valveSettleMs)' }),
       field('Pump settle', 'ms', F.pump.el, { hint: 'pump on → valve open (pumpToValveSettleMs)' }),
       field('Lowest pad-type status allowed on a board', null, F.minstatus.el, { hint: 'pads below it are not dispensed: plan again after a change' }),
-      field('Before Register board, Probe and Run', null, F.homebefore.el, { hint: 'they home by themselves (pressure off) and say so before they start; nothing else homes' }),
+      field('Before Register board, Probe and Run', null, F.homebefore.el, { hint: 'needed: not homed, or stopped since the last home. They home by themselves (pressure off) and say so first; nothing else homes' }),
       el('div', { class: 'field su-span2' }, el('div', { class: 'field__l' }, el('span', {}, 'Clean-pad check before each board (', abbr('I10', 'Interlock I10: pads clean before the pressure goes on'), ')')), c.cleanTick, c.cleanHint));
     c.setErr = el('div', { class: 'field__err su-set-err', id: 'settings-err', role: 'status', hidden: true });
     c.body.append(c.grid, c.i10, c.setErr, buildJson(c));
@@ -2044,7 +2047,8 @@
     sync(F.bright, cpc.minBrightFraction);
     sync(F.boxw, cpc.boxWMm);
     sync(F.boxh, cpc.boxHMm);
-    const sim = IL.isSim(s);
+    // the SIM top camera draws the board once the simulator answered as one: then the check works like the machine's
+    const sim = IL.isSim(s) && !(s && s.server && s.server.simulatorConfirmed);
     const on = F.clean.el.checked;
     IL.setText(c.cleanLbl, on ? 'On: the top camera looks at every pad first' : sim ? 'Off (simulator)' : 'Off: pads are not checked');
     IL.setText(c.cleanHint, on ? (sim ? 'In the simulator, switch this off: the simulated camera is a static picture, so every pad reads dirty.'

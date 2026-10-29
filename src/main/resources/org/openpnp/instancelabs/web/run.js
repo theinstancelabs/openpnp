@@ -806,9 +806,11 @@
     const rec = mode === 'stopped' ? decision(s) : null;
     const chk = rec ? checkMark(rec) : null;
     const pos = IL.positions(s);
-    // the Register step's overlay (idle, live and its result): probe targets and the fiducials (§8.1 "Hero overlay")
-    const probe = step === 'probe' && mode === 'idle' ? probeOverlay(s) : null;
-    const fids = step === 'probe' && mode === 'idle' && !R.byHand ? fidOverlay(s) : null;
+    // the Register step's overlay (idle, live and its result; also on a part-done board): probe targets and the
+    // fiducials (§8.1 "Hero overlay"); never during a board run
+    const regStep = step === 'probe' && (mode === 'idle' || mode === 'stopped');
+    const probe = regStep ? probeOverlay(s) : null;
+    const fids = regStep && !R.byHand ? fidOverlay(s) : null;
     bv.update({
       done: mode === 'empty' ? [] : R.doneSet,
       dirty: mode === 'live' ? new Map() : dirty,
@@ -843,6 +845,8 @@
     } else if (mode === 'stopped') {
       items.push(layer(null, 'lg-done', 'dispensed · ' + done), layer(null, 'lg-dot', 'not dispensed · ' + Math.max(0, N - done)));
       if (chk) items.push(layer(null, 'lg-check', 'in progress at STOP · 1'));
+      if (fids && fids.length) items.push(layer(null, 'lg-fid', 'fiducial'));
+      if (probe) items.push(layer(null, 'lg-probe', 'probe spot'));
     } else {
       // at most four, by importance: what needs the operator first, the plain layers last
       const blocked = (p.pads || []).filter((x) => x.blocked).length;
@@ -1536,7 +1540,9 @@
     if (!p) return { text: 'Plan a board first' };
     const t = regTargets(p);
     // the plan's own registration no longer applies (registered again elsewhere, a simulator record): plan again first
-    if (t && t.error && /^REG: registration /.test(t.error)) return { text: String(t.error).replace(IL.CODE_RE, '$2').replace(/: register again$/, '') + ': plan again first', fix: 'plan-again' };
+    if (t && t.error && /^REG: registration /.test(t.error)) {
+      return { text: String(t.error).replace(IL.CODE_RE, '$2').replace(/: (plan|register) again\.?$/, '') + ': plan again first.', fix: 'plan-again' };
+    }
     if (t && t.count < 2 && !t.error) return { text: 'This board has ' + IL.plural(t.count, 'fiducial') + ' (2 needed): do it by hand' };
     if (!hasCamera(s)) return { text: 'No top camera in OpenPnP: do it by hand' };
     if (t && t.error) return { text: String(t.error).replace(IL.CODE_RE, '$2') };
@@ -1547,7 +1553,7 @@
   /** Seconds Register board takes now: the plan's estimate with the live home plan (never hard-coded). */
   function regSeconds(s, p) {
     const t = regTargets(p);
-    if (!t) return null;
+    if (!t || t.error) return null;
     const h = homePlan(s, p);
     const home = h && h.needed ? Number(h.estimateS) || 0 : 0;
     const same = regSameSeatLikely(s, p);
@@ -1561,7 +1567,7 @@
   /** The pre-press line of the foot (#register-note, §8.1). */
   function registerNote(s, p) {
     const t = regTargets(p);
-    if (!t) return '';
+    if (!t || t.error || !t.fids.length) return '';
     const h = homePlan(s, p);
     const parts = [];
     if (h && h.needed) {
@@ -1624,8 +1630,9 @@
     const from = regRun(s) && regRun(s).runId === v.runId ? regRun(s).planId : null;
     const again = v.newPlanId && v.newPlanId !== from ? '; planned again.' : v.newPlanId ? '; plan unchanged.' : '.';
     if (!v.ok) {
-      if (!v.registrationStored) return 'Not registered: ' + strip(v.message);
-      return 'Registered ' + at + ', but the probe failed: ' + strip(v.message);
+      const why = strip(v.message).replace(/([^.!?])$/, '$1.');
+      if (!v.registrationStored) return 'Not registered: ' + why;
+      return 'Registered ' + at + ', but the probe failed: ' + why;
     }
     const lim = S.config && S.config.fiducialCheck && isNum(S.config.fiducialCheck.seatToleranceMm) ? S.config.fiducialCheck.seatToleranceMm : 0.1;
     const since = v.previousAtMs ? ' since ' + IL.fmtTime(v.previousAtMs - S.skewMs) : '';
@@ -1928,8 +1935,9 @@
     const same = regSameSeatLikely(s, p);
     const sf = boardSurface(s);
     const key = JSON.stringify([p.planId, !!t, t && t.probes.length, !!same, sf && sf.setAtMs]);
-    IL.keyed(box, key, () => {
+    IL.keyed(box, key + (t && t.error ? 'e' : ''), () => {
       if (!t) return el('div', { class: 'notebox', text: 'This plan has no registration preview (an older plan): plan again.' });
+      if (t.error || !t.probes.length) return null;   // the reason is under the button
       return el('div', { class: 'reg-expect' }, el('span', {}, same
         ? ['Same seat as ', el('b', { text: IL.fmtTime(same.atMs - S.skewMs) }), ' if every fiducial moved at most 0.10 mm: N1 re-touches 3 points of that surface. Else it probes ',
           el('b', { text: IL.plural(t.probes.length, 'spot') }), '.']

@@ -1401,7 +1401,8 @@
       k = Math.min(n, fids.filter((f) => f.state === 'found').length + 1);
       part = 'FID ' + k + '/' + n;
     } else if (stage === 'probe' || stage === 'same-seat') {
-      n = stage === 'same-seat' ? 3 : pr.length;
+      // the blank probe reports its points as it reaches them: its total is in stepsPlanned (the points + the save)
+      n = stage === 'same-seat' ? 3 : run.label === 'blank probe' ? Math.max(pr.length, (Number(d.stepsPlanned) || 0) - 1) : pr.length;
       k = Math.min(n, pr.filter((q) => q.state === 'contact').length + 1);
       part = (stage === 'same-seat' ? 'check ' : 'probe ') + k + '/' + n;
     } else if (stage === 'plan') part = 'plan again';
