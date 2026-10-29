@@ -1812,3 +1812,20 @@ Each issue: what was done, or why it was rejected (verified against the code and
 Slice order (fits the joint plan): pc-model, pc-data, pc-sim now (no dependencies); pc-stream after BI plumbing is
 merged (AR tasks-api is merged); pc-api after BI import-api; pc-task; pc-web with/after AR web-ui and BI web-flow;
 pc-ladder; pc-integration with the wave-3 integration.
+
+### 20.1 Follow-up decisions after pc-model / pc-data / pc-sim (2026-10-29)
+
+13. **Decision 3's band is ±40 % around the nearer allowed dose** (confirmed). The three changed §1.9 rows stand: nano
+    LED_0805 1×1600 (+33 %), nano SOT-223 pins 2×1600 (+31 %), mobo 1TS003B 1.15×1.00 1×1600 (+28 %), all `low`
+    confidence.
+14. **Geometry failures split per instance (pc-stream / pc-api).** A group keeps one plan, but instances whose own
+    neighbours make that plan break the dot gap or overhang (e.g. nano bottom C3.1/C4.1 at 1.27 mm) are reported and
+    blocked as their own sub-group ("2 of 14 pads are too close to a neighbour"), instead of blocking the whole group.
+15. **The ripple negative control fails clearly:** the J variant uses ripple 0.6 (or its own lower transferRatio) so
+    the half-turn split check fails with margin; a negative control that only just fails proves little (pc-task).
+16. **Decision 5 also blocks in plans:** pc-stream gives pads whose type was calibrated with another tip
+    `STATUS_BELOW_MIN` with the tip text (the preview already blocks).
+17. **Hand edits reset calibration provenance (pc-api):** a pad-type edit that changes the pad or the dose writes
+    origin `manual` and clears doseFp / massPerPadMg, so it cannot become a family anchor.
+18. **`R/padcal.kicad_pcb` belongs to pc-web** (with the board-import parser merged it can be checked); one recipe
+    formatter (`DispenseProfile.fingerprintDiff`) for both texts (pc-api).
