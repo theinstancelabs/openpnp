@@ -432,13 +432,14 @@ public class PadProfileApiSimTest {
         }
         assertEquals(55, listed55, "no top pad is covered yet: " + split(top));
         assertEquals(Map.of("tip:pitch", 40, "part", 5, "below-gate", 8, "no-type", 2), split(top));
-        assertEquals(Map.of("tip:pitch", 44, "tip:no-plan", 1, "tip:near", 2, "part", 1, "below-gate", 14, "no-type", 8),
+        assertEquals(Map.of("tip:pitch", 44, "tip:no-plan", 1, "tip:near", 2, "part", 3, "below-gate", 12, "no-type", 8),
                 split(bottom));
         assertEquals(41, rest, "125 - 84");
         // the DO-220AA pin: a half-turn dot reaches past the 0.61 mm pin; its tab is held back with it (decision 4)
         assertEquals(Set.of("D1.2"), padIds(bottom, "tip", "no-plan"));
-        assertEquals(Set.of("D1.1"), padIds(bottom, "part", null));
-        // decision 14: C3 and C4 face each other 1.27 mm apart; the other 12 C_0603 pads keep the plan
+        assertEquals(Set.of("D1.1", "C3.2", "C4.2"), padIds(bottom, "part", null));
+        // decision 14: C3 and C4 face each other 1.27 mm apart; the other C_0603 pads keep the plan, and
+        // decision 4 holds C3 and C4 whole (C3.2 and C4.2 above)
         assertEquals(Set.of("C3.1", "C4.1"), padIds(bottom, "tip", "near"));
         JsonObject near = null;
         for (JsonElement e : bottom.getAsJsonArray("groups")) {
@@ -451,6 +452,31 @@ public class PadProfileApiSimTest {
                 + "(at least 0.20 mm), so they get no paste. The other 12 keep the plan.", str(near, "reasonText"));
         assertTrue(near.get("blocking").getAsBoolean());
         assertEquals("none", str(near.getAsJsonObject("suggestion"), "kind"));
+        // planned with the 0603 type characterized: the planner holds C3 and C4 back whole, the check agrees
+        characterize("chip-0603");
+        JsonObject plan = planOf(new File(sim.configDir, "nano-bottom.board.xml"));
+        Set<String> held = new TreeSet<>(GroupKey.NATURAL);
+        int c0603Dots = 0;
+        for (JsonElement e : plan.getAsJsonArray("pads")) {
+            JsonObject pad = e.getAsJsonObject();
+            if ("C_0603_1608Metric".equals(str(pad, "packageId"))) {
+                if (pad.get("blocked").getAsBoolean()) {
+                    held.add(str(pad, "padId"));
+                    assertTrue(pad.getAsJsonArray("flags").toString().contains("PART_NOT_DISPENSABLE"), pad.toString());
+                }
+                else {
+                    c0603Dots += pad.get("dotCount").getAsInt();
+                }
+            }
+        }
+        assertEquals(Set.of("C3.1", "C3.2", "C4.1", "C4.2"), held);
+        assertEquals(10, c0603Dots, "one half-turn dot on each of the other 10 pads");
+        JsonObject planned = plan.getAsJsonObject("profileCheck");
+        assertEquals(Set.of("C3.1", "C4.1"), padIds(planned, "tip", "near"));
+        assertTrue(padIds(planned, "part", null).containsAll(Set.of("C3.2", "C4.2")), planned.toString());
+        assertTrue(padIds(planned, "below-gate", null).isEmpty() && padIds(planned, "no-type", null).size() == 8,
+                split(planned).toString());
+
         // pasting the partly undispensable parts' other pads anyway: the 6 parts' pads get a plan instead
         for (String pkg : new String[] {"USB_Mini-B_Lumberg_2486_01_Horizontal",
             "VQFN-32-1EP_5x5mm_P0.5mm_EP3.254x3.254mm", "DO-220AA"}) {

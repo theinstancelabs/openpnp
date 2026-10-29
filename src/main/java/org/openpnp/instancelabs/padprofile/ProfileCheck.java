@@ -1,6 +1,7 @@
 package org.openpnp.instancelabs.padprofile;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -33,9 +34,9 @@ import java.util.TreeSet;
  * </ol>
  *
  * <p>Decision 14: when no plan fits every pad of a group, the pads whose own neighbours leave no plan
- * ({@code MAY_BRIDGE} in a plan) are split off as a sub-group of their own, reason {@code tip} of kind
- * {@link #TIP_NEAR}, and the rest keeps its plan; such a sub-group does not make the package's other
- * pads {@code part}.</p>
+ * are split off as a sub-group of their own, reason {@code tip} of kind {@link #TIP_NEAR}, and the
+ * rest keeps its plan. Only the other pads of those parts become {@code part} (decision 4), not the
+ * package's.</p>
  *
  * <p>The check never adds or removes a flag: in a plan {@code blocking} is "some pad of the group is
  * blocked by its flags"; before planning it is what the planner would flag.</p>
@@ -401,6 +402,7 @@ public final class ProfileCheck {
         for (Group g : new ArrayList<>(c.groups)) {
             splitNear(c, g);
         }
+        holdNearParts(c);
         for (Group g : c.groups) {
             if (g.idx.length > 0 && g.tipKind == null && g.plan == null) {
                 g.tipKind = TIP_NO_PLAN;
@@ -436,36 +438,23 @@ public final class ProfileCheck {
         return c;
     }
 
-    private static String nearSplit(String split) {
-        return split == null ? TIP_NEAR : split + "|" + TIP_NEAR;
-    }
-
     /**
      * Decision 14: when no plan fits every pad of a group, the pads whose own neighbours leave no plan
-     * (in a plan: the pads the planner held back as bridging) become a sub-group ({@link #TIP_NEAR}),
-     * if the rest then has a plan. A group with a plan for every pad keeps its reason (a pad type for
-     * this size avoids the bridge, decision 11).
+     * of their own become a sub-group ({@link #TIP_NEAR}) if the rest then has a plan; a group with a
+     * plan for every pad keeps its reason (a pad type for this size avoids the bridge, decision 11).
+     * Decision 4 then holds the parts of those pads whole: their other pads become a sub-group of
+     * reason {@code part}, unless the package is pasted partly.
      */
     private static void splitNear(Ctx c, Group g) {
         if (g.tipKind != null || g.plan != null || g.idx.length < 2 || g.idx.length != g.members.size()) {
             return;
         }
         List<PadInstance> near = new ArrayList<>();
-        if (c.in.planned) {
-            for (PadInstance p : g.members) {
-                if (p.flags != null && p.flags.contains(FLAG_MAY_BRIDGE)) {
-                    near.add(p);
-                }
-            }
-        }
-        else {
-            for (int i : g.idx) {
-                Group one = newGroup(c, g.key, Collections.singletonList(c.nb.pads.get(i)), g.family, g.allNames,
-                        g.split);
-                one.target = g.target;
-                if (Suggester.search(c, one) == null) {
-                    near.add(c.nb.pads.get(i));
-                }
+        for (int i : g.idx) {
+            Group one = newGroup(c, g.key, Collections.singletonList(c.nb.pads.get(i)), g.family, g.allNames, g.split);
+            one.target = g.target;
+            if (Suggester.search(c, one) == null) {
+                near.add(c.nb.pads.get(i));
             }
         }
         if (near.isEmpty() || near.size() == g.members.size()) {
@@ -473,9 +462,7 @@ public final class ProfileCheck {
         }
         List<PadInstance> keep = new ArrayList<>(g.members);
         keep.removeAll(near);
-        Group rest = newGroup(c, g.key, keep, g.family, g.allNames, g.split);
-        rest.tipEval = g.tipEval;
-        rest.dotsFromSuggestion = g.dotsFromSuggestion;
+        Group rest = rebuild(c, g, keep, g.split);
         rest.plan = Suggester.search(c, rest);
         if (rest.plan == null) {
             return;
@@ -494,19 +481,71 @@ public final class ProfileCheck {
                 c.nb.setDots(at, c.nb.toBoard(at, dots.local.get(at)), dots.view.dGap / 2);
             }
         }
-        Group n = newGroup(c, g.key, near, g.family, g.allNames, nearSplit(g.split));
-        n.tipEval = g.tipEval;
+        Group n = rebuild(c, g, near, sub(g.split, TIP_NEAR));
         n.tipKind = TIP_NEAR;
         n.nearOf = g.members.size();
-        n.dotsFromSuggestion = g.dotsFromSuggestion;
-        replace(c.groups, g, rest, n);
-        replace(c.byPackage.get(g.packageIds.get(0)), g, rest, n);
+        replace(c, g, Arrays.asList(rest, n));
     }
 
-    private static void replace(List<Group> l, Group g, Group a, Group b) {
-        int at = l.indexOf(g);
-        l.set(at, a);
-        l.add(at + 1, b);
+    /**
+     * Decision 4 for the near sub-groups: the other pads of their parts (in any group of the package)
+     * become a sub-group of reason {@code part}, unless the package is pasted partly.
+     */
+    private static void holdNearParts(Ctx c) {
+        for (List<Group> pkg : new ArrayList<>(c.byPackage.values())) {
+            Set<String> refs = new HashSet<>();
+            for (Group g : pkg) {
+                if (TIP_NEAR.equals(g.tipKind)) {
+                    refs.addAll(g.refs);
+                }
+            }
+            if (refs.isEmpty() || c.in.pastePartialPackages != null
+                    && c.in.pastePartialPackages.contains(pkg.get(0).packageIds.get(0))) {
+                continue;
+            }
+            for (Group g : new ArrayList<>(pkg)) {
+                if (g.tipKind != null) {
+                    continue;
+                }
+                List<PadInstance> whole = new ArrayList<>();
+                List<PadInstance> keep = new ArrayList<>();
+                for (PadInstance p : g.members) {
+                    (refs.contains(p.ref) ? whole : keep).add(p);
+                }
+                if (whole.isEmpty()) {
+                    continue;
+                }
+                Group w = keep.isEmpty() ? g : rebuild(c, g, whole, sub(g.split, PART));
+                w.partial = true;
+                w.otherPads = "too close to a neighbour";
+                if (!keep.isEmpty()) {
+                    replace(c, g, Arrays.asList(rebuild(c, g, keep, g.split), w));
+                }
+            }
+        }
+    }
+
+    private static String sub(String split, String what) {
+        return split == null ? what : split + "|" + what;
+    }
+
+    /** A group of some of g's pads, with g's plans and working state (plans are by opening, so a subset keeps them). */
+    private static Group rebuild(Ctx c, Group g, List<PadInstance> members, String split) {
+        Group r = newGroup(c, g.key, members, g.family, g.allNames, split);
+        r.tipEval = g.tipEval;
+        r.plan = g.plan;
+        r.typePlan = g.typePlan;
+        r.dotsFromSuggestion = g.dotsFromSuggestion;
+        return r;
+    }
+
+    /** Replaces a group by its sub-groups, in place, in the group list and its package's list. */
+    private static void replace(Ctx c, Group g, List<Group> by) {
+        for (List<Group> l : Arrays.asList(c.groups, c.byPackage.get(g.packageIds.get(0)))) {
+            int at = l.indexOf(g);
+            l.remove(at);
+            l.addAll(at, by);
+        }
     }
 
     private static void buildGroups(Ctx c) {
