@@ -480,9 +480,9 @@ public final class FiducialLocator {
      * Fits board -> machine to the found fiducials and checks it: |scale - 1| within
      * maxScaleErrorPct (the one scale for 2 points), |shear| within maxShearDeg (3+), every
      * residual within maxResidualMm (4+; zero by construction for 3), and against previous (may
-     * be null): scales within maxScaleChangePct and shear within maxShearChangeDeg when both are
-     * affine fits, the scale when both are similarities. Throws Failure FEW or FIT; nothing is
-     * stored by this class.
+     * be null): scales within maxScaleChangePct and shear within maxShearChangeDeg in the machine
+     * frame ({@link #machineFrame}) when both are affine fits, the scale when both are
+     * similarities. Throws Failure FEW or FIT; nothing is stored by this class.
      */
     public static Fit fit(List<Found> found, Fit previous, Settings s) throws Failure {
         if (s == null) {
@@ -571,9 +571,33 @@ public final class FiducialLocator {
             // A similarity has one scale, an affine two: they cannot be compared.
             return false;
         }
-        return !(Math.abs(fit.scaleX - prev.scaleX) <= limit)
-                || !(Math.abs(fit.scaleY - prev.scaleY) <= limit)
-                || !(Math.abs(fit.shearDeg - prev.shearDeg) <= s.maxShearChangeDeg);
+        // in the machine frame: the board-frame scales and shear turn with the seat
+        Fit a = machineFrame(fit.boardToMachine);
+        Fit b = machineFrame(prev.boardToMachine);
+        return !(Math.abs(a.scaleX - b.scaleX) <= limit)
+                || !(Math.abs(a.scaleY - b.scaleY) <= limit)
+                || !(Math.abs(a.shearDeg - b.shearDeg) <= s.maxShearChangeDeg);
+    }
+
+    /**
+     * The machine-frame part of a board-to-machine affine: the stretch P of its linear part
+     * L = P Q (P = sqrt(L Lᵀ), symmetric; Q a rotation), as the scales and shear of {@link Fit#of}.
+     * The machine's own scales and skew (bench: X 1.0011, Y 0.9947, shear -0.27 deg) lie in the
+     * machine frame, so P stays when the same board is seated at another angle; the board-frame
+     * scales and shear of Utils2D.affineInfo turn with the seat (about 0.014 deg of shear per deg).
+     */
+    static Fit machineFrame(AffineTransform t) {
+        double a = t.getScaleX();
+        double b = t.getShearX();
+        double c = t.getShearY();
+        double d = t.getScaleY();
+        double s00 = a * a + b * b;
+        double s01 = a * c + b * d;
+        double s11 = c * c + d * d;
+        double det = Math.abs(a * d - b * c);
+        double tr = Math.sqrt(s00 + s11 + 2 * det);
+        return Fit.of(new AffineTransform((s00 + det) / tr, s01 / tr, s01 / tr, (s11 + det) / tr, 0, 0), null,
+                null);
     }
 
     /**

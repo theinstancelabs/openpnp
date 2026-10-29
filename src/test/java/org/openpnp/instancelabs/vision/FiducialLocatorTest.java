@@ -580,6 +580,35 @@ public class FiducialLocatorTest {
                 "REG: the fiducials do not fit this board's last registration"), s.getMessage());
     }
 
+    /**
+     * Review 1: the check against the previous registration compared Utils2D.affineInfo's scales and shear, which
+     * are the board frame's. The machine's own distortion (BOARD2: X 1.0011, Y 0.9947, shear -0.27 deg) is fixed in
+     * the machine frame, so the same board seated 12 deg the other way shows a board-frame shear of -0.10 deg, past
+     * the 0.15 deg limit, and the correct fit was refused. In the machine frame it is unchanged; a fiducial found on
+     * the wrong mark at that seat is still refused.
+     */
+    @Test
+    public void aReseatAtAnotherAngleFitsTheLastRegistration() throws Exception {
+        AffineTransform prev = affine(BOARD2);
+        Fit previous = Fit.of(prev, "affine-3", 1761670000000L);
+        AffineTransform seat = new AffineTransform(prev);
+        seat.rotate(Math.toRadians(-12), 37.5, 37.5); // the board turned on the bed, under the machine's distortion
+        Fit fit = FiducialLocator.fit(found(seat, FTP, NAMES), previous, new Settings());
+        assertEquals(previous.rotationDeg - 11.9, fit.rotationDeg, 0.05);
+        assertEquals(-0.27, previous.shearDeg, 0.005);
+        assertEquals(-0.10, fit.shearDeg, 0.005, "the board-frame shear turned with the seat");
+        Fit was = FiducialLocator.machineFrame(prev);
+        Fit now = FiducialLocator.machineFrame(seat);
+        assertEquals(was.scaleX, now.scaleX, 1e-9);
+        assertEquals(was.scaleY, now.scaleY, 1e-9);
+        assertEquals(was.shearDeg, now.shearDeg, 1e-9);
+        List<Found> f = found(seat, FTP, NAMES);
+        f.get(2).x += 0.3;
+        Failure e = assertThrows(Failure.class, () -> FiducialLocator.fit(f, previous, new Settings()));
+        assertTrue(e.getMessage().startsWith("REG: the fiducials do not fit this board's last registration"),
+                e.getMessage());
+    }
+
     @Test
     public void tooFewFound() {
         Failure e = assertThrows(Failure.class, () -> FiducialLocator.fit(
