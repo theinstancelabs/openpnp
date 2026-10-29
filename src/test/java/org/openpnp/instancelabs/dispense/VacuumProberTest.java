@@ -120,6 +120,10 @@ public class VacuumProberTest {
         java.util.function.BiFunction<Double, Double, Double> contact = (a, b) -> 4.52;
         final List<double[]> leaky = new ArrayList<>();
         final Deque<Integer> script = new ArrayDeque<>();
+        /** Real readings by N1 Z and the read's index at that Z (null = the model); used with the vacuum on. */
+        java.util.function.BiFunction<Double, Integer, Integer> byZ;
+        double lastReadZ = Double.NaN;
+        int readsAtZ;
         /** Per-read noise pattern added to the model value (cycled). */
         int[] noise = {0};
         int reads;
@@ -243,7 +247,11 @@ public class VacuumProberTest {
             if (readReply != null) {
                 return readReply;
             }
-            int v = script.isEmpty() ? (int) Math.round(value()) + noise[reads % noise.length] : script.poll();
+            readsAtZ = Math.abs(z - lastReadZ) < 1e-9 ? readsAtZ + 1 : 0;
+            lastReadZ = z;
+            Integer real = byZ != null && pump && valve ? byZ.apply(z, readsAtZ) : null;
+            int v = real != null ? real
+                    : script.isEmpty() ? (int) Math.round(value()) + noise[reads % noise.length] : script.poll();
             reads++;
             int u = v & 0xFFFFFF;
             return Arrays.asList(String.format(Locale.ROOT, "echo:i2c-reply: from:109 bytes:3 data:%02X %02X %02X",
@@ -585,30 +593,45 @@ public class VacuumProberTest {
         assertSafe(l, 3.0, 31.5);
     }
 
+    /**
+     * The real machine, 2026-10-29 03:04 (board 3 at board X 8, Y 8; the PROBE record's 3-read means): N1 seals
+     * over Z and time. The coarse 5.25 read 1.872 M (threshold 1.886 M: open), 5.00 sealed; 5.25 never let go
+     * (1.89 M), 5.50 did; the fine pass from 5.50 crossed the threshold at 5.325. The contact is 5.325, above the
+     * last open coarse step: that step's partial seal was the surface.
+     */
     @Test
-    public void afterTheOneStepHigherReleaseASealAboveTheLastOpenStepIsNoContact() throws Exception {
-        // the fallback's fine pass starts above the last open coarse step; a sealed pair up there (a brush,
-        // drift) is a fine miss, never a contact above that step
+    public void aRealProgressiveSealAboveTheLastOpenStepIsTheContact() throws Exception {
         Rig rig = new Rig();
-        int[] brushes = {0};
-        rig.ch.contact = (a, b) -> 4.73;
-        rig.ch.onLine = l -> {
-            if (l.equals(z(4.85, 300)) && brushes[0]++ == 0) {
-                rig.ch.contact = (a, b) -> 4.86;
+        double[][] fine = {{5.475, -1660997}, {5.45, -1653637}, {5.425, -1659869}, {5.4, -1680617},
+            {5.375, -1783311}, {5.35, -1883822}, {5.325, -1907489}, {5.3, -1936089}, {5.275, -1962524}};
+        rig.ch.byZ = (z, n) -> {
+            if (z > 7.0 + 1e-9) {
+                return -1640380; // the baseline at the approach
             }
-            if (l.startsWith("G1 Z") && l.endsWith("F600")) {
-                rig.ch.contact = (a, b) -> 4.73;
+            if (Math.abs(z - 5.25) < 1e-9) {
+                return n < 3 ? -1872480 : -1894062; // the coarse step, then the release reads
             }
+            if (Math.abs(z - 5.5) < 1e-9) {
+                return n < 3 ? -1675510 : -1747519; // open on the way down, let go after the seal
+            }
+            for (double[] f : fine) {
+                if (Math.abs(z - f[0]) < 1e-9) {
+                    return (int) f[1];
+                }
+            }
+            return z <= 5.0 + 1e-9 ? -2049344 : z < 5.25 ? -1990000 : -1675000;
         };
-        VacuumProber.Point p = rig.prober().probe(Arrays.asList(example()), window(rig, 4.50, 4.50)).get(0);
-        assertEquals(4.75, p.lastOpenZ, 1e-9);
-        assertEquals(5.00, p.releaseZ, 1e-9);
-        assertTrue(p.retried, "the sealed 4.850 / 4.825 was a fine miss: probed again");
-        assertTrue(p.notes.stream().anyMatch(n -> n.contains("sealed at Z 4.850, at or above the last open step 4.750")),
-                p.notes.toString());
+        VacuumProber.Window w = window(rig, 4.50, 5.50);
+        VacuumProber.Point p = rig.prober().probe(Arrays.asList(example()), w).get(0);
+        assertEquals(5.00, p.coarseZ, 1e-9);
+        assertEquals(5.25, p.lastOpenZ, 1e-9, "1.872 M against a threshold of 1.886 M");
+        assertEquals(5.50, p.releaseZ, 1e-9, "5.25 never let go");
+        assertTrue(p.notes.stream().anyMatch(n -> n.contains("still drawing at Z 5.250")), p.notes.toString());
         assertEquals("contact", p.state);
-        assertEquals(4.725, p.z, 1e-9, "the re-probe's contact, below the last open step");
-        assertSafe(rig.ch.sent, 3.0, 31.5);
+        assertFalse(p.retried, "no fine miss");
+        assertEquals(5.325, p.z, 1e-9, "the first of the two sealed fine steps");
+        assertSafe(rig.ch.sent, w.floorZ, w.travelZ);
+        assertEquals(END, rig.ch.sent.subList(rig.ch.sent.size() - 4, rig.ch.sent.size()));
     }
 
     @Test

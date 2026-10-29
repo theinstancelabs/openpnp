@@ -590,8 +590,11 @@ public final class VacuumProber {
      * (runs/serial.log) its mean was more than drop / 2 below the baseline (median 169 k counts against
      * a ~230 k threshold), and it never comes back to the baseline there. So when it does not let go
      * within the wait, N1 waits once more one coarse step higher, and the fine pass starts below that
-     * step; only a seal that holds there too is refused. A contact still counts only below the last open
-     * coarse step: a sealed pair at or above it is a fine miss.</p>
+     * step; only a seal that holds there too is refused. The fine pass may then find the contact at or
+     * above the last open coarse step: that step's partial seal was the surface. Real N1 seals build up
+     * over Z and time (real machine 2026-10-29, board 3: open at 5.40, 1.78 M at 5.375, sealed at
+     * 5.325 / 5.30 on the fine pass, while the quick coarse reads at 5.25 stayed just above the
+     * threshold), so a contact above that step is the surface, not drift.</p>
      */
     private Double releaseAndFine(Point p, Window w, double zc) throws Exception {
         double zo = p.lastOpenZ;
@@ -618,13 +621,6 @@ public final class VacuumProber {
             }
             boolean sealed = step(p, z, w) < p.threshold;
             if (sealed && prevSealed) {
-                if (prevZ >= p.lastOpenZ - 1e-9) {
-                    // only after the one-step-higher release: the coarse pass read open air at that step, so
-                    // the surface lies below it; a seal there is drift or a brush, not the contact
-                    p.notes.add(String.format(Locale.ROOT, "%s: sealed at Z %.3f, at or above the last open step "
-                            + "%.3f: not a contact", spotName(p), prevZ, p.lastOpenZ));
-                    return null;
-                }
                 p.fine = true;
                 return prevZ;
             }
