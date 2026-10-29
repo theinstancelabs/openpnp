@@ -701,8 +701,10 @@ public class Configuration extends AbstractModelObject {
     }
 
     /**
-     * The ids (for boards.xml the board paths) a library file would load with. Reads no Package or
-     * Part objects: their constructors register configuration listeners that are never removed.
+     * The ids (for boards.xml the board paths) a library file would load with. Reads no Part objects
+     * (each one's constructor registers a configuration listener that is never removed), and packages
+     * the same way. The parser still reads the whole file, so text that would not load anywhere in it
+     * (a control character in a pad name, say) fails here too.
      */
     private static List<String> readBackIds(Object holder, byte[] xml) throws Exception {
         List<String> l = new ArrayList<>();

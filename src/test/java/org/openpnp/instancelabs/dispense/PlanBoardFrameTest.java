@@ -58,7 +58,8 @@ public class PlanBoardFrameTest {
 
     /**
      * A KiCad-like 0603 package with paste pads (roundrect 25 % -> roundness 50), a pad-less one
-     * (pads from the pad type), a fiducial package, three fiducials (one disabled, one on the bottom).
+     * (pads from the pad type), a fiducial package, four fiducials (one in inches, one disabled, one on
+     * the bottom).
      */
     static Board board() {
         Package r = new Package("R_0603_1608Metric~2");
@@ -85,7 +86,9 @@ public class PlanBoardFrameTest {
         b.addPlacement(BoardPlanningTest.placement("R2", pr, 12.25, 7.75, 30));
         b.addPlacement(BoardPlanningTest.placement("D1", pl, 37.5, 47.5, 0));
         b.addPlacement(fiducial("FID1", pf, 62.5, 5.0, true, Side.Top));
-        b.addPlacement(fiducial("FID2", pf, 12.5, 55.0, true, Side.Top));
+        Placement fid2 = fiducial("FID2", pf, 12.5, 55.0, true, Side.Top);
+        fid2.setLocation(new Location(LengthUnit.Inches, 12.5 / 25.4, 55.0 / 25.4, 0, 0)); // the plan has it in mm
+        b.addPlacement(fid2);
         b.addPlacement(fiducial("FID3", pf, 62.5, 55.0, false, Side.Top));
         b.addPlacement(fiducial("FID4", pf, 30.0, 30.0, true, Side.Bottom));
         return b;
@@ -181,7 +184,10 @@ public class PlanBoardFrameTest {
         assertEquals("Fiducial_1mm_Mask3mm-Fiducial", f1.partId);
         assertEquals(62.5, f1.bx, 1e-12);
         assertEquals(5.0, f1.by, 1e-12);
-        assertEquals("FID2", plan.fiducials.get(1).id);
+        DispensePlan.BoardFiducial f2 = plan.fiducials.get(1);
+        assertEquals("FID2", f2.id);
+        assertEquals(12.5, f2.bx, 1e-9, "board mm, though the board file has inches");
+        assertEquals(55.0, f2.by, 1e-9);
         for (DispensePlan.BoardFiducial f : plan.fiducials) {
             double[] m = apply(plan.boardToMachine, f.bx, f.by);
             assertEquals(m[0], f.xMm, 1e-9, f.id);

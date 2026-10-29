@@ -122,6 +122,7 @@ public class ConfigurationSaveLibraryTest {
                 e.getMessage());
         assertTrue(read("packages.xml").contains("R_0603_1608Metric~2"));
         assertEquals(boardsBefore, read("boards.xml"));
+        assertFalse(new File(dir, "parts.xml.tmp").exists(), "the temp file of the failed move is removed");
 
         unblock("parts.xml");
         blockWithADirectory("boards.xml");
@@ -171,6 +172,14 @@ public class ConfigurationSaveLibraryTest {
         assertTrue(e.getMessage().startsWith("Error while saving parts.xml"), e.getMessage());
         assertSnapshotEquals(before, snapshot());
         config.removePart(orphan);
+
+        // not only ids: a control character anywhere in a file (here a pad name) fails the read too
+        Footprint.Pad pad = config.getPackage("R_0603_1608Metric~2").getFootprint().getPads().get(0);
+        pad.setName("1\u0007");
+        e = assertThrows(Exception.class, () -> config.saveLibraryFiles());
+        assertTrue(e.getMessage().startsWith("packages.xml would not read back"), e.getMessage());
+        assertSnapshotEquals(before, snapshot());
+        pad.setName("1");
 
         config.saveLibraryFiles();
         assertTrue(read("packages.xml").contains("R_0603_1608Metric~2"));
