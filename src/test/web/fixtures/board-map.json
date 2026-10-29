@@ -1,0 +1,4 @@
+{
+  "_note": "devproxy.py --fixtures: board file name -> board drawing (a file in this directory or a 16-hex art id). sample.art.json is a hand-made stand-in (BOARD_IMPORT_DESIGN.md §4.1) drawn after Opulo's LumenPnP functional test board ftp.kicad_pcb (CERN-OHL-W v2; Opulo's logo and web address left out) until the art slice generates fixtures/art/*.json.",
+  "ftp.board.xml": "sample.art.json"
+}
