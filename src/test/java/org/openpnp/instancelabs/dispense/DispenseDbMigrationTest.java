@@ -165,6 +165,9 @@ public class DispenseDbMigrationTest {
                     "dose_fp", "tip_key", "paste_key", "regulator_psi", "controller_connected_at_ms", "simulated")));
             assertTrue(columns(db, "pad_calibrations").containsAll(Arrays.asList("job_id", "type_key", "outcome",
                     "checks_json", "evidence_json", "runs_json")));
+            assertTrue(columns(db, "package_options").containsAll(Arrays.asList("package_id", "version",
+                    "paste_partial")));
+            assertTrue(db.pastePartialPackages().isEmpty(), "decision 4: off for every package");
             // the view was made again: it lists the new columns
             assertTrue(columns(db, "pad_types_current").containsAll(NEW_PAD_TYPE_COLUMNS));
             // old rows read with null new fields; nothing was seeded again
@@ -221,6 +224,7 @@ public class DispenseDbMigrationTest {
             assertThrows(SQLException.class, () -> db.executeRaw("UPDATE runs SET skipped_pads = '[]'"));
             assertThrows(SQLException.class, () -> db.executeRaw("UPDATE dose_records SET total_mg = 1"));
             assertThrows(SQLException.class, () -> db.executeRaw("UPDATE pad_calibrations SET outcome = 'x'"));
+            assertThrows(SQLException.class, () -> db.executeRaw("UPDATE package_options SET paste_partial = 0"));
             assertThrows(SQLException.class, () -> db.executeRaw("UPDATE schema_info SET version = 1"));
         }
 
@@ -239,7 +243,7 @@ public class DispenseDbMigrationTest {
                 assertEquals(3, rs.getInt(1));
             }
             try (ResultSet rs = st.executeQuery("SELECT name FROM sqlite_master WHERE name IN ('dose_records',"
-                    + " 'pad_calibrations')")) {
+                    + " 'pad_calibrations', 'package_options')")) {
                 assertFalse(rs.next(), "no schema-2 table in the backup");
             }
             try (ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM pragma_table_info('pad_types')"

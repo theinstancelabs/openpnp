@@ -20,7 +20,9 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.TreeSet;
 
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
@@ -33,9 +35,9 @@ import com.google.gson.reflect.TypeToken;
  * <p>Tables: pad_types (versioned), pad_rules (versioned), package_pad_type (versioned mapping
  * overrides, whole package or some of its pads), calibration, dot_ladder, pad_plan, runs, dot_log,
  * events, needle_touchoff, scale_entries, dose_records and pad_calibrations (profile calibration
- * design §5).</p>
+ * design §5), package_options (main-thread decision 4).</p>
  *
- * <p>Schema 2 adds nullable columns and the two tables; a schema-1 file is copied to
+ * <p>Schema 2 adds nullable columns and the three tables; a schema-1 file is copied to
  * {@code dispense.db.v1-<time>.bak} and migrated in one transaction when it is opened
  * ({@link #migrate()}).</p>
  */
@@ -45,9 +47,10 @@ public class DispenseDb implements AutoCloseable {
 
     static final String[] TABLES = {"schema_info", "pad_types", "pad_rules", "package_pad_type",
             "calibration", "dot_ladder", "pad_plan", "runs", "dot_log", "events", "needle_touchoff",
-            "scale_entries", "dose_records", "pad_calibrations"};
+            "scale_entries", "dose_records", "pad_calibrations", "package_options"};
     /** The tables schema 2 added (created by {@link #migrate()}, as a fresh database's). */
-    private static final Set<String> V2_TABLES = new HashSet<>(Arrays.asList("dose_records", "pad_calibrations"));
+    private static final Set<String> V2_TABLES = new HashSet<>(Arrays.asList("dose_records", "pad_calibrations",
+            "package_options"));
     /** Columns schema 2 added to schema-1 tables: {table, column, type}, all nullable (old rows read null). */
     private static final String[][] V2_COLUMNS = {
         {"pad_types", "dot_steps", "INTEGER"}, {"pad_types", "dots_per_pad", "INTEGER"},
@@ -57,6 +60,11 @@ public class DispenseDb implements AutoCloseable {
     private static final String PAD_TYPES_CURRENT = "CREATE VIEW IF NOT EXISTS pad_types_current AS SELECT p.*"
             + " FROM pad_types p JOIN (SELECT type_key, MAX(version) AS v FROM pad_types GROUP BY type_key) m"
             + " ON p.type_key = m.type_key AND p.version = m.v";
+    /** The newest row of every (package, pad names) mapping key. */
+    private static final String CURRENT_MAPPINGS = "SELECT p.package_id, p.pad_names, p.type_key"
+            + " FROM package_pad_type p JOIN (SELECT package_id, IFNULL(pad_names, '') AS n, MAX(version) AS v"
+            + " FROM package_pad_type GROUP BY package_id, IFNULL(pad_names, '')) m"
+            + " ON p.package_id = m.package_id AND IFNULL(p.pad_names, '') = m.n AND p.version = m.v";
     private static final String DOSE_RECORD_COLUMNS = "created_at, kind, steps, n, found, misses, hops, threads,"
             + " hop_mm, area_mean_mm2, resid_cv, diameter_mean_mm, diameter_cv, diameter_p95_mm, phase_json, drift,"
             + " landing_mean_mm, landing_sd_mm, dots_json, pass, why, coupon_place, coupon_record_id, full_mg,"
@@ -210,7 +218,7 @@ public class DispenseDb implements AutoCloseable {
      * Schema 1 -> 2 (profile calibration design §5.4), also the second half of creating a new
      * database: a no-op at version 2. A schema-1 file is first copied next to itself (the database is
      * the audit record); then, in one transaction, the new nullable columns (ALTER TABLE fires no
-     * append-only trigger), the pad_types_current view again (it lists the columns), the two new
+     * append-only trigger), the pad_types_current view again (it lists the columns), the new
      * tables with their triggers, and a schema_info row (a new row: the table is append-only). A
      * failure rolls back and the next open tries again.
      */
@@ -251,6 +259,10 @@ public class DispenseDb implements AutoCloseable {
                     + " steps INTEGER, dots_per_pad INTEGER, mass_per_pad_mg REAL, checks_json TEXT NOT NULL,"
                     + " evidence_json TEXT, runs_json TEXT, simulated INTEGER NOT NULL DEFAULT 0, message TEXT,"
                     + " operator TEXT)");
+            st.execute("CREATE TABLE IF NOT EXISTS package_options ("
+                    + " row_id INTEGER PRIMARY KEY AUTOINCREMENT, package_id TEXT NOT NULL, version INTEGER NOT NULL,"
+                    + " paste_partial INTEGER NOT NULL CHECK (paste_partial IN (0, 1)), created_at INTEGER NOT NULL,"
+                    + " UNIQUE(package_id, version))");
             for (String t : V2_TABLES) {
                 appendOnly(st, t);
             }
@@ -550,7 +562,9 @@ public class DispenseDb implements AutoCloseable {
     /**
      * Appends a mapping override for some pads of a package (padNames null or empty: the whole
      * package; typeKey null clears it). The current mapping of a (package, pad names) key is its
-     * highest version; versions count per package.
+     * highest version; versions count per package. A package's per-pad mappings never share a pad:
+     * the pads of this one leave the older keys (each is cleared and, for its other pads, mapped
+     * again), so which type a pad gets never depends on the order of the keys.
      */
     public synchronized void mapPackage(String packageId, Collection<String> padNames, String typeKey)
             throws SQLException {
@@ -558,6 +572,34 @@ public class DispenseDb implements AutoCloseable {
             throw new IllegalArgumentException("packageId required");
         }
         String names = joinPadNames(padNames);
+        boolean auto = conn.getAutoCommit();
+        conn.setAutoCommit(false);
+        try {
+            if (names != null) {
+                Set<String> mine = new HashSet<>(splitPadNames(names));
+                for (Map.Entry<String, String> e : padMappings(packageId).entrySet()) {
+                    List<String> rest = splitPadNames(e.getKey());
+                    if (!e.getKey().equals(names) && rest.removeAll(mine)) {
+                        appendMapping(packageId, e.getKey(), null);
+                        if (!rest.isEmpty()) {
+                            appendMapping(packageId, joinPadNames(rest), e.getValue());
+                        }
+                    }
+                }
+            }
+            appendMapping(packageId, names, typeKey);
+            conn.commit();
+        }
+        catch (SQLException | RuntimeException e) {
+            conn.rollback();
+            throw e;
+        }
+        finally {
+            conn.setAutoCommit(auto);
+        }
+    }
+
+    private void appendMapping(String packageId, String names, String typeKey) throws SQLException {
         int version = 1;
         try (PreparedStatement ps = conn.prepareStatement(
                 "SELECT MAX(version) FROM package_pad_type WHERE package_id = ?")) {
@@ -581,17 +623,13 @@ public class DispenseDb implements AutoCloseable {
 
     /**
      * Current mapping overrides (cleared ones omitted): key {@link #mappingKey} (the package id for a
-     * whole package, {@code packageId#names} for some of its pads) -> type key. Ordered by package
-     * id, then by version: of two per-pad keys naming the same pad, the later one is newer.
+     * whole package, {@code packageId#names} for some of its pads) -> type key, ordered by package id,
+     * then by version. The per-pad keys of a package name disjoint pads ({@link #mapPackage}).
      */
     public synchronized Map<String, String> packageMappings() throws SQLException {
         Map<String, String> m = new LinkedHashMap<>();
         try (Statement st = conn.createStatement();
-                ResultSet rs = st.executeQuery("SELECT p.package_id, p.pad_names, p.type_key FROM package_pad_type p"
-                        + " JOIN (SELECT package_id, IFNULL(pad_names, '') AS n, MAX(version) AS v"
-                        + " FROM package_pad_type GROUP BY package_id, IFNULL(pad_names, '')) m"
-                        + " ON p.package_id = m.package_id AND IFNULL(p.pad_names, '') = m.n AND p.version = m.v"
-                        + " ORDER BY p.package_id, p.version")) {
+                ResultSet rs = st.executeQuery(CURRENT_MAPPINGS + " ORDER BY p.package_id, p.version")) {
             while (rs.next()) {
                 if (rs.getString(3) != null) {
                     m.put(mappingKey(rs.getString(1), rs.getString(2)), rs.getString(3));
@@ -599,6 +637,64 @@ public class DispenseDb implements AutoCloseable {
             }
         }
         return m;
+    }
+
+    /** A package's current per-pad mappings: joined pad names -> type key, oldest first. */
+    private Map<String, String> padMappings(String packageId) throws SQLException {
+        Map<String, String> m = new LinkedHashMap<>();
+        try (PreparedStatement ps = conn.prepareStatement(CURRENT_MAPPINGS + " WHERE p.package_id = ?"
+                + " AND p.pad_names IS NOT NULL AND p.type_key IS NOT NULL ORDER BY p.version")) {
+            ps.setString(1, packageId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    m.put(rs.getString(2), rs.getString(3));
+                }
+            }
+        }
+        return m;
+    }
+
+    /**
+     * Main-thread decision 4: a part with an undispensable pad is treated whole (none of its pads
+     * pasted) unless its package has this option on ("paste the dispensable pads of this part
+     * anyway"). Appends the package's new setting; default off.
+     */
+    public synchronized void setPastePartial(String packageId, boolean on) throws SQLException {
+        if (packageId == null || packageId.isEmpty()) {
+            throw new IllegalArgumentException("packageId required");
+        }
+        int version = 1;
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT MAX(version) FROM package_options WHERE package_id = ?")) {
+            ps.setString(1, packageId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next() && rs.getObject(1) != null) {
+                    version = rs.getInt(1) + 1;
+                }
+            }
+        }
+        try (PreparedStatement ps = conn.prepareStatement("INSERT INTO package_options(package_id, version,"
+                + " paste_partial, created_at) VALUES (?,?,?,?)")) {
+            ps.setString(1, packageId);
+            ps.setInt(2, version);
+            ps.setInt(3, on ? 1 : 0);
+            ps.setLong(4, System.currentTimeMillis());
+            ps.executeUpdate();
+        }
+    }
+
+    /** The packages whose current setting pastes the dispensable pads of a partly undispensable part. */
+    public synchronized Set<String> pastePartialPackages() throws SQLException {
+        Set<String> s = new TreeSet<>();
+        try (Statement st = conn.createStatement();
+                ResultSet rs = st.executeQuery("SELECT o.package_id FROM package_options o JOIN (SELECT package_id,"
+                        + " MAX(version) AS v FROM package_options GROUP BY package_id) m"
+                        + " ON o.package_id = m.package_id AND o.version = m.v WHERE o.paste_partial = 1")) {
+            while (rs.next()) {
+                s.add(rs.getString(1));
+            }
+        }
+        return s;
     }
 
     /** The key of a mapping in {@link #packageMappings()}: the package id, or {@code packageId#names}. */
@@ -1043,7 +1139,8 @@ public class DispenseDb implements AutoCloseable {
      * Appends a dose record (created_at = now). A mass row names a coupon record of the same dose
      * that has no mass row yet (one coupon is one reading: two rows of one coupon would confirm each
      * other); it carries a reading pair (total = with paste - wiped, > 0) or none at all (a skipped
-     * weighing, with {@code why}).
+     * weighing, with {@code why}), and its coupon's conditions (§1.7): the readings of dots are
+     * evidence for the setup the dots were laid in, and a simulator coupon never gives a machine mass.
      */
     public synchronized DoseRecord insertDoseRecord(DoseRecord r) throws SQLException {
         if (!DoseRecord.KINDS.contains(r.kind)) {
@@ -1057,6 +1154,9 @@ public class DispenseDb implements AutoCloseable {
         }
         if (!DoseRecord.METHODS.contains(r.method)) {
             throw new IllegalArgumentException("method must be one of " + DoseRecord.METHODS);
+        }
+        if ("sim".equals(r.method) && !r.simulated) {
+            throw new IllegalArgumentException("a record of the simulator's balance must be marked simulated");
         }
         if (DoseRecord.COUPON.equals(r.kind) && blank(r.couponPlace)) {
             throw new IllegalArgumentException("a coupon record needs its coupon place");
@@ -1131,6 +1231,11 @@ public class DispenseDb implements AutoCloseable {
         if (coupon.steps != r.steps) {
             throw new IllegalArgumentException("coupon record " + coupon.id + " has " + coupon.steps
                     + "-step dots, not " + r.steps);
+        }
+        if (coupon.simulated != r.simulated || !coupon.doseFp.equals(r.doseFp) || !coupon.tipKey.equals(r.tipKey)
+                || !coupon.pasteKey.equals(r.pasteKey) || !Objects.equals(coupon.regulatorPsi, r.regulatorPsi)) {
+            throw new IllegalArgumentException("a mass record carries the conditions of coupon record " + coupon.id
+                    + " (simulator flag, recipe, tip, paste, regulator reading)");
         }
         if (!query("SELECT id FROM dose_records WHERE kind = 'mass' AND coupon_record_id = ?", coupon.id).isEmpty()) {
             throw new IllegalArgumentException("coupon record " + coupon.id + " already has its reading");

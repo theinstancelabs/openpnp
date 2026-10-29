@@ -71,6 +71,7 @@ public class DispenseDbTest {
         pc.typeKey = "chip-0603";
         pc.outcome = PadCalibrationRecord.PROVISIONAL;
         db.insertPadCalibration(pc);
+        db.setPastePartial("P", true);
     }
 
     @Test
@@ -156,13 +157,66 @@ public class DispenseDbTest {
         }
     }
 
-    static List<Integer> versions(DispenseDb db, String packageId) throws SQLException {
+    /**
+     * A pad is in at most one per-pad mapping of its package: which type it gets never depends on
+     * the order of the keys, so the resolver's fingerprint (the keys sorted) tells every change.
+     */
+    @Test
+    public void perPadMappingsNeverShareAPad() throws Exception {
+        try (DispenseDb db = DispenseDb.inMemory()) {
+            db.mapPackage("P", Arrays.asList("1", "2"), "chip-0603");
+            db.mapPackage("P", Arrays.asList("2", "3"), "chip-0805");
+            Map<String, String> m = db.packageMappings();
+            assertEquals("{P#1=chip-0603, P#2,3=chip-0805}", new java.util.TreeMap<>(m).toString());
+            String before = new PadTypeResolver(db.currentPadTypes(), m).fingerprint();
+            // pad 2 goes back: chip-0805 keeps pad 3 only, and the fingerprint changes
+            db.mapPackage("P", Arrays.asList("1", "2"), "chip-0603");
+            m = db.packageMappings();
+            assertEquals("{P#1,2=chip-0603, P#3=chip-0805}", new java.util.TreeMap<>(m).toString());
+            assertFalse(before.equals(new PadTypeResolver(db.currentPadTypes(), m).fingerprint()));
+            // clearing some pads takes them out of their mapping; the same key again changes nothing else
+            db.mapPackage("P", Arrays.asList("2"), null);
+            assertEquals("{P#1=chip-0603, P#3=chip-0805}", new java.util.TreeMap<>(db.packageMappings()).toString());
+            db.mapPackage("P", Arrays.asList("1"), "chip-1206");
+            assertEquals("{P#1=chip-1206, P#3=chip-0805}", new java.util.TreeMap<>(db.packageMappings()).toString());
+            // a mapping that covers a whole older key clears it; the whole-package mapping is not a per-pad key
+            db.mapPackage("P", "sot-23");
+            db.mapPackage("P", Arrays.asList("1", "3", "4"), "custom");
+            assertEquals("{P=sot-23, P#1,3,4=custom}", new java.util.TreeMap<>(db.packageMappings()).toString());
+            // other packages are not touched
+            db.mapPackage("Q", Arrays.asList("1"), "chip-0603");
+            assertEquals("chip-0603", db.packageMappings().get("Q#1"));
+            assertEquals("custom", db.packageMappings().get("P#1,3,4"));
+        }
+    }
+
+    /** Decision 4: "paste the dispensable pads of this part anyway", per package, default off. */
+    @Test
+    public void pastePartialIsAPackageOptionDefaultOff() throws Exception {
+        try (DispenseDb db = DispenseDb.inMemory()) {
+            assertTrue(db.pastePartialPackages().isEmpty());
+            db.setPastePartial("USB_Mini-B", true);
+            db.setPastePartial("VQFN-32", true);
+            assertEquals(new java.util.TreeSet<>(Arrays.asList("USB_Mini-B", "VQFN-32")), db.pastePartialPackages());
+            db.setPastePartial("VQFN-32", false);
+            assertEquals(Collections.singleton("USB_Mini-B"), db.pastePartialPackages());
+            assertEquals(Arrays.asList(1, 2), versionsOf(db, "package_options", "VQFN-32"));
+            assertTrue(db.packageMappings().isEmpty(), "an option is no mapping");
+            assertThrows(IllegalArgumentException.class, () -> db.setPastePartial("", true));
+        }
+    }
+
+    static List<Integer> versionsOf(DispenseDb db, String table, String packageId) throws SQLException {
         List<Integer> l = new ArrayList<>();
-        for (Map<String, Object> r : db.query("SELECT version FROM package_pad_type WHERE package_id = ? ORDER BY"
+        for (Map<String, Object> r : db.query("SELECT version FROM " + table + " WHERE package_id = ? ORDER BY"
                 + " version", packageId)) {
             l.add(((Number) r.get("version")).intValue());
         }
         return l;
+    }
+
+    static List<Integer> versions(DispenseDb db, String packageId) throws SQLException {
+        return versionsOf(db, "package_pad_type", packageId);
     }
 
     /** Schema 2 pad type fields (design §5.1): a quarter, half or whole turn, at most 6 dots, half a turn per pad. */
@@ -344,6 +398,22 @@ public class DispenseDbTest {
             assertFalse(db.doseRecord(skipped.id).hasReading());
             assertTrue(db.pendingCoupons(0).isEmpty());
 
+            // a mass row carries its coupon's conditions: no machine reading of simulator dots
+            DoseRecord c3 = db.insertDoseRecord(DoseRecordTest.record(DoseRecord.COUPON, 800, c, 0));
+            DoseRecord machineReading = DoseRecordTest.mass(c3, 70.0);
+            machineReading.simulated = true;
+            refused(db, machineReading, "conditions of coupon record " + c3.id);
+            DoseRecord otherRecipe = DoseRecordTest.mass(c3, 70.0);
+            otherRecipe.doseFp = "psi=17.000";
+            refused(db, otherRecipe, "conditions of coupon record");
+            DoseRecord otherRegulator = DoseRecordTest.mass(c3, 70.0);
+            otherRegulator.regulatorPsi = 17.5;
+            refused(db, otherRegulator, "conditions of coupon record");
+            DoseRecord simBalance = DoseRecordTest.mass(c3, 70.0);
+            simBalance.method = "sim";
+            refused(db, simBalance, "marked simulated");
+            assertEquals(Arrays.asList(c3.id), ids(db.pendingCoupons(0)));
+
             DoseRecord kind = DoseRecordTest.record("weighed", 800, c, 0);
             refused(db, kind, "kind must be one of");
             DoseRecord noFp = DoseRecordTest.record(DoseRecord.OPTICAL, 800, c, 0);
@@ -360,7 +430,7 @@ public class DispenseDbTest {
             DoseRecord place = DoseRecordTest.record(DoseRecord.COUPON, 800, c, 0);
             place.couponPlace = null;
             refused(db, place, "coupon place");
-            assertEquals(5, db.doseRecords(null, 0).size(), "nothing refused was stored");
+            assertEquals(6, db.doseRecords(null, 0).size(), "nothing refused was stored");
         }
     }
 
