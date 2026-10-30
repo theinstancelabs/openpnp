@@ -32,6 +32,8 @@ with the board surface tied to the plan. The SIM top camera draws the board wher
   --balance MODE with --padcal: display (default, you read it) or connected (the job reads the SIM balance itself and
                  an emulated operator wipes the coupons between the readings)
   --api-port N   the web API on the first free port of N … N+8 (default any free port)
+  --tip-camera   the SIM bottom camera (PROFILE_CALIBRATION_DESIGN.md §22.8): it draws the tip on the head end-on when
+                 N2 is over it, so "Take a picture from below" has a picture
 
 Prints one JSON line: {"session", "url", "port", "planId", "board", "config"} (config: the session's copy, where
 il_sim_scene.py amend/write changes the SIM scene), with --register
@@ -96,6 +98,7 @@ def main(argv=None):
     ap.add_argument("--padcal", action="store_true", help="the pad calibration's SIM set-up and padcal.kicad_pcb")
     ap.add_argument("--balance", choices=["display", "connected"], default="display", help="--padcal: the SIM balance")
     ap.add_argument("--api-port", type=int, help="the web API on the first free port of N … N+8")
+    ap.add_argument("--tip-camera", action="store_true", help="the SIM bottom camera that draws the tip on the head")
     for k, v in acc.DEF.items():
         ap.add_argument("--" + k.replace("_", "-"), dest=k, default=v)
     a = ap.parse_args(argv)
@@ -106,7 +109,8 @@ def main(argv=None):
         return 0
     a.out = os.path.join("/tmp", a.prefix + "session-" + a.name)
     os.makedirs(a.out, exist_ok=True)
-    s = acc.Session(a, a.name, scene=scene_of)
+    s = acc.Session(a, a.name, scene=scene_of,
+                    xml_sets=acc.SIM_XML_SETS + ([scn.TIP_CAMERA_XML_SET] if a.tip_camera else []))
     if a.padcal:
         return padcal(s, a)
     acc.setup_machine(s)

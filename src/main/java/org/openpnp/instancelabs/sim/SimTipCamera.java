@@ -13,6 +13,7 @@ import java.awt.image.Kernel;
 
 import org.openpnp.instancelabs.dispense.DispenseService;
 import org.openpnp.instancelabs.dispense.TipSetup;
+import org.openpnp.machine.reference.SimulationModeMachine;
 import org.openpnp.machine.reference.camera.SimulatedUpCamera;
 import org.openpnp.model.Configuration;
 import org.openpnp.model.LengthUnit;
@@ -78,6 +79,11 @@ public class SimTipCamera extends SimulatedUpCamera {
             Location cam = getSimulatedLocation().convertToUnits(LengthUnit.Millimeters);
             double dx = n.getX() - cam.getX(), dy = n.getY() - cam.getY();
             if (!inView(dx, dy)) {
+                // another nozzle over the camera (N1 at its nozzle tip calibration while homing): OpenPnP's simulated
+                // up camera draws it, as the session's bottom camera would without the tip camera
+                if (otherNozzleInView(m, needle, cam)) {
+                    return super.internalCapture();
+                }
                 return render(null, 0, 0, 0); // N2 elsewhere: nothing to look up (no scene or engine read)
             }
             return render(physicalTip(scene()), dx, dy, n.getZ() - cam.getZ());
@@ -86,6 +92,23 @@ public class SimTipCamera extends SimulatedUpCamera {
             Logger.warn(e, "sim bottom camera: no tip drawn");
             return render(null, 0, 0, 0);
         }
+    }
+
+    /** A nozzle other than the needle whose simulated tip lies in this camera's frame. */
+    private boolean otherNozzleInView(Machine m, Nozzle needle, Location cam) {
+        for (Head h : m.getHeads()) {
+            for (Nozzle n : h.getNozzles()) {
+                if (n == needle) {
+                    continue;
+                }
+                Location l = SimulationModeMachine.getSimulatedPhysicalLocation(n, getLooking(), true)
+                        .convertToUnits(LengthUnit.Millimeters);
+                if (inView(l.getX() - cam.getX(), l.getY() - cam.getY())) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /** The dispense service's nozzle (N2) on any head, or null. */

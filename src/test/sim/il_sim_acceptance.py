@@ -346,9 +346,13 @@ def setup_machine(s, characterize=True):
     s.api("POST", "/api/machine/enable")
     s.wait_status(lambda st: st["machine"]["enabled"], 30, "enabled")
     s.api("POST", "/api/machine/home", {"wait": True}, timeout=180)
-    s.wait_status(lambda st: st["machine"]["homed"], 60, "homed")
-    anchor = s.api("POST", "/api/needle/anchor", NEEDLE_FRAME)
-    s.api("POST", "/api/needle/offset", {"offsetMm": NEEDLE_OFFSET,
+    st = s.wait_status(lambda st: st["machine"]["homed"], 60, "homed")
+    # tip setups (PROFILE_CALIBRATION_DESIGN.md §22.3): needle values name the needle change they were taken after,
+    # pad-type writes the tip setup they were made for
+    token = st["dispense"]["needle"].get("changedAtMs")
+    tip = st["dispense"]["tip"]["key"]
+    anchor = s.api("POST", "/api/needle/anchor", dict(NEEDLE_FRAME, needleChangedAtMs=token))
+    s.api("POST", "/api/needle/offset", {"offsetMm": NEEDLE_OFFSET, "needleChangedAtMs": token,
                                           "note": "sim acceptance (no needle): the frame offset confirmed"})
     s.api("PUT", "/api/surfaces/blank", {"points": [list(p) for p in BLANK_PROBES],
                                          "note": "sim: bench N1 probes along the purge row"})
@@ -357,7 +361,7 @@ def setup_machine(s, characterize=True):
     # I11: the start angle is valid for this controller connection only (confirmed after enable).
     s.api("POST", "/api/screw/start-angle", {"note": "sim acceptance: confirmed after connect"})
     if characterize:
-        s.api("PUT", "/api/pad-types/chip-0603", {"status": "characterized",
+        s.api("PUT", "/api/pad-types/chip-0603", {"status": "characterized", "forSetup": tip,
                                                    "notes": "SIM ONLY: marked characterized for the acceptance run"})
     cfg = s.api("GET", "/api/config")
     cfg["_anchor_response"] = anchor
