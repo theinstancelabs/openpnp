@@ -1259,9 +1259,16 @@ async function runFirstDots(page, n) {
         const zf = await waitStatus(page, failedNow, 60000);
         check('Z moved: Check Z fails by about 0.8 mm', Math.abs(zf.machine.zCheck.last.deltaMm - 0.8) < 0.1, zf.machine.zCheck.last);
         await page.evaluate(() => IL.go('#run/checks'));
-        /** The remedy's step now (IL.zMoved) and the Z check blocker on Run › Checks with its fix-its, once the plan is read again. */
+        /**
+         * The remedy's step now (IL.zMoved) and the Z check blocker on Run › Checks with its fix-its, once the page's own
+         * status poll has the step wanted and the plan is read again (the card shows until the step is done).
+         */
         const zStep = async (want) => {
-          await page.waitForFunction((w) => { const z = IL.zMoved(IL.S.status); return !IL.S.planPending && (!z || z.step === w); }, want, { timeout: 30000 }).catch(() => {});
+          await page.waitForFunction((w) => {
+            const z = IL.zMoved(IL.S.status);
+            const card = document.querySelector('#chk-needs .ri[data-key="I4-z"]');
+            return !IL.S.planPending && !!z && z.step === w && (w === 'done' ? !card : !!card);
+          }, want, { timeout: 30000 }).catch(() => {});
           await page.waitForTimeout(300);
           return page.evaluate(() => {
             const z = IL.zMoved(IL.S.status);
