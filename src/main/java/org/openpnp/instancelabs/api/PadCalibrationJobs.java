@@ -136,7 +136,7 @@ final class PadCalibrationJobs {
     void needleChanging(long atMs) {
         PadCalibrationJob j = current;
         if (j != null && j.holdsLock()) {
-            j.stop(PadCalibrationJob.needleChangedDuring(atMs));
+            j.needleChanging(atMs);
         }
     }
 

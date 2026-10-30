@@ -2374,6 +2374,21 @@ final class PadCalibrationJob {
     }
 
     /**
+     * A needle change is about to be recorded (§22.3): a job that runs, decides or plans stops at its next engine step
+     * (the change aborts the one that runs) with the needle's words as its result, nothing saved.
+     */
+    void needleChanging(long atMs) {
+        synchronized (lock) {
+            if (ended() || AWAITING.equals(state)) {
+                return;
+            }
+            tipHalt = needleChangedDuring(atMs);
+            stopRequested = true;
+            stopReason = tipHalt;
+        }
+    }
+
+    /**
      * A needle change was recorded (§22.3): a job waiting for the readings of its coupons ends stopped (the engine wrote
      * their skip rows: their dots were laid by the needle that came off). A job between its engine steps was stopped
      * before the change ({@link PadCalibrationJobs#needleChanging}).
