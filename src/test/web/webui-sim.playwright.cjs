@@ -893,6 +893,10 @@ async function runFirstDots(page, n) {
       check('registering: the live phases show (#reg-phases li.now)', liveNow);
       const homeRow = await page.waitForSelector('#reg-phases li[data-ph=home]', { timeout: 10000 }).then(() => true, () => false);
       check('registering: the Home row is shown', homeRow);
+      const fidRow = await page.evaluate(() => { const li = document.querySelector('#reg-phases li[data-ph=fiducials]'); const t = IL.S.plan.registrationTargets;
+        return { text: li ? li.textContent : null, n: t && t.fiducials ? t.fiducials.length : null }; });
+      check('registering: the Fiducials row counts the plan\'s fiducials before the run reports them ("0 of 3", no "…")', fidRow.n > 0
+        && new RegExp('Fiducials · \\d+ of ' + fidRow.n + ' found').test(fidRow.text || '') && !/of …/.test(fidRow.text || ''), fidRow);
       await waitStatus(page, (x) => x.run && x.run.label === 'board registration' && x.run.detail && x.run.detail.stage === 'fiducials'
         && (x.run.detail.fiducials || []).some((f) => f.state === 'found'), 120000).catch(() => {});
       await page.screenshot({ path: path.join(OUT, 'register-running.png') });

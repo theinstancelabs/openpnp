@@ -1973,11 +1973,13 @@
       v: home.needed && stage === 'home' ? '≈ ' + IL.fmtSecs(home.estimateS) : '' });
     const fids = d.fiducials || [];
     const nf = fids.filter((f) => f.state === 'found').length;
+    // before the run reports its fiducials (while it homes) the plan's own targets count them (as Probe's points)
+    const nFid = fids.length || ((p && p.registrationTargets && p.registrationTargets.fiducials) || []).length;
     const ph = String(live.phase || '');
     const fidNow = /^fiducials: (.+)$/.exec(ph);
-    rows.push({ k: 'fiducials', st: stOf(1), t: 'Fiducials · ' + nf + ' of ' + (fids.length || '…') + ' found',
+    rows.push({ k: 'fiducials', st: stOf(1), t: 'Fiducials · ' + nf + ' of ' + (nFid || '…') + ' found',
       d: stage === 'fiducials' && fidNow ? 'looking at ' + fidNow[1].replace(/ \((\d+) of (\d+)\)/, '').replace(/ · /g, ', ') : at > 1 ? names(fids) + ' found' : 'top camera, light on',
-      v: stage === 'fiducials' ? '≈ ' + IL.fmtSecs(Math.max(0, fids.length - nf) * 5) : '' });
+      v: stage === 'fiducials' ? '≈ ' + IL.fmtSecs(Math.max(0, nFid - nf) * 5) : '' });
     const seatTxt = d.seat === 'same' ? 'same seat' + (isNum(d.movedMm) ? ' · moved ' + mmText(d.movedMm) : '') : d.seat === 'reseated' ? 're-seated' + (isNum(d.movedMm) ? ' · moved ' + mmText(d.movedMm) : '')
       : d.seat === 'first' ? 'first registration of this seat' : '';
     rows.push({ k: 'fit', st: at > 1 ? 'done' : 'todo', t: 'Fit the board to the fiducials', d: at > 1 ? seatTxt : 'shift, rotation and scale from the fiducials', v: '' });
