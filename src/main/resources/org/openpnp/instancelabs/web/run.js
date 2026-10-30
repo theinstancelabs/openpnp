@@ -41,8 +41,8 @@
     refused: null,                             // a board run of this plan ended REFUSED: banner on Checks
     ccRefused: null,                           // a clean-pad check of this plan refused at its start: its reason on the card
     test: false, maxDots: '',                  // "Test run with fewer dots" (cleared after every run)
-    done: Object.assign({ planId: null, idx: [], runIds: [] }, ssGet('il.run.done') || {}),
-    doneSet: null,
+    doneSet: new Set(),                        // dots of the plan shown with paste on its board (server: plan.pasted, trackDone)
+    pasteVersion: null,                        // status.dispense.pasteVersion seen (a "Next board" or wipe elsewhere: read the plan again)
     maps: {},                                  // subset planId → [full-plan dot index per subset index]
     ph: { runId: null, at: {}, firstDotAt: null, endAt: null },
     probe: Object.assign({ seat: null, points: [] }, ssGet('il.run.probe') || {}),
@@ -52,16 +52,11 @@
     regLoaded: {},                             // registration run ids whose new plan this tab loaded
     regDetail: null,                           // the last live detail of a registration {runId, detail} (stopped texts)
     dlg: null,
-    restPending: false,
     decidedAt: Number(ssGet('il.run.decidedAt')) || 0,
-    lastFetched: {},
     view: 'dots', hidden: new Set(),
     showAllDirty: false,
     kinds: ssGet('il.run.kinds') || {},        // run planId (subset ids too) → 'test' | 'rest' | 'all' | 'full' (this page started it)
-    alias: ssGet('il.run.alias') || {},        // planId → the first planId of the same seated board (plan again keeps the board)
-    boardStarts: ssGet('il.run.boardStarts') || [],   // client ms of every "Next board" (a new board starts there)
   };
-  R.doneSet = new Set(R.done.idx || []);
   IL.run = R;   // console / tests: IL.run
 
   // ================================================================================== small helpers
@@ -165,50 +160,27 @@
     return { x: src.x, y: src.y, z: src.z, rot: src.rotation || 0, job: false };
   }
   function remembered(file) { return file ? lsJson('il.boardloc.' + file, null) : null; }
-  /** The board a plan belongs to: plans made again for the same seat share the first plan's key (R.alias). */
-  const boardKey = (planId) => { const b = IL.basePlanId(planId); return (b && R.alias[b]) || b; };
   /**
-   * Board number this session: today's board runs with dots, in order; a new board starts when the board key changes
-   * or "Next board" was pressed between two runs. The plan shown is the last board if its key matches and no
-   * "Next board" came after that run, else the next number.
+   * A board run of the board on the plan shown's seat (status.run with the server's boardNumber, rc1 review): the board
+   * the plan read has, or a newer one its first dot numbered after the plan was read. Null otherwise (a "Next board"
+   * took that run's board off).
    */
-  function boardNumber(planId) {
-    const today0 = new Date().setHours(0, 0, 0, 0);
-    const rows = (S.runs || []).filter((r) => r.kind === 'board' && r.dots_done > 0 && (r.started_at - S.skewMs) >= today0)
-      .sort((a, b) => a.started_at - b.started_at);
-    const starts = R.boardStarts || [];
-    let n = 0, prevKey = null, prevAt = -Infinity;
-    for (const r of rows) {
-      const key = boardKey(r.plan_id), at = r.started_at - S.skewMs;
-      if (key !== prevKey || starts.some((t) => t > prevAt && t <= at)) n++;
-      prevKey = key;
-      prevAt = at;
-    }
-    if (!planId) return n + 1;
-    const newer = starts.some((t) => t > prevAt);
-    return n && prevKey === boardKey(planId) && !newer ? n : n + 1;
+  function runOfThisBoard(s) {
+    const p = plan(), run = s && s.run;
+    const pa = (p && p.pasted) || {};
+    if (!run || run.label !== 'board' || !IL.planMatches(run.planId) || !isNum(run.boardNumber)) return null;
+    return run.boardNumber === pa.board || (isNum(pa.nextBoard) && run.boardNumber >= pa.nextBoard) ? run : null;
   }
   /**
-   * Plan again for the same seated board (no "Next board" since the old plan): the new plan is the same board. Its key
-   * and the dots already dispensed carry over (matched by pad and position), so the board count and the pasted pads stay.
+   * The number this session of the board on the plan shown's seat: kept by the server with the board's paste
+   * (plan.pasted: the same in every tab and browser; a plan made again for the same seat is the same board): the
+   * board's own once it has paste, else the number the next board gets ("Next board" took the last one off).
    */
-  function carryBoard(prev, p) {
-    if (!prev || !p || prev.planId === p.planId || seatKey(prev.source) !== seatKey(p.source)) return;
-    // the old plan belongs to the board on the machine if this board's dots are on it (the done map is emptied by
-    // "Next board"), or it was made after the last "Next board" (a plan used for several boards keeps the newest)
-    const lastStart = (R.boardStarts || []).reduce((a, b) => Math.max(a, b), 0);
-    const hasDots = R.done.planId === prev.planId && R.doneSet.size > 0;
-    if (!hasDots && (prev.createdAtMs - S.skewMs) < lastStart) return;
-    R.alias[p.planId] = boardKey(prev.planId);
-    ssSet('il.run.alias', R.alias);
-    if (R.done.planId !== prev.planId || !R.doneSet.size) return;
-    const key = (d) => d.padId + '|' + Number(d.x).toFixed(3) + '|' + Number(d.y).toFixed(3);
-    const was = new Set((prev.dots || []).filter((d) => R.doneSet.has(d.index)).map(key));
-    const pads = new Set((prev.dots || []).filter((d) => R.doneSet.has(d.index)).map((d) => d.padId));
-    const now = (p.dots || []).filter((d) => was.has(key(d)) || (pads.has(d.padId) && !(prev.dots || []).some((o) => o.padId === d.padId && !R.doneSet.has(o.index))));
-    R.done = { planId: p.planId, idx: [], runIds: R.done.runIds.slice(), since: R.done.since || 0 };
-    R.doneSet = new Set(now.map((d) => d.index));
-    saveDone();
+  function boardNumber() {
+    const pa = (plan() && plan().pasted) || {};
+    const run = runOfThisBoard(S.status);
+    if (run) return run.boardNumber;
+    return isNum(pa.board) ? pa.board : isNum(pa.nextBoard) ? pa.nextBoard : 1;
   }
   function runRow(r) {
     if (!r) return null;
@@ -243,7 +215,7 @@
       return 'nothing dispensed';
     }
     const pp = p || plan();
-    const mine = !!(pp && r.planId && boardKey(r.planId) === boardKey(pp.planId));
+    const mine = !!(pp && r.planId && (IL.basePlanId(r.planId) === pp.planId || (isNum(r.boardNumber) && r.boardNumber === boardNumber())));
     const N = mine ? pp.dots.length : null;
     const sub = /-subset-/.test(String(r.planId || '')) || (N !== null && r.dotsPlanned < N);
     const kind = R.kinds[r.planId] || null;
@@ -257,32 +229,27 @@
   }
 
   // ================================================================================== done dots, phases (every poll)
-  function saveDone() { ssSet('il.run.done', { planId: R.done.planId, idx: Array.from(R.doneSet), runIds: R.done.runIds.slice(-20), since: R.done.since || 0 }); }
-  /** The done dots belong to one plan: another plan (not carried over by carryBoard) starts with none. */
-  function doneFor(p) {
-    if (R.done.planId !== p.planId) { R.done = { planId: p.planId, idx: [], runIds: [], since: 0 }; R.doneSet = new Set(); saveDone(); }
-  }
+  /**
+   * The dots of the plan shown that its board has paste on (rc1 review: the server keeps them, so a new tab, another
+   * browser or a reload sees the same board): plan.pasted counts the dots laid on each pad since the board was seated,
+   * taken in path order on the pad, with the dots of this board's run still under way or not in the plan read yet
+   * (status.run.doneDots). A "Next board" or a wipe elsewhere (status.dispense.pasteVersion) reads the plan again.
+   */
   function trackDone(s) {
     const p = plan();
-    const run = s.run;
-    if (!p) return;
-    doneFor(p);
-    if (!run || run.label !== 'board' || !IL.planMatches(run.planId)) return;
-    // "Next board" cleared the map: a run that ended before it belongs to the board taken off the machine
-    if (R.done.since && run.startedAtMs && run.startedAtMs - S.skewMs < R.done.since) return;
-    if (!R.done.runIds.includes(run.runId)) {
-      // a new board run of this plan: "finish the pads left" adds to the dots before it; any other run starts over
-      const rest = R.restPending && run.planId !== p.planId;
-      if (!rest) R.doneSet = new Set();
-      R.restPending = false;
-      R.done.runIds.push(run.runId);
-    }
-    let changed = false;
-    for (const i of run.doneDots || []) {
+    if (!p) { R.doneSet = new Set(); return; }
+    const pv = s && s.dispense ? s.dispense.pasteVersion : null;
+    if (R.pasteVersion !== null && pv !== R.pasteVersion) IL.planRefreshSoon();
+    R.pasteVersion = pv === undefined ? null : pv;
+    const laid = Object.assign({}, ((p.pasted || {}).pads) || {});
+    const set = new Set();
+    for (const d of p.dots) if (laid[d.padId] > 0) { set.add(d.index); laid[d.padId]--; }
+    const run = runOfThisBoard(s);
+    for (const i of (run && run.doneDots) || []) {
       const j = mapIndex(run.planId, i);
-      if (j !== null && j !== undefined && !R.doneSet.has(j)) { R.doneSet.add(j); changed = true; }
+      if (j !== null && j !== undefined) set.add(j);
     }
-    if (changed || !R.done.saved) { R.done.saved = true; saveDone(); }
+    R.doneSet = set;
   }
   function trackPhases(s) {
     const run = s.run;
@@ -324,7 +291,7 @@
     const p = plan();
     if (!p || runningBoard(s) || IL.recoveryActive()) return null;
     const N = p.dots.length;
-    const done = R.done.planId === p.planId ? R.doneSet.size : 0;
+    const done = R.doneSet.size;
     if (!(done > 0 && done < N)) return null;
     const rr = resultRun(s);
     const kind = rr ? R.kinds[rr.planId] : null;
@@ -602,7 +569,7 @@
     const n = R.n;
     const run = s.run;
     const seat = p ? seatOf(p) : null;
-    const no = p ? boardNumber(p.planId) : null;
+    const no = p ? boardNumber() : null;
     const dec0 = mode === 'stopped' ? decision(s) : null;
     const partial = !!dec0 && dec0.cause === 'partial';
     // another board chosen: Plan (the Board step's) is the one action; "Plan again" would plan the board before
@@ -1074,20 +1041,6 @@
     const n = R.n;
     const rec = decision(s);
     if (!rec) return;
-    // the stopped run's dot timings (GET /api/runs/last) complete the done dots after a reload
-    if (rec.run.runId && !R.lastFetched[rec.run.runId]) {
-      R.lastFetched[rec.run.runId] = true;
-      IL.api('GET', '/api/runs/last').then((x) => {
-        const lr = x && (x.run || x);
-        if (!lr || lr.runId !== rec.run.runId) return;
-        let ch = false;
-        for (const tm of lr.dotTimings || []) {
-          const j = mapIndex(lr.planId, tm.dotIndex);
-          if (j !== null && j !== undefined && !R.doneSet.has(j)) { R.doneSet.add(j); ch = true; }
-        }
-        if (ch) { saveDone(); IL.render(); }
-      }).catch(() => { /* status doneDots stand */ });
-    }
     const left = padsLeft(p);
     R.padsLeft = left;
     const active = IL.recoveryActive();
@@ -1159,9 +1112,12 @@
           : rr.status === 'REFUSED' ? { kind: 'need', sub: 'refused' } : { kind: 'block', sub: 'dot ' + rr.dotsDone };
       }
       const last = rr || lastBoardRow();
+      // numbered by the board that ran (the server's boardNumber of the run), not the board on the machine now
+      const ran = last && isNum(last.boardNumber) ? 'board ' + last.boardNumber + ' ' : '';
       st.result = last ? { kind: last.status === 'OK' ? 'ok' : last.status === 'REFUSED' ? 'need' : 'block',
-        sub: last.status === 'OK' ? 'board ' + (last.planId ? boardNumber(IL.basePlanId(last.planId)) : '') + ' ok' : { ABORTED: 'stopped', ERROR: 'error', REFUSED: 'refused' }[last.status] || '—' } : { kind: 'num', sub: '—' };
-      if (!rr) st.result.kind = 'num';
+        sub: last.status === 'OK' ? ran + 'ok' : { ABORTED: 'stopped', ERROR: 'error', REFUSED: 'refused' }[last.status] || '—' } : { kind: 'num', sub: '—' };
+      // a result from before "Next board" (or a new plan) is the last board's: no tick for the board waiting now
+      if (!rr || !(rr.endedAtMs && rr.endedAtMs - S.skewMs > R.decidedAt)) st.result.kind = 'num';
     }
     return st;
   }
@@ -1520,12 +1476,10 @@
     const m = (s && s.machine) || {};
     return [m.enabled, m.homed, s && s.server && s.server.simulatorConfirmed, m.home && m.home.needed].join('|');
   }
-  /** Shows the plan a registration made (the same physical board: its count and dots carry over, R.alias). */
+  /** Shows the plan a registration made (the same seat: the server keeps its board number and paste). */
   function adoptRegPlan(r) {
     const p = plan();
     if (!r.nextPlanId || !p || r.nextPlanId === p.planId) return;
-    R.alias[r.nextPlanId] = R.alias[p.planId] || p.planId;
-    ssSet('il.run.alias', R.alias);
     IL.loadPlan(r.nextPlanId);
   }
   /** Register board: POST /api/plan/{id}/register (probe 'auto': the engine's new-seat flag forces the probe). */
@@ -2459,7 +2413,7 @@
     const p = plan();
     const r = IL.ready();
     // header: eyebrow, count, segment bar, interlock line
-    IL.setText($('chk-eyebrow'), p ? 'Board ' + boardNumber(p.planId) + ' · plan ' + shortId(p) : 'No plan yet');
+    IL.setText($('chk-eyebrow'), p ? 'Board ' + boardNumber() + ' · plan ' + shortId(p) : 'No plan yet');
     IL.keyed($('chk-count'), S.planPending ? 'pending' : r.count, () => (S.planPending ? el('small', { class: 'checking', text: 'checking…' }) : [String(r.count), ' ', el('small', { text: 'of 9' })]));
     const bar = $('ready-segbar');
     r.items.forEach((it, i) => IL.setClass(bar.children[i], SEG_CLASS[it.state] || ''));
@@ -2511,7 +2465,7 @@
     if (!btn) return;
     const dec = footDecision(s);
     const total = p ? p.dots.length : 0;
-    const complete = !!p && !dec && R.done.planId === p.planId && R.doneSet.size >= total && total > 0;
+    const complete = !!p && !dec && R.doneSet.size >= total && total > 0;
     IL.show($('btn-run-test'), !dec);
     IL.show($('run-all-link'), !!dec);
     IL.show($('run-next-link'), complete);
@@ -2651,7 +2605,7 @@
     const after = $('run-after');
     let msg = null;
     if (row.defined) {
-      const nextNo = boardNumber(p.planId) + 1;
+      const nextNo = boardNumber() + 1;
       const need = IL.purgeNeed(row, p);
       msg = row.spotsLeft < need
         ? [el('b', { text: 'After this board: ' }), 'the purge row has ' + IL.plural(row.spotsLeft, 'spot') + ' left, ' + need + ' needed. Wipe it and reset it before board ' + nextNo + '.']
@@ -2689,11 +2643,9 @@
           R.decidedAt = Date.now();
           ssSet('il.run.decidedAt', R.decidedAt);
           R.doneSet = new Set();
-          R.done.since = Date.now();
-          saveDone();
-          // a new board starts here: the board count goes up, plans made from now on are this board's
-          R.boardStarts = (R.boardStarts || []).concat([Date.now()]).slice(-50);
-          ssSet('il.run.boardStarts', R.boardStarts);
+          // a new board starts here (the server: every tab sees it): the board count goes up at its first dot
+          IL.api('POST', '/api/board/next', {}).then(() => IL.planRefresh({ quiet: true }))
+            .catch((e) => IL.toast('Next board not noted: ' + IL.errorText(e), 'need'));
           goStep('board');
         } }, 'Yes: new seat')],
       initialFocus: null });
@@ -2724,7 +2676,7 @@
       const mini = (k, v, u, sub) => el('div', { class: 'mini' }, el('div', { class: 'mini__k' }, k), el('div', { class: 'mini__v' }, v, u ? el('span', { class: 'u', text: u }) : null), sub ? el('div', { class: 'mini__s' }, sub) : null);
       return [
         el('div', { class: 'result-head' }, IL.glyph(kind), el('div', {}, el('div', { class: 'result-head__t', text: (STATUS_WORD[rr.status] || rr.status) + ' · ' + outcomeText(rr, p) }),
-          el('div', { class: 'result-head__s', text: boardShort(rr.boardName || p.boardName) + ' · board ' + boardNumber(p.planId) + ' · ended ' + IL.fmtTime(rr.endedAtMs - S.skewMs) }))),
+          el('div', { class: 'result-head__s', text: boardShort(rr.boardName || p.boardName) + ' · board ' + (isNum(rr.boardNumber) ? rr.boardNumber : boardNumber()) + ' · ended ' + IL.fmtTime(rr.endedAtMs - S.skewMs) }))),
         rr.message ? el('div', { class: 'notebox' + (kind === 'ok' ? '' : ' notebox--' + kind), text: rr.message }) : null,
         el('div', { class: 'result-tiles' },
           mini(['', dphAbbr(), ' dots only'], dph(rr.dphMotion), '', 'estimate ' + dph(sm.estimatedWorkDph) + ' · bench ' + IL.fmtInt(BENCH_DPH)),
@@ -2744,7 +2696,7 @@
       const known = new Set(p.pads.map((x) => x.padId));
       // a list from elsewhere (Records: the pads one stopped run did not reach) never brings back a pad this page saw
       // pasted on this board (an earlier test or finish run)
-      const left = new Set(R.done.planId === p.planId ? padsLeft(p) : known);
+      const left = new Set(padsLeft(p));
       const pads = (opts && opts.padIds ? opts.padIds.filter((id) => known.has(id) && left.has(id)) : padsLeft(p)).slice();
       const nd = p.dots.filter((d) => pads.includes(d.padId)).length;
       const dec = decision(S.status);
@@ -2781,6 +2733,12 @@
     gauge.psi = prof.pressurePsi;   // the psi the label shows: a tick records this one (updateDialog keeps both current)
     const paste = tick('run-tick-paste', 'Paste is within its working life');
     const hands = tick('run-tick-hands', 'Hands and tools are clear of the head');
+    // the board already has paste on pads this run lays (the server keeps it, every tab sees it): only after an explicit
+    // "I wiped this board", which the run tells the engine (POST /api/run {wiped: true}); finishing the pads left needs none
+    const covered = new Set(mode.kind === 'test' ? p.dots.slice(0, mode.maxDots || 0).map((d) => d.padId) : p.pads.map((x) => x.padId));
+    const pastedHere = mode.kind === 'rest' ? [] : padsDone(p).filter((id) => covered.has(id));
+    const wipe = pastedHere.length ? tick('run-tick-wiped', 'I wiped this board: no paste on its ' + IL.plural(pastedHere.length, 'pad') + ' now',
+      'This board (board ' + boardNumber() + ') already has paste on ' + IL.plural(pastedHere.length, 'pad') + ' this run lays: wipe them first, or press Cancel and finish the pads left.') : null;
     const reg = IL.attest.valid('regulator', s);
     gauge.input.checked = !!reg;
     paste.input.checked = !!IL.attest.valid('paste-life', s);
@@ -2791,6 +2749,7 @@
     });
     paste.input.addEventListener('change', () => { if (paste.input.checked) IL.attest.set('paste-life', true); else IL.attest.clear('paste-life'); updateDialog(S.status); });
     hands.input.addEventListener('change', () => updateDialog(S.status));
+    if (wipe) wipe.input.addEventListener('change', () => updateDialog(S.status));
     const pon = el('button', { type: 'button', class: 'btn', id: 'run-confirm-pressure', title: 'Pressure on to read the gauge (press twice unless the needle is over the waste)' }, IL.icon('i-gauge'), 'Pressure on to adjust');
     pon.addEventListener('click', (ev) => IL.runFix('pressure-on', pon, null, ev));
     const held = el('div', { class: 'regulator__held', id: 'run-confirm-held', hidden: true });
@@ -2809,17 +2768,18 @@
       testLine, blockBox,
       IL.sectionK('The machine checked'), sensed,
       IL.sectionK('You confirm (nothing senses these)'),
+      wipe ? el('div', { class: 'run-confirm-wiped', id: 'run-confirm-wiped' }, wipe.lab) : null,
       el('div', { class: 'grid2' }, paste.lab, hands.lab),
       refusals,
     ];
     const sum = el('div', { class: 'dialog__sum', id: 'run-confirm-sum' });
     const cancel = el('button', { type: 'button', class: 'btn btn--lg', id: 'btn-run-cancel' }, 'Cancel');
     const go = el('button', { type: 'button', class: 'btn btn--primary btn--lg', id: 'btn-run-go' });
-    const first = [gauge.input, paste.input, hands.input].find((i) => !i.checked) || hands.input;
+    const first = [gauge.input, paste.input].concat(wipe ? [wipe.input] : []).concat([hands.input]).find((i) => !i.checked) || hands.input;
     const h = IL.dialog.open({ id: 'dlg-run', eyebrow: 'Run board · ' + p.boardName + ' · plan ' + shortId(p), title: mode.title, keys: true,
       body, foot: [sum, cancel, go], initialFocus: first, onClose: () => { if (R.dlg === h) R.dlg = null; } });
     h.mode = mode;
-    h.n = { gauge, paste, hands, pon, held, sensed, sum, go, refusals, blockBox, homeBox };
+    h.n = { gauge, paste, hands, wipe, pon, held, sensed, sum, go, refusals, blockBox, homeBox };
     h.runId = s.run ? s.run.runId : null;   // the last task this tab knew of when the confirm opened
     R.dlg = h;
     cancel.addEventListener('click', () => h.close('cancel'));
@@ -2833,7 +2793,7 @@
     const body = { planId: p.planId };
     if (m.maxDots) body.maxDots = m.maxDots;
     if (m.padIds) body.padIds = m.padIds;
-    R.restPending = m.kind === 'rest';
+    if (h.n.wipe && h.n.wipe.input.checked) body.wiped = true;   // the server forgets the board's paste before the run
     h.starting = true;   // this run's own start closes the confirm without a note
     const res = await IL.act(h.n.go, async () => {
       const r = await IL.api('POST', '/api/run', body);
@@ -2845,7 +2805,6 @@
       ok: (r) => 'Run started: ' + IL.plural((r && r.dots) || m.n, 'dot') + (m.kind === 'test' ? ' (test)' : m.kind === 'rest' ? ' (the pads left)' : ''),
     });
     if (!res) {
-      R.restPending = false;
       h.starting = false;
       if (!h.closed) h.n.refusals.scrollIntoView({ block: 'nearest' });
       return;
@@ -2879,7 +2838,8 @@
     const pl = IL.attest.valid('paste-life', s);
     IL.setText(n.paste.who, pl ? 'you, ' + IL.fmtTime(pl.atMs) : 'every 8 h');
     IL.setText(n.hands.who, 'every run');
-    for (const t of [n.gauge, n.paste, n.hands]) t.lab.classList.toggle('on', t.input.checked);
+    if (n.wipe) IL.setText(n.wipe.who, 'this run');
+    for (const t of [n.gauge, n.paste, n.hands, n.wipe].filter(Boolean)) t.lab.classList.toggle('on', t.input.checked);
     IL.setText($('run-confirm-psi'), 'Set the regulator to ' + psi + ' psi (profile ' + (prof.name || '') + ')');
     // a pressure hold for reading the gauge must be off again before the run
     const pr = s.pressure || {};
@@ -2903,7 +2863,7 @@
       const a = row.usedSpots + 1, b = row.usedSpots + need;
       const after = row.spotsLeft - need;
       cards.push([row.spotsLeft >= need ? 'ok' : 'need', 'Purge spots ' + a + ' to ' + b,
-        after >= 0 ? IL.plural(after, 'spot') + ' left after' + (after < need ? ': wipe before board ' + (boardNumber(p.planId) + 1) : '') : 'only ' + row.spotsLeft + ' left, ' + need + ' needed: wipe and reset first']);
+        after >= 0 ? IL.plural(after, 'spot') + ' left after' + (after < need ? ': wipe before board ' + (boardNumber() + 1) : '') : 'only ' + row.spotsLeft + ' left, ' + need + ' needed: wipe and reset first']);
     } else cards.push(['block', 'Purge row not set', 'Setup › Purge row']);
     // Refuse flagged pads off: the pads that cannot be dispensed are skipped, by package (PROFILE_CALIBRATION_DESIGN §21)
     const skipped = (p.pads || []).filter((x) => x.blocked);
@@ -2926,7 +2886,7 @@
     IL.keyed(n.sensed, JSON.stringify(cards), () => cards.map(([st, t, d]) => el('div', { class: 'tick' }, IL.glyph(st === 'checking' || st === 'wait' ? 'off' : st),
       el('div', {}, el('div', { class: 'tick__t', text: t }), el('div', { class: 'tick__d', text: d })))));
     // blocked now (another task, machine down, plan stale ...): say why, keep the dialog
-    const ticksLeft = [n.gauge.input, n.paste.input, n.hands.input].filter((i) => !i.checked).length;
+    const ticksLeft = [n.gauge.input, n.paste.input, n.hands.input].concat(n.wipe ? [n.wipe.input] : []).filter((i) => !i.checked).length;
     let why = S.online === false ? IL.lockReason(s) : S.planPending ? 'Re-reading the plan (checking…)' : !r.canRun ? r.runReason : null;
     if (!why && holding) why = 'Pressure is held: switch it off first';
     const showWhy = why && (!holding || S.online === false) && !S.planPending;
@@ -3033,11 +2993,9 @@
     if (R.dlg) IL.safe(() => updateDialog(s), 'run confirm');
   });
   IL.on('plan', (p, prev) => {
-    if (p && prev && prev.planId !== p.planId) IL.safe(() => carryBoard(prev, p), 'carry board');
+    // before the render that follows: the done dots of this plan's board (the server's paste), never the last plan's
+    IL.safe(() => trackDone(S.status), 'run done');
     if (p && (!prev || prev.planId !== p.planId)) {
-      // before the render that follows: the last plan's done dots are not this plan's (the hero drew them on the new
-      // plan's dots, or failed on an index past its last dot, until the next status)
-      doneFor(p);
       formFromPlan(p);
       R.showAllDirty = false;
       if (R.bv) R.bv.setPlan(p, { origin: originOf(p) });
@@ -3117,7 +3075,7 @@
         return { sub: 'Finish ' + IL.plural(left, 'pad'), kind: 'need', title: dec.run.dotsDone + ' of ' + dec.run.dotsPlanned + ' dots on this board: finish the ' + IL.plural(left, 'pad') + ' left' };
       }
       const r = IL.ready();
-      if (r.verdict.state === 'ok') return { sub: 'Ready: board ' + boardNumber(S.plan.planId), kind: 'ok', title: 'Ready: ' + (S.plan.boardName || 'board') };
+      if (r.verdict.state === 'ok') return { sub: 'Ready: board ' + boardNumber(), kind: 'ok', title: 'Ready: ' + (S.plan.boardName || 'board') };
       return null;
     },
   });

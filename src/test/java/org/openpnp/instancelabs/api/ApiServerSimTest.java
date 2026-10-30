@@ -607,6 +607,9 @@ public class ApiServerSimTest {
         assertTrue(plan.get("cleanCheck").isJsonNull());
         String planId = plan.get("planId").getAsString();
         assertEquals(planId, ok(get("/api/plan/" + planId)).get("planId").getAsString());
+        // the board on this seat has no paste yet: it will be board 1 of the session
+        JsonObject pasted = plan.getAsJsonObject("pasted");
+        assertTrue(pasted.get("board").isJsonNull() && pasted.get("nextBoard").getAsInt() == 1, pasted.toString());
 
         sim.server.setBStepCount(4321); // the screw's history since the controller's power-up
         sim.server.mark();
@@ -645,6 +648,13 @@ public class ApiServerSimTest {
         JsonObject row = s.getAsJsonObject("dispense").getAsJsonObject("purgeRow");
         assertEquals(8, row.get("usedSpots").getAsInt());
         assertEquals(5, row.get("boardsLeft").getAsInt());
+        // rc1 review: the server keeps the board's paste (a new tab or browser sees it): board 1, a dot on each pad
+        assertEquals(1, progress.get("boardNumber").getAsInt(), progress.toString());
+        assertEquals(1, s.getAsJsonObject("lastRun").get("boardNumber").getAsInt());
+        pasted = ok(get("/api/plan/" + planId)).getAsJsonObject("pasted");
+        assertEquals(1, pasted.get("board").getAsInt(), pasted.toString());
+        assertEquals(6, pasted.get("dots").getAsInt());
+        assertEquals(6, pasted.getAsJsonObject("pads").entrySet().size(), pasted.toString());
 
         // a subset: only the first 2 dots, logged as such
         JsonObject sub = ok(post("/api/run", "{\"planId\":\"" + planId + "\",\"maxDots\":2,\"wait\":true}"));
@@ -652,6 +662,8 @@ public class ApiServerSimTest {
         assertEquals(2, sub.getAsJsonObject("result").get("dotsDone").getAsInt());
         assertEquals(2, sub.getAsJsonObject("result").get("dotsPlanned").getAsInt());
         assertEquals(planId, sub.get("parentPlanId").getAsString());
+        assertEquals(8, ok(get("/api/plan/" + planId)).getAsJsonObject("pasted").get("dots").getAsInt(),
+                "a subset run's dots go on the same board");
         // GET /api/plans: the plans kept, newest first, without the run subsets (a fresh browser restores the latest)
         JsonArray kept = get("/api/plans").array();
         List<String> keptIds = new ArrayList<>();
@@ -668,6 +680,21 @@ public class ApiServerSimTest {
         assertTrue(first.getAsJsonObject("profile").get("name").getAsString().length() > 0, first.toString());
         assertTrue(first.get("profileFingerprint").getAsString().contains("psi="), first.toString());
         assertTrue(first.get("createdAtMs").getAsLong() > 0);
+        // the same seat planned again is the same board, with its paste
+        JsonObject again = ok(post("/api/plan", planBody(board)));
+        assertEquals(8, again.getAsJsonObject("pasted").get("dots").getAsInt(), again.toString());
+        assertEquals(1, again.getAsJsonObject("pasted").get("board").getAsInt());
+        // the operator wiped the board: a run with "wiped" clears its paste first, then counts its own dots
+        JsonObject wiped = ok(post("/api/run", "{\"planId\":\"" + planId + "\",\"maxDots\":2,\"wiped\":true,\"wait\":true}"));
+        assertEquals("OK", wiped.getAsJsonObject("result").get("status").getAsString(), wiped.toString());
+        JsonObject afterWipe = ok(get("/api/plan/" + planId)).getAsJsonObject("pasted");
+        assertEquals(2, afterWipe.get("dots").getAsInt(), afterWipe.toString());
+        assertEquals(1, afterWipe.get("board").getAsInt(), "the same board, wiped");
+        // "Next board": the board is taken off; the next one is board 2
+        assertEquals(2, ok(post("/api/board/next", null)).get("nextBoard").getAsInt());
+        JsonObject next = ok(get("/api/plan/" + planId)).getAsJsonObject("pasted");
+        assertTrue(next.get("board").isJsonNull() && next.get("dots").getAsInt() == 0 && next.get("nextBoard").getAsInt()
+                == 2, next.toString());
 
         // the purge row was wiped: all spots free again
         JsonObject reset = ok(post("/api/purge-row/reset", null));

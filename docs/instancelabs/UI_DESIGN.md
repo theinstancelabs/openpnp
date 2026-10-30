@@ -439,7 +439,13 @@ same board decision as after STOP, without the red: `Finish the 140 pads left` (
 Checks / `#btn-result-rest`) or `Wipe the 20 pads, run all` (`#btn-run-all`); `Test run with fewer dots…` is not offered
 on a board that already has paste. Planning the same seat again (no `Next board` in between) is the same board: its
 number and its dispensed dots carry over. A STOP before the first board dot has nothing to keep or wipe: `No dot
-reached the board` and the one action `Run the board again`.
+reached the board` and the one action `Run the board again`. *As built (rc1 review):* the server keeps each seated
+board's paste and number (`plan.pasted`, `status.run.boardNumber`; `Next board` posts `POST /api/board/next`), so a
+new tab, another browser or a reload sees the same board; a run that lays pads that already have paste (the whole
+board, `Wipe all, run all`, a test run over them) asks `I wiped this board: no paste on its 150 pads now`
+(`#run-tick-wiped`, `This board (board 3) already has paste on 150 pads this run lays: wipe them first, or press
+Cancel and finish the pads left.`) before `Run`, and tells the engine (`{wiped: true}`). The Result step's
+`board 1 ok` names the board that ran, without its tick once `Next board` was pressed.
 
 #### 8.1.8 Recovery (`data-view=recovery`) — `mockup-run-stopped.html`
 

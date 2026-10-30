@@ -545,14 +545,15 @@ const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y
     else skip('(14) screenshots', 'BI_SHOTS=0');
 
     // ---- (16) the dispensed dots belong to their plan ------------------------------------------------------------------
-    // the shown plan's done set (as a board run leaves it) plus one index past its last dot, then another plan of ftp:
-    // the hero draws the first plan's dots as done and nothing on the second (a stale index used to throw in render)
+    // the shown plan's board with paste on every pad (as the server keeps it, plan.pasted) plus one done index past its
+    // last dot, then another plan of ftp at another seat: the hero draws the first plan's dots as done and nothing on the
+    // second (a stale index used to throw in render)
     await toBoardStep(page);
     const dd = await page.evaluate(async ([file, seat]) => {
       const R = IL.run, p0 = IL.S.plan;
       const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
       const n = p0 ? p0.dots.length : 0;
-      R.done = { planId: p0 && p0.planId, idx: [], runIds: [], since: 0 };
+      if (p0) p0.pasted = Object.assign({}, p0.pasted, { pads: Object.fromEntries(p0.dots.map((d) => [d.padId, 99])) });
       R.doneSet = new Set(Array.from({ length: n }, (_, i) => i).concat([n + 1000]));
       IL.render();
       await frame();

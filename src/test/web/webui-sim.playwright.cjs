@@ -1133,6 +1133,39 @@ async function runFirstDots(page, n) {
       check('run after the home and the Z check: OK, homed', rr.run.status === 'OK' && rr.machine.homed, { status: rr.run.status, message: rr.run.message });
       await waitText(page, 'pill-homed', /^Homed$/, 15000).catch(() => {});
 
+      // 9b. The board's paste is the server's (rc1 review: the tab alone kept it): a new browser (no tab storage) sees
+      // the same pads with paste and the same board number, and a run of the whole board on it asks "I wiped this
+      // board" first (Go stays locked until it is ticked; the run would tell the engine)
+      {
+        await page.waitForFunction(() => !IL.S.planPending && IL.S.plan && IL.S.plan.pasted, null, { timeout: 15000 }).catch(() => {});
+        await page.waitForTimeout(1000);
+        const mine = await page.evaluate(() => ({ done: IL.run.doneSet.size, board: IL.S.plan.pasted.board, plan: IL.S.plan.planId,
+          eyebrow: (document.getElementById('chk-eyebrow') || {}).textContent }));
+        const fresh = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+        const tab = await fresh.newPage();
+        tab.on('console', (m) => { if (m.type() === 'error') jsErrors.push('new tab: ' + m.text()); });
+        await tab.goto(BASE + '#run/checks');
+        await tab.waitForFunction((id) => window.IL && IL.S && IL.S.plan && IL.S.plan.planId === id && IL.S.plan.pasted, mine.plan, { timeout: 30000 }).catch(() => {});
+        await tab.waitForTimeout(1500);
+        const theirs = await tab.evaluate(() => ({ done: IL.run.doneSet.size, board: IL.S.plan.pasted.board, eyebrow: (document.getElementById('chk-eyebrow') || {}).textContent,
+          verdict: IL.ready().verdict.text, all: !document.getElementById('run-all-link').hidden }));
+        check('the board\'s paste is the server\'s: a new browser sees the same pasted dots and the same board number', mine.done > 0 && theirs.done === mine.done
+          && theirs.board === mine.board && theirs.eyebrow === mine.eyebrow, { mine, theirs });
+        await tab.screenshot({ path: path.join(OUT, 'new-browser-same-board.png') });
+        await tab.click(theirs.all ? '#run-all-link' : '#btn-run');
+        await tab.waitForSelector('#dlg-run', { timeout: 10000 }).catch(() => {});
+        await tab.evaluate(() => { IL.attest.set('regulator', IL.S.status.dispense.profile.pressurePsi); IL.attest.set('paste-life', true); });
+        for (const t of ['#run-tick-gauge', '#run-tick-paste', '#run-tick-hands']) if (!(await tab.isChecked(t).catch(() => true))) await tab.check(t).catch(() => {});
+        await tab.waitForTimeout(400);
+        const cf = await tab.evaluate(() => { const w = document.getElementById('run-tick-wiped'); const go = document.getElementById('btn-run-go');
+          return { wipe: w ? w.closest('label').textContent : null, go: go ? go.textContent : null, locked: !!go && go.disabled }; });
+        await tab.screenshot({ path: path.join(OUT, 'new-browser-run-all-wiped-tick.png') });
+        check('a whole-board run on the pasted board asks "I wiped this board", Go locked until it is ticked',
+          !!cf.wipe && /^I wiped this board: no paste on its \d+ pads now/.test(cf.wipe) && /already has paste on \d+ pads/.test(cf.wipe) && cf.locked && /Tick 1 more to run/.test(cf.go), cf);
+        await tab.click('#btn-run-cancel').catch(() => {});
+        await fresh.close();
+      }
+
       // 10. Setup › Probe the blank: automatic, beside the purge row, the panel stays open with the result
       await nav(page, 'setup');
       await page.evaluate(() => IL.openView('probe-blank', { keep: true }));

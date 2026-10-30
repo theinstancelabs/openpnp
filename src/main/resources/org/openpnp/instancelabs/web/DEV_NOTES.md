@@ -461,9 +461,14 @@ Never `/dev/ttyACM*`, `/dev/serial/*`, `/dev/video*` or a real-mode OpenPnP.
   waits for new points) and counts in a second tab at once, a board planned 15 mm away does the same; the run of the
   140 pads left is stopped and Records › Finish offers only its own pads (none of the test run's 20); a run confirm
   in a tab that saw no status during a test dot closes; at 1024 px the offline band sits below STOP NOT CONFIRMED.
-- Board identity: a plan made again for the same seat (no "Next board" since) is the same board (`IL.run.alias`), its
-  dispensed dots carry over (`carryBoard`); a part-done board shows the board decision (`partialDecision`). Kept per tab
-  (sessionStorage), like the done-dot map.
+- Board identity: a plan made again for the same seat (no "Next board" since) is the same board, its dispensed dots
+  carry over; a part-done board shows the board decision (`partialDecision`). As built (rc1 review), the server keeps
+  it, so every tab and browser sees the same board: `plan.pasted` (`{board, nextBoard, sinceMs, dots, pads: {padId:
+  dots laid}}` of the plan's seat) and `status.run.boardNumber`; `trackDone` takes each pad's dots laid in path order,
+  with the live dots of this board's run (`runOfThisBoard`); `boardNumber()` is the seat's board, else the next one;
+  `Next board` posts `/api/board/next`; a change elsewhere (`status.dispense.pasteVersion`) reads the plan again. A
+  run that lays pads with paste needs `I wiped this board` (`#run-tick-wiped`) and posts `{wiped: true}`. The old
+  per-tab keys `il.run.done`, `il.run.alias` and `il.run.boardStarts` are gone.
 - Optional API additions of §17 in place: `GET /api/plans` (plan restore in a fresh browser) and `run.pressureOnAtMs`
   (pressure on-time of a run, also after a reload). Not added (fallbacks in use): `run.checkDone/checkPlanned` (camera
   tour progress is estimated, labelled `≈`), `server.simulated` (inferred from the driver connection).

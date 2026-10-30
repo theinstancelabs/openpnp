@@ -111,6 +111,7 @@ final class DispenseEndpoints {
         s.route("POST", "/api/screw/start-angle", this::startAngle);
         s.route("POST", "/api/purge-row/reset", r -> purgeReset());
         s.route("POST", "/api/run", this::run);
+        s.route("POST", "/api/board/next", r -> nextBoard());
         s.route("GET", "/api/runs", r -> ctx.svc().getDb().recentRuns(r.queryInt("limit", 20, 1, 500)));
         s.route("GET", "/api/runs/last", r -> lastRun());
         s.route("GET", "/api/events", r -> ctx.svc().getDb().recentEvents(r.queryInt("limit", 50, 1, 1000)));
@@ -134,7 +135,11 @@ final class DispenseEndpoints {
         Map<String, Object> pressure = ctx.pressure.snapshot();
         pressure.put("engineRunActive", svc != null && svc.isBusy());
         out.put("pressure", pressure);
-        out.put("run", ctx.tracker.snapshot());
+        Map<String, Object> run = ctx.tracker.snapshot();
+        if (run != null) {
+            run.put("boardNumber", ctx.paste.boardOfRun((String) run.get("runId")));
+        }
+        out.put("run", run);
         PadCalibrationJob pcal = ctx.padCalJobs.current();
         out.put("padCalibration", pcal == null || svc == null ? null : pcal.view());
         // an upload holds the import pipeline: every engine endpoint refuses until it has read the file
@@ -177,8 +182,13 @@ final class DispenseEndpoints {
         d.put("refuseFlaggedPads", cfg.refuseFlaggedPads);
         d.put("homeBeforeRun", cfg.homeBeforeRun);
         d.put("newSeatAtMs", cfg.newSeatAtMs);
+        d.put("pasteVersion", ctx.paste.version());
         RunResult last = svc.getLastRun();
-        out.put("lastRun", Views.run(last, false));
+        Map<String, Object> lastView = Views.run(last, false);
+        if (lastView != null) {
+            lastView.put("boardNumber", ctx.paste.boardOfRun(last.runId));
+        }
+        out.put("lastRun", lastView);
         out.put("interlocks", interlockList(svc, cfg));
         return out;
     }
@@ -693,6 +703,7 @@ final class DispenseEndpoints {
         Map<String, Object> m = Views.plan(e, runPreflight(svc, e.plan, nz(e.estimatedPressurisedSeconds)),
                 svc.getConfig().newSeatAtMs);
         m.put("purgeSpotsNeeded", DoseBlocks.purgeSpotsNeeded(e.plan, svc.getConfig()));
+        m.put("pasted", ctx.paste.view(e.source));
         return m;
     }
 
@@ -948,6 +959,9 @@ final class DispenseEndpoints {
         InterlockReport pre = ctx.preflightPlan(svc, p, nz(runEntry.estimatedPressurisedSeconds), home.needed,
                 zCheckFirst);
         ApiContext.refuseUnlessOk(pre, "Run");
+        if (Json.bool(b, "wiped", false)) {
+            ctx.paste.wiped(e.source); // the operator wiped this board: its pads have no paste now
+        }
         ctx.tracker.expect("board");
         Future<RunResult> f = svc.runPlan(p);
         Map<String, Object> accepted = Views.map("kind", "board", "planId", p.planId, "parentPlanId",
@@ -957,6 +971,15 @@ final class DispenseEndpoints {
                         : Views.map("name", zc.reference.name, "x", zc.reference.x, "y", zc.reference.y, "z",
                                 zc.reference.z), "zCheckTouches", zc.touches);
         return ApiContext.awaitIf(Json.bool(b, "wait", false), f, rr -> Views.run(rr, false), accepted);
+    }
+
+    /** "Next board": the boards on the machine are taken off ({@link BoardPaste#nextBoard}): {nextBoard}. */
+    Object nextBoard() throws Exception {
+        DispenseService svc = ctx.svc();
+        if (svc.isBusy()) {
+            throw ApiException.refused("the next board cannot start while a dispense task runs");
+        }
+        return Views.map("nextBoard", ctx.paste.nextBoard());
     }
 
     /**
