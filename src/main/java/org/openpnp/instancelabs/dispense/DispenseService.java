@@ -275,32 +275,46 @@ public final class DispenseService {
         connectionSimulated = SimGuard.isSimulatorIdentity(m115);
     }
 
+    /**
+     * Finds the dispenser nozzle. Each field is written once, the reason before a null nozzle: every config update
+     * resolves again, and a transient null made concurrent readers (the status's interlocks, availability) fail with a
+     * NullPointerException or "unavailable (null)".
+     */
     private void resolveNozzle() {
-        nozzle = null;
-        unavailableReason = null;
         Machine machine = configuration.getMachine();
+        Nozzle found = null;
+        String why = null;
         if (!(machine instanceof ReferenceMachine)) {
-            unavailableReason = "machine is not a ReferenceMachine";
-            return;
+            why = "machine is not a ReferenceMachine";
         }
-        for (Head h : machine.getHeads()) {
-            for (Nozzle n : h.getNozzles()) {
-                if (cfg.nozzle.equals(n.getId())) {
-                    nozzle = n;
-                }
-            }
-        }
-        if (nozzle == null) {
+        else {
             for (Head h : machine.getHeads()) {
                 for (Nozzle n : h.getNozzles()) {
-                    if (cfg.nozzle.equals(n.getName())) {
-                        nozzle = n;
+                    if (cfg.nozzle.equals(n.getId())) {
+                        found = n;
                     }
                 }
             }
+            if (found == null) {
+                for (Head h : machine.getHeads()) {
+                    for (Nozzle n : h.getNozzles()) {
+                        if (cfg.nozzle.equals(n.getName())) {
+                            found = n;
+                        }
+                    }
+                }
+            }
+            if (found == null) {
+                why = "no dispenser nozzle '" + cfg.nozzle + "' in the machine";
+            }
         }
-        if (nozzle == null) {
-            unavailableReason = "no dispenser nozzle '" + cfg.nozzle + "' in the machine";
+        if (found == null) {
+            unavailableReason = why;
+            nozzle = null;
+        }
+        else {
+            nozzle = found;
+            unavailableReason = null;
         }
     }
 
@@ -875,13 +889,15 @@ public final class DispenseService {
         in.cfg = c;
         in.machineEnabled = m != null && m.isEnabled();
         in.machineHomed = m != null && m.isHomed();
-        in.nozzleName = nozzle == null ? cfg.nozzle : nozzle.getName();
+        Nozzle n = nozzle; // read once: a config update resolves it again on another thread
+        in.nozzleName = n == null ? cfg.nozzle : n.getName();
         in.compatibleNozzleTips = new ArrayList<>();
-        if (nozzle != null) {
-            for (NozzleTip t : nozzle.getCompatibleNozzleTips()) {
+        if (n != null) {
+            for (NozzleTip t : n.getCompatibleNozzleTips()) {
                 in.compatibleNozzleTips.add(t.getName());
             }
-            in.loadedNozzleTip = nozzle.getNozzleTip() == null ? null : nozzle.getNozzleTip().getName();
+            NozzleTip loaded = n.getNozzleTip();
+            in.loadedNozzleTip = loaded == null ? null : loaded.getName();
         }
         in.pressureSensor = pressureSensor;
         in.plan = plan;
