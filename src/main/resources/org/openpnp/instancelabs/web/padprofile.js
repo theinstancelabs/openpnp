@@ -818,14 +818,17 @@
   function jobLockText(s) { return jobLock(s) ? 'Locked while the pad calibration runs' : null; }
   // the panel's step names, short (STEP_TITLE)
   const STEP_WORD = { blank: 'blank', coupons: 'coupons', ladder: 'test dots', weigh: 'weigh dots', readings: 'readings', decide: 'deciding', plan: 'plan again' };
-  /** The strip's live label of the job's engine step: ['Pad calibration · test dots 14/48', ' · ≈ 2:50 left']. */
+  /**
+   * The strip's live label of the job's engine step: ['Pad calibration', ' · test dots 14/48 · ≈ 2:50 left'] (the
+   * second part goes when the strip is narrow: "Pad calibration" whole rather than "Pad calibration · t…").
+   */
   function taskParts(run) {
     const j = job(S.status);
     const st = j && j.steps ? j.steps.find((x) => x.state === 'now') : null;
     const word = st ? STEP_WORD[st.key] || st.key : 'running';
     const n = run.dotsPlanned ? ' ' + Math.min(run.dotsDone || 0, run.dotsPlanned) + '/' + run.dotsPlanned : '';
     const left = j && isNum(j.estimatedSecondsLeft) ? ' · ≈ ' + IL.fmtClock(j.estimatedSecondsLeft) + ' left' : '';
-    return ['Pad calibration · ' + word + n, left];
+    return ['Pad calibration', ' · ' + word + n + left];
   }
   /** The strip verdict while the job waits for the operator or works between its engine steps, else null. */
   function verdict(s) {
