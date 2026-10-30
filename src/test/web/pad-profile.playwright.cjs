@@ -366,6 +366,11 @@ async function weighCoupon(page, place) {
     await page.waitForFunction(() => /needs you once/.test((document.getElementById('pcal-note') || {}).textContent || ''), null, { timeout: 20000 });
     const run7 = await page.evaluate(() => !!(IL.S.status.run && IL.S.status.run.running));
     check('(7) the before-start summary says it needs you once; nothing runs yet', !run7, await page.textContent('#pcal-note'));
+    // the purge spots it lays (rc1 review: the row was short right after): in the note and as a row of the steps table
+    const purge7 = await page.evaluate(() => ({ note: document.getElementById('pcal-note').textContent,
+      row: Array.from(document.querySelectorAll('#pcal-plan tr')).map((tr) => tr.textContent).find((t) => /^Purge row/.test(t)) || null }));
+    check('(7) the summary says how many purge spots it uses ("It uses n of the m free purge spots") and the steps list the purge row',
+      /It uses \d+ of the \d+ free purge spots/.test(purge7.note) && /^Purge row\d+ of \d+ free spots \(\d+ left after\)/.test(purge7.row || ''), purge7);
     await page.waitForFunction(() => !document.getElementById('btn-pcal-start').disabled, null, { timeout: 20000 }).catch(() => null);
     const why7 = await page.textContent('#pcal-why');
     check('(7) Start is not locked', !(await page.isDisabled('#btn-pcal-start')), why7);
@@ -427,6 +432,13 @@ async function weighCoupon(page, place) {
     check('(9) the plan made again is shown', await page.evaluate(() => IL.S.plan.planId === IL.S.status.padCalibration.result.newPlanId), j9.result && j9.result.newPlanId);
     const p9 = await primaries(page);
     check('(9) one filled button: Checks', p9.length === 1 && p9[0] === 'btn-pcal-plan', p9);
+    // the purge row after the job, and the camera checks under their own title (they count the coupons' dots too)
+    const r9 = await page.evaluate(() => { const row = IL.S.status.dispense.purgeRow; const pr = document.getElementById('pcal-result-purge');
+      return { left: row.spotsLeft, need: IL.purgeNeed(row), purge: pr ? pr.textContent : null,
+        title: (document.querySelector('#pcal-ladder-box .section-k') || document.querySelector('#pcal-ladder-box') || {}).textContent }; });
+    check('(9) a purge row short for the next board: the result says to wipe and reset it, with "Wiped: reset row"; the camera checks title',
+      (r9.left < r9.need ? new RegExp('^Next: wipe the purge row and reset it before the next board \\(' + r9.left + ' of \\d+ spots left, ' + r9.need + ' needed\\)\\. Wiped: reset row').test(r9.purge || '')
+        : r9.purge === null) && /^Camera checks of the dots/.test(r9.title || ''), r9);
     await shoot(page, 'result', () => toTop(page, '#pt-needs', '#pt-section'), true);
     await closePanels(page);
     await page.evaluate(() => IL.go('#profile/needs'));

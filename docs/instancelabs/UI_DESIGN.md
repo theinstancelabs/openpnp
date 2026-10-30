@@ -663,9 +663,11 @@ lock)`; the cup shots are folded into `Older method: shots into a cup (records o
 - **The pad-cal panel view** (`?panel=pad-cal`; stays open from every workspace while the operator weighs): before
   start `#pcal-note` (the summary: `Checks and touches your two weigh coupons (≈ 1:44). Lays 76 test dots on the
   blank … Then it needs you once: weigh each coupon, wipe it and weigh it again (4 readings). About 0.23 g of paste,
-  ≈ 5:45 before your readings.`), `#pcal-needs` (`You need: two clean weigh coupons on coupon1 and coupon2 (blank PCB,
-  40 × 30 mm, at least 3 g), the balance, a lint-free wipe and isopropyl alcohol.`), `table#pcal-plan` (the steps
-  with their times), `#pcal-groups-list`, `#pcal-fixes` (fix-its for a refusal), `Calibrate · ≈ 5:45`
+  ≈ 5:45 before your readings.` and, from the preview's `purgeSpots`, `It uses 26 of the 31 free purge spots: wipe the
+  purge row and reset it before the next board.`), `#pcal-needs` (`You need: two clean weigh coupons on coupon1 and
+  coupon2 (blank PCB, 40 × 30 mm, at least 3 g), the balance, a lint-free wipe and isopropyl alcohol.`),
+  `table#pcal-plan` (the steps with their times, and `Purge row · 26 of 31 free spots (5 left after)`),
+  `#pcal-groups-list`, `#pcal-fixes` (fix-its for a refusal), `Calibrate · ≈ 5:45`
   (`#btn-pcal-start`, two presses: the only start); running `ol.phases#pcal-phases` (Home, Z check, Probe the blank,
   Find and touch the coupons, Test dots on the blank, Weigh dots on the coupons, Your readings, Decide, Plan again), `#pcal-live`
   (`0 of 6 dots`), `table#pcal-ladder`, `STOP stops it at once (F9).`; the readings `div.ri.ri--need#pcal-ask`
@@ -673,7 +675,10 @@ lock)`; the cup shots are folded into `Older method: shots into a cup (records o
   `#pcal-mg-k` `= 78 mg of paste (0.574 mg per dot)`), `Save the readings` `#btn-pcal-readings`, `Skip weighing (the
   types stay provisional: boards still refuse these pads)` `#btn-pcal-skip`, `Cancel the calibration`
   `#btn-pcal-cancel`; a reload or a second browser brings the prompt back; the result `div.ri#pcal-result` (the first
-  sentence, e.g. `Characterized 20:47: …; planned again.`, the control's drift), `#pcal-groups` (per group its numbers
+  sentence, e.g. `Characterized 20:47: …; planned again.`, the control's drift, and when a board would be short of
+  purge spots `#pcal-result-purge` `Next: wipe the purge row and reset it before the next board (5 of 31 spots left,
+  13 needed).` with `Wiped: reset row`), `table#pcal-ladder` under `Camera checks of the dots` (every dot the top
+  camera looked at per dot size: the blank's test dots and the coupons' weigh dots), `#pcal-groups` (per group its numbers
   and checks), `#pcal-crops` (camera crops, 12 px under the card), `#pcal-pred` (`Predicted and measured`, P1–P8),
   and `Calibrate again…` `#btn-pcal-again`, `Type the readings` `#btn-pcal-weigh-now` (a stopped job's coupons),
   `Finish the calibration` `#btn-pcal-finish`, `I’ll do it by hand` `#btn-pcal-manual`, `Checks ›` `#btn-pcal-plan`
@@ -998,7 +1003,7 @@ line):
 | Reason badges | `no pad type` · `not calibrated yet` · `cannot be dispensed with the 22G tip` · the group's `short` for the others |
 | Before start | the engine's sentence (`WEB_API.md` §3.5) and `You need: two clean weigh coupons on coupon1 and coupon2 (blank PCB, 40 × 30 mm, at least 3 g), the balance, a lint-free wipe and isopropyl alcohol.`; button `Calibrate · ≈ 5:45`; started `Pad calibration started: STOP stops it at once (F9).` |
 | Readings prompt | `The dots are laid and the head is parked over the purge row. For each coupon: put it on the balance and type the reading; wipe the paste off with a lint-free wipe and isopropyl alcohol, let it dry, put it back on the balance and type the second reading. Coupon 1 has 136 quarter-turn dots (about 0.072 g); … Waiting for you since 21:25.`; echo `= 78 mg of paste (0.574 mg per dot)`, else `Type both readings in grams.`; `Save the readings` · `Skip weighing (the types stay provisional: boards still refuse these pads)` · `Cancel the calibration` |
-| Result, first sentence | `Characterized 21:50: SW_SPST_3.9x2.9mm · 1.83 × 0.86 mm gets 2 half-turn dots per pad, about 2.29 mg per pad (0 % more than the 2.29 mg target); …; planned again.` · `Not characterized 21:58: … stays provisional: the two start angles of the half-turn dots differ 19 % in area (at most 13 % allowed); …` · `Measured 22:02: 62 half-turn dots on the blank: the dots landed 0.20 mm off on average (at most 0.15 mm allowed): check the needle offset.` · `Failed 22:03: Coupon 1 is not at its place: …` · `Stopped 13:06 during weigh: the blank results were kept; the coupons still need weighing until 21:13.`; the control's drift `The validated half turn now gives 1.15 mg, 9 % more than the 1.06 mg weighed on 2026-10-27.` |
+| Result, first sentence | `Characterized 21:50: SW_SPST_3.9x2.9mm · 1.83 × 0.86 mm gets 2 half-turn dots per pad, about 2.29 mg per pad (0 % more than the 2.29 mg target); …; planned again.` · `Not characterized 21:58: … stays provisional: the two start angles of the half-turn dots differ 19 % in area (at most 13 % allowed); …` · `Measured 22:02: 62 half-turn dots checked by the camera: the dots landed 0.20 mm off on average (at most 0.15 mm allowed): check the needle offset.` · `Failed 22:03: Coupon 1 is not at its place: …` · `Stopped 13:06 during weigh: the blank results were kept; the coupons still need weighing until 21:13.`; the control's drift `The validated half turn now gives 1.15 mg, 9 % more than the 1.06 mg weighed on 2026-10-27.` |
 | Decider check lines (shown as the engine words them) | `Amount 2.37 mg per pad (target 2.29 mg per pad, -25 % to +10 %)`, `overhang 0.12, dot gap 2.83, copper gap 2.99 mm (limits overhang 0.20, gaps 0.30 / 0.15 mm)`: the engine still writes a hyphen for the minus and a single mm for the list (open UI need: `−25 %`, a unit on every number) |
 | Calibrate › Pad calibration | `Lower-left corner and size. Default: 40 × 20 mm at the blank place, off the purge row.` · `The calibration area is free again: 14.0 mm left.` · `New paste noted: weighings and camera results from before stop counting.` · `Wipe the area with a lint-free wipe and isopropyl alcohol first.` |
 

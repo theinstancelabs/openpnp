@@ -940,13 +940,27 @@
   }
   const STEP_TITLE = { blank: 'Probe the blank', coupons: 'Find and touch the coupons', ladder: 'Test dots on the blank', weigh: 'Weigh dots on the coupons',
     readings: 'Your readings', decide: 'Decide', plan: 'Plan again', home: 'Home', zcheck: 'Z check' };
+  /**
+   * The purge spots the job lays (preview purgeSpots {need, left}; rc1 review: the start card did not say, and the board
+   * was short of spots right after): "It uses 26 of the 31 free purge spots: wipe the purge row and reset it before the
+   * next board." Empty when it uses none.
+   */
+  function purgeWords(pv, s) {
+    const ps = pv && pv.purgeSpots;
+    if (!ps || !isNum(ps.need) || ps.need <= 0) return '';
+    const row = (s && s.dispense && s.dispense.purgeRow) || {};
+    const after = ps.left - ps.need;
+    return 'It uses ' + ps.need + ' of the ' + IL.plural(ps.left, 'free purge spot') + (after >= 0 && after < IL.purgeNeed(row)
+      ? ': wipe the purge row and reset it before the next board.' : '.');
+  }
   function renderBefore(s) {
     const e = estimate(C.req);
     const pv = e && e.s;
-    IL.setText($('pcal-note'), pv ? IL.nb(pv.sentence) : e && e.error ? 'Could not read the summary: ' + e.error : 'Reading the summary…');
+    const pw = purgeWords(pv, s);
+    IL.setText($('pcal-note'), pv ? IL.nb(pv.sentence + (pw ? ' ' + pw : '')) : e && e.error ? 'Could not read the summary: ' + e.error : 'Reading the summary…');
     IL.setText($('pcal-needs'), pv && pv.needsText ? IL.nb(pv.needsText) : '');
     IL.show($('pcal-needs'), !!(pv && pv.needsText));
-    IL.keyed($('pcal-plan').tBodies[0], JSON.stringify(pv ? [pv.steps, pv.home, pv.homes, pv.zCheck] : null), () => {
+    IL.keyed($('pcal-plan').tBodies[0], JSON.stringify(pv ? [pv.steps, pv.home, pv.homes, pv.zCheck, pv.purgeSpots] : null), () => {
       if (!pv) return null;
       const rows = [];
       // under the "always home first" setting it homes before every engine step (pv.homes of them)
@@ -956,6 +970,9 @@
       }
       if (pv.zCheck && pv.zCheck.needed) rows.push(['Z check', 'one N1 touch', pv.zCheck.estimateS]);
       for (const x of pv.steps) rows.push([STEP_TITLE[x.key] || x.key, x.state === 'skipped' ? x.text || 'skipped' : stepDetail(pv, x.key), x.state === 'skipped' ? null : x.estimatedSeconds, x.key]);
+      // the purge row it uses (a phase dot and flush dots before every dose, 8 to start): in the time of the steps above
+      const ps = pv.purgeSpots;
+      if (ps && isNum(ps.need) && ps.need > 0) rows.push(['Purge row', ps.need + ' of ' + IL.plural(ps.left, 'free spot') + ' (' + (ps.left - ps.need) + ' left after)', 0, 'purge']);
       // the time column: the machine's estimate, "you" for the readings, nothing for a step that takes no time
       const when = (sec, k) => (k === 'readings' && sec !== null ? 'you' : isNum(sec) && sec > 0 ? '≈ ' + IL.fmtClock(sec) : sec === 0 ? '' : '—');
       return rows.map(([t, d, sec, k]) => el('tr', {}, el('td', {}, el('div', { class: 'pcal__st', text: t }), d ? el('div', { class: 'pcal__sd', text: d }) : null),
@@ -1056,7 +1073,8 @@
       el('ol', { class: 'phases', id: 'pcal-phases' }),
       el('div', { class: 'pcal-live', id: 'pcal-live', role: 'status' }),
       el('div', { id: 'pcal-pending', hidden: true }),
-      el('div', { id: 'pcal-ladder-box', hidden: true }, IL.sectionK('Test dots on the blank'),
+      el('div', { id: 'pcal-ladder-box', hidden: true }, IL.sectionK('Camera checks of the dots'),
+        el('p', { class: 'pcal__sd', text: 'Every dot the top camera looked at, per dot size: the test dots on the blank and the weigh dots on the coupons.' }),
         el('div', { class: 'pcal__tblwrap' }, el('table', { class: 'tbl pcal__ladder', id: 'pcal-ladder' },
           el('thead', {}, el('tr', {}, [['Turn'], ['Found', 'dots found of dots laid'], ['Threads', 'paste threads to the next dot, of the moves'], ['Spread', 'residual spread of the dot area'],
             ['Angle', 'dot area between the screw angles, and its limit'], ['Size', 'mean and 95th percentile diameter (mm)'], ['']].map(([h, t]) => el('th', { scope: 'col', title: t || null, text: h })))), el('tbody'))))));
@@ -1225,7 +1243,7 @@
   }
   /** A decision check in words when the engine gave none (§7.6: key, predicted, measured, limit). */
   const CHECK_WORD = {
-    optical: (k) => 'Camera checks on the blank' + (k.measured ? ': ' + k.measured : ''),
+    optical: (k) => 'Camera checks (the blank and the coupons)' + (k.measured ? ': ' + k.measured : ''),
     mass: (k) => 'Weighed ' + (k.measured || '—') + (k.predicted ? ' (predicted ' + k.predicted + ')' : '') + (k.limit ? '; ' + k.limit : ''),
     amount: (k) => 'Amount ' + (k.measured || '—') + (k.predicted ? ' (target ' + k.predicted + ', ' + (k.limit || '') + ')' : ''),
     r6: (k) => (k.measured || '') + (k.limit ? ' (' + k.limit + ')' : ''),
@@ -1247,11 +1265,16 @@
     const box = $('pcal-result');
     IL.setClass(box, 'ri ri--' + kind);
     IL.setAttr(box, 'data-outcome', res.outcome);
-    IL.keyed(box, JSON.stringify([res.sentence, res.control && res.control.drift, res.planError, j.warnings]), () => [IL.glyph(kind),
+    // the purge row after the job: a board needs its spots (the plan made again counts them, IL.purgeNeed)
+    const row = (s && s.dispense && s.dispense.purgeRow) || {};
+    const short = row.defined && row.spotsLeft < IL.purgeNeed(row);
+    IL.keyed(box, JSON.stringify([res.sentence, res.control && res.control.drift, res.planError, j.warnings, short, row.spotsLeft]), () => [IL.glyph(kind),
       el('div', {}, el('div', { class: 'ri__t', id: 'pcal-result-t' }, headSplit(res.sentence)),
         res.control && res.control.drift ? el('div', { class: 'ri__d', text: IL.cap(res.control.drift) + '.' }) : null,
         res.planError ? el('div', { class: 'ri__d', text: 'Not planned again: ' + res.planError }) : null,
-        Array.from(new Set(j.warnings || [])).slice(0, 3).map((w) => el('div', { class: 'ri__d', text: IL.cap(w) + '.' })))]);
+        Array.from(new Set(j.warnings || [])).slice(0, 3).map((w) => el('div', { class: 'ri__d', text: IL.cap(w) + '.' })),
+        short ? el('div', { class: 'ri__d', id: 'pcal-result-purge' }, 'Next: wipe the purge row and reset it before the next board (' + row.spotsLeft + ' of '
+          + IL.plural(row.spots, 'spot') + ' left, ' + IL.purgeNeed(row) + ' needed). ', IL.fixButton({ fix: 'purge-reset', label: 'Wiped: reset row', icon: 'i-wipe' }, { cls: 'btn--sm' })) : null)]);
     IL.keyed($('pcal-groups'), JSON.stringify(res.groups), () => (res.groups || []).map((g) => {
       const ok = g.outcome === 'characterized';
       const checks = g.checks || [];

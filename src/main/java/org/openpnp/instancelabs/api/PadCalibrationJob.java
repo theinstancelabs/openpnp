@@ -2410,7 +2410,8 @@ final class PadCalibrationJob {
         if (e == null || !e.opticalFresh) {
             return "Measured " + clock + ": no " + DoseModel.turnNoun(s) + " dots were measured.";
         }
-        return "Measured " + clock + ": " + e.n + " " + DoseModel.turnName(s) + " dots on the blank: "
+        // the fresh camera checks of the dose: the blank's test dots and the coupons' weigh dots (rc1 review)
+        return "Measured " + clock + ": " + e.n + " " + DoseModel.turnName(s) + " dots checked by the camera: "
                 + (e.opticalPass ? "every camera check passed." : e.failures.get(0) + ".");
     }
 
