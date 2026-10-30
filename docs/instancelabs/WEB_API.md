@@ -59,12 +59,15 @@ it runs (authoritative). Runs return `202 {"started": true}` immediately; add `"
 ends (max 10 min) and get `"result"` (RunResult view).
 
 Every engine endpoint (runs, the clean-pad check, prime, the test dot, the calibrations' shots, dot ladder and
-touch-off, Pressure on, Register board, the probes, Check Z, Home, the pad calibration's start and its preview, and the
-profile writes of §3.4) answers 409 `refused` at once while: another dispense task runs or a pad calibration is between
-its engine steps; a board upload holds the import pipeline (`a board file is being read (an upload takes up to about
-20 s): wait for it to finish`; `status.boardImport.reading`); the pressure is held. Those that move also wait for
-OpenPnP's own work (`OpenPnP is busy (homing or moving): wait for it to finish`): a task queued behind one of
-OpenPnP's own that fails would be dropped. Inside the task, on OpenPnP's machine thread, a STOP since it was queued,
+touch-off, Pressure on, Register board, the probes, Check Z, Home, the pad calibration's start, and the profile writes
+of §3.4) answers 409 `refused` at once while another dispense task runs or a pad calibration is between its engine
+steps, and while a board upload holds the import pipeline (`a board file is being read (an upload takes up to about
+20 s): wait for it to finish`; `status.boardImport.reading`). Those that pressurise or move (not the profile writes)
+also refuse while the pressure is held. Those that move also wait for OpenPnP's own work (`OpenPnP is busy (homing or
+moving): wait for it to finish`; Home included): a task queued behind one of OpenPnP's own that fails would be dropped
+(one dropped anyway no longer keeps the engine busy: it ends at the next STOP or engine request). The pad
+calibration's preview (`GET /api/pad-calibrations/preview`) always answers 200 and says what Start would refuse in its
+`refusal` and `refusalCode` fields (§3.5). Inside the task, on OpenPnP's machine thread, a STOP since it was queued,
 a stopped machine and a pressure hold switched on in between refuse it again: the run ends REFUSED (`the pressure hold
 is on: Pressure off first`).
 
@@ -73,6 +76,7 @@ is on: Pressure off first`).
 | Method + path | Body | Does |
 |---|---|---|
 | `GET /api/status` | | Everything the UI polls (every 0.7 s): `server`, `machine` (enabled = connected, homed, busy, drivers, nozzle/camera positions, axes incl. B), `dispense` (see below), `pressure` (hold state, auto-off time, keepalive), `run` (live progress: label, phase, dots done/planned, done dot indexes, live DPH, `pressureOnAtMs` = when the run's pressure session started, i.e. its first pressurised phase `dispensing` / `shots` / `dispensing calibration dots`, null before; `boardNumber` = the number of the board a board run's dots went on, null before its first dot), `lastRun` (run view, incl. `dphMotion`, `dphOverall`, `boardNumber`), `interlocks` (MACHINE, CONFIG, I1–I11 with state ok/blocked/warning/off/info and plain text) |
+| `GET /api/machine` | | The `machine` block of `GET /api/status` alone (enabled, homed, busy, home, zCheck, drivers, positions, axes). |
 | `POST /api/stop` | | **Always allowed.** Engine `abort()` (before its next line it sends the bench F9 Stop sequence `M410, M107 P3, M107 P2, M107 P1, M107 P0, M18 B`: quick stop, dispenser valve and pump off, pick valve and pump off, screw driver off), vents a pressure hold, then OpenPnP's Stop path (`machine.setEnabled(false)`: emergency thread if the machine thread is busy, as OpenPnP's own Stop button). Unless the driver's DISABLE_COMMAND contains that sequence, STOP first gives the engine up to 1 s to send its own lines. Answers within 1.5 s, waits included (the web UI says STOP NOT CONFIRMED after 2 s without an answer): `{stopped, machineEnabled, actions}`. A disable queued behind a dwell (valve settle, up to 3 s) goes on after the answer; `machineEnabled` is then still `true`, an action says so, and `GET /api/status` shows the machine off. |
 | `POST /api/machine/enable` | | OpenPnP Start (connects the driver). |
 | `POST /api/machine/home` | `{wait?}` | OpenPnP home through the engine (`homeSafely`): when a STOP left N1 low, N1 is first raised Z-only to the travel Z (31.5); a STOP during the home stops the head for good (the drivers are disconnected). The engine times the home for its estimate. Refused while the engine runs, the pressure is held, OpenPnP is busy (`OpenPnP is busy (homing or moving): wait for it to finish`), or the machine is not started. 202 `{started, homing}`; with `wait`: `{homed, n1RaisedFromZ}` (409 `homing failed: …`, e.g. `homing failed: the machine is not started: press Start first` when the machine was stopped before the home task started; 409 `the home did not start or did not end within 5 min: nothing homed; press Home again` when it waited 5 min, e.g. dropped behind one of OpenPnP's own tasks that failed). The home's machine task returns its failure instead of throwing it, so no engine task queued behind it is dropped; a home a STOP or a failure ended leaves no start time behind (the next clean home is `homed`). |
@@ -174,7 +178,7 @@ vented, and the next home raises it first (`machine.home.n1Low`).
 | `GET /api/plan/{planId}/registration-targets` | | What Register board would do now: `{fiducials: [{name, bx, by, x, y, searchRadiusMm}], probes: [{n, bx, by, x, y, alternates: [{bx, by, x, y}]}], home, fiducialCount, frame: {anchorZ, anchorAtMs, anchorX, anchorY, ok, message}, window: {nominalZ, refZ, startZ, floorZ}, error, estimatedSeconds: {home, fiducials, sameSeat, probe, total}}`. `window` is absent when `frame.ok` is false. The plan view carries the same block as `registrationTargets`, computed when the plan was made. Besides the needle-frame checks, `frame.message` refuses a board top so far under the needle frame that the probe's floor (1.5 mm under the higher of the two) lies at or above it (planning accepts up to 2.0 mm): `PROBE: the board top Z 3.500 lies 2.000 mm under the needle-frame surface 5.500, and the probe goes at most 1.5 mm under the higher of the two (down to Z 4.000): it cannot reach that height. Set the board top Z to roughly the N1 contact height, or record the needle frame again; if both are right, probe by hand` (also the 409 of `POST …/register`; the web UI offers the Board step, the Needle Z frame and Do it by hand). |
 | `POST /api/surfaces/{name}/probe` | `{wait?, targets?: [[x, y], …] (3 to 20, N1 tip, machine mm), z?}` | The automatic N1 probe of a needle-frame surface (the blank): home if needed, look at each spot, touch it, fit the plane, save it. Without `targets` they lie 2 mm either side of the purge row; `z` (else the place's Z) is the nominal N1 contact height. The board surface is refused (`PROBE: the 'board' surface is probed by Register board (Run › Register)`), and so is a surface with neither a place nor `z`. 202 `{kind: "blank probe", surface, targets: [{n, x, y, alternates: [{x, y}]}], window, home, estimatedSeconds}`; with `wait`, `result` = `{ok, status, message, runId, stoppedStage, home, surfaceName, window, points, plane: {a, b, c, maxResidualMm, slopeMmPerMm, minZ, maxZ, coversSpots, spots}, saved, warnings, surface}`. |
 | `GET /api/surfaces/{name}/probe-targets?z=` | | `{targets, window, covers: {spots, spotsCovered, places}, home, estimatedSeconds, error}`: the targets, the probe window and how many purge spots their area covers. |
-| `POST /api/machine/z-check` | `{wait?}` | One N1 touch at a point measured before the last home (the tied board surface, the blank, the needle-frame X/Y), compared with its stored Z (tolerance 0.03 mm). 202 `{kind: "z check", needed, reference: {name, x, y, z} \| null, estimatedSeconds}`; with `wait`, `result` is the run view with `zCheck`. With no point left to touch the task ends REFUSED. A check that fails ends REFUSED with `I4: Z moved 0.80 mm at the home of 14:02: N1 touched the blank at X …, Y … at Z …, where it touched … at 13:40. The needle frame, the touch-off and the surfaces are off by this (the needle by about twice). Record the needle frame again with both tips (Setup › Needle Z frame), probe the blank, take the places' Z again with N1 (Setup › Places), touch off and register the board again.`; every task whose Z data predate the home is refused with that text until they are measured again, in that order, under the same home (`machine.zCheck.stale` and `machine.zCheck.places` drop each; the web UI's Z check blocker offers the next step). |
+| `POST /api/machine/z-check` | `{wait?}` | One N1 touch per Z frame among the stale data (a frame is the home a datum was measured under: usually one touch, two when, e.g., the board was probed under a later home than the needle frame), each at a point measured before the last home (the tied board surface, the blank, the needle-frame X/Y), compared with its stored Z (tolerance 0.03 mm); a point with paste on it is skipped for the next stored one. 202 `{kind: "z check", needed, reference: {name, x, y, z} \| null, touches, estimatedSeconds}` (`estimatedSeconds` = touches × 17 s); with `wait`, `result` is the run view with `zCheck`. With no point left to touch the task ends REFUSED. A check that fails ends REFUSED with `I4: Z moved 0.80 mm at the home of 14:02: N1 touched the blank at X …, Y … at Z …, where it touched … at 13:40. The needle frame, the touch-off and the surfaces are off by this (the needle by about twice). Record the needle frame again with both tips (Setup › Needle Z frame), probe the blank, take the places' Z again with N1 (Setup › Places), touch off and register the board again.`; every task whose Z data predate the home is refused with that text until they are measured again, in that order, under the same home (`machine.zCheck.stale` and `machine.zCheck.places` drop each; the web UI's Z check blocker offers the next step). |
 | `POST /api/board/next` | | "Next board": the boards on the machine are taken off: the server forgets every seat's paste, and the next board dot starts the next board number. `{nextBoard}`. 409 while a task runs. |
 | `POST /api/board/new-seat` | `{newSeat: true \| false}` | The engine's new-seat flag: the next registration of any board is a new seat (Next board, "Yes: new seat"). `{newSeatAtMs}` (null when cleared). 400 when `newSeat` is not a boolean; 409 while a task runs. Register board clears it when it saves a probed surface. |
 
@@ -390,8 +394,8 @@ Vanilla HTML/CSS/JS in `src/main/resources/org/openpnp/instancelabs/web/` (no bu
   views), `boardview.js` (the to-scale board SVG), `boardart.js` (the board drawing as SVG), `pathpreview.js` (the
   path preview), `padinspect.js` (the pad inspector) and `board.css`, one module per workspace: `run.js` + `run.css`,
   `setup.js` + `setup.css`, `profile.js` + `profile.css` (also used by `calibrate.js` and `records.js`), and `app.js`
-  (boot). On `il/bi-web-flow`: `boardflow.js` (the drawing's glue to Run and Records) and `boardimport.js` +
-  `boardimport.css` (the upload dialog).
+  (boot), `boardflow.js` (the drawing's glue to Run and Records), `boardimport.js` + `boardimport.css` (the upload
+  dialog) and `padprofile.js` + `padprofile.css` (missing paste profiles and the pad calibration).
 - **Run**: the per-board loop on one screen: the board drawn to scale (pads, dots in path order, done dots, dirty pads,
   probe targets), plan summary with time and DPH (dots only / overall / bench), and the steps Board → Probe → Checks →
   Run → Result in the panel: board and position, probing this seat (`PUT /api/surfaces/board` with the planId, then plan
@@ -424,7 +428,7 @@ Added on `il/bench-sync-autoreg` and its web branches (`UI_DESIGN.md` §8.1.2–
 - **Board drawing** (merged): the board's copper, mask, silkscreen and holes under the dots (Full, Quiet, Off), the
   path preview (play, scrub, speeds 1×, 4×, 16× on the plan's clock), the pad inspector (a pad or part click: its
   pads, dots, pad type and the rule that chose it, flags), the Records map on the drawing.
-- **KiCad upload** (`il/bi-web-flow`): `Upload KiCad board…` in the Board step opens the dialog (choose → reading →
+- **KiCad upload**: `Upload KiCad board…` in the Board step opens the dialog (choose → reading →
   preview → saving → saved), board thumbnails, "Camera is on FID1" (the origin from the top camera on the first
   fiducial), the chosen board's drawing at its seat before planning.
 - **Missing paste profiles** (pc-web, `padprofile.js` + `padprofile.css`, `PROFILE_CALIBRATION_DESIGN.md` §13;
@@ -482,7 +486,7 @@ Jargon is explained in tooltips (`title`/`abbr`).
   It drives the element ids of `UI_DESIGN.md` §16 (two-press buttons, the in-page run confirm, Recovery after STOP);
   on `il/ar-webui` also Register board, the blank probe, home at run and Check Z, and on `il/rc1` the final round's
   locks, the refused clean-pad check, the dose rule, the Z-moved remedy in the SIM and the probe-window refusal (205
-  checks in all), and on `il/bi-web-flow` `board-import.playwright.cjs` runs after it in the same session (57 checks:
+  checks in all), and `board-import.playwright.cjs` runs after it in the same session (57 checks:
   upload, the off-board warning, save, replace, attach, Camera is on FID1, the drawing under the plan, the inspector,
   the preview, the Records map, 1280 and 1024 px, dark theme).
   `boardview.playwright.cjs` (`run-boardview-test.sh`, 67 checks) checks the drawing on the session's import of
@@ -537,7 +541,9 @@ Jargon is explained in tooltips (`title`/`abbr`).
 - Paste working life (I8) is not tracked by the engine; shown as "off".
 - Board import: KiCad 5 is read on a best-effort basis (6 to 10 fully); no Gerber; bottom-side parts are skipped; a job
   open in OpenPnP keeps its old copy of a replaced board until it is reopened; uploads are refused while a task runs.
-  Footprints outside the board outline are imported without a warning (review 1).
+  A footprint outside the board outline is drawn only (art only, why `outside the board`: no paste) with one
+  `OFF_BOARD` warning (§3.3); the check uses the outline's box, so a part in a notch of a non-rectangular board is not
+  flagged.
 - Registrations are not written back to a job board in OpenPnP. The home estimate is learned per OpenPnP session
   (25 s until the first home). The fiducial search radius is checked against the 9-frame cap at the default camera
   size when settings are saved, at the real camera's size only inside the task.
