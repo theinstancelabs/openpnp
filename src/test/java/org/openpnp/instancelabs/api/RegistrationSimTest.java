@@ -645,6 +645,24 @@ public class RegistrationSimTest {
     }
 
     /**
+     * rc1 review (tests): Register board refuses a contact outside the board top Z band itself (only the run's I4 band
+     * check was tested): the board planned 1.30 mm under where N1 touches it ends REFUSED with the engine's text, and no
+     * board surface is saved.
+     */
+    @Test
+    public void registerRefusesAContactOutsideTheBoardTopZBand() throws Exception {
+        double low = NZ - 1.30;
+        String p0 = ok(post("/api/plan", planBody("none").replace("\"z\":" + NZ, "\"z\":" + low))).get("planId")
+                .getAsString();
+        JsonObject r = register(p0, "{\"wait\":true}");
+        assertEquals("REFUSED", r.get("status").getAsString(), r.toString());
+        String m = r.get("message").getAsString();
+        assertTrue(m.startsWith("I4: N1 touched at Z ") && m.contains(String.format(Locale.ROOT, "mm above the board top "
+                + "Z %.3f (tolerance 1.00): the board top Z or the surface is off", low)), m);
+        assertFalse(ok(get("/api/surfaces")).getAsJsonObject("surfaces").has("board"), "no board surface saved");
+    }
+
+    /**
      * rc1 review (ui-ux): a STOP during a board's dots leaves the needle low, not N1. On the shared Z axis N1 then sits
      * above its safe zone (N1 near 60, the needle near 3 over the pad), and the status says which tool is low, so the
      * recovery names the needle and never calls a high N1 "low".
@@ -875,11 +893,30 @@ public class RegistrationSimTest {
         assertTrue(prime.body.contains("measured before the home at"), prime.toString());
         JsonObject zc = ok(get("/api/status")).getAsJsonObject("machine").getAsJsonObject("zCheck");
         assertTrue(zc.get("needed").getAsBoolean(), zc.toString());
+        // rc1 review (AR §2.4 step 1): paste on every stored point (purge dots beside the row, the blank slid): the check
+        // touches none of them and refuses with what to do; paste on the first only: it touches the next one
+        JsonArray stored = blank.getAsJsonArray("points");
+        for (JsonElement e : stored) {
+            scene.blankDots.add(new double[] {e.getAsJsonObject().get("x").getAsDouble(), e.getAsJsonObject().get("y")
+                    .getAsDouble()});
+        }
+        sim.server.mark();
+        JsonObject dirty = ok(post("/api/machine/z-check", "{\"wait\":true}")).getAsJsonObject("result");
+        assertEquals("REFUSED", dirty.get("status").getAsString(), dirty.toString());
+        assertTrue(dirty.get("message").getAsString().contains("but something lies on every stored point (paste, a part "
+                + "or print seen): wipe one of them, or record the needle frame again"), dirty.toString());
+        assertFalse(commands(sim.server.sinceMark()).contains(ControllerCommands.LEFT_VALVE_ON), "N1 touched no paste");
+        scene.blankDots.subList(1, scene.blankDots.size()).clear();
         JsonObject check = ok(post("/api/machine/z-check", "{\"wait\":true}"));
         assertTrue(check.get("needed").getAsBoolean());
         JsonObject res = check.getAsJsonObject("result");
         assertEquals("OK", res.get("status").getAsString(), res.toString());
         assertTrue(res.getAsJsonObject("zCheck").get("pass").getAsBoolean());
+        JsonObject second = stored.get(1).getAsJsonObject();
+        assertEquals(second.get("x").getAsDouble(), res.getAsJsonObject("zCheck").get("x").getAsDouble(), 1e-9,
+                "the next stored point: " + res);
+        assertTrue(res.get("warnings").toString().contains("(the next stored point is used)"), res.toString());
+        scene.blankDots.clear();
         assertEquals(200, post("/api/prime", "{\"wait\":true}").status);
         assertEquals("Z data were measured after the last home: nothing to check",
                 ok(post("/api/machine/z-check", "{\"wait\":true}")).getAsJsonObject("result").get("message")
