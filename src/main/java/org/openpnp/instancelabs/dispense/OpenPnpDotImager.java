@@ -6,6 +6,7 @@ import org.openpnp.instancelabs.vision.CameraCapture;
 import org.openpnp.instancelabs.vision.Dot;
 import org.openpnp.instancelabs.vision.DotInspector;
 import org.openpnp.instancelabs.vision.DotInspectorSettings;
+import org.openpnp.instancelabs.vision.SpotDot;
 import org.openpnp.model.Length;
 import org.openpnp.model.LengthUnit;
 import org.openpnp.model.Location;
@@ -62,6 +63,14 @@ public class OpenPnpDotImager implements DotImager {
         all.minCircularity = 0;
         all.maxDiameterMm = Math.max(all.maxDiameterMm, INSPECT_ALL_MAX_DIAMETER_MM);
         return new DotInspector(all).inspect(before.image, after.image, after.mmPerPxX, after.mmPerPxY);
+    }
+
+    /** The dot at each known spot, strings cut off ({@link DotInspector#inspectSpots}). */
+    @Override
+    public List<SpotDot> inspectSpots(Frame before, Frame after, List<double[]> spotsMm, double cutMm,
+            double radiusMm) throws Exception {
+        return new DotInspector(settings).inspectSpots(before.image, after.image, after.mmPerPxX, after.mmPerPxY,
+                spotsMm, cutMm, radiusMm);
     }
 
     /** The camera's frame in mm (its size in pixels times its units per pixel), or null when it cannot say. */

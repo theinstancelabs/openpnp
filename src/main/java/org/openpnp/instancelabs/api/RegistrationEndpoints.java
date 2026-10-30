@@ -69,7 +69,8 @@ final class RegistrationEndpoints {
     /**
      * POST /api/plan/{planId}/register {"wait"?, "probe"?: "auto" | "always" | "never"}: home if needed,
      * the fiducials, the probe, plan again. Obvious misconfigurations are refused (409) before anything
-     * moves.
+     * moves. A board with fewer fiducials than Register board needs is refused; one without any, with "probe":
+     * "always" on a plan without a registration, is probed only (F10), where the plan puts it.
      */
     Object registerBoard(ApiServer.Request r) throws Exception {
         JsonObject b = r.json();
@@ -90,8 +91,10 @@ final class RegistrationEndpoints {
         DispenseConfig c = svc.getConfig();
         BoardFeatures f = BoardFeatures.of(nominal.getBoard(), svc.padTypeResolver());
         String few = DispenseService.fewFiducials(f, c.fiducialCheck.minFiducials);
-        if (few != null) {
-            throw ApiException.refused(few);
+        boolean probeOnly = probeOnlyBoard(f, few, e) && mode == RegisterRequest.ProbeMode.ALWAYS;
+        if (few != null && !probeOnly) {
+            throw ApiException.refused(few + (probeOnlyBoard(f, few, e) ? " Or probe it only, where it is planned: "
+                    + "Register with probe \"always\"." : ""));
         }
         if (!svc.hasTopCamera()) {
             throw ApiException.unavailable("REG: no top camera in OpenPnP: Register board needs it. Check the board X/Y "
@@ -111,6 +114,7 @@ final class RegistrationEndpoints {
         req.planToBoard = dispense.currentBoardLocation(e).getLocalToGlobalTransform().createInverse();
         req.nominalZ = nominalZ;
         req.probe = mode;
+        req.probeOnly = probeOnly;
         req.replanner = reg -> replan(svc, e, reg);
         ArtHints art = ArtHints.of(nominal.getBoard());
         req.fiducialHints = art.fiducials;
@@ -121,8 +125,16 @@ final class RegistrationEndpoints {
         e.registrationFuture = f2;
         Map<String, Object> accepted = Views.map("kind", "board registration", "planId", e.plan.planId, "home",
                 Views.home(home), "fiducials", preview.get("fiducials"), "probeTargets", preview.get("probes"), "probe",
-                probe.toLowerCase(Locale.ROOT), "estimatedSeconds", estimatedTotal(preview));
+                probe.toLowerCase(Locale.ROOT), "probeOnly", probeOnly, "estimatedSeconds", estimatedTotal(preview));
         return ApiContext.awaitIf(Json.bool(b, "wait", false), f2, Views::registration, accepted);
+    }
+
+    /**
+     * Probe only may run (F10): a board without a single fiducial (one with some is fitted by them, or refused), on a
+     * plan without a registration (registration "none", or "auto" with nothing stored).
+     */
+    private static boolean probeOnlyBoard(BoardFeatures f, String few, PlanStore.Entry e) {
+        return few != null && f.fiducials.isEmpty() && e.source.get("registrationId") == null;
     }
 
     /** The plan's board at its nominal seat; 409 when it is gone, bottom-up or its registration no longer applies. */
@@ -147,17 +159,19 @@ final class RegistrationEndpoints {
 
     /**
      * The Replanner of §5.3, on the machine thread at the end of Register board: the board planned again
-     * with the registration. A same seat that kept its surface keeps a plan that already carries both.
+     * with the registration (without one after a probe only, {@code reg} null). A same seat that kept its surface
+     * keeps a plan that already carries both.
      */
     private String replan(DispenseService svc, PlanStore.Entry e, BoardRegistration reg) throws Exception {
         SurfacePlane surface = svc.surfacePlane(svc.getConfig().boardSurfaceName);
-        if (reg.id.equals(e.source.get("registrationId")) && surface != null
+        String regId = reg == null ? null : reg.id;
+        if (java.util.Objects.equals(regId, e.source.get("registrationId")) && surface != null
                 && surface.fingerprint().equals(e.plan.surfaceFingerprint)) {
             e.registrationRecord = reg;
             return e.plan.planId;
         }
         Map<String, Object> src = new LinkedHashMap<>(e.source);
-        src.put("registrationId", reg.id);
+        src.put("registrationId", regId);
         BoardLocation bl = dispense.baseBoardLocation(src);
         DispensePlan plan = svc.planBoard(bl, reg);
         dispense.artRef(plan, bl);
@@ -193,6 +207,7 @@ final class RegistrationEndpoints {
         List<Map<String, Object>> probes = new ArrayList<>();
         out.put("fiducials", fids);
         out.put("probes", probes);
+        out.put("probeOnly", false);
         out.put("home", Views.home(home));
         try {
             BoardLocation bl = dispense.currentBoardLocation(e);
@@ -232,6 +247,8 @@ final class RegistrationEndpoints {
                 probes.add(Views.map("n", t.n, "bx", t.bx, "by", t.by, "x", t.x, "y", t.y, "alternates", alts));
             }
             out.put("error", few);
+            // no fiducials, on a plan without a registration: Register with probe "always" probes it only (F10)
+            out.put("probeOnly", probeOnlyBoard(f, few, e));
         }
         catch (Exception x) {
             out.put("error", MachineEndpoints.rootMessage(x));

@@ -28,6 +28,7 @@ import org.openpnp.instancelabs.sim.SimGuard;
 import org.openpnp.instancelabs.vision.BareSpotCheck;
 import org.openpnp.instancelabs.vision.Dot;
 import org.openpnp.instancelabs.vision.FiducialLocator;
+import org.openpnp.instancelabs.vision.SpotDot;
 import org.openpnp.machine.reference.ReferenceMachine;
 import org.openpnp.machine.reference.axis.ReferenceControllerAxis;
 import org.openpnp.machine.reference.driver.GcodeDriver;
@@ -268,32 +269,46 @@ public final class DispenseService {
         connectionSimulated = SimGuard.isSimulatorIdentity(m115);
     }
 
+    /**
+     * Finds the dispenser nozzle. Each field is written once, the reason before a null nozzle: every config update
+     * resolves again, and a transient null made concurrent readers (the status's interlocks, availability) fail with a
+     * NullPointerException or "unavailable (null)".
+     */
     private void resolveNozzle() {
-        nozzle = null;
-        unavailableReason = null;
         Machine machine = configuration.getMachine();
+        Nozzle found = null;
+        String why = null;
         if (!(machine instanceof ReferenceMachine)) {
-            unavailableReason = "machine is not a ReferenceMachine";
-            return;
+            why = "machine is not a ReferenceMachine";
         }
-        for (Head h : machine.getHeads()) {
-            for (Nozzle n : h.getNozzles()) {
-                if (cfg.nozzle.equals(n.getId())) {
-                    nozzle = n;
-                }
-            }
-        }
-        if (nozzle == null) {
+        else {
             for (Head h : machine.getHeads()) {
                 for (Nozzle n : h.getNozzles()) {
-                    if (cfg.nozzle.equals(n.getName())) {
-                        nozzle = n;
+                    if (cfg.nozzle.equals(n.getId())) {
+                        found = n;
                     }
                 }
             }
+            if (found == null) {
+                for (Head h : machine.getHeads()) {
+                    for (Nozzle n : h.getNozzles()) {
+                        if (cfg.nozzle.equals(n.getName())) {
+                            found = n;
+                        }
+                    }
+                }
+            }
+            if (found == null) {
+                why = "no dispenser nozzle '" + cfg.nozzle + "' in the machine";
+            }
         }
-        if (nozzle == null) {
-            unavailableReason = "no dispenser nozzle '" + cfg.nozzle + "' in the machine";
+        if (found == null) {
+            unavailableReason = why;
+            nozzle = null;
+        }
+        else {
+            nozzle = found;
+            unavailableReason = null;
         }
     }
 
@@ -871,13 +886,15 @@ public final class DispenseService {
         in.cfg = c;
         in.machineEnabled = m != null && m.isEnabled();
         in.machineHomed = m != null && m.isHomed();
-        in.nozzleName = nozzle == null ? cfg.nozzle : nozzle.getName();
+        Nozzle n = nozzle; // read once: a config update resolves it again on another thread
+        in.nozzleName = n == null ? cfg.nozzle : n.getName();
         in.compatibleNozzleTips = new ArrayList<>();
-        if (nozzle != null) {
-            for (NozzleTip t : nozzle.getCompatibleNozzleTips()) {
+        if (n != null) {
+            for (NozzleTip t : n.getCompatibleNozzleTips()) {
                 in.compatibleNozzleTips.add(t.getName());
             }
-            in.loadedNozzleTip = nozzle.getNozzleTip() == null ? null : nozzle.getNozzleTip().getName();
+            NozzleTip loaded = n.getNozzleTip();
+            in.loadedNozzleTip = loaded == null ? null : loaded.getName();
         }
         in.pressureSensor = pressureSensor;
         in.plan = plan;
@@ -1210,7 +1227,11 @@ public final class DispenseService {
         public RunResult run;
     }
 
-    /** Needle touch-off by dot ladder at stepped gaps (plan §6.1). Applies the new offset if found and asked. */
+    /**
+     * Needle touch-off by dot ladder at stepped gaps (plan §6.1). Applies the new offset if found and asked. Each dot
+     * is found at its spot with the strings cut off; paste at a spot that is not one dot refuses the conclusion
+     * ({@link NeedleTouchOff#analyze}). A pitch with no room between the dots is refused before anything is sent.
+     */
     public Future<TouchOffResult> runNeedleTouchOff(NeedleTouchOff.Request req, boolean apply) throws Exception {
         requireAvailable();
         String blankName = req.locationName == null ? cfg.blankLocationName : req.locationName;
@@ -1220,6 +1241,12 @@ public final class DispenseService {
         res.run = r;
         return submitResult(r, res, () -> {
             DispenseConfig c = cfg;
+            String pitch = NeedleTouchOff.pitchProblem(req, c);
+            if (pitch != null) {
+                throw refused(pitch);
+            }
+            double dotMm = NeedleTouchOff.expectedDotDiameterMm(req, c);
+            double steadyMm = NeedleTouchOff.steadyDotMm(req, c);
             Session s = new Session(c, r);
             SurfacePlane plane = planeOf(c, blankName);
             if (Double.isNaN(req.rotationDeg)) {
@@ -1239,16 +1266,13 @@ public final class DispenseService {
             if (!s.preflight(scope, p.estimatedPressurisedSeconds)) {
                 return;
             }
-            List<Dot> found = s.imageDots(specs, req.primeAtWaste, primeExtra, req.pitchMm / 2);
-            double[] gaps = NeedleTouchOff.gaps(req);
-            Double[] d = new Double[gaps.length];
-            for (int i = 0; i < d.length; i++) {
-                d[i] = found.get(i) == null ? null : found.get(i).diameterMm;
-            }
-            res.analysis = NeedleTouchOff.analyze(gaps, d, req.jumpRatio);
+            List<SpotDot> seen = s.imageSpots(specs, req.primeAtWaste, primeExtra, NeedleTouchOff.cutMm(dotMm),
+                    req.pitchMm / 2);
+            res.analysis = NeedleTouchOff.analyze(NeedleTouchOff.gaps(req), seen, req.jumpRatio, steadyMm);
             res.previousOffsetMm = c.needleZOffsetMm;
             java.util.Map<String, Object> det = new java.util.LinkedHashMap<>();
             det.put("analysis", res.analysis);
+            det.put("pitchMm", req.pitchMm);
             det.put("blank", blankName);
             det.put("blankPlane", plane == null ? null : java.util.Arrays.asList(plane.a, plane.b, plane.c));
             det.put("blankPlaneMaxResidualMm", plane == null ? null : plane.maxAbsResidualMm);
@@ -1884,8 +1908,9 @@ public final class DispenseService {
      * Register board (§5.2): home if needed, find the fiducials with the top camera, fit the board ->
      * machine affine, decide the seat, touch the board with N1's vacuum (or re-touch 3 stored points of
      * a same seat), save the surface tied to the registration and plan the board again. A registration
-     * once stored stays (also after a refused probe or a STOP) and the board is planned with it. The
-     * Future never throws for task failures; see the result.
+     * once stored stays (also after a refused probe or a STOP) and the board is planned with it. A board
+     * with fewer fiducials than needed is refused; one without any is probed only when the request says so
+     * ({@link RegisterRequest#probeOnly}, F10). The Future never throws for task failures; see the result.
      */
     public Future<RegistrationResult> registerBoard(RegisterRequest req) throws Exception {
         requireAvailable();
@@ -1934,7 +1959,9 @@ public final class DispenseService {
         BoardFeatures f = BoardFeatures.of(board, new PadTypeResolver(db.currentPadTypes(), db.packageMappings()),
                 req.fiducialHints);
         String few = fewFiducials(f, c.fiducialCheck.minFiducials);
-        if (few != null) {
+        // probe only (F10) is for a board without a single fiducial: one that has some is fitted by them, or refused
+        boolean onlyProbe = few != null && req.probeOnly && f.fiducials.isEmpty();
+        if (few != null && !onlyProbe) {
             throw refused(few);
         }
         DotImager im = imager();
@@ -1943,6 +1970,11 @@ public final class DispenseService {
         }
         boolean sim = isSimulatorConfirmed();
         res.simulated = sim;
+        if (onlyProbe) {
+            probeOnly(req, res, t, f, few, sim);
+            s.ok();
+            return;
+        }
         BoardRegistration prev = c.boardRegistrations.get(req.boardKey);
         if (prev != null && prev.refusal(req.boardKey, req.nominalSeat, board, () -> sim) != null) {
             prev = null;
@@ -2125,7 +2157,6 @@ public final class DispenseService {
     /** The probe part of Register board: the same-seat check, or every target; the surface saved and tied. */
     private void probeBoard(RegisterRequest req, RegistrationResult res, Task t, BoardFeatures f, BoardRegistration reg,
             boolean announced, boolean sim) throws Exception {
-        RunResult r = t.r;
         Session s = t.s;
         DispenseConfig c = cfg;
         ProbeReport pr = res.probe;
@@ -2159,10 +2190,77 @@ public final class DispenseService {
             pr.why = "same seat, surface changed: probed again";
             res.sameSeat.note = pr.why;
         }
+        probeAll(req, res, t, p, f, reg.transform(), tie, "registration " + reg.shortId(), sim);
+    }
+
+    /**
+     * Register board on a board without fiducials (F10), asked with probe "always" on a plan without a registration:
+     * no fiducial fit and no registration stored; N1 probes the board's targets where the
+     * plan puts the board (each spot looked at first), the surface is tied to that seat (a board planned at another
+     * X/Y, rotation or side is not tied to it), and the board is planned again on it.
+     */
+    private void probeOnly(RegisterRequest req, RegistrationResult res, Task t, BoardFeatures f, String few,
+            boolean sim) throws Exception {
+        RunResult r = t.r;
+        DispenseConfig c = cfg;
+        ProbeReport pr = res.probe;
+        if (req.probe != RegisterRequest.ProbeMode.ALWAYS) {
+            throw refused(few);
+        }
+        String tie = boardRegistration(req.nominal);
+        if (!tie.equals(req.plan.boardRegistration)) {
+            throw refused("REG: probe only needs a plan of the board where its file or job puts it, without a "
+                    + "registration: plan the board again with registration none");
+        }
+        res.probeOnly = true;
+        t.stage = "probe";
+        pr.needed = true;
+        pr.why = PROBE_ONLY_NOTE;
+        Probe p = new Probe(t.s, t::aborted, pt -> t.point("probe", Math.max(1, t.points.size()), pt));
+        pr.window = VacuumProber.preflight(c, true, "the board top Z", req.nominalZ, p.travelZ, p.settings,
+                p.n1.getNozzle());
+        try {
+            probeAll(req, res, t, p, f, req.planToBoard.createInverse(), tie, pr.why, sim);
+        }
+        finally {
+            // a new surface: plan the board on it (nothing else changed when the probe was refused or stopped)
+            if (pr.saved && req.replanner != null) {
+                String was = t.stage;
+                t.stage = "plan";
+                try {
+                    res.newPlanId = req.replanner.replan(null);
+                    r.nextPlanId = res.newPlanId;
+                    phase(r, "plan: planned again");
+                }
+                catch (Exception e) {
+                    r.warnings.add("plan again failed: " + e.getMessage());
+                }
+                t.stepsDone = t.stepsPlanned;
+                t.secondsLeft = 0;
+                t.send();
+                t.stage = was;
+            }
+        }
+    }
+
+    /** The result's word for a probe-only Register board (F10). */
+    static final String PROBE_ONLY_NOTE = "no fiducials: probed only, X/Y as planned";
+
+    /**
+     * Every target of the board probed (§5.2), the plane checked and saved as the board surface tied to {@code tie}:
+     * the targets and the plan's dots go to the machine through {@code boardToMachine} (the registration's affine, or
+     * the plan's own seat when probing only); {@code what} names it in the surface's note.
+     */
+    private void probeAll(RegisterRequest req, RegistrationResult res, Task t, Probe p, BoardFeatures f,
+            AffineTransform boardToMachine, String tie, String what, boolean sim) throws Exception {
+        RunResult r = t.r;
+        Session s = t.s;
+        DispenseConfig c = cfg;
+        ProbeReport pr = res.probe;
         t.stage = "probe";
         t.points.clear();
         List<VacuumProber.Target> targets = ProbeTargets.map(ProbeTargets.forBoard(f, ProbeTargets.dotsBoard(req.plan,
-                req.planToBoard), c, req.keepOuts), reg.transform());
+                req.planToBoard), c, req.keepOuts), boardToMachine);
         t.stepsPlanned = t.stepsDone + targets.size() + 1;
         t.secondsLeft = targets.size() * PROBE_POINT_ESTIMATE_S;
         for (VacuumProber.Target x : targets) {
@@ -2190,7 +2288,7 @@ public final class DispenseService {
         if (band != null) {
             throw refused(band);
         }
-        AffineTransform planToMachine = new AffineTransform(reg.transform());
+        AffineTransform planToMachine = new AffineTransform(boardToMachine);
         planToMachine.concatenate(req.planToBoard);
         int outside = 0;
         for (DispensePlan.PlannedDot d : req.plan.dots) {
@@ -2208,8 +2306,8 @@ public final class DispenseService {
         if (t.aborted()) {
             throw new DispenseExecutor.AbortedException(abortReason(s.exec, "stopped before the surface was saved"));
         }
-        String note = String.format(Locale.ROOT, "Register board %s: %d points by N1 vacuum touch (registration %s, run %s)",
-                ZCheck.clock(System.currentTimeMillis()), sp.size(), reg.shortId(), shortRun(r.runId));
+        String note = String.format(Locale.ROOT, "Register board %s: %d points by N1 vacuum touch (%s, run %s)",
+                ZCheck.clock(System.currentTimeMillis()), sp.size(), what, shortRun(r.runId));
         setSurface(c.boardSurfaceName, sp, note, tie, sim ? Boolean.TRUE : null);
         pr.saved = true;
         pr.surfaceSetAtMs = cfg.surface(c.boardSurfaceName).setAtMs;
@@ -3278,11 +3376,18 @@ public final class DispenseService {
     /** The result card's first sentence of a registration that ended OK. */
     private static String registrationSentence(RegistrationResult res) {
         StringBuilder sb = new StringBuilder("Registered " + ZCheck.clock(System.currentTimeMillis()) + ": ");
+        ProbeReport p = res.probe;
+        if (res.probeOnly) {
+            sb.append(p.why);
+            if (p.saved) {
+                sb.append(String.format(Locale.ROOT, "; board probed at %d points", p.points.size()));
+            }
+            return sb.append('.').toString();
+        }
         sb.append("first".equals(res.seat) ? "first seat" : "same".equals(res.seat) ? "same seat" : "re-seated");
         if (res.movedMm != null) {
             sb.append(String.format(Locale.ROOT, " (moved %.2f mm)", res.movedMm));
         }
-        ProbeReport p = res.probe;
         if (p != null && p.saved) {
             sb.append(String.format(Locale.ROOT, ", board probed at %d points", p.points.size()));
         }
@@ -3562,6 +3667,11 @@ public final class DispenseService {
         }
     };
 
+    /** What one before/after pair of a calibration dot gives (the dot nearest the centre, the dot at its spot). */
+    private interface FrameMeasure<T> {
+        T of(DotImager im, int i, DotImager.Frame before, DotImager.Frame after) throws Exception;
+    }
+
     /** One task on the machine thread: OpenPnP motion settled, mapper, channel, executor. */
     private final class Session {
         final DispenseConfig c;
@@ -3703,6 +3813,28 @@ public final class DispenseService {
         /** Before/after images of every spec around one pressure session; returns the dot per spec. */
         List<Dot> imageDots(List<GcodeStreamBuilder.DotSpec> specs, boolean primeAtWaste, double primeExtra,
                 double radius) throws Exception {
+            return imageEach(specs, primeAtWaste, primeExtra, (im, i, before, after) -> TestDotCheck.nearest(
+                    im.inspect(before, after), radius));
+        }
+
+        /**
+         * As {@link #imageDots}, each dot found at its spot with the strings cut off ({@link DotImager#inspectSpots}):
+         * the frame of dot i is centred on it, the other dots are its neighbours there.
+         */
+        List<SpotDot> imageSpots(List<GcodeStreamBuilder.DotSpec> specs, boolean primeAtWaste, double primeExtra,
+                double cutMm, double radiusMm) throws Exception {
+            return imageEach(specs, primeAtWaste, primeExtra, (im, i, before, after) -> {
+                List<double[]> spots = new ArrayList<>();
+                for (GcodeStreamBuilder.DotSpec d : specs) {
+                    spots.add(new double[] {d.x - specs.get(i).x, d.y - specs.get(i).y});
+                }
+                return im.inspectSpots(before, after, spots, cutMm, radiusMm).get(i);
+            });
+        }
+
+        /** Before images of every spec, one pressure session, then each spec's after image and its measure. */
+        private <T> List<T> imageEach(List<GcodeStreamBuilder.DotSpec> specs, boolean primeAtWaste, double primeExtra,
+                FrameMeasure<T> measure) throws Exception {
             DotImager im = imager();
             if (im == null || !im.isAvailable()) {
                 throw new IllegalStateException("no top camera / dot vision available");
@@ -3715,10 +3847,10 @@ public final class DispenseService {
             runSegment(() -> GcodeStreamBuilder.forDots(c, mapper, specs, bZeroed.get(), keepalive, primeAtWaste,
                     primeExtra, "calibration dots"), "dispensing calibration dots");
             phase(r, "after images");
-            List<Dot> found = new ArrayList<>();
+            List<T> found = new ArrayList<>();
             for (int i = 0; i < specs.size(); i++) {
                 DotImager.Frame after = im.capture(specs.get(i).x, specs.get(i).y);
-                found.add(TestDotCheck.nearest(im.inspect(before.get(i), after), radius));
+                found.add(measure.of(im, i, before.get(i), after));
             }
             return found;
         }

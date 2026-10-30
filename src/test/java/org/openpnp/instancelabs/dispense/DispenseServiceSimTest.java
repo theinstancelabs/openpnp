@@ -20,6 +20,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.openpnp.instancelabs.vision.Dot;
+import org.openpnp.instancelabs.vision.SpotDot;
 import org.openpnp.machine.reference.driver.GcodeDriver;
 import org.openpnp.model.Configuration;
 import org.openpnp.model.LengthUnit;
@@ -121,7 +122,10 @@ public class DispenseServiceSimTest {
         return l;
     }
 
-    /** Fake squash: touch-off dots whose commanded gap <= 0.05 come out 1.0 mm wide. */
+    /**
+     * Fake squash: half-turn touch-off dots come out 1.05 mm wide (steady dots, as on the real machine: 0.91-1.20 mm),
+     * and 1.45 mm at commanded gaps <= 0.05.
+     */
     static DotImager squashImager() {
         final double[] gapsSeen = NeedleTouchOff.gaps(new NeedleTouchOff.Request());
         return new DotImager() {
@@ -141,7 +145,7 @@ public class DispenseServiceSimTest {
             @Override
             public List<Dot> inspect(Frame before, Frame after) {
                 double g = gapsSeen[i++];
-                double dia = g <= 0.05 + 1e-9 ? 1.0 : 0.62;
+                double dia = g <= 0.05 + 1e-9 ? 1.45 : 1.05;
                 return Arrays.asList(new Dot(0, 0, dia, 0.3, 0.9));
             }
         };
@@ -741,6 +745,138 @@ public class DispenseServiceSimTest {
         held[0] = false;
         assertEquals(RunResult.Status.OK, svc.runShots("waste", 90, 1, true).get(60, TimeUnit.SECONDS).status);
         assertTrue(svc.checkCleanPads(plan).get(60, TimeUnit.SECONDS).ok);
+    }
+
+    /**
+     * F9: a camera that finds the touch-off's dots at their spots, but the dots at gaps 0.075 and 0.050 joined by a
+     * thick neck. It keeps what the engine asked: the cut, the spot radius and the spots of each frame.
+     */
+    static final class StrungImager implements DotImager {
+        final List<List<double[]>> spots = new ArrayList<>();
+        double cutMm, radiusMm;
+
+        @Override
+        public boolean isAvailable() {
+            return true;
+        }
+
+        @Override
+        public Frame capture(double x, double y) {
+            return new Frame(null, 0.01, 0.01, x, y);
+        }
+
+        @Override
+        public List<Dot> inspect(Frame before, Frame after) {
+            throw new AssertionError("the touch-off finds its dots at their spots");
+        }
+
+        @Override
+        public List<SpotDot> inspectSpots(Frame before, Frame after, List<double[]> s, double cut, double radius) {
+            spots.add(s);
+            cutMm = cut;
+            radiusMm = radius;
+            List<SpotDot> l = new ArrayList<>();
+            for (int j = 0; j < s.size(); j++) {
+                l.add(j == 2 || j == 3 ? SpotDot.unmeasured("joined to the paste at another spot", Arrays.asList(5 - j))
+                        : SpotDot.dot(new Dot(s.get(j)[0], s.get(j)[1], 1.05, 0.87, 0.9)));
+            }
+            return l;
+        }
+    }
+
+    /**
+     * F9 + F14 on the SIM machine: strung dots refuse the touch-off's conclusion (nothing recorded or applied), each
+     * frame measures its dot among its neighbours a pitch apart with the strings cut off at 0.45 x the dot, and a
+     * pitch with no room between the dots is refused before anything moves.
+     */
+    @Test
+    public void touchOffRefusesStrungDotsAndATightPitch() throws Exception {
+        StrungImager cam = new StrungImager();
+        svc.setDotImager(cam);
+        double offset = svc.getConfig().needleZOffsetMm;
+        int rows = svc.getDb().query("SELECT id FROM needle_touchoff").size();
+        DispenseService.TouchOffResult t = svc.runNeedleTouchOff(new NeedleTouchOff.Request(), true)
+                .get(60, TimeUnit.SECONDS);
+        assertEquals(RunResult.Status.OK, t.run.status, t.run.toString());
+        assertFalse(t.analysis.found());
+        assertEquals("dots touch or are strung together: the paste at gap 0.075 mm is joined to the dot at gap 0.050 mm; "
+                + "use a larger pitch", t.run.message);
+        assertFalse(t.applied);
+        assertEquals(null, t.newOffsetMm);
+        assertEquals(offset, svc.getConfig().needleZOffsetMm, 1e-12, "the offset is kept");
+        assertEquals(rows, svc.getDb().query("SELECT id FROM needle_touchoff").size(), "nothing recorded");
+        assertEquals(0.45 * 1.16, cam.cutMm, 1e-9);
+        assertEquals(0.8, cam.radiusMm, 1e-9, "half the default pitch of 1.6 mm");
+        assertEquals(6, cam.spots.size(), "one frame per dot");
+        for (int i = 0; i < 6; i++) {
+            for (int j = 0; j < 6; j++) {
+                assertEquals((j - i) * 1.6, cam.spots.get(i).get(j)[0], 1e-9, "frame " + i + ", spot " + j);
+                assertEquals(0, cam.spots.get(i).get(j)[1], 1e-9);
+            }
+        }
+
+        // F14: 1.0 mm leaves no room between half-turn dots: refused before the pressure or any move
+        sim.server.mark();
+        NeedleTouchOff.Request tight = new NeedleTouchOff.Request();
+        tight.pitchMm = 1.0;
+        RunResult r = svc.runNeedleTouchOff(tight, true).get(60, TimeUnit.SECONDS).run;
+        assertEquals(RunResult.Status.REFUSED, r.status, r.toString());
+        assertEquals(NeedleTouchOff.pitchProblem(tight, svc.getConfig()), r.message);
+        for (String l : sim.server.sinceMark()) {
+            assertFalse(l.startsWith("M106") || l.startsWith("G1") || l.startsWith("G0"), "nothing sent: " + l);
+        }
+    }
+
+    /**
+     * F9 review: the first two dots are droplets of the same size (a start gap too high: the real ladder's first dot
+     * was a 0.37-0.43 mm droplet), then steady dots. The first steady dot read as squashed against them, and the
+     * contact was applied between the droplets and it (+0.0875 here); now droplets are no reference: nothing is
+     * recorded or applied.
+     */
+    @Test
+    public void touchOffRefusesDropletsAsItsReference() throws Exception {
+        double[] sizes = {0.40, 0.42, 1.02, 1.05, 1.04, 1.06};
+        svc.setDotImager(new DotImager() {
+            @Override
+            public boolean isAvailable() {
+                return true;
+            }
+
+            @Override
+            public Frame capture(double x, double y) {
+                return new Frame(null, 0.01, 0.01, x, y);
+            }
+
+            @Override
+            public List<Dot> inspect(Frame before, Frame after) {
+                throw new AssertionError("the touch-off finds its dots at their spots");
+            }
+
+            @Override
+            public List<SpotDot> inspectSpots(Frame before, Frame after, List<double[]> s, double cut, double radius) {
+                List<SpotDot> l = new ArrayList<>();
+                for (int j = 0; j < s.size(); j++) {
+                    l.add(SpotDot.dot(new Dot(s.get(j)[0], s.get(j)[1], sizes[j], Math.PI / 4 * sizes[j] * sizes[j],
+                            0.9)));
+                }
+                return l;
+            }
+        });
+        double offset = svc.getConfig().needleZOffsetMm;
+        int rows = svc.getDb().query("SELECT id FROM needle_touchoff").size();
+        DispenseService.TouchOffResult t = svc.runNeedleTouchOff(new NeedleTouchOff.Request(), true)
+                .get(60, TimeUnit.SECONDS);
+        assertEquals(RunResult.Status.OK, t.run.status, t.run.toString());
+        assertFalse(t.analysis.found(), t.analysis.reason);
+        assertEquals("the first two dots (0.400 mm at gap 0.125, 0.420 mm at gap 0.100) are under 60 % of the 1.16 mm "
+                + "a steady dot of this dose makes on the blank: droplets from a needle too high, so a larger dot "
+                + "after them is no contact; run the ladder again from a lower start gap", t.run.message);
+        assertFalse(t.applied);
+        assertEquals(null, t.newOffsetMm);
+        assertEquals(offset, svc.getConfig().needleZOffsetMm, 1e-12, "the offset is kept");
+        assertEquals(rows, svc.getDb().query("SELECT id FROM needle_touchoff").size(), "nothing recorded");
+        assertEquals(0.0875, NeedleTouchOff.analyze(NeedleTouchOff.gaps(new NeedleTouchOff.Request()), new Double[] {
+            0.40, 0.42, 1.02, 1.05, 1.04, 1.06}, 0.25).contactGapMm, 1e-12, "what was applied before");
     }
 
     static double primeRawZ(List<String> sent) {

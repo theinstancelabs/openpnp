@@ -418,6 +418,7 @@ final class Views {
         }
         m.put("probe", p);
         m.put("newPlanId", r.newPlanId);
+        m.put("probeOnly", r.probeOnly);
         m.put("warnings", r.run == null ? new ArrayList<>() : new ArrayList<>(r.run.warnings));
         return m;
     }
