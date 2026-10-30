@@ -357,11 +357,16 @@
     let q = x.title + ': ' + x.value, dd = x.detail, code = x.code || null, acts = null;
     const lg = (f) => IL.fixButton(f, { cls: 'btn--lg' });
     switch (x.key) {
-      case 'machine':
-        q = x.state === 'block' ? 'Not connected to the controller' : x.state === 'live' ? 'Homing…' : 'Not homed: positions are unknown';
-        dd = x.state === 'block' ? 'Connect reconnects OpenPnP to the controller; nothing moves.' : 'After a STOP or a reconnect the machine must home before any move.';
+      case 'machine': {
+        const low = x.state === 'need' && IL.n1Low(s);
+        q = x.state === 'block' ? 'Not connected to the controller' : x.state === 'live' ? 'Homing…'
+          : low ? 'N1 stopped low (Z ' + IL.fmt((((s || {}).machine || {}).home || {}).n1Z, 2) + ' mm)' : 'Not homed: positions are unknown';
+        dd = x.state === 'block' ? 'Connect reconnects OpenPnP to the controller; nothing moves.'
+          : low ? 'Look at the board under it. Home raises N1 first, then homes; Register board, Probe the blank and Run wait until then.'
+            : 'After a STOP or a reconnect the machine must home before any move.';
         acts = x.fixes.map((f) => IL.fixButton(f));
         break;
+      }
       case 'angle': {
         const a = IL.fmtDeg(prof.startAngleDeg, 1);
         if (x.state === 'need') {
@@ -934,10 +939,11 @@
     IL.ssSet('il.setup.blankRun', PB.runId);
     PB.prevKey = null;   // the used spots and the surface changed: the preview again
   });
-  /** Why the automatic probe cannot start now, or null: {text, href?, link?}. */
+  /** Why the automatic probe cannot start now, or null: {text, href? or fix?, link?}. */
   function blankWhy(s, name) {
-    const lock = IL.lockReason(s, { connected: true, engine: true });
-    if (lock) return { text: lock };
+    // it homes by itself when needed: not while a STOP left N1 low (Run waits too), the operator looks and homes first
+    const lock = IL.lockReason(s, { connected: true, engine: true, homes: true });
+    if (lock) return IL.n1Low(s) ? { text: lock, fix: 'home', link: 'Home now' } : { text: lock };
     const d = disp(s);
     if (!(d.needle && d.needle.anchor)) return { text: 'Record the needle Z frame first: the probe checks its heights against it', href: '#setup/needle', link: 'Open Needle Z frame' };
     if (!PB.prev) return { text: 'Working out the spots…' };
@@ -1127,7 +1133,7 @@
     if (byHand) return;
     const why = live ? null : blankWhy(s, name);
     const okDone = !!fin && fin.status === 'OK';
-    const note = live || okDone ? '' : blankNote(s, name);
+    const note = live || okDone || IL.n1Low(s) ? '' : blankNote(s, name);   // N1 low: the home first (the reason says so)
     // after a good probe the panel's job is done: Probe again stays, but no longer as the primary action
     PB.auto.classList.toggle('btn--primary', !okDone);
     IL.setText(PB.note, note);
@@ -1137,8 +1143,9 @@
     setLabel(PB.auto, live ? 'Probing…' + (g.left !== null ? ' · ≈ ' + IL.fmtClock(g.left) + ' left' : '')
       : (fin ? 'Probe again' : 'Probe the ' + name) + (t ? ' · ' + IL.plural(t.targets.length, 'spot') + (isNum(t.estimatedSeconds) ? ' ≈ ' + IL.fmtClock(t.estimatedSeconds) : '') : ''));
     IL.gate(PB.auto, live ? 'Probing: STOP stops it' : why && why.text);
-    IL.keyed(PB.why, why ? why.text + (why.href || '') : '', () => (why ? [IL.icon('i-lock'), el('span', {}, why.text,
-      why.href ? [' ', el('button', { type: 'button', class: 'link', onclick: () => IL.go(why.href) }, why.link)] : null)] : null));
+    IL.keyed(PB.why, why ? why.text + (why.href || '') + (why.fix || '') : '', () => (why ? [IL.icon('i-lock'), el('span', {}, why.text,
+      why.href ? [' ', el('button', { type: 'button', class: 'link', onclick: () => IL.go(why.href) }, why.link)] : null,
+      why.fix ? [' ', el('button', { type: 'button', class: 'link', 'data-fix': why.fix, onclick: (ev) => IL.runFix(why.fix, ev.currentTarget) }, why.link)] : null)] : null));
     IL.show(PB.why, !!why && !live);
   }
   /** "Do it by hand": today's table, live N1 and the plane tiles; the foot's Add / Save. */

@@ -36,8 +36,10 @@
     seatSame: null,                            // remembered-entry atMs the operator said "same seat" for
     section: null,                             // step chosen in the route (#run/<step>), else automatic
     built: null,                               // step built in the panel now
+    pending: null,                             // the plan kept while the Board step has another board chosen (main column: that board)
     resultRunId: null,                         // show Result after this board run (until the operator moves on)
     refused: null,                             // a board run of this plan ended REFUSED: banner on Checks
+    ccRefused: null,                           // a clean-pad check of this plan refused at its start: its reason on the card
     test: false, maxDots: '',                  // "Test run with fewer dots" (cleared after every run)
     done: Object.assign({ planId: null, idx: [], runIds: [] }, ssGet('il.run.done') || {}),
     doneSet: null,
@@ -559,12 +561,25 @@
     if (partialDecision(s)) return 'stopped';
     return 'idle';
   }
+  /** The board chosen in the Board step when it is not the plan's (picked, or "Use this board" after an upload), else null. */
+  function otherBoard(p) {
+    const sel = selectedBoard();
+    const src = (p && p.source) || {};
+    if (!sel || !p) return null;
+    if (sel.kind === 'job') return src.source === 'job' && String(src.boardLocationId) === String(sel.id) ? null : sel;
+    return src.source === 'file' && src.file === sel.file ? null : sel;
+  }
   function renderMain(s) {
     const n = R.n;
     if (!n.hero) return;
-    const p = plan();
     const step = currentStep(s);
-    const mode = mainMode(s, step);
+    let p = plan();
+    let mode = mainMode(s, step);
+    // another board chosen in the Board step: the main column shows it before planning (its drawing at the form's seat,
+    // BOARD_IMPORT_DESIGN.md §5.9), not the plan of the board before; that plan stays (and shows on the other steps)
+    // until Plan
+    R.pending = p && step === 'board' && (mode === 'idle' || mode === 'result') && otherBoard(p) ? p : null;
+    if (R.pending) { p = null; mode = 'empty'; }
     R.mode = mode;
     const r = IL.ready();
     renderHead(s, p, mode);
@@ -590,13 +605,19 @@
     const no = p ? boardNumber(p.planId) : null;
     const dec0 = mode === 'stopped' ? decision(s) : null;
     const partial = !!dec0 && dec0.cause === 'partial';
-    IL.show(n.actions, mode !== 'stopped' || partial);
+    // another board chosen: Plan (the Board step's) is the one action; "Plan again" would plan the board before
+    IL.show(n.actions, (mode !== 'stopped' || partial) && !R.pending);
     // the lock note names what is locked during any task (board run, pad check, prime ...): greyed controls say why
     const taskLock = IL.taskRunning(s) ? IL.lockReason(s, { pressureOff: false }) : null;
     IL.show(n.lock, !!taskLock);
     if (taskLock) IL.setText(n.lock.lastChild, 'Change board, Plan again, the board position, setup saves and Home: ' + taskLock.charAt(0).toLowerCase() + taskLock.slice(1) + '.');
     let eb = '', ebCls = 'eyebrow', title = '', meta = [];
-    if (mode === 'empty') {
+    if (mode === 'empty' && R.pending) {
+      eb = 'Run · not planned yet';
+      title = (selectedBoard() || {}).name || 'Choose a board';
+      meta = [el('span', { text: 'Enter where it sits on the right, then Plan. Until then the plan of ' + boardShort(R.pending.boardName)
+        + ' stays. Planning moves nothing.' })];
+    } else if (mode === 'empty') {
       const sel = selectedBoard();
       eb = S.planForgotten ? 'Plan forgotten (OpenPnP restarted)' : 'Run · no board planned';
       ebCls += S.planForgotten ? ' eyebrow--need' : '';
@@ -639,6 +660,7 @@
     IL.setText(n.eyebrow, eb);
     IL.setClass(n.eyebrow, ebCls);
     IL.setText(n.title, title);
+    IL.setAttr(n.title, 'title', title || null);
     IL.keyed(n.meta, mode + '|' + meta.map((m) => m.textContent).join('|'), () => meta);
     IL.show(n.meta, mode !== 'live');
     // Change board / Plan again: locked while a task runs
@@ -653,6 +675,7 @@
     const run = s.run;
     if (!p) {
       if (S.planForgotten) { kind = 'need'; glyph = 'need'; text = 'Plan forgotten (OpenPnP restarted): plan again'; title = 'OpenPnP keeps plans in memory only: plan the board again (nothing moves).'; }
+      else if (R.pending) { kind = 'off'; glyph = 'off'; text = 'Not planned yet'; title = 'Enter where the board sits, then Plan (nothing moves).'; }
       else { kind = 'off'; glyph = 'off'; text = 'No plan yet'; title = 'Choose a board and plan it.'; }
     } else if (mode === 'live') {
       kind = 'live'; glyph = 'live';
@@ -1204,8 +1227,10 @@
       }
       if (b && (b.files || []).length) {
         opts.push(el('optgroup', { label: 'Board files' }, b.files.filter((x) => x.file).map((x) => {
+          // the folder tells boards of one name apart; an upload's folder is its name ("mobo · mobo" said it twice)
           const dir = x.file.split('/').slice(-2, -1)[0];
-          return el('option', { value: 'file:' + x.file, title: x.file + (x.placements ? ' · ' + x.placements + ' placements' : ''), text: x.name + (dir ? ' · ' + dir : '') });
+          const own = !!dir && String(x.name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').startsWith(dir);
+          return el('option', { value: 'file:' + x.file, title: x.file + (x.placements ? ' · ' + x.placements + ' placements' : ''), text: x.name + (dir && !own ? ' · ' + dir : '') });
         })));
       }
       if (!b && !R.boardsLoading && R.form.sel && R.form.sel !== 'other') opts.push(el('option', { value: R.form.sel, text: (selectedBoard() || {}).name || R.form.sel }));
@@ -1545,8 +1570,9 @@
   /** Why Register board cannot start now (first of AUTO_REGISTER_DESIGN.md §8.1 `#register-why`), or null. */
   function registerWhy(s) {
     const p = plan();
-    const lock = IL.lockReason(s, { connected: true, engine: true });
-    if (lock) return { text: lock };
+    // it homes by itself when needed: not while a STOP left N1 low (Run waits too), the operator looks and homes first
+    const lock = IL.lockReason(s, { connected: true, engine: true, homes: true });
+    if (lock) return IL.n1Low(s) ? { text: lock, fix: 'home', link: 'Home now' } : { text: lock };
     if (!p) return { text: 'Plan a board first' };
     const t = regTargets(p);
     // the plan's own registration no longer applies (registered again elsewhere, a simulator record): plan again first
@@ -1557,7 +1583,14 @@
     if (!hasCamera(s)) return { text: 'No top camera in OpenPnP: do it by hand' };
     if (t && t.error) return { text: String(t.error).replace(IL.CODE_RE, '$2') };
     if (!anchorOf(s)) return { text: 'Record the needle Z frame first: the probe checks its heights against it.', href: '#setup/needle', link: 'Open Needle Z frame' };
-    if (t && t.frame && t.frame.ok === false && t.frame.message) return { text: String(t.frame.message).replace(IL.CODE_RE, '$2'), href: '#run/board', link: 'Board step' };
+    if (t && t.frame && t.frame.ok === false && t.frame.message) {
+      const text = String(t.frame.message).replace(IL.CODE_RE, '$2');
+      // a board top so far under the needle frame that the probe's floor cannot reach it: the Z, the frame, or by hand
+      if (/cannot reach that height/i.test(text)) {
+        return { text, links: [{ href: '#run/board', link: 'Board step' }, { href: '#setup/needle', link: 'Needle Z frame' }, { fix: 'probe-by-hand', link: 'Do it by hand' }] };
+      }
+      return { text, href: '#run/board', link: 'Board step' };
+    }
     return null;
   }
   /** Seconds Register board takes now: the plan's estimate with the live home plan (never hard-coded). */
@@ -2057,6 +2090,7 @@
       return [IL.glyph(ok ? 'ok' : kind), el('div', { class: 'reg-result__main' }, el('div', { class: 'ri__t reg-result__t', id: 'reg-result-t' }, title), lines),
         buttons.length ? el('div', { class: 'ri__act reg-result__act' }, buttons) : null];
     });
+    for (const b of box.querySelectorAll('#btn-reg-again, #btn-reg-probe')) IL.gate(b, regGate(s));
   }
   /** "Register again" / "Probe again" in the result card: two-press, like the foot's button. */
   function regActionBtn(f) {
@@ -2194,7 +2228,8 @@
       const btn = $('btn-register'), cont = $('btn-reg-continue');
       IL.show(cont, ok);
       IL.show(btn, !ok);
-      const note = live || mode === 'result' ? '' : IL.nb(registerNote(s, p));
+      // N1 low: the home comes first (the reason below says so), and the press it describes comes after that home
+      const note = live || mode === 'result' || IL.n1Low(s) ? '' : IL.nb(registerNote(s, p));
       IL.setText($('register-note'), note);
       IL.show($('register-note'), !!note);
       const why = live ? null : registerWhy(s);
@@ -2204,9 +2239,10 @@
       setBtnLabel(btn, live ? ['Registering…' + (g.left !== null ? ' · ≈ ' + IL.fmtClock(g.left) + ' left' : '')]
         : [IL.icon('i-capture'), (mode === 'result' ? 'Register again' : 'Register board') + (isNum(secs) ? ' · ≈ ' + IL.fmtClock(secs) : '')]);
       IL.gate(btn, live ? 'Registering: STOP stops it' : why && why.text);
-      IL.keyed($('register-why'), why ? why.text + '|' + (why.href || '') + (why.fix || '') : '', () => (why ? [IL.icon('i-lock'), el('span', {}, why.text,
-        why.href ? [' ', el('button', { type: 'button', class: 'link', onclick: () => IL.go(why.href) }, why.link || 'Open')] : null,
-        why.fix ? [' ', el('button', { type: 'button', class: 'link', 'data-fix': why.fix, onclick: (ev) => IL.runFix(why.fix, ev.currentTarget) }, 'Plan again')] : null)] : null));
+      const whyLinks = why ? (why.links || [why]).filter((x) => x.href || x.fix) : [];
+      IL.keyed($('register-why'), why ? why.text + '|' + whyLinks.map((x) => (x.href || '') + (x.fix || '')).join(',') : '', () => (why ? [IL.icon('i-lock'), el('span', {}, why.text,
+        whyLinks.map((x, i) => [i ? ' · ' : ' ', x.href ? el('button', { type: 'button', class: 'link', onclick: () => IL.go(x.href) }, x.link || 'Open')
+          : x.fix ? el('button', { type: 'button', class: 'link', 'data-fix': x.fix, onclick: (ev) => IL.runFix(x.fix, ev.currentTarget) }, x.link || 'Plan again') : null]))] : null));
       IL.show($('register-why'), !!why && !live);
       return;
     }
@@ -2273,7 +2309,13 @@
     return el('div', { class: 'stack', style: 'gap:10px', 'data-refusals': '' }, reason, btn, testRow,
       el('div', { class: 'run-foot__links' }, el('span', { id: 'run-scope' }), testLink, allLink, nextLink));
   }
-  /** The "first N dots" limit if set and smaller than the board: {n, total} or null; .bad for an invalid entry. */
+  /** Two dots of one pad: the plan's pad index, else the pad id (the engine's rule for a test run's cut, PlanStore). */
+  const samePad = (a, b) => (a.padIndex >= 0 || b.padIndex >= 0 ? a.padIndex === b.padIndex : a.padId === b.padId);
+  /**
+   * The "first N dots" limit if set and smaller than the board: {n, asked, total} or null; .bad for an invalid entry.
+   * A test run lays whole pads (a pad's dose is all its dots): the cut falls before the pad it would split, so n can be
+   * fewer than asked.
+   */
   function testLimit() {
     const p = plan();
     if (!R.test || !p || String(R.maxDots).trim() === '') return null;
@@ -2281,8 +2323,17 @@
     const total = p.dots.length;
     if (!Number.isInteger(v) || v < 1) return { bad: 'A whole number of dots, at least 1' };
     if (v >= total) return null;
-    return { n: v, total };
+    let n = v;
+    while (n > 0 && samePad(p.dots[n - 1], p.dots[n])) n--;
+    if (n === 0) {
+      let first = 1;
+      while (first < total && samePad(p.dots[0], p.dots[first])) first++;
+      return { bad: 'A test run lays whole pads: the first pad, ' + p.dots[0].padId + ', has ' + first + ' dots, so ask for at least ' + first };
+    }
+    return { n, asked: v, total };
   }
+  /** "18 of 160 dots (whole pads: 18 of the 20 asked for)" of a test limit. */
+  const limitText = (lim) => lim.n + ' of ' + lim.total + ' dots' + (lim.n < lim.asked ? ' (whole pads: ' + lim.n + ' of the ' + lim.asked + ' asked for)' : '');
   function interlockLine(s) {
     const p = plan();
     const list = s.interlocks || [];
@@ -2339,6 +2390,8 @@
     const run = s.run;
     const checking = run && run.running && run.label === 'clean-pad check';
     let detail;
+    const ref = checking ? null : ccRefusedText(cc);
+    const refLine = ref ? el('b', { class: 'cc-refused', text: ref + ' ' }) : null;
     if (checking) {
       // the counter is patched every render (renderChecks): the card itself is not rebuilt while the check runs
       detail = ['The top camera visits every pad, the pressure stays off: ', el('span', { class: 'clean-tour', text: tourLine(run) })];
@@ -2357,6 +2410,7 @@
         detail.push('. Wipe them in place; clean copper reads ' + IL.fmt(cc.minBrightFraction, 2) + ' or more.');
       }
     } else detail = [it.detail];
+    if (refLine) detail.unshift(refLine);
     const posWrong = !checking && IL.cleanPositionWrong(cc);
     const btn = fixBtn({ fix: 'clean-check', label: posWrong ? 'Check again' : cc && !cc.ok ? 'Wiped: check again' : 'Check pads', icon: 'i-refresh', title: 'The top camera looks at every pad (≈ ' + IL.fmtClock(tourSeconds(plan().pads.length)) + '), the pressure stays off. Press twice.' }, null, 'btn-clean-check');
     const cam = el('button', { type: 'button', class: 'btn btn--icon', title: 'Top camera snapshot (nothing moves)', 'aria-label': 'Top camera snapshot', onclick: () => IL.openView('camera', { keep: true }) }, IL.icon('i-camera'));
@@ -2366,6 +2420,13 @@
       el('div', {}, el('div', { class: 'ri__t' }, it.title, first ? el('span', { class: 'tag tag--next', text: 'Next' }) : null), el('div', { class: 'ri__d' }, detail)),
       el('abbr', { class: 'icode', title: 'Interlock I10', text: 'I10' }),
       checking ? null : [pos ? el('div', { class: 'ri__act ri__act--pos' }, pos) : null, el('div', { class: 'ri__act' }, btn, cam)]);
+  }
+  /** "Refused 14:05: the pressure hold is on: …." of a check of this plan refused at its start after the report cc, or null. */
+  function ccRefusedText(cc) {
+    const ref = R.ccRefused;
+    if (!ref || !IL.planMatches(ref.planId) || (cc && (cc.checkedAtMs || 0) >= (ref.finishedAtMs || 0))) return null;
+    const msg = String(ref.message || 'the check did not start').replace(IL.CODE_RE, '$2').replace(/[.\s]+$/, '');
+    return 'Refused ' + IL.fmtTime(ref.finishedAtMs ? ref.finishedAtMs - S.skewMs : Date.now()) + ': ' + msg + '.';
   }
   /** "≈ pad 57 of 160 · 1:52 left." of a running clean-pad check. */
   function tourLine(run) {
@@ -2388,7 +2449,7 @@
       const btn = fixBtn({ fix: 'clean-check', label: 'Check pads', title: 'The top camera looks at every pad, the pressure stays off. Works with the check switched off too. Press twice.' }, 'btn--sm', 'btn-clean-check');
       return el('div', { class: 'rt rt--wide rt--clean', id: 'clean-result', title: it.tip || it.detail, 'data-refusals': '' },
         IL.glyph(it.state, 'xs'), el('span', { class: 'rt__t', text: it.title + (it.state === 'off' ? ' · off' : '') }), btn,
-        el('span', { class: 'rt__d', text: cc ? IL.cleanSummary(cc) : it.detail }));
+        el('span', { class: 'rt__d', text: ccRefusedText(cc) || (cc ? IL.cleanSummary(cc) : it.detail) }));
     }
     // a note that counts ready ("homes first, checks Z") takes the whole row: its value is longer than a tile
     return el('button', { type: 'button', class: 'rt rt--one' + (it.state === 'info' ? ' rt--wide rt--note' : ''), title: it.tip || it.detail, 'data-key': it.key, onclick: () => tileGo(it.key) },
@@ -2420,13 +2481,14 @@
     const run = s.run;
     const ccKey = S.cleanCheck ? S.cleanCheck.checkedAtMs : '';
     const checking = !!(run && run.running && run.label === 'clean-pad check');
-    const nk = JSON.stringify(needs.map((x) => [x.key, x.state, x.detail, (x.fixes || []).map((f) => f.label)])) + ccKey + checking + R.showAllDirty;
+    const ccRef = R.ccRefused ? R.ccRefused.runId : '';
+    const nk = JSON.stringify(needs.map((x) => [x.key, x.state, x.detail, (x.fixes || []).map((f) => f.label)])) + ccKey + checking + R.showAllDirty + ccRef;
     IL.keyed($('chk-needs'), nk, () => (needs.length ? [IL.sectionK('Needs you', needs.length),
       el('div', { class: 'stack', style: 'margin-top:10px;gap:10px' }, needs.map((x, i) => needCard(x, i === 0, s)))] : null));
     const tour = checking && plan() ? $('chk-needs').querySelector('.clean-tour') : null;
     if (tour) IL.setText(tour, tourLine(run));
     const ready = r.items.filter((x) => x.ready);
-    const rk = JSON.stringify(ready.map((x) => [x.key, x.state, x.value, x.tip])) + ccKey;
+    const rk = JSON.stringify(ready.map((x) => [x.key, x.state, x.value, x.tip])) + ccKey + ccRef;
     IL.keyed($('chk-ready'), rk, () => (ready.length ? [IL.sectionK('Ready', ready.length),
       el('div', { class: 'rtiles', style: 'margin-top:10px' }, ready.filter((x) => x.key !== 'clean').map((x) => readyTile(x, s)),
         ready.filter((x) => x.key === 'clean').map((x) => readyTile(x, s)))] : null));
@@ -2464,7 +2526,7 @@
     if (dec && !left.length) reason = reason || 'No pads left';
     const style = lim && !lim.bad ? 'btn--test' : r.runStyle === 'go' && !complete ? 'btn--primary' : 'btn--hold';
     IL.setClass(btn, 'btn btn--lg btn--block ' + (reason ? '' : dec ? 'btn--primary' : style));
-    setBtnLabel(btn, [IL.icon('i-play'), dec ? 'Finish ' + IL.plural(left.length, 'pad') + ' left' : lim && lim.n ? 'TEST: first ' + lim.n + ' of ' + total + ' dots' : 'Run board · ' + IL.plural(total, 'dot')]);
+    setBtnLabel(btn, [IL.icon('i-play'), dec ? 'Finish ' + IL.plural(left.length, 'pad') + ' left' : lim && lim.n ? 'TEST: first ' + lim.n + ' of ' + total + ' dots' + (lim.n < lim.asked ? ' · whole pads' : '') : 'Run board · ' + IL.plural(total, 'dot')]);
     IL.gate(btn, reason);
     // reason line above the button: soft (needs you, run anyway) or blocked (finish first); a lock (a task runs, the
     // recovery) shows the lock glyph, not the red ✕ of a blocked check
@@ -2498,7 +2560,7 @@
     const err = $('run-maxdots-err');
     IL.setText(err, lim && lim.bad ? lim.bad : R.test && String(R.maxDots).trim() !== '' && !lim ? 'That is the whole board: the full run.' : '');
     IL.show(err, !!err.textContent);
-    IL.setText($('run-scope'), dec ? 'Only the pads left · ' + IL.plural(left.length, 'pad') : lim && lim.n ? 'TEST · first ' + lim.n + ' of ' + total + ' dots'
+    IL.setText($('run-scope'), dec ? 'Only the pads left · ' + IL.plural(left.length, 'pad') : lim && lim.n ? 'TEST · first ' + limitText(lim)
       : complete ? 'Board complete · ' + total + ' of ' + total + ' dots' : 'Full board · all ' + total + ' dots');
     IL.setText($('btn-run-test'), R.test ? 'Run the full board instead' : 'Test run with fewer dots…');
   }
@@ -2693,7 +2755,7 @@
     if (lim && lim.n) {
       const pads = new Set(p.dots.slice(0, lim.n).map((d) => d.padId)).size;
       return { kind: 'test', maxDots: lim.n, n: lim.n, pads, title: 'Dispense the first ' + lim.n + ' of ' + N + ' dots?',
-        test: 'TEST: only the first ' + lim.n + ' of ' + N + ' dots', scope: 'Test: the first ' + lim.n + ' of ' + N + ' dots.' };
+        test: 'TEST: only the first ' + limitText(lim), scope: 'Test: the first ' + limitText(lim) + '.' };
     }
     return { kind: kind === 'all' ? 'all' : 'full', n: N, pads: p.pads.length, title: 'Dispense ' + IL.plural(N, 'dot') + ' on ' + IL.plural(p.pads.length, 'pad') + '?',
       test: null, scope: kind === 'all' ? 'The whole board again, all ' + N + ' dots (wipe every pad first).' : 'Full board, all ' + N + ' dots.' };
@@ -2977,6 +3039,12 @@
       setRegResult(run.runId);
       R.byHand = false;
       if (IL.active() === 'run' && R.section && R.section !== 'probe') goStep('probe');
+      IL.render();
+      return;
+    }
+    // a clean-pad check refused at its start (the pressure hold switched on, a STOP) looked at no pad: the card says why
+    if (run && run.label === 'clean-pad check' && IL.planMatches(run.planId)) {
+      R.ccRefused = run.status === 'REFUSED' ? run : null;
       IL.render();
       return;
     }

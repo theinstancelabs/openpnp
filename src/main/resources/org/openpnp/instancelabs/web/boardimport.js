@@ -106,7 +106,8 @@
   function query(o) {
     return Object.keys(o).filter((k) => o[k] !== undefined && o[k] !== null).map((k) => k + '=' + encodeURIComponent(o[k])).join('&');
   }
-  const taskLock = () => (IL.taskRunning(IL.S.status) ? RUNNING : null);
+  /** The engine refuses an upload while a task runs or a pad calibration is between its engine steps. */
+  const taskLock = () => (IL.taskRunning(IL.S.status) || (IL.padProfile && IL.padProfile.jobLock(IL.S.status)) ? RUNNING : null);
 
   // ------------------------------------------------------------------------------------------ the dialog
   function open(opts) {
@@ -655,6 +656,22 @@
       IL.pollNow();
     }
   }
+  /**
+   * The name the drawing of board file c is kept under (instancelabs/boards/<slug>/): its earlier drawing's, else the
+   * board's OpenPnP name (else its file name). A name another board holds (an import, the drawing of another board file;
+   * taken: slugs the server answered "exists" for) is never replaced: the next free one is used ("ftp-board-xml-2").
+   */
+  function attachName(c, base, taken) {
+    const files = (IL.run && IL.run.boards && IL.run.boards.files) || [];
+    const own = files.find((x) => x.file === c.file && x.imported && x.imported.how === 'attach' && x.imported.slug);
+    if (own && !taken.includes(own.imported.slug)) return own.imported.slug;
+    const want = !nameProblem(c.name) ? String(c.name).trim() : base.replace(/\.board\.xml$/i, '');
+    const held = new Set(files.filter((x) => x.file !== c.file && x.imported && x.imported.slug).map((x) => x.imported.slug).concat(taken));
+    if (!held.has(slugOf(want))) return want;
+    const stem = (slugOf(want) || 'board').slice(0, 37).replace(/-+$/, '');
+    for (let k = 2; k < 100; k++) if (!held.has(stem + '-' + k)) return stem + '-' + k;
+    return want;
+  }
   async function attach(c) {
     const n = M.n;
     const pv = M.pv;
@@ -662,9 +679,21 @@
     n.refusals.replaceChildren();
     M.state = 'saving';
     paint();
-    const q = query({ file: M.file.name, board: c.file, name: c.name || base.replace(/\.board\.xml$/i, ''), replace: M.attachReplace ? 1 : 0, sha256: pv.file && pv.file.sha256 });
+    const taken = [];
     try {
-      const r = await post('/api/boards/import/attach?' + q, M.file, null);
+      let r = null;
+      while (!r) {
+        const name = attachName(c, base, taken);
+        const q = query({ file: M.file.name, board: c.file, name, replace: M.attachReplace ? 1 : 0, sha256: pv.file && pv.file.sha256 });
+        try {
+          r = await post('/api/boards/import/attach?' + q, M.file, null);
+        } catch (e) {
+          // the name belongs to another board (not in the board list: its folder only): the next free name, at most 3 times
+          const d = e.data || {};
+          if (!(e.status === 409 && d.error === 'exists' && d.exists && d.exists.file && d.exists.file !== c.file && taken.length < 3)) throw e;
+          taken.push(slugOf(name));
+        }
+      }
       if (!M) { IL.toast('The KiCad drawing is now used for ' + base + '.', 'ok'); return; }
       saved(Object.assign({ file: c.file, name: c.name }, r), 'attach', c.name || base);
     } catch (e) {
@@ -672,7 +701,8 @@
       M.state = 'preview';
       paint();
       const d = e.data || {};
-      if (e.status === 409 && d.error === 'exists') {
+      if (e.status === 409 && d.error === 'exists' && !(d.exists && d.exists.file && d.exists.file !== c.file)) {
+        // this board file's own earlier drawing under that name: replacing it is the operator's second press
         M.attachReplace = true;
         IL.toast((d.reason || 'A drawing with this name exists') + ' Press again to replace it.', 'need');
         paintAttach(pv);

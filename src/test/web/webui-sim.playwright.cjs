@@ -17,9 +17,13 @@
  * moved board, the run confirm closing after a task its tab never saw running, STOP NOT CONFIRMED and
  * the offline band at 1024 px, then Register board (docs/instancelabs/AUTO_REGISTER_DESIGN.md §10.3: recovery without
  * Home, the Register step, a first registration that homes first with its G-code, the fiducial correction against the
- * SIM scene, a same seat, STOP mid-register and Home with N1 low, the by-hand path with the engine's targets, a run that
- * homes and checks Z by itself, the automatic blank probe, the home setting, a fiducial not found and a plan without
- * fiducial correction), no native dialogs, no JS errors.
+ * SIM scene, a same seat, STOP mid-register and Home with N1 low (Register board and Probe the blank locked like Run until
+ * then), the by-hand path with the engine's targets, a run that homes and checks Z by itself, the automatic blank probe,
+ * the home setting, a fiducial not found (its fixes two by two in the narrow card) and a plan without fiducial
+ * correction), what the engine refuses since the final round (OpenPnP busy, an upload reading its file: locked; a
+ * clean-pad check refused at its start: its reason on the card; the profile's dose a quarter, half or whole turn), a Z
+ * that moved at a home and its remedy under the same home (Z check blocker: the needle frame, the blank, the touch-off,
+ * Register board), a board top too far under the needle frame for the probe, no native dialogs, no JS errors.
  *
  * Env: IL_API_URL (http://127.0.0.1:PORT/), PLAYWRIGHT_DIR (dir with node_modules/playwright),
  *      UINAV (uinav CLI), UINAV_SESSION, OUT_DIR (screenshots + results.json), SIM_SCENE (the session's SIM scene file).
@@ -311,7 +315,18 @@ async function runFirstDots(page, n) {
     await nav(page, 'profile');
     await page.waitForFunction(() => document.getElementById('pf-turn').options.length > 0, null, { timeout: 10000 });
     const turns = await page.$$eval('#pf-turn option', (os) => os.map((o) => o.value));
-    check('profile: screw turn offers whole fractions of a revolution', ['400', '800', '1600', '3200'].every((v) => turns.includes(v)), turns);
+    check('profile: screw turn offers a quarter, half or whole turn only (400, 800, 1600 steps)', turns.join(',') === '400,800,1600', turns);
+    // a profile stored before that rule (two turns) shows its value with the engine's reason at the field; Save waits
+    await page.evaluate(() => {
+      const sel = document.getElementById('pf-turn');
+      sel.appendChild(Object.assign(document.createElement('option'), { value: '3200', textContent: '2 turns · 3200 steps' }));
+      sel.value = '3200';
+      for (const t of ['input', 'change']) sel.dispatchEvent(new Event(t, { bubbles: true }));
+    });
+    await page.waitForFunction(() => !document.getElementById('pf-turn-err').hidden, null, { timeout: 5000 }).catch(() => {});
+    const twoTurns = await page.evaluate(() => ({ err: document.getElementById('pf-turn-err').textContent, save: document.getElementById('btn-pf-save').disabled }));
+    check('profile: a two-turn dose is refused at the field, as the engine refuses it (Save locked)',
+      /^Must be 400, 800 or 1600 steps \(a quarter, half or whole turn\)/.test(twoTurns.err) && twoTurns.save, twoTurns);
     await page.fill('#pf-rpm', '200');
     check('profile: rpm above 180 warns', await page.isVisible('#pf-rpm-warn'));
     await page.fill('#pf-rpm', '180');
@@ -969,6 +984,19 @@ async function runFirstDots(page, n) {
       await answerI11();
       const home1 = await recStep('home');
       check('recovery: N1 stopped low: the home step is needed and names its Z', home1 && !home1.done && /N1 stopped low \(Z \d/.test(home1.detail), home1);
+      // what homes by itself waits as Run does (AUTO_REGISTER_DESIGN.md §8.2): Register board (its fix, the button every card
+      // offers; Run's own Register step is the recovery now) and Probe the blank are locked with N1's Z, the blank with "Home now"
+      const lowReg = await page.evaluate(() => { const b = IL.fixButton({ fix: 'register', label: 'Register board' }); return { disabled: b.disabled, why: b.title, canRun: IL.ready().canRun }; });
+      await page.evaluate(() => IL.go('#setup/surfaces'));
+      await page.waitForFunction(() => IL.S.route.ws === 'setup', null, { timeout: 10000 }).catch(() => {});
+      await page.evaluate(() => { if (IL.panel.isPushed()) IL.panel.close(); IL.openView('probe-blank', { keep: true }); });
+      await waitText(page, 'blank-why', /N1 stopped low/, 15000).catch(() => {});
+      const lowBlank = await page.evaluate(() => { const b = document.getElementById('btn-blank-auto'), w = document.getElementById('blank-why');
+        return { disabled: !!b && b.disabled, why: w ? w.textContent : null, home: !!document.querySelector('#blank-why [data-fix="home"]') }; });
+      const lowText = /^N1 stopped low \(Z [−-]?\d+\.\d\d mm\): look at the board under it\./;
+      check('N1 low: Register board and Probe the blank are locked like Run, the reason names N1\'s Z, the blank\'s with "Home now"',
+        !lowReg.canRun && lowReg.disabled && lowText.test(lowReg.why) && lowBlank.disabled && lowText.test(lowBlank.why) && lowBlank.home, { lowReg, lowBlank });
+      await page.evaluate(() => { if (IL.panel.isPushed()) IL.panel.close(); IL.go('#run/probe'); });
       g1 = gcodeNext();
       await press2(page, '#btn-home');
       await waitText(page, 'pill-homed', /^Homed$/, 120000);
@@ -1151,6 +1179,10 @@ async function runFirstDots(page, n) {
       check('REG fixes in order: look with the camera, change board, plan without correction, do it by hand (Register again in the foot)',
         JSON.stringify(fixes) === JSON.stringify(['Look with the camera', 'Change board', 'Plan without fiducial correction', 'Do it by hand'])
         && /^Register again/.test(await textOf(page, 'btn-register')), { fixes, foot: await textOf(page, 'btn-register') });
+      const fixRows = await page.$$eval('#reg-result .ri__act [data-fix]', (bs) => ({ vw: window.innerWidth,
+        rows: new Set(bs.map((b) => Math.round(b.getBoundingClientRect().top))).size,
+        inside: bs.every((b) => { const r = b.getBoundingClientRect(), c = b.closest('.ri').getBoundingClientRect(); return r.left >= c.left && r.right <= c.right; }) }));
+      check('REG fixes side by side in the narrow card: two rows of two, inside the card (not one per line)', fixRows.rows <= 2 && fixRows.inside, fixRows);
       await page.screenshot({ path: path.join(OUT, 'register-fid-not-found.png') });
       fs.writeFileSync(SIM_SCENE + '.tmp', JSON.stringify(scene));
       fs.renameSync(SIM_SCENE + '.tmp', SIM_SCENE);
@@ -1179,6 +1211,137 @@ async function runFirstDots(page, n) {
       }
       check('Plan without fiducial correction: no registration, #reg-correction says so',
         await page.evaluate(() => IL.S.plan.registration === null) && /^no fiducial correction/.test(await textOf(page, 'reg-correction')), await textOf(page, 'reg-correction'));
+
+      // 13. What the engine refuses, the UI locks or says (the final round's engine fixes, E1 and E2). Pure checks on the
+      // status: OpenPnP homing or jogging by itself (409 "OpenPnP is busy"), an upload reading its file
+      // (status.boardImport.reading, 409 on every engine endpoint); a clean-pad check refused at its start (the pressure
+      // hold switched on after it was queued) shows its reason on the card, not "no pad was checked"
+      {
+        const locks = await page.evaluate(() => {
+          const s = IL.S.status;
+          const idle = { run: Object.assign({}, s.run, { running: false }), dispense: Object.assign({}, s.dispense, { busy: false }), padCalibration: null };
+          const busy = Object.assign({}, s, idle, { machine: Object.assign({}, s.machine, { enabled: true, busy: true }) });
+          const reading = Object.assign({}, s, idle, { boardImport: { reading: true } });
+          return { busy: IL.lockReason(busy, { connected: true }), busyPlan: IL.lockReason(busy, { pressureOff: false }), reading: IL.lockReason(reading),
+            readingNoIdle: IL.lockReason(reading, { idle: false, pressureOff: false }), field: s.boardImport ? s.boardImport.reading : 'missing' };
+        });
+        check('locks: OpenPnP busy homing or jogging locks what uses the machine with the engine\'s words (not Plan)',
+          locks.busy === 'OpenPnP is busy (homing or moving): wait for it to finish' && locks.busyPlan === null, locks);
+        check('locks: status.boardImport.reading (false now) locks Run, Register board, the probes and the other engine actions while true',
+          locks.field === false && locks.reading === 'A board file is being read (an upload takes up to about 20 s): wait for it to finish' && locks.readingNoIdle === null, locks);
+        await page.evaluate(() => IL.go('#run/checks'));
+        await page.waitForSelector('#clean-result', { timeout: 15000 });
+        const finished = (await status()).server.timeMs + 1000;
+        await page.evaluate((t) => IL.emit('taskend', { runId: 'pw-clean-refused', label: 'clean-pad check', status: 'REFUSED', running: false,
+          planId: IL.S.plan.planId, finishedAtMs: t, message: 'the pressure hold is on: Pressure off first' }), finished);
+        await page.waitForFunction(() => /Refused \d\d:\d\d: the pressure hold is on: Pressure off first\./.test(document.getElementById('clean-result').textContent), null, { timeout: 5000 }).catch(() => {});
+        const cr = await textOf(page, 'clean-result');
+        check('clean-pad check refused at its start: "Refused hh:mm: the pressure hold is on: Pressure off first." on its card',
+          /Refused \d\d:\d\d: the pressure hold is on: Pressure off first\./.test(cr) && !/No pad was checked/.test(cr), cr);
+        await page.evaluate(() => { IL.run.ccRefused = null; IL.render(); });
+      }
+
+      // 14. Z moved at a home (AUTO_REGISTER_DESIGN.md §2.4): the scene's board and blank seal 0.8 mm higher after a home,
+      // so Check Z fails ("Z moved"). The Z check blocker leads through the remedy under the same home, one step at a time:
+      // the needle frame, the blank, the touch-off (or the frame's own offset), Register board; then nothing blocks. The
+      // scene stays 0.8 mm higher: every height is measured again at it, so the next files find a consistent machine
+      {
+        const zUp = JSON.parse(JSON.stringify(scene));
+        zUp.board.surface.z0 += 0.8;
+        zUp.blank.surface.z0 += 0.8;
+        fs.writeFileSync(SIM_SCENE + '.tmp', JSON.stringify(zUp));
+        fs.renameSync(SIM_SCENE + '.tmp', SIM_SCENE);
+        await page.waitForTimeout(600);
+        const hr = await page.request.post(BASE + 'api/machine/home', { data: { wait: true }, timeout: 180000 });
+        check('Z moved: homed (every height now predates the home)', hr.ok(), [hr.status(), (await hr.text()).slice(0, 300)]);
+        await page.request.post(BASE + 'api/machine/z-check', { data: { wait: true }, timeout: 180000 });
+        const failedNow = (x) => !!(x.machine.zCheck && x.machine.zCheck.last && x.machine.zCheck.last.pass === false && x.machine.zCheck.last.homeAtMs === x.machine.zCheck.homeAtMs);
+        const zf = await waitStatus(page, failedNow, 60000);
+        check('Z moved: Check Z fails by about 0.8 mm', Math.abs(zf.machine.zCheck.last.deltaMm - 0.8) < 0.1, zf.machine.zCheck.last);
+        await page.evaluate(() => IL.go('#run/checks'));
+        /**
+         * The remedy's step now (IL.zMoved) and the Z check blocker on Run › Checks with its fix-its, once the page's own
+         * status poll has the step wanted and the plan is read again (the card shows until the step is done).
+         */
+        const zStep = async (want) => {
+          await page.waitForFunction((w) => {
+            const z = IL.zMoved(IL.S.status);
+            const card = document.querySelector('#chk-needs .ri[data-key="I4-z"]');
+            return !IL.S.planPending && !!z && z.step === w && (w === 'done' ? !card : !!card);
+          }, want, { timeout: 30000 }).catch(() => {});
+          await page.waitForTimeout(300);
+          return page.evaluate(() => {
+            const z = IL.zMoved(IL.S.status);
+            const card = document.querySelector('#chk-needs .ri[data-key="I4-z"]');
+            return { step: z ? z.step : null, fixes: z ? z.fixes.map((f) => f.label) : [], text: card ? card.querySelector('.ri__d').textContent : null,
+              card: card ? Array.from(card.querySelectorAll('button[data-fix]')).map((b) => [b.dataset.fix, b.textContent.trim()]) : null, canRun: IL.ready().canRun };
+          });
+        };
+        let st = await zStep('frame');
+        await page.screenshot({ path: path.join(OUT, 'z-moved-1-frame.png') });
+        check('Z moved 1: the blocker names the move, the remedy in its order, and offers "Open Needle Z frame"', st.step === 'frame' && !st.canRun && !!st.card
+          && st.card[0] && st.card[0][0] === 'go:#setup/needle' && /^Z moved 0\.\d\d mm/.test(st.text || '')
+          && /Record the needle frame again \(Setup › Needle Z frame\), probe the blank, touch off and register the board again\./.test(st.text || ''), st);
+        // the operator records the frame again from K: N1 touches the blank 0.8 mm higher, K is unchanged
+        await page.click('#chk-needs .ri[data-key="I4-z"] button[data-fix="go:#setup/needle"]');
+        await page.waitForSelector('#btn-anchor-k', { state: 'visible', timeout: 15000 });
+        await page.fill('#anchor-n1', '10.8');
+        await page.fill('#anchor-k', '65.59');
+        await page.click('#btn-anchor-k');
+        await waitStatus(page, (x) => x.dispense.needle.anchor && Math.abs(x.dispense.needle.anchor.surfaceZMm - 10.8) < 1e-6, 10000);
+        await page.evaluate(() => IL.go('#run/checks'));
+        st = await zStep('blank');
+        await page.screenshot({ path: path.join(OUT, 'z-moved-2-blank.png') });
+        check('Z moved 2: after the needle frame, the fix is "Probe the blank…"', st.step === 'blank' && !!st.card && st.card[0] && st.card[0][0] === 'view:probe-blank', st);
+        await page.click('#chk-needs .ri[data-key="I4-z"] button[data-fix="view:probe-blank"]');
+        // the view keeps "Do it by hand" open from step 10: the automatic probe is the one this step wants
+        await page.waitForSelector('#blank-by-hand', { state: 'attached', timeout: 15000 });
+        await page.evaluate(() => { const d = document.getElementById('blank-by-hand'); if (d.open) d.open = false; });
+        await page.waitForSelector('#btn-blank-auto', { state: 'visible', timeout: 15000 });
+        const t7 = Date.now() + (await page.evaluate(() => IL.S.skewMs));
+        await press2(page, '#btn-blank-auto');
+        const bz = await waitStatus(page, (x) => x.run && x.run.label === 'blank probe' && !x.run.running && x.run.startedAtMs > t7, 300000);
+        check('Z moved 2: the blank probed again at its new height', bz.run.status === 'OK' && bz.dispense.surfaces.blank.points.every((q) => Math.abs((Array.isArray(q) ? q[2] : q.z) - 10.8) < 0.1),
+          { status: bz.run.status, message: bz.run.message });
+        await page.evaluate(() => { if (IL.panel.isPushed()) IL.panel.close(); IL.go('#run/checks'); });
+        st = await zStep('touch-off');
+        await page.screenshot({ path: path.join(OUT, 'z-moved-3-touch-off.png') });
+        check('Z moved 3: after the blank, "Run a touch-off" or the frame\'s own offset', st.step === 'touch-off' && !!st.card
+          && st.card.some(([f]) => f === 'go:#calibrate/touch-off') && st.card.some(([f, t]) => f === 'needle-confirm' && /^Confirm frame offset [−-]?\d+\.\d{3} mm$/.test(t)), st);
+        await page.click('#chk-needs .ri[data-key="I4-z"] button[data-fix="needle-confirm"]');
+        await waitStatus(page, (x) => x.dispense.needle.touchedOff, 10000);
+        st = await zStep('register');
+        await page.screenshot({ path: path.join(OUT, 'z-moved-4-register.png') });
+        check('Z moved 4: after the touch-off, "Register board"', st.step === 'register' && !!st.card && st.card[0] && st.card[0][0] === 'register', st);
+        const t8 = Date.now() + (await page.evaluate(() => IL.S.skewMs));
+        await press2(page, '#chk-needs .ri[data-key="I4-z"] button[data-fix="register"]');
+        const rz = await regEnd(t8);
+        check('Z moved 4: Register board measures the board again', rz.run.status === 'OK', { status: rz.run.status, message: rz.run.message });
+        await page.evaluate(() => { if (IL.panel.isPushed()) IL.panel.close(); IL.go('#run/checks'); });
+        st = await zStep('done');
+        check('Z moved: after the remedy nothing is left to measure, no Z check blocker (the same home)', st.step === 'done' && !st.card, st);
+      }
+
+      // 15. A board top Z planned 1.7 mm under the needle frame (planning takes up to 2.0 mm, the probe goes 1.5 mm under the
+      // higher of the two): Register board says why before anything moves, with the Board step, the Needle Z frame and Do
+      // it by hand; planned back at its Z, the reason goes
+      {
+        const src = await page.evaluate(() => IL.S.plan.source);
+        const anchorZ = (await status()).dispense.needle.anchor.surfaceZMm;
+        const lowZ = Number((anchorZ - 1.7).toFixed(3));
+        await page.evaluate((b) => IL.api('POST', '/api/plan', b).then((p) => IL.setPlan(p)), { source: 'file', file: src.file, x: src.x, y: src.y, z: lowZ, rotation: src.rotation || 0 });
+        await page.evaluate(() => { if (IL.panel.isPushed()) IL.panel.close(); IL.go('#run/probe'); });
+        await page.waitForFunction(() => /cannot reach that height/.test(document.getElementById('register-why').textContent), null, { timeout: 20000 }).catch(() => {});
+        await page.screenshot({ path: path.join(OUT, 'register-board-too-low.png') });
+        const rw = await page.evaluate(() => ({ text: document.getElementById('register-why').textContent, shown: !document.getElementById('register-why').hidden,
+          links: Array.from(document.querySelectorAll('#register-why button')).map((b) => b.textContent.trim()), locked: document.getElementById('btn-register').disabled }));
+        check('Register board: a board top 1.7 mm under the needle frame is refused before anything moves, with Board step · Needle Z frame · Do it by hand',
+          rw.shown && rw.locked && new RegExp('^the board top Z ' + lowZ.toFixed(3).replace('.', '\\.') + ' lies 1\\.700 mm under the needle-frame surface .*: it cannot reach that height\\. Set the board top Z to roughly the N1 contact height')
+            .test(rw.text) && JSON.stringify(rw.links) === JSON.stringify(['Board step', 'Needle Z frame', 'Do it by hand']), rw);
+        await page.evaluate((b) => IL.api('POST', '/api/plan', b).then((p) => IL.setPlan(p)), { source: 'file', file: src.file, x: src.x, y: src.y, z: src.z, rotation: src.rotation || 0 });
+        await page.waitForFunction(() => !/cannot reach that height/.test(document.getElementById('register-why').textContent), null, { timeout: 20000 }).catch(() => {});
+        check('Register board: planned back at the board\'s Z, the reason goes', !/cannot reach that height/.test(await textOf(page, 'register-why')), await textOf(page, 'register-why'));
+      }
     }
 
     check('no native dialogs (confirm / alert / prompt)', dialogs.length === 0, dialogs);

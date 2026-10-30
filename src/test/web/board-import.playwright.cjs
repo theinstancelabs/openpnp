@@ -10,18 +10,20 @@
  * the drawing within 0.5 px of the plan's, every pad on drawn copper; (2) a pad click opens the inspector (rule
  * sentence, dots, the selected pad, the top camera, Esc back) and #btn-pad-inspect opens the first pad in path order;
  * (3) #pv-play expands #run-preview, Clear collapses it; (4) a file dropped outside the drop zone never replaces the
- * page; (5) a file the server refuses shows its reason with "Choose another file", Cancel while reading goes back to
- * the file choice; upload of ftp.kicad_pcb: 80 parts get paste (160 pads), 3 fiducials, the drawing, three packages new
- * or suffixed, nothing that blocks dispensing, PACKAGE_SUFFIXED a note, the attach offer naming ftp.board.xml and FID1,
- * a package row focused from the keyboard outlines its parts;
- * (6) save under a unique name, Use this board: the Board step has it, with its picture; (7) the same file dropped on
+ * page; (5) a part outside the board outline is drawn only, with OFF_BOARD in group 3; a file the server refuses shows
+ * its reason with "Choose another file", Cancel while reading goes back to the file choice; upload of ftp.kicad_pcb:
+ * 80 parts get paste (160 pads), 3 fiducials, the drawing, three packages new or suffixed, nothing that blocks
+ * dispensing, PACKAGE_SUFFIXED a note, the attach offer naming ftp.board.xml and FID1, a package row focused from the
+ * keyboard outlines its parts;
+ * (6) save under a unique name, Use this board: the Board step has it, with its picture (every picture with its size
+ * and parts), and the main column draws it before planning while the plan of (1) stays; (7) the same file dropped on
  * the drop zone under the same name: "exists", a two-press replace, Esc does nothing while it saves; (8) the import
  * planned at 30°: 160 pads and dots, R pads within 0.01 mm and LED pads within 0.04 mm of (1), copper and silkscreen
  * in Full, the drawing aligned (FID1 included); (9) Camera is on FID1 sets the origin to camera − R(30°)·FID1 within
- * 0.01 mm, and the plan from it puts FID1 under the camera; (10) attach: ftp.board.xml gets the KiCad drawing, its
- * plan's pads unchanged; (11) Records: a board run's map draws the board (skipped when the session has no board run
+ * 0.01 mm, and the plan from it puts FID1 under the camera; (10) attach: ftp.board.xml gets the KiCad drawing in one
+ * press, under a free name when another board holds its name (that board keeps its drawing), its plan's pads unchanged; (11) Records: a board run's map draws the board (skipped when the session has no board run
  * yet); (12) the stage bar and the expanded preview row fit at 1280 × 800 and 1024 × 768, #plan-svg >= 280 px tall
- * at 1280; (13) dark theme: the marks on the board keep their contrast; (14) screenshots to SHOTS_DIR (1440 and 1280,
+ * at both, the Run stepper keeps a long board name inside its step at 1440, 1280 and 1024; (13) dark theme: the marks on the board keep their contrast; (14) screenshots to SHOTS_DIR (1440 and 1280,
  * light and dark): the empty dialog, and for nano, ftp and mobo the preview, the saved state with its pad-type actions,
  * the Board step with the board chosen (the hero before planning), the board planned on Run and the pad inspector;
  * (15) no JavaScript errors, no native dialogs; (16) the hero draws a plan's dispensed dots on that plan only (another
@@ -70,6 +72,9 @@ const NANO = () => kicad('NanoV3.3.kicad_pcb.gz', 'NanoV3.3.kicad_pcb');
 const MOBO = () => kicad('mobo.kicad_pcb.gz', 'mobo.kicad_pcb');
 
 async function boards(page) { return page.evaluate(() => IL.api('GET', '/api/boards')); }
+/** The folder name the server keeps a board or a drawing under (BoardStore.slug for Latin names). */
+const slugOf = (s) => String(s || '').normalize('NFKD').replace(/\p{Mn}/gu, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+  .slice(0, 40).replace(/-+$/g, '');
 async function toBoardStep(page) {
   await page.evaluate(() => { if (IL.panel.isPushed()) IL.panel.close(); IL.go('#run/board'); });
   await page.waitForSelector('#board-select', { state: 'visible', timeout: 15000 });
@@ -244,6 +249,19 @@ const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y
 
     // ---- (5) upload ftp ---------------------------------------------------------------------------------------------
     await openDialog(page);
+    // a footprint outside the board outline (padcal.kicad_pcb's R1 parked left of the board): drawn only, no paste, and
+    // OFF_BOARD under "Check in the preview" (group 3)
+    const offBoard = fs.readFileSync(path.join(FIX, '..', 'padprofile', 'padcal.kicad_pcb'), 'utf8').replace('(at 104 126)', '(at 90 126)');
+    await page.setInputFiles('#board-import-file', { name: 'padcal-off-board.kicad_pcb', mimeType: 'application/octet-stream', buffer: Buffer.from(offBoard) });
+    await page.waitForSelector('#dlg-board-import[data-state="preview"]', { timeout: 60000 }).catch(() => {});
+    const ob = await page.evaluate(() => {
+      const li = document.querySelector('#board-import-warn li[data-code="OFF_BOARD"]');
+      return { group: li ? li.dataset.group : null, section: !!(li && li.closest('section[data-group="3"]')), text: li ? li.textContent : null,
+        found: document.getElementById('board-import-found').textContent };
+    });
+    check('(5) a part outside the board outline: OFF_BOARD under "Check in the preview" (group 3), drawn only, no paste',
+      ob.group === '3' && ob.section && /^R1 is not inside the board outline: it gets no paste \(its paste would land off the board\)\./.test(ob.text)
+      && /1 part drawn only \(R1\)/.test(ob.found), ob);
     // first the server's refusal of a .kicad_pcb that is not a board, shown as it says it, with one way on
     await page.setInputFiles('#board-import-file', { name: 'notes.kicad_pcb', mimeType: 'application/octet-stream', buffer: Buffer.from('(kicad_sch (version 20231120) (generator "eeschema"))') });
     await page.waitForSelector('#dlg-board-import[data-state="error"]', { timeout: 30000 }).catch(() => {});
@@ -294,6 +312,27 @@ const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y
       return !!(i && i.complete && i.naturalWidth > 0);
     }));
     const file6 = sel6.slice(5);
+    // every picture says the board's size and parts (§5.9 "75 × 75 mm · 80 parts"), each line inside the picture
+    const th6 = await page.evaluate(() => Array.from(document.querySelectorAll('#board-thumbs button.board-thumb')).map((b) => {
+      const r = b.getBoundingClientRect();
+      const lines = Array.from(b.querySelectorAll('.board-thumb__t > *')).map((x) => x.getBoundingClientRect());
+      return { size: (b.querySelector('.board-thumb__size') || {}).textContent || null, parts: (b.querySelector('.board-thumb__t > .board-thumb__s:last-child') || {}).textContent || null,
+        inside: lines.every((x) => x.top >= r.top && x.bottom <= r.bottom) };
+    }));
+    // (a board file without dimensions has no size line)
+    check('(6) the board pictures name the size ("75 × 75 mm") and the parts, inside the picture',
+      th6.some((x) => x.size) && th6.every((x) => (x.size === null || /^\d+(\.\d)?\u00a0×\u00a0\d+(\.\d)?\u00a0mm$/.test(x.size)) && /^\d+ parts?/.test(x.parts) && x.inside), th6);
+    // the plan of (1) stays until Plan; the main column shows the board just chosen before planning (§5.9), not that plan
+    await page.waitForFunction(() => { const c = document.getElementById('board-preplan'); return !!c && !c.hidden && !!IL.run.bv.board; }, null, { timeout: 15000 }).catch(() => {});
+    const pre6 = await page.evaluate((f) => {
+      const bv = IL.run.bv, e = ((IL.run.boards || {}).files || []).find((x) => x.file === f) || {};
+      return { plan: !!IL.S.plan && IL.S.plan.source.file !== f, art: bv.board && bv.art ? bv.art.id : null, want: e.art ? e.art.id : null,
+        dots: document.querySelectorAll('#plan-svg circle.dot').length, cap: document.getElementById('board-preplan').textContent,
+        title: document.getElementById('run-title').textContent, name: e.name, chip: document.getElementById('plan-chip').textContent };
+    }, file6);
+    check('(6) the board chosen is drawn before planning ("Plan to see the dots", no dots, its name, "Not planned yet") while the plan of (1) stays',
+      pre6.plan && !!pre6.art && pre6.art === pre6.want && pre6.dots === 0 && /^Plan to see the dots/.test(pre6.cap) && pre6.title === pre6.name
+        && /Not planned yet/.test(pre6.chip), pre6);
 
     // ---- (7) replace: the same bytes dropped on the drop zone, the same name ---------------------------------------
     await openDialog(page);
@@ -373,15 +412,31 @@ const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y
       && Math.hypot(fid9.x - want9.cam.x, fid9.y - want9.cam.y) <= 0.01, { fid9, cam: want9.cam });
 
     // ---- (10) attach the drawing to ftp.board.xml ---------------------------------------------------------------------
+    // first a board of its own under ftp.board.xml's OpenPnP name (the name the attach keeps the drawing under): the
+    // attach must not replace that board's drawing, it takes a free name
+    const b10a = await boards(page);
+    const bench10 = (b10a.files || []).find((f) => f.file === ftpFile) || {};
+    const had10 = !!(bench10.imported && bench10.imported.how === 'attach');
+    const holderOf = (list) => (list.files || []).find((f) => f.file !== ftpFile && f.imported && f.imported.slug === slugOf(bench10.name));
+    if (!holderOf(b10a) && !had10 && slugOf(bench10.name) && String(bench10.name).length <= 60) {
+      await openDialog(page);
+      await upload(page, FTP());
+      await saveAs(page, bench10.name);
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('#dlg-board-import', { state: 'detached', timeout: 5000 });
+    }
+    const holder10 = holderOf(await boards(page)) || null;
     await openDialog(page);
     await upload(page, FTP());
-    // one press; two when ftp.board.xml has a drawing already (an earlier run) or the server says the name is taken
+    // one press; two when ftp.board.xml has a drawing already (an earlier run: replacing it is a second press)
+    let presses10 = 0;
     for (let i = 0; i < 4; i++) {
       if (await page.$('#dlg-board-import[data-state="saved"]')) break;
       await page.waitForSelector('#dlg-board-import[data-state="preview"] #btn-board-import-attach:enabled', { timeout: 60000 });
       const armed10 = await page.$('#btn-board-import-attach.btn--press');
       if (armed10) await sleep(450);
       await page.click('#btn-board-import-attach');
+      presses10++;
       await page.waitForFunction(() => { const d = document.getElementById('dlg-board-import'); return !d || d.dataset.state !== 'saving'; }, null, { timeout: 60000 });
       await sleep(200);
     }
@@ -393,6 +448,11 @@ const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y
     const b10 = await boards(page);
     const e10 = (b10.files || []).find((f) => f.file === ftpFile) || {};
     check('(10) GET /api/boards: ftp.board.xml has the KiCad drawing now', e10.art && e10.art.kind === 'kicad', e10.art);
+    const holderNow = holder10 ? (b10.files || []).find((f) => f.file === holder10.file) : null;
+    check('(10) a name another board holds is not replaced: one press (two to replace its own drawing), the drawing kept under a free name, that board keeps its drawing',
+      presses10 === (had10 ? 2 : 1) && (had10 || !holder10 || (!!holderNow && holderNow.art && holderNow.art.id === holder10.art.id
+        && !!e10.imported && e10.imported.slug !== holder10.imported.slug)),
+      { presses10, had10, holder: holder10 && { file: holder10.file, slug: holder10.imported.slug, art: holder10.art.id }, holderNow: holderNow && holderNow.art, bench: e10.imported });
     await page.waitForFunction((f) => { const b = document.querySelector('#board-thumbs button.board-thumb[data-board="file:' + CSS.escape(f) + '"]'); return !!b && /KiCad/.test(b.textContent); }, ftpFile, { timeout: 10000 }).catch(() => {});
     check('(10) its picture in the board row says KiCad', await page.evaluate((f) => {
       const b = Array.from(document.querySelectorAll('#board-thumbs button.board-thumb')).find((x) => x.dataset.board === 'file:' + f);
@@ -431,9 +491,30 @@ const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y
         return { barSw: bar.scrollWidth, barCw: bar.clientWidth, rowSw: row.scrollWidth, rowCw: row.clientWidth, rowShown: !row.hidden,
           lgSw: lg ? lg.scrollWidth : 0, lgCw: lg ? lg.clientWidth : 0, svgH: Math.round(document.getElementById('plan-svg').getBoundingClientRect().height) };
       });
-      check('(12) ' + w + ' px: the stage bar, its legend and the open preview row fit' + (w > 1024 ? '; #plan-svg >= 280 px tall' : ''),
-        lay.rowShown && lay.barSw <= lay.barCw + 1 && lay.rowSw <= lay.rowCw + 1 && lay.lgSw <= lay.lgCw + 1 && (w <= 1024 || lay.svgH >= 280), lay);
+      check('(12) ' + w + ' px: the stage bar, its legend and the open preview row fit; #plan-svg >= 280 px tall',
+        lay.rowShown && lay.barSw <= lay.barCw + 1 && lay.rowSw <= lay.rowCw + 1 && lay.lgSw <= lay.lgCw + 1 && lay.svgH >= 280, lay);
       await page.click('#pv-reset');
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+    // the Run stepper: a long board name ends in "…" inside its own step, never under the next step's sub-label
+    for (const [w, h] of [[1440, 900], [1280, 800], [1024, 768]]) {
+      await page.setViewportSize({ width: w, height: h });
+      await sleep(300);
+      const st12 = await page.evaluate(async () => {
+        const p = IL.S.plan, keep = p.boardName;
+        p.boardName = 'Arduino Nano V3.3 with a long board name for the stepper.board.xml';
+        IL.render();
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        const out = Array.from(document.querySelectorAll('nav.steps .step')).map((b) => {
+          const sub = b.querySelector('.step__s'), r = b.getBoundingClientRect(), q = sub.getBoundingClientRect();
+          return { k: b.dataset.step, inside: q.left >= r.left - 0.5 && q.right <= r.right + 0.5, cut: sub.scrollWidth > sub.clientWidth + 1, text: sub.textContent };
+        });
+        p.boardName = keep;
+        IL.render();
+        return out;
+      });
+      const bs = st12.find((x) => x.k === 'board') || {};
+      check('(12) ' + w + ' px: the Run stepper keeps a long board name inside its step, cut with "…"', st12.length === 5 && st12.every((x) => x.inside) && bs.cut, st12);
     }
     await page.setViewportSize({ width: 1440, height: 900 });
 

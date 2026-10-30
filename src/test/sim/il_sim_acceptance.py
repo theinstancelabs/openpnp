@@ -25,8 +25,19 @@ Scenarios (plan §4.4, §4.5, §8.1; bench recipe 2026-10-28):
   import      KiCad upload of ftp.kicad_pcb (BOARD_IMPORT_DESIGN.md §6.7): preview, save, plan (pads vs the bench
               board file), 20 dots run, attach, a restart keeps it; then the imported board registered on a moved
               seat and run
+  padcal      Missing paste profiles (PROFILE_CALIBRATION_DESIGN.md §14.5) on the SIM paste and balance, one session per
+              part. main: padcal.kicad_pcb uploaded (the preview's NEEDS_PROFILE and reasons per package), saved,
+              planned; the profile check's groups; Use for TestChip_A; Calibrate automatically for SW_SPST and
+              Test_Strip (the script is the operator: coupons on the SIM balance, wiped, weighed again, the readings
+              typed); both characterized with the SIM's 2.30 mg per turn; the plan made at the end run with the WSON
+              skipped (per-pad paste, dose blocks and the M114 Count lines of the controller); a reconnect then
+              refuses the quarter-turn block (I11). nano: the Arduino Nano's upload and top-side split (40 tip, 15
+              with a plan, 5 partial), Calibrate automatically for its two groups (SW_SPST characterized, the
+              LED_0805 stays provisional: no allowed dose is within -25 %/+10 % of its amount), its next plan run.
+              controls: §11.7's other negative controls, each ending with its reason. --padcal-parts runs some parts
 
-    il_sim_acceptance.py [--out DIR] all | load | stop | board | register | import | bench | dph --stream FILE
+    il_sim_acceptance.py [--out DIR] [--prefix P] [--api-port N] all | load | stop | board | register | import |
+                         padcal [--padcal-parts main,nano,controls] | bench | dph --stream FILE
 
 Sim-only changes on top of the patched copy (reported in results.json):
   * machine.xml copy (uinav --xml-set; not in the load scenario): head visual-homing-method=None (the
@@ -44,6 +55,7 @@ Sim-only changes on top of the patched copy (reported in results.json):
 Python 3 standard library only.
 """
 import argparse
+import gzip
 import json
 import math
 import os
@@ -134,6 +146,25 @@ def free_port():
         return s.getsockname()[1]
 
 
+def api_port(a):
+    """The web API port of the next session: with --api-port N the first free one of N … N+8 (taken in turn, so a
+    run stays inside the range it was given), else any free port."""
+    first = getattr(a, "api_port", None)
+    if not first:
+        return free_port()
+    for k in range(9):
+        p = first + (getattr(a, "port_turn", 0) + k) % 9
+        with socket.socket() as so:
+            so.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                so.bind(("127.0.0.1", p))
+            except OSError:
+                continue
+        a.port_turn = p - first + 1
+        return p
+    raise RuntimeError("no free web API port in %d..%d" % (first, first + 8))
+
+
 def strip(line):
     return line.split(";", 1)[0].strip()
 
@@ -206,7 +237,7 @@ class Session:
         """stage_dir: launch on this config dir (e.g. an earlier session's copy) instead of a new stage."""
         self.a, self.name = a, a.prefix + name
         self.stage = stage_dir or stage(a, name, scene)
-        self.port = free_port()
+        self.port = api_port(a)
         env = dict(os.environ, OPENPNP_IL_API_PORT=str(self.port))
         cmd = [UINAV, "--session", self.name, "launch", "--config", self.stage, "--openpnp-jar", a.jar]
         for x in xml_sets:
@@ -1414,6 +1445,648 @@ def scenario_import(a):
     return res
 
 
+# --------------------------------------------------------------------------- scenario: padcal
+
+# PROFILE_CALIBRATION_DESIGN.md §14.3's test board as a KiCad file (§20.1 item 18), and the Arduino Nano.
+KICAD_PADCAL = os.path.join(REPO, "src", "test", "resources", "padprofile", "padcal.kicad_pcb")
+KICAD_NANO = os.path.join(REPO, "src", "test", "resources", "kicad", "NanoV3.3.kicad_pcb.gz")
+PADCAL_PARTS = ("main", "nano", "controls")
+# The nano's top side (§1.9; the upload imports the top only): 40 pads the 22G tip cannot dispense, 15 with a plan, 5 of
+# those on parts whose other pads it cannot dispense (decision 4: not pasted unless asked).
+NANO_TOP = {"tip": 40, "planned": 15, "partial": 5}
+STEPS_PER_DEG, STEPS_PER_REV = 4.44, 1600
+# §20.1 item 15: the ripple control runs at 0.6 (il_sim_scene's ripple-0.45 sets the worst physical offset), so the
+# half-turn split fails with margin.
+RIPPLE_CLEAR_FAIL = 0.6
+JOB_ENDED = ("done", "failed", "stopped", "cancelled")
+
+
+def padcal_layout(sc):
+    """Where the pad calibration works on the scene's blank (machine mm): the blank surface from points 3 mm inside its
+    corners (on the scene's plane), the purge row 5 mm above its lower edge, the calibration area 3 mm above the row
+    (its own blank place at the corner), so the blank probe of the idle-dead-0 control looks 3 mm inside the edge."""
+    x0, y0, x1, y1 = sc["blank"]["rect"]
+
+    def z(x, y):
+        return round(scn.blank_contact_z(sc, x, y), 3)
+    area = {"x0Mm": x0 + 5, "y0Mm": y0 + 8, "widthMm": x1 - x0 - 10, "heightMm": y1 - y0 - 11}
+    return {"surface": [[x, y, z(x, y)] for x, y in ((x0 + 3, y0 + 3), (x1 - 3, y0 + 3), (x1 - 3, y1 - 3),
+                                                     (x0 + 3, y1 - 3))],
+            "purgeRow": {"surfaceName": "blank", "x0Mm": x0 + 5, "y0Mm": y0 + 5, "pitchXMm": 2.5, "pitchYMm": 0.0,
+                         "spots": int((x1 - x0 - 10) / 2.5) + 1},
+            "area": area, "blank": {"x": area["x0Mm"], "y": area["y0Mm"], "z": z(area["x0Mm"], area["y0Mm"])}}
+
+
+def padcal_scene(s, board, variant=None, balance="display", **paste):
+    """The session's SIM scene: the board truly at the planned seat, with §11.3's blocks (the SIM paste, the two weigh
+    coupons, the SIM balance, the bench blank colour), one negative control of §11.7 and paste overrides. Written
+    after setup_machine, so the paste's needle Z offset is the engine's (the session's config)."""
+    sc = scn.scene(board, nominal_seat(), BOARD_PLANE, config_dir=s.cfg, vacuum=scn.FAST_VACUUM)
+    scn.padcal(sc, balance=balance, config_dir=s.cfg)
+    if variant:
+        scn.variant(sc, variant, s.cfg)
+    sc["paste"].update(paste)
+    scn.write(s.cfg, sc)
+    time.sleep(0.6)  # the session reads the scene again once its stamp changed (250 ms)
+    return sc
+
+
+def wiped(s, *regions):
+    """The operator wiped the blank (and any coupon named): the SIM paste off, the purge row and the area free again."""
+    for r in regions or ("blank",):
+        s.api("POST", "/api/sim/paste/wipe", {"region": r})
+    s.api("POST", "/api/purge-row/reset", {})
+    s.api("POST", "/api/calibration-area/reset", {})
+
+
+def padcal_setup(s, balance="display"):
+    """setup_machine, the padcal scene, the simulator's probe timings, and the places on the SIM blank and coupons the
+    pad calibration needs (§12.2's preflight): (cfg, scene, layout)."""
+    cfg = setup_machine(s)
+    cfg.pop("_anchor_response")
+    sc = padcal_scene(s, session_board(s), balance=balance)
+    lay = padcal_layout(sc)
+    s.api("PUT", "/api/config", dict(scn.FAST_TIMINGS, purgeRow=lay["purgeRow"]))
+    s.api("PUT", "/api/surfaces/blank", {"points": lay["surface"], "note": "sim padcal: the SIM blank's plane"})
+    s.api("PUT", "/api/locations/blank", lay["blank"])
+    s.api("PUT", "/api/calibration-area", lay["area"])
+    for k in sc["coupons"]:
+        r = k["rect"]
+        s.api("PUT", "/api/locations/" + k["place"], {"x": (r[0] + r[2]) / 2, "y": (r[1] + r[3]) / 2, "z": k["z"]})
+    wiped(s)
+    return cfg, sc, lay
+
+
+def padcal_import(s, path, name):
+    """KiCad upload through BI's import (preview, then save): (preview, the saved board file)."""
+    raw = open(path, "rb").read()
+    gz = path.endswith(".gz")
+    pv, saved = import_kicad(s, gzip.decompress(raw) if gz else raw, os.path.basename(path)[:-3] if gz
+                             else os.path.basename(path), name)
+    return pv, saved["file"]
+
+
+def tied_plan(s, board, sc):
+    """Plan the board at BOARD_LOC, tie the board surface (the scene's plane, 2 mm inside the corners and the centre)
+    to that plan (I4), plan again."""
+    body = dict(BOARD_LOC, source="file", file=board)
+    first = s.api("POST", "/api/plan", body, timeout=120)
+    w, h = scn.board_size(board)
+    pts = [[round(c, 3) for c in scn.apply(nominal_seat(), bx, by)] + [round(scn.board_contact_z(sc, bx, by), 3)]
+           for bx, by in ((2, 2), (w - 2, 2), (w - 2, h - 2), (2, h - 2), (w / 2, h / 2))]
+    surf = s.api("PUT", "/api/surfaces/board", {"points": pts, "planId": first["planId"],
+                                                "note": "sim padcal: the scene's board plane"})
+    if not surf.get("boundToBoard"):
+        raise RuntimeError("board surface not bound to the board registration: %s" % json.dumps(surf)[:400])
+    return s.api("POST", "/api/plan", body, timeout=120)
+
+
+def preview_summary(pv):
+    """The upload preview's profile column: per package its outcome and reason, the warning codes and NEEDS_PROFILE."""
+    w = {x["code"]: x for x in pv.get("warnings") or []}
+    return {"counts": pv.get("counts"), "warning_codes": sorted(w),
+            "needs_profile": (w.get("NEEDS_PROFILE") or {}).get("text"),
+            "packages": {p["id"]: {"outcome": p.get("outcome"), "reason": p.get("profileReason"),
+                                   "short": p.get("profileShort")} for p in pv.get("packages") or []}}
+
+
+def groups_by_package(check):
+    out = {}
+    for g in check["groups"]:
+        sg = g.get("suggestion") or {}
+        out.setdefault(g["packageIds"][0], []).append(
+            {"group": g["group"], "reason": g["reason"], "pads": g["pads"], "partial": g.get("partial"),
+             "fixable": g.get("fixable"), "kind": sg.get("kind"), "steps": (sg.get("dots") or {}).get("steps"),
+             "perPad": (sg.get("dots") or {}).get("perPad"), "errorPct": (sg.get("predicted") or {}).get("errorPct"),
+             "confidence": sg.get("confidence"), "sentence": sg.get("sentence")})
+    return out
+
+
+def attested():
+    """The browser's attestations: the regulator read at the profile's 18 psi, the paste within its life (now)."""
+    now = int(time.time() * 1000)
+    return {"regulator": {"psi": 18, "atMs": now}, "pasteLifeAtMs": now}
+
+
+def calibrate_groups(s, plan_id, groups):
+    """Calibrate automatically these groups of the plan's check (POST /api/pad-calibrations, as the UI's two
+    presses), their suggestions saved as provisional pad types first."""
+    body = dict(attested(), planId=plan_id, groups=[g["group"] for g in groups], save=True,
+                suggestionIds={g["group"]: g["suggestion"]["id"] for g in groups})
+    return s.api("POST", "/api/pad-calibrations", body)
+
+
+def fixable(check):
+    return [g for g in check["groups"] if g.get("fixable")]
+
+
+def await_job(s, timeout=1800):
+    """The pad calibration's view once it waits for the readings or has ended."""
+    t0, last = time.time(), None
+    while time.time() - t0 < timeout:
+        last = s.api("GET", "/api/status")["padCalibration"]
+        if last and (last["state"] == "awaiting-reading" or last["state"] in JOB_ENDED):
+            return last
+        time.sleep(1)
+    raise TimeoutError("the pad calibration did not reach the readings: %s" % json.dumps(last)[:1500])
+
+
+def balance_reading(s, place):
+    """One coupon on the SIM balance, read once stable (grams, as the display shows)."""
+    s.api("POST", "/api/sim/balance/load", {"place": place})
+    t0 = time.time()
+    while time.time() - t0 < 30:
+        b = s.api("GET", "/api/sim/balance")
+        if b["stable"] and b["loaded"] == place:
+            return float(b["display"].split()[0])
+        time.sleep(0.2)
+    raise TimeoutError("the SIM balance did not settle with " + place)
+
+
+def weigh_and_type(s, job, skip=False):
+    """The operator at the SIM balance (§7.5, §11.6 display): each coupon weighed, wiped, weighed again; the readings
+    typed. skip: the readings skipped (the types stay provisional). (the job's view at its end, the readings)"""
+    readings = []
+    for k in [] if skip else job["awaiting"]["coupons"]:
+        full = balance_reading(s, k["place"])
+        n = s.api("POST", "/api/sim/paste/wipe", {"region": k["place"]})["wiped"]
+        empty = balance_reading(s, k["place"])
+        s.api("POST", "/api/sim/balance/load", {"place": None})
+        readings.append({"place": k["place"], "fullG": full, "emptyG": empty, "depositsWiped": n})
+    body = {"step": "readings", "wait": True, "skip": True} if skip else {
+        "step": "readings", "wait": True, "coupons": [{k: r[k] for k in ("place", "fullG", "emptyG")} for r in readings]}
+    return s.api("POST", "/api/pad-calibrations/%s/answer" % job["id"], body, timeout=900), readings
+
+
+def round_deposits(s, region):
+    """The SIM paste of a region or coupon place, threads left out."""
+    return [d for d in s.api("GET", "/api/sim/paste/deposits?region=" + region) if not d["thread"]]
+
+
+def job_summary(job):
+    r = job.get("result") or {}
+    return {"id": job["id"], "state": job["state"], "steps": [(x["key"], x["state"], x["text"]) for x in job["steps"]],
+            "ladder": [{k: l.get(k) for k in ("steps", "dots", "found", "hops", "threads", "residCv", "phase",
+                                               "phaseLimit", "dMeanMm", "d95Mm", "landingMeanMm", "pass", "failures")}
+                       for l in job.get("ladder") or []],
+            "warnings": job.get("warnings"), "sentence": r.get("sentence"), "outcome": r.get("outcome"),
+            "newPlanId": r.get("newPlanId"), "control": r.get("control"),
+            "groups": [{k: g.get(k) for k in ("label", "typeKey", "outcome", "text", "steps", "perPad", "mgPerPad",
+                                               "targetMg", "errorPct", "massConfirmed", "phase", "phaseLimit")}
+                       for g in r.get("groups") or []],
+            "crops": len(r.get("crops") or []), "predictions": [p.get("id") for p in r.get("predictions") or []]}
+
+
+def controller_io(s, since_ms):
+    """(sent, received) lines of the session's simulated controller since a time (uinav's gcode-io.log)."""
+    sent, recv = [], []
+    with open(os.path.join(s.sess_dir, "gcode-io.log")) as f:
+        for row in f:
+            p = row.rstrip("\n").split("\t", 3)
+            if len(p) == 4 and p[0].isdigit() and int(p[0]) >= since_ms:
+                if p[2] == ">":
+                    sent.append(p[3])
+                elif p[2] == "<":
+                    recv.append(p[3])
+    return sent, recv
+
+
+def b_counts(lines, start_b, b_count):
+    """Marlin's B step count before each line: steps since power-up (G92 moves only the origin, every B target is a
+    whole step), from the count the engine read before the stream."""
+    logical, count, out = start_b, b_count, []
+    for l in lines:
+        out.append(count)
+        code = strip(l).upper()
+        words = {k.upper(): float(v) for k, v in AXIS_WORD.findall(code)}
+        if "B" not in words:
+            continue
+        if code.startswith("G92"):
+            logical = words["B"]
+        elif MOTION.match(code):
+            count += java_round(words["B"] * STEPS_PER_DEG) - java_round(logical * STEPS_PER_DEG)
+            logical = words["B"]
+    return out
+
+
+def dose_blocks(streamed, start, plan, b_count, cfg):
+    """The run's B feeds against the plan's dose blocks (PC §6.2): per block the phase dot and flush dots on the purge
+    row, then its work dots; net steps and the count each starts at. (rows, ok) ok: every flush and work dot turns the
+    block's net steps, the first work dot of a partial-turn block starts at the start angle and every other one at the
+    start angle plus whole multiples of its net steps (the phase lock, count based), and no feed is left over."""
+    feeds = engine_dots(streamed, start)
+    counts = b_counts(streamed, start["B"], b_count)
+    angle = java_round(cfg["profile"]["startAngleDeg"] / 360.0 * STEPS_PER_REV) % STEPS_PER_REV
+    rows, k, ok = [], 0, True
+    for b in plan["blocks"]:
+        roles = (["phase"] if b["phaseDot"] else []) + ["flush"] * b["flushDots"] + ["work"] * b["dots"]
+        first_work = True
+        for role in roles:
+            if k >= len(feeds):
+                return rows, False
+            f = feeds[k]
+            k += 1
+            net = java_round((f.get("retract_to", f["b_to"]) - f["b_from"]) * STEPS_PER_DEG)
+            at = counts[f["line"]] % STEPS_PER_REV
+            rows.append({"block": b["index"], "role": role, "netSteps": net, "startCountMod1600": at})
+            if role != "phase":
+                ok &= net == b["netSteps"]
+            if role == "work" and b["netSteps"] % STEPS_PER_REV:  # whole turns have no phase
+                ok &= (at - angle) % b["netSteps"] == 0 and (not first_work or at == angle)
+                first_work = False
+    return rows, ok and k == len(feeds)
+
+
+def pad_deposits(plan, laid, tol=0.3):
+    """The SIM paste per pad (every deposit within tol of one of its dots) against the plan's predicted mass."""
+    per_pad = {}
+    for d in plan["dots"]:
+        for p in laid:
+            if math.hypot(p["x"] - d["x"], p["y"] - d["y"]) < tol:
+                per_pad[d["padId"]] = per_pad.get(d["padId"], 0.0) + p["mg"]
+    rows = {}
+    for p in plan["pads"]:
+        if not p.get("blocked") and p.get("predictedMassMg"):
+            got = per_pad.get(p["padId"], 0.0)
+            rows[p["padId"]] = {"packageId": p["packageId"], "laidMg": round(got, 3), "predictedMg": p["predictedMassMg"],
+                                "ratio": round(got / p["predictedMassMg"], 3)}
+    by_pkg = {}
+    for r in rows.values():
+        by_pkg.setdefault(r["packageId"], []).append(r["ratio"])
+    means = {k: round(sum(v) / len(v), 3) for k, v in by_pkg.items()}
+    ok = bool(rows) and all(0.7 < r["ratio"] < 1.3 for r in rows.values()) and all(
+        abs(m - 1) <= 0.10 for m in means.values())
+    return {"pads": rows, "packageMeanRatio": means, "ok": ok}
+
+
+def padcal_run(s, plan, cfg):
+    """Run a plan whole after the operator wiped the blank, the pads the tip cannot dispense skipped
+    (refuseFlaggedPads false: PC §20 decision 6's per-run skip has no API yet). The stream's dose blocks, the M114
+    Count lines of the controller, and the SIM paste per pad."""
+    wiped(s)
+    s.api("PUT", "/api/config", {"refuseFlaggedPads": False})
+    start = driver_start(s)
+    before = len(s.api("GET", "/api/sim/paste/deposits?region=board"))
+    since = int(time.time() * 1000)
+    acc_ = s.api("POST", "/api/run", {"planId": plan["planId"], "wait": True}, timeout=900, ok=(200, 202))
+    if not acc_.get("finished"):
+        s.wait_status(lambda x: not x["dispense"]["busy"], 1800, "engine idle after the run")
+    last = s.api("GET", "/api/runs/last")["run"]
+    sent, recv = controller_io(s, since)
+    counts = [int(m.group(1)) for m in (re.search(r"\bCount\b.*\bB:(-?\d+)", l) for l in recv) if m]
+    out = {"status": last.get("status"), "message": last.get("message"), "dotsPlanned": last.get("dotsPlanned"),
+           "dotsDone": last.get("dotsDone"), "purgeDots": last.get("purgeDots"),
+           "bCountAtStart": last.get("bCountAtStart"), "workStartAngleDeg": last.get("workStartAngleDeg"),
+           "warnings": last.get("warnings"), "blocks": plan.get("blocks"),
+           "m114_sent": sum(1 for l in sent if strip(l) == "M114"), "count_lines": counts}
+    out["feeds"], blocks_ok = dose_blocks(last.get("streamedLines") or [], start, plan, last.get("bCountAtStart") or 0,
+                                          cfg)
+    order = [d["padId"] for d in sorted(plan["dots"], key=lambda d: d["index"])]
+    at = {}
+    for i, p in enumerate(order):
+        at.setdefault(p, []).append(i)
+    out["pads_whole"] = all(i == list(range(i[0], i[0] + len(i))) for i in at.values())  # R5: a pad's dots in a row
+    out["deposits"] = pad_deposits(plan, s.api("GET", "/api/sim/paste/deposits?region=board")[before:])
+    out["ok"] = (out["status"] == "OK" and out["dotsDone"] == len(plan["dots"]) and blocks_ok and out["pads_whole"]
+                 and bool(counts) and counts[-1] == out["bCountAtStart"] and out["m114_sent"] >= 1
+                 and not any(SIM_COUNT_WARNING in w for w in out["warnings"] or []) and out["deposits"]["ok"])
+    out["blocks_ok"] = blocks_ok
+    return out
+
+
+def padcal_main(a):
+    """§14.5 on padcal.kicad_pcb: the upload's profile column, the plan's groups, Use for TestChip_A, Calibrate
+    automatically for SW_SPST and Test_Strip (the script is the operator at the SIM balance), characterized, the plan
+    made at its end run with the WSON skipped, then the reconnect control of §11.7."""
+    s = Session(a, "padcal-main")
+    res, ok = {"session": s.name}, {}
+    try:
+        cfg, sc, res["layout"] = padcal_setup(s)
+        pv, board = padcal_import(s, KICAD_PADCAL, "padcal")
+        sc = padcal_scene(s, board)
+        res["preview"] = pp = preview_summary(pv)
+        reasons = {k: v["reason"] for k, v in pp["packages"].items() if v["reason"]}
+        ok["preview"] = ("NEEDS_PROFILE" in pp["warning_codes"] and "NO_PAD_TYPE" not in pp["warning_codes"]
+                         and reasons == {"TestChip_A": "no-type", "SW_SPST_3.9x2.9mm": "no-type",
+                                         "Test_Strip_0.62x1.50": "no-type",
+                                         "WSON-8-1EP_2x2mm_P0.5mm_EP0.9x1.6mm": "tip"})
+
+        # the plan's profile check: J and Q new pad types, T uses chip-0603, the WSON's two groups not dispensable
+        plan = tied_plan(s, board, sc)
+        g = groups_by_package(plan["profileCheck"])
+        res["check"] = {"fixable": plan["profileCheck"]["fixable"], "groups": g}
+        j, q, t = g["SW_SPST_3.9x2.9mm"][0], g["Test_Strip_0.62x1.50"][0], g["TestChip_A"][0]
+        ok["check"] = (plan["profileCheck"]["fixable"] == 3 and (j["kind"], j["steps"], j["perPad"]) == ("new", 800, 2)
+                       and (q["kind"], q["steps"], q["perPad"]) == ("new", 400, 2) and t["kind"] == "use"
+                       and [u["reason"] for u in g["WSON-8-1EP_2x2mm_P0.5mm_EP0.9x1.6mm"]] == ["tip", "tip"])
+
+        # Use for TestChip_A: the mapping, planned again
+        tg = next(x for x in plan["profileCheck"]["groups"] if x["group"] == t["group"])
+        ap = s.api("POST", "/api/pad-profile/apply", {"planId": plan["planId"], "groups": [t["group"]], "choice": "use",
+                                                      "suggestionIds": {t["group"]: tg["suggestion"]["id"]}})
+        plan_id = ap.get("newPlanId")
+        check = s.api("GET", "/api/pad-profile/check?planId=" + str(plan_id))
+        res["use"] = {"applied": [(x["group"], x["kind"], x["typeKey"]) for x in ap.get("applied") or []],
+                      "newPlanId": plan_id, "fixableAfter": check.get("fixable")}
+        ok["use"] = bool(plan_id) and check["fixable"] == 2 and "TestChip_A" not in groups_by_package(check)
+
+        # Calibrate automatically: the before-start summary, then the job up to the readings
+        pv2 = s.api("GET", "/api/pad-calibrations/preview?planId=%s&groups=all&regulatorPsi=18&regulatorAtMs=%d"
+                           "&pasteLifeAtMs=%d" % (plan_id, int(time.time() * 1000), int(time.time() * 1000)))
+        res["before_start"] = {k: pv2.get(k) for k in ("sentence", "needsText", "refusal", "estimatedSeconds",
+                                                       "pasteMg", "blank", "purgeSpots")}
+        ok["before_start"] = (pv2.get("refusal") is None and "Lays 76 test dots on the blank (28 half-turn, 48 "
+                              "quarter-turn)" in pv2["sentence"] and "it needs you once" in pv2["sentence"])
+        t0 = time.time()
+        started = calibrate_groups(s, plan_id, fixable(check))
+        job = await_job(s)
+        res["job_to_readings_s"] = round(time.time() - t0, 1)
+        laid = {p: len(round_deposits(s, p)) for p in ("coupon1", "coupon2")}
+        steps = {x["key"]: x["text"] for x in job["steps"]}
+        res["awaiting"] = {"id": started.get("id"), "state": job["state"], "steps": steps,
+                           "coupons": [{k: c.get(k) for k in ("place", "steps", "dots", "found", "expectedMg")}
+                                       for c in (job.get("awaiting") or {}).get("coupons") or []],
+                           "laid": laid, "warnings": job.get("warnings")}
+        ok["engine_steps"] = (job["state"] == "awaiting-reading" and steps.get("coupons") == "coupon1 and coupon2 found "
+                              "and touched" and steps.get("ladder") == "76 dots: half ok, quarter ok"
+                              and steps.get("weigh") == "136 quarter-turn dots on coupon1, 68 half-turn dots on coupon2"
+                              and laid == {"coupon1": 136, "coupon2": 68} and not job.get("warnings"))
+
+        # the operator weighs, wipes and weighs again; the decision and the plan follow
+        done, res["readings"] = weigh_and_type(s, job)
+        res["result"] = jr = job_summary(done)
+        by_group = {x["group"]: x for x in done["result"]["groups"]}
+        jt, qt = by_group.get(j["group"]) or {}, by_group.get(q["group"]) or {}
+        ok["result"] = (done["state"] == "done" and jr["outcome"] == "characterized"
+                        and jr["sentence"].startswith("Characterized ") and jr["sentence"].endswith("; planned again.")
+                        and all(x.get("outcome") == "characterized" and x.get("massConfirmed") for x in (jt, qt))
+                        and abs((jt.get("mgPerPad") or 0) - 2.30) <= 2.30 * 0.05
+                        and abs((qt.get("mgPerPad") or 0) - 1.15) <= 1.15 * 0.05
+                        and (jr["control"].get("drift") or "").startswith("the validated half turn now gives 1.1")
+                        and jr["crops"] >= 6 and len(jr["predictions"]) == 8)
+        crop = (done["result"].get("crops") or [{}])[0].get("after")
+        png = urllib.request.urlopen(s.base + crop, timeout=30).read() if crop else b""
+        ok["crops_load"] = png[:4] == b"\x89PNG"
+
+        # what was written: the types, one pad_calibrations row each, the weighings, all made in the simulator
+        types = {t_["typeKey"]: t_ for f in s.api("GET", "/api/pad-types")["families"] for t_ in f["types"]}
+        rows = s.api("GET", "/api/pad-calibrations")
+        recs = s.api("GET", "/api/dose-records?freshOnly=true")
+        mass = [r for r in recs if r["kind"] == "mass"]
+        res["written"] = {
+            "types": {k: {f: types[k].get(f) for f in ("status", "dotSteps", "dotsPerPad", "origin", "massPerPadMg")}
+                      for k in (jt.get("typeKey"), qt.get("typeKey")) if k in types},
+            "pad_calibrations": [{k: r.get(k) for k in ("typeKey", "outcome", "steps", "dotsPerPad", "massPerPadMg",
+                                                         "simulated")} for r in rows],
+            "mass_records": [{k: r.get(k) for k in ("couponPlace", "steps", "n", "totalMg", "mgPerDot", "mgPerStep",
+                                                     "confirmedBy", "method", "simulated")} for r in mass]}
+        ok["written"] = (all(types.get(k, {}).get("status") == "characterized"
+                             and types[k].get("origin") == "auto-calibrated" for k in (jt.get("typeKey"), qt.get("typeKey")))
+                         and len(rows) == 2 and all(r["simulated"] and r["outcome"] == "characterized" for r in rows)
+                         and len(mass) == 2 and all(r["simulated"] and r["method"] == "typed"
+                                                    and abs(r["mgPerStep"] - 0.575 / 400) <= 0.575 / 400 * 0.04
+                                                    for r in mass))
+
+        # the plan made at the end: nothing left to fix but the WSON, two dose blocks; run it with the WSON skipped
+        nxt = s.api("GET", "/api/plan/" + str(jr["newPlanId"]))
+        res["next_plan"] = {"planId": nxt["planId"], "fixable": nxt["profileCheck"]["fixable"],
+                            "blocked": sorted({p["packageId"] for p in nxt["pads"] if p.get("blocked")}),
+                            "blocks": [(b["netSteps"], b["dots"], b["pads"]) for b in nxt["blocks"]]}
+        ok["next_plan"] = (nxt["profileCheck"]["fixable"] == 0 and res["next_plan"]["blocked"]
+                           == ["WSON-8-1EP_2x2mm_P0.5mm_EP0.9x1.6mm"] and res["next_plan"]["blocks"]
+                           == [(800, 18, 14), (400, 12, 6)])
+        res["run"] = padcal_run(s, nxt, cfg)
+        ok["run"] = res["run"]["ok"]
+
+        # §11.7 reconnect: the quarter-turn camera records are stale, the weighings are not; the run refuses the
+        # 400 block (I11) until the start angle is confirmed
+        s.api("POST", "/api/stop", {})
+        s.wait_status(lambda x: not x["machine"]["enabled"], 30, "disabled")
+        s.api("POST", "/api/machine/enable")
+        s.wait_status(lambda x: x["machine"]["enabled"], 30, "enabled")
+        s.api("POST", "/api/machine/home", {"wait": True}, timeout=180)
+        wiped(s)
+        refused = s.api("POST", "/api/run", {"planId": nxt["planId"]}, ok=(409,))
+        recs = s.api("GET", "/api/dose-records")
+        quarter = [r for r in recs if r["steps"] == 400 and r["kind"] in ("optical", "coupon")]
+        s.api("POST", "/api/screw/start-angle", {"note": "sim padcal: the controller was not power-cycled"})
+        after = s.api("GET", "/api/plan/" + nxt["planId"])["interlocks"]
+        res["reconnect"] = {"run": refused.get("reason"), "quarter_records": [(r["kind"], r["whyStale"]) for r in quarter],
+                            "mass_fresh": [r["fresh"] for r in recs if r["kind"] == "mass"],
+                            "after_confirm": [v["code"] for v in after.get("violations") or []]}
+        ok["reconnect"] = ("I11: the controller (re)connected after the screw start angle was set" in refused.get(
+            "reason", "") and bool(quarter) and all(r["whyStale"] == "made before the controller last connected: the "
+                                                    "screw angle may have moved" for r in quarter)
+            and res["reconnect"]["mass_fresh"] == [True, True] and "I11" not in res["reconnect"]["after_confirm"])
+    except Exception:
+        res["error"] = traceback.format_exc()
+        log("padcal main:", res["error"])
+    finally:
+        res["checks"] = ok
+        res["pass"] = len(ok) == 11 and all(ok.values()) and "error" not in res
+        s.stop()
+    return res
+
+
+def padcal_nano(a):
+    """The Arduino Nano (the next job): its upload's profile column, the top side's split (§14.5: 40 tip, 15 with a
+    plan, 5 partial), Calibrate automatically for its fixable groups, and the plan made at the end run."""
+    s = Session(a, "padcal-nano")
+    res, ok = {"session": s.name}, {}
+    try:
+        cfg, sc, res["layout"] = padcal_setup(s)
+        pv, board = padcal_import(s, KICAD_NANO, "nano")
+        sc = padcal_scene(s, board)
+        res["preview"] = pp = preview_summary(pv)
+        reasons = {k: v["reason"] for k, v in pp["packages"].items() if v["reason"]}
+        ok["preview"] = ("NEEDS_PROFILE" in pp["warning_codes"] and "NO_PAD_TYPE" not in pp["warning_codes"]
+                         and reasons.get("SW_SPST_3.9x2.9mm") == "no-type"
+                         and reasons.get("LED_0805_2012Metric") == "below-gate"
+                         and all(reasons.get(k) == "tip" for k in (
+                             "USB_Mini-B_Lumberg_2486_01_Horizontal", "VQFN-32-1EP_5x5mm_P0.5mm_EP3.254x3.254mm",
+                             "Resonator_SMD_Murata_CSTxExxV-3Pin_3.0x1.1mm")))
+        plan = tied_plan(s, board, sc)
+        chk = plan["profileCheck"]
+        tip = sum(g["pads"] for g in chk["groups"] if g["reason"] == "tip")
+        res["split"] = {"tip": tip, "planned": pv["counts"]["pastePads"] - tip,
+                        "partial": sum(g["pads"] for g in chk["groups"] if g.get("partial"))}
+        res["check"] = {"fixable": chk["fixable"], "groups": groups_by_package(chk)}
+        ok["split"] = res["split"] == NANO_TOP
+        fix = {k: v[0] for k, v in res["check"]["groups"].items() if v[0]["fixable"]}
+        ok["groups"] = (sorted(fix) == ["LED_0805_2012Metric", "SW_SPST_3.9x2.9mm"]
+                        and (fix["SW_SPST_3.9x2.9mm"]["steps"], fix["SW_SPST_3.9x2.9mm"]["perPad"]) == (800, 2)
+                        and (fix["LED_0805_2012Metric"]["steps"], fix["LED_0805_2012Metric"]["perPad"],
+                             fix["LED_0805_2012Metric"]["confidence"]) == (1600, 1, "low"))
+
+        t0 = time.time()
+        calibrate_groups(s, plan["planId"], fixable(chk))
+        job = await_job(s)
+        res["job_to_readings_s"] = round(time.time() - t0, 1)
+        done, res["readings"] = weigh_and_type(s, job)
+        res["result"] = jr = job_summary(done)
+        by_pkg = {x["label"].split(" · ")[0]: x for x in jr["groups"]}
+        led, sw = by_pkg.get("LED_0805_2012Metric") or {}, by_pkg.get("SW_SPST_3.9x2.9mm") or {}
+        # the SW pads are characterized; no allowed dose brings the LED within -25 %/+10 % of its amount (one turn
+        # +46 %, half a turn -27 % with the SIM's 2.30 mg per turn; ±33 % on the machine), so it stays provisional
+        ok["result"] = (done["state"] == "done" and jr["outcome"] == "partly"
+                        and sw.get("outcome") == "characterized" and led.get("outcome") == "provisional"
+                        and (led.get("errorPct") or 0) > 10 and "stays provisional: 1 one-turn dot gives" in (
+                            led.get("text") or "") and bool(jr["newPlanId"]))
+        nxt = s.api("GET", "/api/plan/" + str(jr["newPlanId"]))
+        pads = {p["padId"]: p for p in nxt["pads"]}
+        res["next_plan"] = {"planId": nxt["planId"], "dots": len(nxt["dots"]),
+                            "dispensed": sorted(k for k, p in pads.items() if not p.get("blocked")),
+                            "led_flags": sorted({f for p in pads.values() if p["packageId"].startswith("LED_0805")
+                                                 for f in p.get("flags") or []})}
+        ok["next_plan"] = (all(p["packageId"].startswith("SW_SPST") and p["dotsPerPad"] == 2 and p["dotSteps"] == 800
+                               for k, p in pads.items() if not p.get("blocked"))
+                           and len(res["next_plan"]["dispensed"]) == 2 and res["next_plan"]["led_flags"]
+                           == ["STATUS_BELOW_MIN"])
+        res["run"] = padcal_run(s, nxt, cfg)
+        ok["run"] = res["run"]["ok"]
+    except Exception:
+        res["error"] = traceback.format_exc()
+        log("padcal nano:", res["error"])
+    finally:
+        res["checks"] = ok
+        res["pass"] = len(ok) == 6 and all(ok.values()) and "error" not in res
+        s.stop()
+    return res
+
+
+def by_hand(s, part, steps, type_key):
+    """The by-hand path's engine step alone (§8): a ladder or a weighing of one dose, recorded, nothing decided."""
+    r = s.api("POST", "/api/pad-calibrations", dict(attested(), steps=[part], doseSteps=steps, typeKeys=[type_key],
+                                                    wait=True), timeout=900)
+    return r["result"] if r.get("finished") else await_job(s)
+
+
+def padcal_controls(a):
+    """§11.7's negative controls (the reconnect one is in padcal_main), each from a clean blank with a new paste loaded
+    (older dose records stop counting, so no control borrows another's evidence): every one ends with its reason."""
+    s = Session(a, "padcal-controls")
+    res, out = {"session": s.name, "variants": []}, []
+    try:
+        cfg, sc, res["layout"] = padcal_setup(s)
+        pv, board = padcal_import(s, KICAD_PADCAL, "padcal")
+
+        def control(name, how, act, expect, scene=None, **paste):
+            wiped(s, "blank", "coupon")
+            padcal_scene(s, board, scene or (name if name in scn.VARIANTS and scn.VARIANTS[name][0] else None),
+                         **paste)
+            s.api("POST", "/api/paste", {"name": "SIM paste", "lot": "control " + name})
+            before = len(round_deposits(s, "all"))
+            row = {"name": name, "changes": (scn.VARIANTS.get(name) or (None,))[0], "how": how,
+                   "expected": (scn.VARIANTS.get(name) or (None, None))[1]}
+            try:
+                job = act()
+                r = job.get("result") or {}
+                row.update(state=job["state"], sentence=r.get("sentence"), outcome=r.get("outcome"),
+                           laid=len(round_deposits(s, "all")) - before)
+                row["pass"] = bool(expect(job, row))
+                if name.startswith("ripple"):
+                    row["groups"] = [{k: g.get(k) for k in ("label", "outcome", "text", "phase", "phaseLimit")}
+                                     for g in r.get("groups") or []]
+                    row["ladder"] = [{k: l.get(k) for k in ("steps", "pass", "failures")} for l in job.get("ladder") or []]
+            except Exception:
+                row["error"] = traceback.format_exc()
+                row["pass"] = False
+            out.append(row)
+            log("padcal control", name, "PASS" if row["pass"] else "FAIL", row.get("sentence"))
+
+        def has(*texts):
+            return lambda job, row: all(t in (row.get("sentence") or "") for t in texts)
+
+        # ripple: the full job on J and Q (shorter weighing), the readings skipped: both stay provisional, the
+        # half-turn split and the quarter-turn swing named
+        def ripple():
+            plan = tied_plan(s, board, sc)
+            s.api("PUT", "/api/config", {"padCalibration": {"weighTargetMg": 35}})
+            calibrate_groups(s, plan["planId"], [g for g in fixable(plan["profileCheck"])
+                                                 if g["suggestion"]["kind"] == "new"])
+            job = await_job(s)
+            done, _ = weigh_and_type(s, job, skip=True)
+            s.api("PUT", "/api/config", {"padCalibration": {"weighTargetMg": 70}})
+            return done
+
+        def ripple_failed(job, row):
+            r = job["result"]
+            groups = {g["label"].split(" · ")[0]: g for g in r["groups"]}
+            quarter = [l for l in job["ladder"] if l["steps"] == 400]
+            return (r["outcome"] == "provisional" and len(groups) == 2
+                    and all(g["outcome"] == "provisional" for g in groups.values())
+                    and "the two start angles of the half-turn dots differ" in groups["SW_SPST_3.9x2.9mm"]["text"]
+                    and quarter and quarter[0]["pass"] is False
+                    and any("the quarter-turn dots swing" in f for f in quarter[0]["failures"]))
+        control("ripple-0.45", "Calibrate automatically J and Q (weighTargetMg 35), readings skipped; ripple %.1f at "
+                "the worst offset (PC §20.1 item 15)" % RIPPLE_CLEAR_FAIL, ripple, ripple_failed,
+                ripple=RIPPLE_CLEAR_FAIL)
+        control("report-count-off", "by hand: quarter-turn ladder", lambda: by_hand(s, "ladder", 400, "chip-0603"),
+                lambda job, row: job["state"] == "failed" and row["laid"] == 0 and has(
+                    "I11: the controller did not report the B step count (M114 Count): the start angle of a partial-turn "
+                    "dose cannot be set. Nothing was sent.")(job, row))
+        control("thread-zero-0.65", "by hand: quarter-turn ladder", lambda: by_hand(s, "ladder", 400, "chip-0603"),
+                lambda job, row: job["state"] == "done" and re.search(
+                    r"quarter-turn dots trailed a paste thread to the next dot \d+ times in \d+ moves \(at most \d+ "
+                    r"allowed\)", row.get("sentence") or ""))
+        control("cv-0.20", "by hand: half-turn ladder", lambda: by_hand(s, "ladder", 800, "chip-0603"),
+                lambda job, row: job["state"] == "done" and has(
+                    "the half-turn dots vary", "in area beyond the screw-angle pattern")(job, row))
+        control("landing-bias-0.2", "by hand: half-turn ladder", lambda: by_hand(s, "ladder", 800, "chip-0603"),
+                lambda job, row: job["state"] == "done" and has(
+                    "the dots landed 0.20 mm off on average (at most 0.15 mm allowed): check the needle offset")(job, row))
+        control("coupon1-off-1.5", "by hand: quarter-turn weighing", lambda: by_hand(s, "weigh", 400, "chip-0603"),
+                lambda job, row: job["state"] == "failed" and row["laid"] == 0 and has(
+                    "Coupon 1 is not at its place: its edge is 1.5 mm inside the weigh grid's margin")(job, row))
+        control("needle-gap-0.25", "by hand: half-turn ladder", lambda: by_hand(s, "ladder", 800, "chip-0603"),
+                lambda job, row: job["state"] == "failed" and has("were not found")(job, row))
+
+        def dead():
+            s.api("DELETE", "/api/surfaces/blank")  # the job probes the blank first
+            return by_hand(s, "ladder", 800, "chip-0603")
+        control("idle-dead-0", "by hand: half-turn ladder, no blank surface (the job probes it first)", dead,
+                lambda job, row: job["state"] == "done" and (job["steps"][0]["text"] or "").startswith(
+                    "blank surface probed: ") and (row.get("sentence") or "").endswith("every camera check passed.")
+                and "P7" in [p.get("id") for p in job["result"].get("predictions") or []])
+        dwell = cfg["profile"]["dwellMs"]
+
+        def short_dwell():
+            s.api("PUT", "/api/config", {"profile": {"dwellMs": 50}})
+            s.api("POST", "/api/screw/start-angle", {"note": "sim padcal: dwell 50 ms"})
+            try:
+                return by_hand(s, "ladder", 1600, "chip-0805")
+            finally:
+                s.api("PUT", "/api/config", {"profile": {"dwellMs": dwell}})
+                s.api("POST", "/api/screw/start-angle", {"note": "sim padcal: dwell back"})
+        control("dwell-50-one-turn", "by hand: one-turn ladder at profile dwellMs 50", short_dwell,
+                lambda job, row: job["state"] == "failed" and row["laid"] == 0 and has("asks the screw for", "I6")(
+                    job, row))
+    except Exception:
+        res["error"] = traceback.format_exc()
+        log("padcal controls:", res["error"])
+    finally:
+        res["variants"] = out
+        names = sorted(r["name"] for r in out)
+        res["pass"] = (names == sorted(k for k in scn.VARIANTS if k != "reconnect") and all(r["pass"] for r in out)
+                       and "error" not in res)
+        s.stop()
+    return res
+
+
+def scenario_padcal(a):
+    """PROFILE_CALIBRATION_DESIGN.md §14.5, one session per part (types and records of one part are no evidence in the
+    next): main (padcal.kicad_pcb, Calibrate automatically, the run, the reconnect control), nano (the next job's
+    upload, split and calibration), controls (the other negative controls of §11.7)."""
+    res = {}
+    for part in a.padcal_parts:
+        t0 = time.time()
+        res[part] = {"main": padcal_main, "nano": padcal_nano, "controls": padcal_controls}[part](a)
+        res[part]["seconds"] = round(time.time() - t0)
+        log("padcal", part, "PASS" if res[part]["pass"] else "FAIL", "%d s" % res[part]["seconds"])
+    res["pass"] = all(res[p]["pass"] for p in a.padcal_parts) and set(a.padcal_parts) == set(PADCAL_PARTS)
+    return res
+
+
 # --------------------------------------------------------------------------- DPH estimate
 
 def stream_tags(streamed, n_purge):
@@ -1548,13 +2221,20 @@ def bench_validation():
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("what", choices=["all", "load", "stop", "board", "register", "import", "bench", "dph"])
+    ap.add_argument("what", choices=["all", "load", "stop", "board", "register", "import", "padcal", "bench", "dph"])
     ap.add_argument("--stream", help="dph: a saved board-run-streamed.gcode")
     ap.add_argument("--purge-dots", type=int, default=8, help="dph: purge dots at the start of --stream")
     for k, v in DEF.items():
         ap.add_argument("--" + k.replace("_", "-"), dest=k, default=v)
     ap.add_argument("--prefix", default="il-acc-", help="uinav session name prefix")
+    ap.add_argument("--api-port", type=int, help="the sessions' web API ports: the first free one of N … N+8 "
+                                                 "(default any free port)")
+    ap.add_argument("--padcal-parts", default=",".join(PADCAL_PARTS),
+                    help="padcal: the parts to run (%s; the scenario passes only with all three)" % ", ".join(PADCAL_PARTS))
     a = ap.parse_args(argv)
+    a.padcal_parts = tuple(x for x in a.padcal_parts.split(",") if x)
+    if not a.padcal_parts or set(a.padcal_parts) - set(PADCAL_PARTS):
+        ap.error("--padcal-parts: a comma-separated subset of " + ",".join(PADCAL_PARTS))
     a.jar = os.path.abspath(a.jar)  # uinav starts java in its session dir
     if a.what == "dph":
         res = json.load(open(os.path.join(os.path.dirname(os.path.abspath(a.stream)), "results.json")))
@@ -1583,7 +2263,13 @@ def main(argv=None):
                                     "the board truly at BOARD_LOC; register and import move it (their results name "
                                     "the seats)",
                                     "register, import: cleanPadCheck on (the SIM camera draws the pads), the "
-                                    "simulator's probe timings %s after the first registration" % scn.FAST_TIMINGS],
+                                    "simulator's probe timings %s after the first registration" % scn.FAST_TIMINGS,
+                                    "padcal: the SIM scene's pad-calibration blocks (PROFILE_CALIBRATION_DESIGN.md "
+                                    "§11.3: SIM paste with 2.30 mg per turn, two weigh coupons, the SIM balance on "
+                                    "display, the bench blank colour); the blank surface typed from the scene's plane, "
+                                    "the purge row 5 mm above the SIM blank's lower edge, the calibration area and the "
+                                    "blank place above it, the coupon places on the scene's coupons (web API); "
+                                    "refuseFlaggedPads false for the runs (no per-run skip yet, PC §20 decision 6)"],
                "started": time.strftime("%Y-%m-%d %H:%M:%S")}
     rpath = os.path.join(a.out, "results.json")
 
@@ -1609,6 +2295,10 @@ def main(argv=None):
     if a.what in ("all", "import"):
         results["import"] = scenario_import(a)
         log("import", "PASS" if results["import"]["pass"] else "FAIL")
+        save()
+    if a.what in ("all", "padcal"):
+        results["padcal"] = scenario_padcal(a)
+        log("padcal", "PASS" if results["padcal"]["pass"] else "FAIL")
         save()
     if a.what in ("all", "board", "bench"):
         results["dph_model_bench_validation"] = bench_validation()

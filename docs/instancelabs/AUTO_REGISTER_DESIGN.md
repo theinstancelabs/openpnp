@@ -1677,12 +1677,15 @@ plan chip during the task (`renderChip`, W/run.js:595-611) reads `Registering ·
   - `IL.fix('check-z', {press2: 'check Z', run: post /api/machine/z-check})`.
 - **`fixesForCode`** (W/core.js:2418-2446):
   - I4 seat / surface-bad / plan → register, probe-by-hand.
-  - I4 whose message starts `the needle frame (…), … were measured before the home` → `check-z`. `Z moved` → links to
-    Setup › Needle Z frame.
+  - I4 whose message starts `the needle frame (…), … were measured before the home` → `check-z`. `Z moved` → the
+    remedy's next step under the same home (`IL.zMoved`, from `machine.zCheck.stale` and `needle.touchedOff`; final
+    round): `Open Needle Z frame`, then `Probe the blank…`, then `Run a touch-off` or `Confirm frame offset …`, then
+    `Register board` / `Do it by hand`; the touch-off and dot ladder cards list the frame or the blank first.
   - `REG`, ordered: `Look with the camera` (look-camera), `Change board` (board-step), `Plan without fiducial
     correction` (plan-unregistered), `Register again` (register), `Do it by hand` (probe-by-hand).
   - `PROBE` → `Register again`, `Do it by hand`; plus `[{view: 'probe-blank', label: 'Probe the blank…'}]` when the
-    message names the blank.
+    message names the blank; a board top the probe `cannot reach` (§4.4, final round) → `Board step`, `Open Needle Z
+    frame`, `Do it by hand` (also the links of `#register-why`).
   - `MACHINE` keeps `Home`.
 - **Task words.**
   - `TASK_WORD` (W/core.js:1258) gets `'board registration': 'Register'`, `'blank probe': 'Blank probe'` and

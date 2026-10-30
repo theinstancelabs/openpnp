@@ -102,7 +102,7 @@
 .pcal-coupon__in, .pcal-coupon__mg { grid-column: 1 / -1; }
 .pcal-coupon:first-child { border-top: 0; }
 .pcal-coupon--pending { grid-template-columns: minmax(0, 1fr); }
-.pcal-coupon--pending .pcal-coupon__in { grid-template-columns: repeat(2, minmax(0, 1fr)) auto; }
+.pcal-coupon--pending .pcal-coupon__in { grid-template-columns: repeat(2, minmax(0, 1fr)) auto auto; }
 .pcal-coupon__img { width: 72px; height: 72px; border-radius: 8px; border: 1px solid var(--line); object-fit: cover; background: var(--sunken); }
 .pcal-coupon__img--none { display: grid; place-items: center; font-size: 12px; color: var(--ink-3); }
 .pcal-coupon__t { font-size: 13.5px; line-height: 1.4; }

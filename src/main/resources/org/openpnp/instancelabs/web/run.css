@@ -11,8 +11,13 @@
 .hero__head .recipe { color: var(--ink); }
 .hero__note { font-size: 13.5px; color: var(--ink-2); line-height: 1.4; flex-basis: 100%; }
 .hero__note:empty { display: none; }
-.hero__stage { position: relative; flex: 1; min-height: 280px; background: var(--pv-bg); display: flex; flex-direction: column; }
-.hero__svgwrap { flex: 1; min-height: 0; position: relative; }
+.hero__stage { position: relative; flex: 1; background: var(--pv-bg); display: flex; flex-direction: column; }
+/* the drawing (#plan-svg, inset 12 + 4 px below) is never under 280 px tall (BOARD_IMPORT_DESIGN.md §5.13): a short window
+   (1024 × 768, or the preview row and the run's timeline open) scrolls the page instead of squeezing the board */
+.hero__svgwrap { flex: 1; min-height: 296px; position: relative; }
+/* so the page head stays two lines at most next to its buttons: a long board name ends in "…" (the full name is its
+   title, and in the Board step) */
+#run-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hero__svgwrap > svg.pv { position: absolute; inset: 12px 16px 4px; width: calc(100% - 32px); height: calc(100% - 16px); }
 .hero__empty { position: absolute; inset: 16px; display: grid; place-items: center; text-align: center; border: 2px dashed var(--line-2); border-radius: 14px; color: var(--ink-2); padding: 24px; }
 .hero__empty .ic { width: 38px; height: 38px; color: var(--ink-3); stroke-width: 1.5; margin: 0 auto 8px; display: block; }
@@ -227,6 +232,8 @@
 /* ================================================================ responsive: <= 1360 px */
 @media (max-width: 1360px) {
   #plan-summary { grid-template-columns: .75fr 1.15fr 1.55fr 1.45fr; }
+  #plan-summary .tile, #run-live .tile { padding-top: 10px; padding-bottom: 10px; }
+  .hero__head { padding-top: 10px; padding-bottom: 10px; }   /* with the tiles: the 280 px drawing fits 800 px of height */
   .stage-bar { gap: 8px; padding: 8px 10px 10px; }
   .legend { font-size: 12.5px; }
   .legend button, .legend span { padding: 0 6px; }
@@ -313,7 +320,10 @@ body:has(#ws-run:not([hidden])) #panel[data-view="recovery"] li[data-step="decid
 .reg-result .reg-why { margin-top: 6px; font-size: 14px; line-height: 1.42; }
 .reg-result .reg-why b { font-weight: 650; }
 .reg-result__main { min-width: 0; }
-.reg-result .ri__act { margin-top: 10px; }
+/* the fixes (up to four) take the card's whole width, side by side in equal columns (two in the 380 px panel, one row
+   when the panel is wide), a long label on two lines: one per line made the card 200 px of buttons */
+.reg-result .ri__act { margin-top: 10px; grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 136px), 1fr)); }
+.reg-result .ri__act .btn { height: auto; min-height: 44px; }
 .reg-note { font-size: 13.5px; line-height: 1.42; color: var(--ink-2); }
 #register-why .link { font: inherit; font-weight: 650; }
 .reg-byhand > summary { padding: 10px 0 6px; }

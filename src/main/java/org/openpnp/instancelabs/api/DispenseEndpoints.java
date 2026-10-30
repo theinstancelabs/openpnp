@@ -10,6 +10,7 @@ import java.util.concurrent.Future;
 import org.openpnp.Main;
 import org.openpnp.gui.MainFrame;
 import org.openpnp.instancelabs.board.BoardArtStore;
+import org.openpnp.instancelabs.board.BoardImporter;
 import org.openpnp.instancelabs.board.EdtRunner;
 import org.openpnp.instancelabs.dispense.BoardRegistration;
 import org.openpnp.instancelabs.dispense.Calibration;
@@ -147,6 +148,8 @@ final class DispenseEndpoints {
         out.put("run", ctx.tracker.snapshot());
         PadCalibrationJob pcal = ctx.padCalJobs.current();
         out.put("padCalibration", pcal == null || svc == null ? null : pcal.view());
+        // an upload holds the import pipeline: every engine endpoint refuses until it has read the file
+        out.put("boardImport", Views.map("reading", BoardImporter.reading()));
         if (svc == null) {
             d.put("running", false);
             d.put("available", false);

@@ -148,8 +148,11 @@
 .board-thumb[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: var(--accent-tint); }
 .board-thumb:disabled { cursor: default; opacity: .6; }
 .board-thumb__img { width: 56px; height: 48px; flex: none; border-radius: 6px; background: var(--pv-bg); object-fit: contain; }
-.board-thumb__t { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.board-thumb__t { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .board-thumb__n { font: 650 13px/1.2 var(--font-ui); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* name, size, parts (BOARD_IMPORT_DESIGN.md §5.9): with the size the name keeps one line (its full text is the
+   title and the list above), so the three lines fit the 64 px picture */
+.board-thumb__t:has(.board-thumb__size) .board-thumb__n { display: block; white-space: nowrap; text-overflow: ellipsis; }
 .board-thumb__s { font-size: 12px; color: var(--ink-2); line-height: 1.3; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .board-thumb__tag { font: 700 10px/1 var(--font-ui); letter-spacing: .06em; text-transform: uppercase; padding: 2px 5px; border-radius: 4px; background: var(--info-bg); color: var(--info); border: 1px solid var(--info-line); }
 .board-thumbs__more { flex: none; align-self: center; font-size: 13px; color: var(--ink-2); padding: 0 6px; white-space: nowrap; }

@@ -181,7 +181,7 @@
     { id: 'pf-psi', key: 'pressurePsi', label: 'Regulator pressure', unit: 'psi', range: '0.1 to 21.7', step: '0.1', min: '0.1', max: String(MAX_PSI),
       check: (v) => v > 0 && v <= MAX_PSI, err: 'Must be above 0 and at most 21.7 psi (DV-5005: 1.5 bar).',
       helpId: 'pf-psi-note', help: '16 psi starved the screw, 20 psi drooled. Set by hand on the regulator: there is no pressure sensor.' },
-    { id: 'pf-turn', key: 'netStepsPerDot', select: true, label: 'Screw turn per dot', unit: 'whole fractions of 1600 steps',
+    { id: 'pf-turn', key: 'netStepsPerDot', select: true, label: 'Screw turn per dot', unit: 'a quarter, half or whole turn',
       help: 'Every dot starts at the same screw angle again, so partial turns stay repeatable.' },
     { id: 'pf-dwell', key: 'dwellMs', int: true, label: 'Dwell', unit: 'ms', range: '0 to 5000', step: '10', min: '0', max: '5000',
       check: (v) => v >= 0 && v <= 5000, err: 'Must be 0 to 5000 ms.', help: 'Wait after the forward turn: the dot-size knob at a fixed pressure.' },
@@ -243,9 +243,11 @@
     }
     return out;
   }
+  /** The doses a profile may have (the engine's validate): a quarter, half or whole turn of the screw. */
+  const turnSteps = (rev) => [rev / 4, rev / 2, rev].filter((n) => Number.isInteger(n));
   function turnOptions(p) {
     const rev = p.stepsPerRev || 1600;
-    const steps = [rev / 8, rev / 4, rev / 2, rev, 2 * rev].filter((n) => Number.isInteger(n));
+    const steps = turnSteps(rev);
     const cur = readVal(FIELDS[2]);
     for (const extra of [p.netStepsPerDot, cur]) if (isNum(extra) && !steps.includes(Number(extra))) steps.push(Number(extra));
     return steps.sort((a, b) => a - b);
@@ -274,6 +276,10 @@
     if (!String(name || '').trim()) errs['pf-name'] = 'Give the profile a name.';
     const rev = p.stepsPerRev || 1600;
     const net = readVal(FIELDS[2]);
+    // a stored profile from before the rule (200 or 3200 steps) shows its value with the reason, until another is saved
+    if (isNum(net) && !turnSteps(rev).includes(Number(net))) {
+      errs['pf-turn'] = 'Must be ' + turnSteps(rev).join(', ').replace(/, (\d+)$/, ' or $1') + ' steps (a quarter, half or whole turn): the start angle repeats and a purge dot turns at most one revolution.';
+    }
     const partial = isNum(net) && net % rev !== 0;
     const purge = readVal(FIELDS[8]);
     if (!errs['pf-purge'] && partial && isNum(purge) && purge < 2) errs['pf-purge'] = 'At least 2 for a partial turn: the first purge dot sets the start angle, one more flushes it.';

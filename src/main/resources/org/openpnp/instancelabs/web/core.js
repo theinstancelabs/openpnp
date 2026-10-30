@@ -694,9 +694,19 @@
     || !!(s.pressure && ((s.pressure.state && s.pressure.state !== 'off') || s.pressure.engineRunActive))
     || !!(s.machine && s.machine.busy));
   IL.interlock = (s, id) => ((s && s.interlocks) || []).find((i) => i.id === id) || null;
+  /** A STOP left N1 low and nothing homed since (status.machine.home.n1Low, with a home policy): the operator looks first. */
+  IL.n1Low = function (status) {
+    const m = ((status || S.status) || {}).machine || {};
+    return !!(m.enabled && !m.homed && m.home && m.home.policy && m.home.n1Low);
+  };
+  /** What the Machine item says then; also why a task that homes by itself waits. */
+  IL.n1LowText = function (status) {
+    const hm = (((status || S.status) || {}).machine || {}).home || {};
+    return 'N1 stopped low (Z ' + IL.fmt(hm.n1Z, 2) + ' mm): look at the board under it. Home raises N1 first, then homes.';
+  };
   /**
    * Why a control is locked now, or null. need: {connected, homed, idle (default true), pressureOff (default true),
-   * engine}. Texts are the spec's (§13 "Locked control").
+   * engine, homes (the task homes by itself: it waits while N1 is low)}. Texts are the spec's (§13 "Locked control").
    */
   IL.lockReason = function (status, need) {
     const s = status || S.status;
@@ -709,9 +719,16 @@
       return lab === 'board' ? 'Locked while the board runs' : 'Locked while the ' + (lab === 'z check' ? 'Z check' : lab) + ' runs';
     }
     if (n.idle && IL.padProfile && IL.padProfile.jobLock(s)) return 'Locked while the pad calibration runs';
+    // the engine's own refusals (409): an upload holds the import pipeline; OpenPnP homes or jogs by itself, and what
+    // uses the machine waits (a task queued behind one of OpenPnP's own that fails would be dropped)
+    if (n.idle && s.boardImport && s.boardImport.reading) return 'A board file is being read (an upload takes up to about 20 s): wait for it to finish';
+    if (n.idle && (n.connected || n.homed) && m.enabled && m.busy) return 'OpenPnP is busy (homing or moving): wait for it to finish';
     if (n.pressureOff && pr.state && pr.state !== 'off') return 'Pressure is held: switch it off first';
     if (n.connected && !m.enabled) return 'Not connected: connect first';
     if (n.homed && !m.homed) return 'Not homed: home first';
+    // a task that homes by itself (Register board, Probe the blank, the pad calibration) waits, as Run does, while a STOP
+    // left N1 low: an automatic home must not drag N1 across the board (AUTO_REGISTER_DESIGN.md §8.2)
+    if (n.homes && IL.n1Low(s)) return IL.n1LowText(s);
     if (n.engine && (!d.running || !d.available)) return 'Dispenser unavailable' + (d.unavailableReason ? ': ' + d.unavailableReason : '');
     return null;
   };
@@ -815,7 +832,8 @@
   };
   /** Adopts a clean-pad report of the plan shown (or a subset) if newer than the one shown. */
   IL.adoptCleanCheck = function (cc, planId) {
-    if (!cc || !IL.planMatches(planId || cc.planId)) return false;
+    // a check refused at its start (the pressure hold, a STOP) looked at nothing: its reason is the run's (cleanCard)
+    if (!cc || (!cc.checkedAtMs && !(cc.pads || []).length) || !IL.planMatches(planId || cc.planId)) return false;
     if (S.cleanCheck && S.cleanCheck.checkedAtMs >= cc.checkedAtMs) return false;
     S.cleanCheck = cc;
     planVersion++;
@@ -901,6 +919,31 @@
     return 'surface-bad';
   }
   IL.i4Kind = i4Kind;
+  /** A touch-off, or the needle frame's own offset (I4 asks for one after the frame was recorded again). */
+  const touchOffFixes = (nd) => [{ href: '#calibrate/touch-off', label: 'Run a touch-off' }].concat(isNum(nd.anchorOffsetMm)
+    ? [{ fix: 'needle-confirm', label: 'Confirm frame offset ' + IL.fmt(nd.anchorOffsetMm, 3) + ' mm' }] : []);
+  /**
+   * After a failed Z check ("Z moved", AUTO_REGISTER_DESIGN.md §2.4) the remedy works under the same home, in this
+   * order: record the needle frame again, probe the blank (the touch-off's dots take their Z from it), touch off (a
+   * frame recorded after the home replaces the touch-off, which I4 then asks for again), register the board. What was
+   * measured again since the home drops out of status.machine.zCheck.stale. Returns {step: frame | blank | touch-off |
+   * register | done, fixes} while the last Z check of this home failed, else null.
+   */
+  IL.zMoved = function (status) {
+    const s = status || S.status || {};
+    const zc = (s.machine || {}).zCheck || {};
+    const d = s.dispense || {};
+    const nd = d.needle || {};
+    const last = zc.last;
+    if (!last || last.pass !== false || !zc.homeAtMs || last.homeAtMs !== zc.homeAtMs) return null;
+    const stale = new Set((zc.stale || []).map((x) => x.what));
+    const surf = (n) => stale.has("the '" + n + "' surface");
+    if (stale.has('the needle frame')) return { step: 'frame', fixes: [{ href: '#setup/needle', label: 'Open Needle Z frame' }] };
+    if (surf(d.blankLocationName || 'blank')) return { step: 'blank', fixes: [{ view: 'probe-blank', label: 'Probe the blank…' }] };
+    if (stale.has('the touch-off') || !nd.touchedOff) return { step: 'touch-off', fixes: touchOffFixes(nd) };
+    if (surf(d.boardSurfaceName || 'board')) return { step: 'register', fixes: [{ fix: 'register', label: 'Register board' }, { fix: 'probe-by-hand', label: 'Do it by hand' }] };
+    return { step: 'done', fixes: [] };
+  };
   const sentence = (t) => { const x = cap(String(t || '').trim()); return x && !/[.:!?]$/.test(x) ? x + '.' : x; };
 
   /**
@@ -951,9 +994,8 @@
         detail: 'Not connected to the controller.', fixes: [{ fix: 'connect', label: 'Connect', primary: true }] });
     } else if (!m.homed && m.busy) {
       add({ key: 'machine', code: 'MACHINE', title: 'Machine', state: 'live', value: 'homing', short: 'homing', detail: 'Homing…' });
-    } else if (!m.homed && hm && hm.policy && hm.n1Low) {
-      add({ key: 'machine', code: 'MACHINE', title: 'Machine', state: 'need', value: 'N1 low', short: 'N1 low',
-        detail: 'N1 stopped low (Z ' + IL.fmt(hm.n1Z, 2) + '): look at the board under it. Home raises N1 first, then homes.',
+    } else if (IL.n1Low(s)) {
+      add({ key: 'machine', code: 'MACHINE', title: 'Machine', state: 'need', value: 'N1 low', short: 'N1 low', detail: IL.n1LowText(s),
         fixes: [{ fix: 'home', label: 'Home now' }] });
     } else if (!m.homed && hm && hm.policy) {
       const why = IL.homeWhy(hm);
@@ -1570,7 +1612,7 @@
     const homeS = isNum(hm.estimateS) ? hm.estimateS : 25;
     steps.push(m.enabled && !m.homed && hm.policy && hm.n1Low
       ? { key: 'home', title: 'Home', wait: false, done: false,
-        detail: 'N1 stopped low (Z ' + IL.fmt(hm.n1Z, 2) + '): look at the board under it; Home raises N1 first, then homes.',
+        detail: 'N1 stopped low (Z ' + IL.fmt(hm.n1Z, 2) + ' mm): look at the board under it; Home raises N1 first, then homes.',
         fixes: [{ fix: 'home', label: 'Home now', primary: true }] }
       : autoHome
         ? { key: 'home', title: 'Home first', state: 'info', done: true,
@@ -1976,7 +2018,7 @@
         } else {
           const hm = m.home || {};
           const auto = hm.policy && !hm.n1Low ? ' Register board and Run home first (≈ ' + IL.fmtSecs(isNum(hm.estimateS) ? hm.estimateS : 25) + ').'
-            : hm.n1Low ? ' N1 stopped low (Z ' + IL.fmt(hm.n1Z, 2) + '): Home raises it first, then homes.' : ' Home before any move.';
+            : hm.n1Low ? ' N1 stopped low (Z ' + IL.fmt(hm.n1Z, 2) + ' mm): Home raises it first, then homes.' : ' Home before any move.';
           setCell(mc, 'need', undefined, 'Connected, not homed: positions are unknown.' + auto);
           IL.setText(homed, 'Not homed');
           showHome = !IL.taskRunning(s) && (!s.pressure || s.pressure.state === 'off');
@@ -2616,12 +2658,17 @@
           const pm = /^place '([^']+)'/i.exec(msg);
           return [{ href: '#setup/places' + (pm ? '/' + encodeURIComponent(pm[1]) : ''), label: 'Retake Z with N1' + (pm ? ' (' + pm[1] + ')' : '') }];
         }
-        // Z after a home: one N1 touch checks it; with no point left to touch, or a Z that moved, the frame (and
-        // everything after it) is measured again
+        // Z after a home: one N1 touch checks it; with no point left to touch the frame (and everything after it) is
+        // measured again; a Z that moved: the remedy's next step (IL.zMoved)
         if (k === 'zcheck') {
-          return /no point measured before/i.test(msg) || /^(I4:\s*)?z moved\b/i.test(msg) ? [{ href: '#setup/needle', label: 'Open Needle Z frame' }]
-            : [{ fix: 'check-z', label: 'Check Z' }];
+          if (/^(I4:\s*)?z moved\b/i.test(msg)) {
+            const zm = IL.zMoved(s);
+            return zm && zm.fixes.length ? zm.fixes : [{ href: '#setup/needle', label: 'Open Needle Z frame' }];
+          }
+          return /no point measured before/i.test(msg) ? [{ href: '#setup/needle', label: 'Open Needle Z frame' }] : [{ fix: 'check-z', label: 'Check Z' }];
         }
+        // the needle frame recorded again replaced the touch-off: touch off, or take the frame's own offset
+        if (k === 'needle' && /run a touch-off/i.test(msg)) return touchOffFixes(d.needle || {});
         if (k === 'other-surface') return [{ href: '#setup/surfaces', label: 'Open Probed surfaces' }];
         if (k === 'seat' || k === 'surface-bad' || k === 'plan') return [{ fix: 'register', label: 'Register board' }, { fix: 'probe-by-hand', label: 'Do it by hand' }];
         return [{ href: '#setup/needle', label: 'Open Needle Z frame' }];
@@ -2631,6 +2678,10 @@
         { fix: 'plan-unregistered', label: 'Plan without fiducial correction' }, { fix: 'register', label: 'Register again' },
         { fix: 'probe-by-hand', label: 'Do it by hand' }];
       case 'PROBE': {
+        // the board top Z lies too far under the needle frame for the probe's floor: fix the Z or the frame, or by hand
+        if (/cannot reach that height/i.test(msg)) {
+          return [{ fix: 'board-step', label: 'Board step' }, { href: '#setup/needle', label: 'Open Needle Z frame' }, { fix: 'probe-by-hand', label: 'Do it by hand' }];
+        }
         const out = [{ fix: 'register', label: 'Register again' }, { fix: 'probe-by-hand', label: 'Do it by hand' }];
         if (/\b(blank|purge row)\b|'(?!board')[^']+' (surface|place)/i.test(msg) && !/board top/i.test(msg)) out.push({ view: 'probe-blank', label: 'Probe the blank…' });
         return out;
@@ -2645,8 +2696,11 @@
   // core fix-its
   IL.fix('connect', { run: () => IL.api('POST', '/api/machine/enable'), ok: 'Connecting to the controller…',
     gate: (s) => (S.online === false ? IL.lockReason(s) : null) });
-  IL.fix('home', { press2: 'home', run: () => IL.api('POST', '/api/machine/home'), ok: 'Homing…',
-    gate: (s) => IL.lockReason(s, { connected: true }) });
+  // the home's own answer (wait): a home that fails says why (`homing failed: …`, the pressure hold, a STOP before it
+  // started), as the strip alone cannot; the engine waits up to 5 min for it
+  IL.fix('home', { press2: 'home', gate: (s) => IL.lockReason(s, { connected: true }),
+    run: () => { IL.toast('Homing…'); return IL.api('POST', '/api/machine/home', { wait: true }, { timeoutMs: 320000 }); },
+    ok: (r) => (r && isNum(r.n1RaisedFromZ) ? 'Homed: N1 was raised from Z ' + IL.fmt(r.n1RaisedFromZ, 2) + ' mm first.' : 'Homed.') });
   IL.fix('I11-confirm', {
     gate: (s) => IL.lockReason(s, { connected: true, pressureOff: false }),
     run: async () => { const p = await IL.api('POST', '/api/screw/start-angle', {}); IL.planRefreshSoon(); return p; },

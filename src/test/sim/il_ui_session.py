@@ -3,6 +3,7 @@
 
   python3 src/test/sim/il_ui_session.py start --jar target/openpnp-gui-0.0.1-alpha-SNAPSHOT.jar --name ui-qa1
   python3 src/test/sim/il_ui_session.py start --name ui-qa2 --kicad src/test/resources/kicad/ftp.kicad_pcb.gz --register
+  python3 src/test/sim/il_ui_session.py start --name ui-qa3 --padcal
   python3 src/test/sim/il_ui_session.py stop --name ui-qa1
 
 start: launches openpnp-uinav in SIM mode (never the serial port or cameras), enables and homes the simulated
@@ -19,10 +20,24 @@ with the board surface tied to the plan. The SIM top camera draws the board wher
                  the SIM scene then shows it
   --clean-check  keep the clean-pad guard on (the SIM camera draws the pads, so it sees the true seat)
   --no-plan      do not plan
+  --padcal       missing paste profiles and the pad calibration (PROFILE_CALIBRATION_DESIGN.md §11, §14.5): the SIM
+                 scene gets the SIM paste (2.30 mg per turn, not the engine's 2.11), the two weigh coupons, the SIM
+                 balance and the bench blank colour; the blank surface, the purge row, the calibration area, the blank
+                 place and the coupon places are set on the SIM blank and coupons as the sim acceptance's padcal
+                 scenario sets them; then src/test/resources/padprofile/padcal.kicad_pcb (or --kicad FILE) is
+                 uploaded and planned where it truly sits, its board surface tied. Profile › Needs a profile lists
+                 its groups; Calibrate automatically runs in the SIM. On the balance's display you are the operator:
+                   POST /api/sim/balance/load {"place": "coupon1"}   then GET /api/sim/balance (stable, display)
+                   POST /api/sim/paste/wipe {"region": "coupon1"}     then load and read it again, type both readings
+  --balance MODE with --padcal: display (default, you read it) or connected (the job reads the SIM balance itself and
+                 an emulated operator wipes the coupons between the readings)
+  --api-port N   the web API on the first free port of N … N+8 (default any free port)
 
 Prints one JSON line: {"session", "url", "port", "planId", "board", "config"} (config: the session's copy, where
-il_sim_scene.py amend/write changes the SIM scene) and, with --register,
-"registration": {"status", "seat", "movedMm", "newPlanId", "message"}. The session keeps running until 'stop'.
+il_sim_scene.py amend/write changes the SIM scene), with --register
+"registration": {"status", "seat", "movedMm", "newPlanId", "message"}, and with --padcal "preview" (the upload's
+NEEDS_PROFILE warning) and "needsProfile": the plan's groups [{"group", "label", "reason", "fixable", "suggestion"}].
+The session keeps running until 'stop'.
 """
 import argparse
 import gzip
@@ -44,26 +59,56 @@ def scene_of(board, config_dir):
     return scn.scene(board, TRUE_SEAT, acc.BOARD_PLANE, config_dir=config_dir, vacuum=scn.FAST_VACUUM)
 
 
+def padcal(s, a):
+    """--padcal: the sim acceptance's padcal set-up, the board uploaded where it truly sits and planned (or registered)."""
+    acc.padcal_setup(s, balance=a.balance)
+    s.api("PUT", "/api/config", {"cleanPadCheck": {"enabled": bool(a.clean_check)}})
+    path = a.kicad or acc.KICAD_PADCAL
+    pv, board = acc.padcal_import(s, path, os.path.basename(path).split(".kicad_pcb")[0])
+    sc = acc.padcal_scene(s, board, balance=a.balance)
+    out = {"session": s.name, "url": s.base + "/", "port": s.port, "planId": None, "board": board, "config": s.cfg,
+           "preview": acc.preview_summary(pv)["needs_profile"], "needsProfile": None}
+    if not a.no_plan:
+        if a.register:
+            p = s.api("POST", "/api/plan", dict(acc.BOARD_LOC, source="file", file=board), timeout=120)
+            r = acc.register(s, p["planId"])
+            out["registration"] = {k: r.get(k) for k in ("status", "seat", "movedMm", "newPlanId", "message")}
+            out["planId"] = r.get("newPlanId") or p["planId"]
+        else:
+            out["planId"] = acc.tied_plan(s, board, sc)["planId"]
+        check = s.api("GET", "/api/pad-profile/check?planId=" + out["planId"])
+        out["needsProfile"] = [{"group": g["group"], "label": g["label"], "reason": g["reason"],
+                                "fixable": g.get("fixable"), "suggestion": (g.get("suggestion") or {}).get("sentence")}
+                               for g in check["groups"]]
+    print(json.dumps(out))
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("what", choices=["start", "stop"])
-    ap.add_argument("--name", default="ui", help="session name (prefix il-ui- is added)")
+    ap.add_argument("--name", default="ui", help="session name (the prefix is added)")
+    ap.add_argument("--prefix", default="il-ui-", help="uinav session name prefix")
     ap.add_argument("--clean-check", action="store_true", help="keep the clean-pad guard on")
     ap.add_argument("--no-plan", action="store_true", help="do not plan the board")
     ap.add_argument("--register", action="store_true", help="plan, then Register board (about a minute)")
     ap.add_argument("--kicad", help="upload this KiCad board (.kicad_pcb[.gz]) and plan it instead of the bench board")
+    ap.add_argument("--padcal", action="store_true", help="the pad calibration's SIM set-up and padcal.kicad_pcb")
+    ap.add_argument("--balance", choices=["display", "connected"], default="display", help="--padcal: the SIM balance")
+    ap.add_argument("--api-port", type=int, help="the web API on the first free port of N … N+8")
     for k, v in acc.DEF.items():
         ap.add_argument("--" + k.replace("_", "-"), dest=k, default=v)
     a = ap.parse_args(argv)
-    a.prefix = "il-ui-"
     a.jar = os.path.abspath(a.jar)
     if a.what == "stop":
         os.system("%s --session %s stop >/dev/null 2>&1" % (acc.UINAV, a.prefix + a.name))
         print(json.dumps({"stopped": a.prefix + a.name}))
         return 0
-    a.out = os.path.join("/tmp", "il-ui-session-" + a.name)
+    a.out = os.path.join("/tmp", a.prefix + "session-" + a.name)
     os.makedirs(a.out, exist_ok=True)
     s = acc.Session(a, a.name, scene=scene_of)
+    if a.padcal:
+        return padcal(s, a)
     acc.setup_machine(s)
     s.api("PUT", "/api/config", dict(scn.FAST_TIMINGS, cleanPadCheck={"enabled": bool(a.clean_check)}))
     board = acc.session_board(s)
