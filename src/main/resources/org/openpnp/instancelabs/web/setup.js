@@ -249,7 +249,13 @@
     const farPlace = Object.keys(locs).filter((n) => n !== 'waste-test-dot').find((n) => placeZOff(locs[n].z) !== null);
     const placeBad = i4 && i4.state === 'blocked' && /^place '/i.test(i4.text || '') ? i4.text : farPlace ? placeZText(farPlace, locs[farPlace].z) : null;
     const names = Object.keys(locs).filter((n) => n !== 'waste-test-dot');
-    if (placeBad) {
+    // a Z check of this home failed: the places set before it are refused until N1 takes their Z again (the card says so)
+    const zcp = (((s && s.machine) || {}).zCheck || {}).places || [];
+    if (zcp.length) {
+      add({ key: 'places', title: 'Places', state: 'block', card: 'places', code: 'I4', value: 'Z moved: retake ' + zcp.length,
+        detail: 'Z moved at this home: take the Z of ' + zcp.map((x) => x.name).join(', ') + ' again with N1 touching.',
+        fixes: [{ href: '#setup/places/' + encodeURIComponent(zcp[0].name), label: 'Retake Z with N1' }] });
+    } else if (placeBad) {
       add({ key: 'places', title: 'Places', state: 'block', card: 'places', code: 'I4', value: 'check Z', detail: sentence(placeBad.split('. Place Z')[0]),
         fixes: [{ href: '#setup/places', label: 'Retake Z with N1' }] });
     } else if (missing.length) {

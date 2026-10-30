@@ -1440,11 +1440,14 @@ async function runFirstDots(page, n) {
         const ws = await page.evaluate(() => {
           const tr = document.querySelector('tr[data-place="waste"]');
           const b = tr.querySelector('button[data-action=save]');
+          const bu = document.querySelector('.bringup button[data-step="places"]');
           return { invalid: tr.querySelector('input[data-axis=z]').classList.contains('input--invalid'), save: b.textContent, locked: b.disabled, why: b.title,
-            state: document.querySelector('#card-places .card__state').textContent };
+            state: document.querySelector('#card-places .card__state').textContent, bu: bu ? { state: bu.parentElement.dataset.state, title: bu.title } : null };
         });
         check('Z moved 3: Places flags the waste Z, "Retake Z" locked until N1 takes it, the card says which places',
           ws.invalid && ws.save === 'Retake Z' && ws.locked && /^Z moved 0\.\d\d mm at the home of \d\d:\d\d: take this Z again with N1 touching/.test(ws.why) && /^Z moved · retake waste/.test(ws.state), ws);
+        check('Z moved 3: Setup\'s bring-up step Places is blocked and names the places to retake (not ok while the engine refuses them)',
+          !!ws.bu && ws.bu.state === 'block' && ws.bu.title === 'Places: Z moved at this home: take the Z of ' + mp.join(', ') + ' again with N1 touching.', ws.bu);
         // the operator takes each place's Z again with N1: 0.8 mm higher, as every surface of the scene
         for (const n of mp) {
           const row = page.locator('tr[data-place="' + n + '"]');
