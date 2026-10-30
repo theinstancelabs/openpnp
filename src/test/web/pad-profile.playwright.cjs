@@ -29,7 +29,8 @@
  * the result at 1440 and 1280 px, light and dark.
  *
  * Env: IL_BASE or IL_API_URL (the UI), PLAYWRIGHT_DIR, OUT_DIR (pad-profile-results.json), SHOTS_DIR (default OUT_DIR),
- * SIM_SCENE (the session's scene file: its config dir is amended), IL_KICAD_FIXTURES (src/test/resources/kicad).
+ * PP_SHOT_SIZES (default 1440x900,1280x800; e.g. add 1024x768), SIM_SCENE (the session's scene file: its config dir is
+ * amended), IL_KICAD_FIXTURES (src/test/resources/kicad).
  */
 'use strict';
 const path = require('path');
@@ -56,16 +57,21 @@ function check(name, cond, detail) {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const shots = [];
-const SIZES = [[1440, 900], [1280, 800]];
-/** The same moment at 1440 and 1280 px, light and dark (prep re-runs after a resize, e.g. to scroll). */
-async function shoot(page, name, prep) {
+/** PP_SHOT_SIZES "1440x900,1280x800,1024x768" (default the first two). */
+const SIZES = String(process.env.PP_SHOT_SIZES || '1440x900,1280x800').split(',').map((x) => x.split('x').map(Number));
+/**
+ * The same moment at each size, light and dark (prep re-runs after a resize, e.g. to scroll). panel: below 1100 px,
+ * where the panel sits under the main column, the shot starts at the panel instead (the view the moment is about).
+ */
+async function shoot(page, name, prep, panel) {
   if (process.env.PP_SHOTS === '0') return;
   for (const theme of ['light', 'dark']) {
     await page.evaluate((t) => IL.setTheme(t), theme);
     for (const [w, h] of SIZES) {
       await page.setViewportSize({ width: w, height: h });
       await sleep(350);
-      if (prep) await prep();
+      if (panel && w < 1100) await page.evaluate(() => window.scrollBy(0, document.getElementById('panel').getBoundingClientRect().top - document.getElementById('strip').getBoundingClientRect().bottom));
+      else if (prep) await prep();
       await sleep(250);
       // the steady screen: a toast of an earlier action and the flash of a row just scrolled to fade by themselves
       await page.evaluate(() => { const t = document.getElementById('toast'); if (t) t.hidden = true; for (const n of document.querySelectorAll('.flash')) n.classList.remove('flash'); });
@@ -79,29 +85,41 @@ async function shoot(page, name, prep) {
   await sleep(200);
 }
 /**
- * Scrolls the main column so that sel starts its own margin below the status strip: what comes before it ends just under
- * the strip (no line cut in half above it). When the page ends before sel can get there, the section around it
- * (fallback) starts there instead.
+ * Scrolls the main column (or the panel that holds sel) so that sel starts its own margin below the status strip: what
+ * comes before it ends just under the strip (no line cut in half above it). When the page ends before sel can get
+ * there, the section around it (fallback) starts there instead; when that cannot get there either, the card cut by the
+ * top edge is shown whole (the page then ends lower in the window).
  */
 const toTop = (page, sel, fallback) => page.evaluate(([x, fb]) => {
-  const place = (n) => {
+  const scroller = (n) => {
     let sc = n.parentElement;
     while (sc && sc !== document.body && !(sc.scrollHeight > sc.clientHeight + 1 && /(auto|scroll)/.test(getComputedStyle(sc).overflowY))) sc = sc.parentElement;
     const win = !sc || sc === document.body;
-    const top = win ? document.getElementById('strip').getBoundingClientRect().bottom : sc.getBoundingClientRect().top;
+    return { win, sc, top: win ? document.getElementById('strip').getBoundingClientRect().bottom : sc.getBoundingClientRect().top,
+      by: (dy) => { if (win) window.scrollBy(0, dy); else sc.scrollTop += dy; } };
+  };
+  const place = (n) => {
+    const v = scroller(n);
     let a = n;
-    while (a.parentElement && !a.previousElementSibling && a.parentElement !== sc) a = a.parentElement;
+    while (a.parentElement && !a.previousElementSibling && a.parentElement !== v.sc) a = a.parentElement;
     const prev = a.previousElementSibling;
-    const want = top + (prev ? Math.max(8, n.getBoundingClientRect().top - prev.getBoundingClientRect().bottom) : 16);
-    const dy = n.getBoundingClientRect().top - want;
-    if (win) window.scrollBy(0, dy); else sc.scrollTop += dy;
+    const want = v.top + (prev ? Math.max(8, n.getBoundingClientRect().top - prev.getBoundingClientRect().bottom) : 16);
+    v.by(n.getBoundingClientRect().top - want);
     return n.getBoundingClientRect().top - want;
   };
   const n = document.querySelector(x);
   if (!n) return;
   const f = fb && document.querySelector(fb);
-  if (place(n) > 2 && f) place(f);
+  if (place(n) <= 2 || (f && place(f) <= 2)) return;
+  const v = scroller(n);
+  const r = n.getBoundingClientRect();
+  const cut = document.elementsFromPoint(r.left + 24, v.top + 2).map((e) => e.closest('.card'))
+    .find((c) => c && (v.win || v.sc.contains(c)) && c.getBoundingClientRect().top < v.top - 1);
+  if (cut && v.top - cut.getBoundingClientRect().top < innerHeight * 0.6) v.by(cut.getBoundingClientRect().top - v.top - 8);
 }, [sel, fallback || null]);
+/** The filled buttons of Profile's Needs list, its "New pad type" and the side panel: one clear next action. */
+const primaries = (page) => page.evaluate(() => Array.from(document.querySelectorAll('#pt-needs .btn--primary, #btn-padtype-new.btn--primary, #panel .btn--primary'))
+  .filter((b) => b.getClientRects().length > 0).map((b) => b.id || b.textContent.trim()));
 const api = (page, method, p, body) => page.evaluate(([m, x, b]) => IL.api(m, x, b === null ? undefined : b, { timeoutMs: 120000 }), [method, p, body === undefined ? null : body]);
 const status = (page) => page.evaluate(() => IL.api('GET', '/api/status'));
 /** The two presses of a two-press button (§11): the second ≥ 300 ms after the first, once it asks for it. */
@@ -243,6 +261,9 @@ async function weighCoupon(page, place) {
       rows: document.querySelectorAll('#board-import-packages tbody tr').length,
       needs: Array.from(document.querySelectorAll('li[data-code="NEEDS_PROFILE"]')).map((l) => l.textContent) }));
     check('nano preview: a profile badge on every package row and one NEEDS_PROFILE warning', nano.badges === nano.rows && nano.rows > 0 && nano.needs.length === 1, nano);
+    const nanoLines = await page.evaluate(() => Array.from(document.querySelectorAll('li[data-code="NEEDS_PROFILE"] .pp-needs-w > li')).map((l) => l.textContent));
+    check('nano preview: the warning names the packages one line per reason, the tip\'s last', nanoLines.length === 3 && /^(Not calibrated yet|No pad type): /.test(nanoLines[0])
+      && /^Cannot be dispensed with the 22G tip: /.test(nanoLines[2]), nanoLines);
     // the profile split: the one NEEDS_PROFILE warning above the packages and their Profile column
     await shoot(page, 'nano-preview', () => page.evaluate(() => { const t = document.querySelector('#dlg-board-import .bi-wg--1') || document.getElementById('board-import-packages'); if (t) t.scrollIntoView({ block: 'start' }); }));
     await page.click('#btn-board-import-cancel').catch(() => page.keyboard.press('Escape'));
@@ -278,7 +299,15 @@ async function weighCoupon(page, place) {
     await sleep(800);
     const card = await page.evaluate(() => { const it = IL.ready().items.find((i) => i.key === 'padtypes'); return { state: it.state, fixes: it.fixes.map((f) => f.label), detail: it.detail }; });
     check('(2) Run › Checks: Pad types blocked with "Needs a profile: SW_SPST_3.9x2.9mm"', card.state === 'block' && card.fixes.includes('Needs a profile: SW_SPST_3.9x2.9mm'), card);
-    await shoot(page, 'run-readiness', () => page.evaluate(() => { const c = document.querySelector('.ri[data-key="padtypes"]'); if (c) c.scrollIntoView({ block: 'center' }); }));
+    // the readiness head (how many of 9) when the Pad types card fits under it, else the cards from "Needs you" on
+    await shoot(page, 'run-readiness', async () => {
+      const fits = await page.evaluate(() => {
+        const sc = document.getElementById('panel-scroll'), c = document.querySelector('.ri[data-key="padtypes"]');
+        sc.scrollTop = 0;
+        return !c || c.getBoundingClientRect().bottom <= Math.min(sc.getBoundingClientRect().bottom, innerHeight) - 8;
+      });
+      if (!fits) await toTop(page, '#chk-needs');
+    });
     const dots0 = await page.evaluate(() => document.querySelectorAll('#plan-svg circle.dot').length);
 
     // ---- (3) Profile › Needs a profile ---------------------------------------------------------------------------------
@@ -303,7 +332,9 @@ async function weighCoupon(page, place) {
     check('(4) the suggestion: "New pad type SW_SPST_3.9x2.9mm …"', card4.text.startsWith('New pad type SW_SPST_3.9x2.9mm'), card4.text);
     check('(4) 4 suggested dots drawn on J1 (circle.pv-sugg), none as circle.dot', card4.sugg === 4, card4);
     check('(4) the plan\'s dot count unchanged', card4.dots === dots0 || dots0 === 0, [dots0, card4.dots]);
-    await shoot(page, 'suggestion', () => toTop(page, '#pt-needs', '#pt-section'));
+    const p4 = await primaries(page);
+    check('(4) one filled button: the suggestion card\'s Calibrate automatically…', p4.length === 1 && p4[0] === 'btn-pt-sugg-auto', p4);
+    await shoot(page, 'suggestion', () => toTop(page, '#pt-needs', '#pt-section'), true);
 
     // ---- (5) Use Chip 0603 on TestChip_A --------------------------------------------------------------------------------
     await page.evaluate(() => IL.go('#profile/needs'));
@@ -335,7 +366,9 @@ async function weighCoupon(page, place) {
     await page.waitForFunction(() => !document.getElementById('btn-pcal-start').disabled, null, { timeout: 20000 }).catch(() => null);
     const why7 = await page.textContent('#pcal-why');
     check('(7) Start is not locked', !(await page.isDisabled('#btn-pcal-start')), why7);
-    await shoot(page, 'pcal-before', () => toTop(page, '#pt-needs', '#pt-section'));
+    const p7 = await primaries(page);
+    check('(7) one filled button: Calibrate', p7.length === 1 && p7[0] === 'btn-pcal-start', p7);
+    await shoot(page, 'pcal-before', () => toTop(page, '#pt-needs', '#pt-section'), true);
     // the gate's reasons while the button is armed (a lock between the two presses disarms it: the second press arms again)
     await page.evaluate(() => {
       window.__ppGate = [];
@@ -355,7 +388,7 @@ async function weighCoupon(page, place) {
     check('(7) the phases advance (coupons done, ladder now or done)', ph.some((p) => p[0] === 'coupons' && p[1] === '') && ph.some((p) => p[0] === 'ladder' && p[1] !== 'todo'), ph);
     check('(7) STOP and Cancel are reachable while it runs', await page.isVisible('#btn-stop') && await page.isVisible('#btn-pcal-cancel') && await page.isEnabled('#btn-pcal-cancel'),
       { stop: await page.isVisible('#btn-stop'), cancel: await page.isVisible('#btn-pcal-cancel') });
-    await shoot(page, 'job-running', () => toTop(page, '#pt-needs', '#pt-section'));
+    await shoot(page, 'job-running', () => toTop(page, '#pt-needs', '#pt-section'), true);
 
     // ---- (8) the readings ----------------------------------------------------------------------------------------------------
     const j8 = await waitJob(page, (j) => j.state === 'awaiting-reading' || ['failed', 'stopped', 'done'].includes(j.state), 600000, 'the readings prompt');
@@ -368,7 +401,7 @@ async function weighCoupon(page, place) {
     await page.waitForSelector('#pcal-ask:not([hidden]) #pcal-full-1', { timeout: 20000 });
     const cs = j8.awaiting.coupons;
     check('(8) after a reload the prompt is back with a field pair per coupon', cs.length >= 1 && (await page.$$('#pcal-coupons .pcal-coupon')).length === cs.length, cs.length);
-    await shoot(page, 'readings-prompt', () => toTop(page, '#pt-needs', '#pt-section'));
+    await shoot(page, 'readings-prompt', () => toTop(page, '#pt-needs', '#pt-section'), true);
     for (let i = 0; i < cs.length; i++) {
       const r = await weighCoupon(page, cs[i].place);
       await page.fill('#pcal-full-' + (i + 1), r.full.toFixed(3));
@@ -389,7 +422,9 @@ async function weighCoupon(page, place) {
     check('(9) at least 3 camera crops load', crops >= 3, crops);
     await page.waitForFunction(() => IL.S.plan && IL.S.status.padCalibration.result && IL.S.plan.planId === IL.S.status.padCalibration.result.newPlanId, null, { timeout: 30000 }).catch(() => null);
     check('(9) the plan made again is shown', await page.evaluate(() => IL.S.plan.planId === IL.S.status.padCalibration.result.newPlanId), j9.result && j9.result.newPlanId);
-    await shoot(page, 'result', () => toTop(page, '#pt-needs', '#pt-section'));
+    const p9 = await primaries(page);
+    check('(9) one filled button: Checks', p9.length === 1 && p9[0] === 'btn-pcal-plan', p9);
+    await shoot(page, 'result', () => toTop(page, '#pt-needs', '#pt-section'), true);
     await closePanels(page);
     await page.evaluate(() => IL.go('#profile/needs'));
     await sleep(1500);
