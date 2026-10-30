@@ -21,8 +21,8 @@ something new from core, ask for it (or add it to your module and propose it for
 | `pathpreview.js` | board import (web-render) | `IL.pathPreview`: the path preview row `#run-preview` (§5 › Board drawing). |
 | `padinspect.js` | board import (web-render) | `IL.padInspect`, panel view `pad`: the pad inspector (§5 › Board drawing). |
 | `board.css` | board import (web-render) | The board palette, `.pv--art` and the casing, picture modes, the preview row, the inspector. Loaded after `run.css`. |
-| `boardflow.js` | board import (web-flow, `il/bi-web-flow`) | `IL.boardFlow`: fills the hooks H1–H5 of `run.js` / `records.js` (§11; §5 › Board drawing). |
-| `boardimport.js` + `boardimport.css` | board import (web-flow, `il/bi-web-flow`) | `IL.boardImport`: the upload dialog `#dlg-board-import` and the page-wide drop guard (§5 › Board drawing). |
+| `boardflow.js` | board import (web-flow) | `IL.boardFlow`: fills the hooks H1–H5 of `run.js` / `records.js` (§11; §5 › Board drawing). |
+| `boardimport.js` + `boardimport.css` | board import (web-flow) | `IL.boardImport`: the upload dialog `#dlg-board-import` and the page-wide drop guard (§5 › Board drawing). |
 | `padprofile.js` + `padprofile.css` | profile calibration (pc-web) | `IL.padProfile`, the `pad-cal` view, Profile › Needs a profile and the suggestion card, the profile column of the upload, the pad inspector's profile notebox (§5 › Missing paste profiles; `PROFILE_CALIBRATION_DESIGN.md` §13). |
 | `run.js` + `run.css` | Run stage | `#ws-run`, Run panel steps (board, probe, checks, run, result, recovery override), run confirm `#dlg-run`. |
 | `setup.js` + `setup.css` | Setup stage | `#ws-setup` (cards §8.2), default panel `head`. `calibrate.js` may reuse `setup.css`. |
@@ -40,7 +40,7 @@ STOP): use `IL.press2`, `IL.dialog.open` / `IL.dialog.showNative`.
 
 ```
 <head>  core.js (sync)  → IL defined, theme applied, F9 / Space / Esc key handlers and the STOP clicks installed
-        boardart.js, boardview.js, pathpreview.js, padinspect.js, [boardflow.js, boardimport.js: web-flow],
+        boardart.js, boardview.js, pathpreview.js, padinspect.js, boardflow.js, boardimport.js, padprofile.js,
         run.js, setup.js, profile.js, calibrate.js, records.js (defer, in this order)
         app.js (defer)  → IL.boot()   (core boots by itself at DOMContentLoaded if app.js never ran)
 boot:   mount(root) of every registered workspace → route applied → show() of the active one
@@ -84,8 +84,11 @@ Registering after boot works (mounted at once).
 | `connectedAt`, `homedAt` | client-observed transition times |
 | `runPressureSince` | client stamp of the first poll of a run's pressure session (phase `dispensing` / `shots` / `dispensing calibration dots`) |
 
-Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, (Run: `['il.boardloc.<file>']`);
-`sessionStorage['il.recovery']`, (Run: `['il.run.regResult']`, Setup: `['il.setup.blankRun']`). A value left in
+Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, (Run: `['il.boardloc.<file>']`,
+`['il.run.source']`, `['il.run.sel']`, `['il.pv.picture']`); `sessionStorage['il.recovery']`, (Run:
+`['il.run.regResult']`, `['il.run.kinds']`, `['il.run.probe']`, `['il.run.decidedAt']`, Setup:
+`['il.setup.blankRun']`, the pad calibration's of §5 › Missing paste profiles). The board's paste and number are the server's (`plan.pasted`): no
+browser keeps them. A value left in
 `localStorage['il.newSeatAtMs']` by an older page is posted to the engine once, then removed.
 
 ## 4. Events (`IL.on(name, fn)` returns the unsubscribe function)
@@ -272,9 +275,8 @@ Constants: `IL.STOP_CODES`, `IL.STOP_TITLE`, `IL.STOP_LINE` (the exact §13 text
 
 ### Board drawing, path preview, pad inspector, upload (BOARD_IMPORT_DESIGN.md §5, 2026-10-29)
 
-The drawing, the preview and the inspector are merged on `il/bench-sync-autoreg`; the upload dialog and the glue
-(`boardflow.js`, `boardimport.js`) are on `il/bi-web-flow` and merge with §11 in the AR + BI integration slice. Nothing
-here moves the machine.
+The drawing, the preview, the inspector, the upload dialog and the glue (`boardflow.js`, `boardimport.js`) are merged
+with §11 (the AR + BI integration slice, on `il/rc1`). Nothing here moves the machine.
 
 - **`IL.boardview`** (`boardview.js` header has the full API): `create(host, {id, aria, onPad, onPart, lite})` makes
   two stacked SVGs in `.pv-host`: `svg.pv.pv-art` (the drawing, `aria-hidden`, no pointer events) under
@@ -309,7 +311,7 @@ here moves the machine.
   the page; a `.kicad_pcb` opens the dialog.
 - Tests: `boardview.playwright.cjs` (`run-boardview-test.sh`: a SIM session plans its upload of ftp.kicad_pcb, devproxy
   `--fixtures` adds mobo and a dot size; the drawing, the overlay, the preview, the inspector, the performance gate at 4×
-  CPU throttling, through boardflow's own glue), `board-import.playwright.cjs` (web-flow, 44
+  CPU throttling, through boardflow's own glue), `board-import.playwright.cjs` (web-flow, 57
   checks, run after `webui-sim.playwright.cjs` in the same SIM session).
 
 ### Missing paste profiles and the pad calibration (PROFILE_CALIBRATION_DESIGN.md §13, as built 2026-10-29)

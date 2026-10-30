@@ -2659,9 +2659,9 @@ safe zone (an automatic home is then harmless), and stays needed, showing N1's Z
 
 What is merged on `il/bench-sync-autoreg` (b81d73d21): wave 1 (vision, sim, engine-core), tasks-api, the fixes from
 the real sessions of 2026-10-28/29 (F1, F2, F4, F6, F8; `REAL_MACHINE_TODO.md` has the findings) and review 1. The
-web-ui slice is built on `il/ar-webui` (184 Playwright checks) and is merged with BI's web-flow by the AR + BI
-integration slice, which also wires the board art's keep-outs into `ProbeTargets` (§16 item 10; until then the API
-passes none, so a board without art gets the assumed corner holes below). The API as built is in `WEB_API.md` §3.2.
+web-ui slice (`il/ar-webui`) is merged with BI's web-flow on `il/rc1` (the AR + BI integration slice), and Register
+board passes the board art's keep-outs to `ProbeTargets` (§16 item 10, `RegistrationEndpoints`; a board without art
+gets the assumed corner holes below). The API as built is in `WEB_API.md` §3.2.
 Where the code differs from the sections above, the code is right:
 
 - **§3.3, the search bound (F4).** `searchRadiusMm` bounds the distance of a mark from the fiducial's **expected**
@@ -2723,9 +2723,12 @@ Where the code differs from the sections above, the code is right:
   dots use the lower of the anchor and the board's reference (§16 item 1). `POST /api/plan` refuses a board top Z
   more than 2.0 mm from the needle-frame surface (`MAX_BOARD_Z_FROM_ANCHOR_MM`).
 - **Not built or not covered.** No endpoint clears the needle anchor. §10.2 cases 3 (surface changed by +0.08 → full
-  probe), 6 (5 mm / −4.6° re-seat), 8 (fit against the previous registration), 12 (release lag 0.4 s), 15 (job board:
-  no headless seam) and 22 (a run with a simulated surface on a Marlin link) have no `RegistrationSimTest` case; the
-  engine-core and vision unit tests cover the code paths. Review 1's open minors (the probe floor of a board far below
-  the anchor, the camera look's mm/px) are listed in `REAL_MACHINE_TODO.md` for the final fix round; the frames
-  against the acceptance circle and the rotation-dependent fit check are fixed (the fit against the previous
-  registration compares the machine-frame stretch, `FiducialLocator.machineFrame`).
+  probe), 6 (5 mm / −4.6° re-seat), 8 (fit against the previous registration), 12 (release lag 0.4 s) and 15 (job
+  board: no headless seam) have no `RegistrationSimTest` case; the engine-core and vision unit tests cover the code
+  paths. Case 22 (a simulated surface on a Marlin link) is covered since the rc1 review: `ZFrameTest`, the plan and
+  the run after `RegistrationSimTest`'s switch to Marlin, and `DoseBlocksCouponFrameTest` for a coupon; only the
+  same-seat check's own guard (`probeBoard`'s `tied`) has no case, as `register()` drops a SIM-made registration on
+  a real link before it. Review 1's probe floor of a board far below the anchor is fixed in the final round
+  (`VacuumProber.Window` refuses a floor at or above the board top); the camera look's mm/px is listed in
+  `REAL_MACHINE_TODO.md`; the frames against the acceptance circle and the rotation-dependent fit check are fixed
+  (the fit against the previous registration compares the machine-frame stretch, `FiducialLocator.machineFrame`).
