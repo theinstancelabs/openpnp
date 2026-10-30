@@ -377,6 +377,28 @@ public class VacuumProberTest {
 
     // ------------------------------------------------------------------------------------------
 
+    /**
+     * rc1 review (machine safety), I1: an Error while N1 is down (here the progress listener's StackOverflowError; on the
+     * machine an OutOfMemoryError) still ends the point with the stop sequence, which vents N1. Only an Exception sent it
+     * before: N1's vacuum stayed on, N1 down on the surface.
+     */
+    @Test
+    public void anErrorWhileN1IsDownStillVentsIt() throws Exception {
+        Rig rig = new Rig();
+        VacuumProber.Window w = window(rig, 4.50, 4.50);
+        VacuumProber pr = new VacuumProber(rig.s, rig.n1, rig.io(), rig.look, rig.r, rig.ex::isAbortRequested, p -> {
+            if (p.lastZ != null) {
+                throw new StackOverflowError("test: an Error on the machine thread");
+            }
+        }, rig.mem);
+        assertThrows(StackOverflowError.class, () -> pr.probe(Arrays.asList(example()), w));
+        List<String> sent = rig.ch.sent;
+        int down = sent.indexOf("M106 P1 S180");
+        int stop = java.util.Collections.indexOfSubList(sent, ControllerCommands.STOP_SEQUENCE);
+        assertTrue(down >= 0 && stop > down, "the stop sequence after N1's vacuum went on: " + sent);
+        assertTrue(pr.needsRecovery());
+    }
+
     @Test
     public void theLineSequenceIsTheBenchBlock() throws Exception {
         Rig rig = new Rig();

@@ -257,6 +257,12 @@ public class DispenseExecutor {
             shutdown(result);
             throw e;
         }
+        catch (Error e) {
+            // I1 on anything that ends the stream (rc1 review: an OutOfMemoryError, or a listener's Error, left the
+            // pump and the valve on: no M410, no vents, no I7 limit after it)
+            shutdown(result);
+            throw e;
+        }
     }
 
     /**

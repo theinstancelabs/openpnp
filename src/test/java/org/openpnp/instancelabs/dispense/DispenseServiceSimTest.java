@@ -726,6 +726,33 @@ public class DispenseServiceSimTest {
     }
 
     /**
+     * rc1 review (machine safety), I1: an Error on the machine thread during a stream (on the machine an
+     * OutOfMemoryError; here a listener's StackOverflowError) still ends with the stop sequence, so the pump and the
+     * valve go off. Only an Exception ran the shutdown before: they stayed on, with no I7 on-time limit after it.
+     */
+    @Test
+    public void anErrorDuringAStreamStillSwitchesThePneumaticsOff() throws Exception {
+        DispenseListener bad = new DispenseListener() {
+            @Override
+            public void onDot(RunResult run, RunResult.DotTiming t, int done, int total) {
+                throw new StackOverflowError("test: an Error on the machine thread");
+            }
+        };
+        svc.addListener(bad);
+        sim.server.mark();
+        Future<RunResult> f = svc.runShots("waste", 360, 3, true);
+        ExecutionException e = assertThrows(ExecutionException.class, () -> f.get(60, TimeUnit.SECONDS));
+        svc.removeListener(bad);
+        assertTrue(e.getCause() instanceof StackOverflowError, String.valueOf(e.getCause()));
+        List<String> sent = sim.server.sinceMark();
+        int valve = sent.indexOf(ControllerCommands.VALVE_ON);
+        int stop = java.util.Collections.indexOfSubList(sent, ControllerCommands.STOP_SEQUENCE);
+        assertTrue(valve >= 0 && stop > valve, "the stop sequence after the valve opened: " + sent);
+        assertFalse(svc.isBusy());
+        assertEquals(RunResult.Status.ERROR, svc.getLastRun().status);
+    }
+
+    /**
      * Review 1 (machine safety), the pressure hold: a hold that went on after a task's API checks meets the
      * task on the machine thread, where every engine task looks at it again. Prime and the test dot (shots at
      * the waste pad), scale shots, the dot ladder, the touch-off and the clean-pad check refuse there, as runs
