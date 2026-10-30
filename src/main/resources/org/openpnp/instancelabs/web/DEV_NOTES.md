@@ -207,13 +207,22 @@ Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, (
   `POST /api/machine/z-check`); Setup registers `su-go-<card>`, `su-probe-blank`. Every gated fix-it row gets a visible
   `.fix-why` reason line from core (rows marked `[data-own-reason]` show their own).
   `IL.fixesForCode(code, status, message)`: an I4 refusal that names a place offers `Retake Z with N1` (#setup/places/<name>);
-  I4 seat / surface → `Register board`, `Do it by hand`; I4 "measured before the home" → `Check Z`; I4 "Z moved" or
-  "no point measured before the home" → Needle Z frame (`IL.i4Kind` → `zcheck` for all three); `REG` → `Look with the camera`, `Change board`, `Plan without fiducial correction`, `Register again`,
-  `Do it by hand`; `PROBE` → `Register again`, `Do it by hand` (+ `Probe the blank…` when it names the blank).
+  I4 seat / surface → `Register board`, `Do it by hand`; I4 "measured before the home" → `Check Z`; "no point
+  measured before the home" → Needle Z frame; I4 "Z moved" → the remedy's next step, `IL.zMoved(status)` →
+  `{step: frame | blank | touch-off | register | done, fixes}` (null unless the last Z check of this home failed:
+  `Open Needle Z frame`, `Probe the blank…`, `Run a touch-off` + `Confirm frame offset …`, `Register board` + `Do it by
+  hand`, from `machine.zCheck.stale` and `needle.touchedOff`) (`IL.i4Kind` → `zcheck` for all three); I4 "(run a
+  touch-off)" → `Run a touch-off`, `Confirm frame offset …`; `REG` → `Look with the camera`, `Change board`, `Plan
+  without fiducial correction`, `Register again`, `Do it by hand`; `PROBE` → `Register again`, `Do it by hand` (+
+  `Probe the blank…` when it names the blank; a board top the probe "cannot reach" → `Board step`, `Open Needle Z
+  frame`, `Do it by hand`).
   `IL.CODE_RE` is the code prefix of an engine text (`I4:`, `MACHINE:`, `CONFIG:`, `PLAN:`, `REG:`, `PROBE:`).
 - `IL.lockReason(status, {connected, homed, idle = true, pressureOff = true, engine, homes})` → the spec's locked-control
   text (`Locked while the board runs`, `Pressure is held: switch it off first`, `Not connected: connect first`, offline)
-  or null; `homes`: the task homes by itself (Register board, Probe the blank, the pad calibration) and waits, as Run
+  or null; with `idle`, also the engine's own 409s: an upload reading its file (`status.boardImport.reading`: `A board
+  file is being read (an upload takes up to about 20 s): wait for it to finish`) and, for what uses the machine
+  (`connected` or `homed`), OpenPnP homing or jogging by itself (`machine.busy`: `OpenPnP is busy (homing or moving):
+  wait for it to finish`); `homes`: the task homes by itself (Register board, Probe the blank, the pad calibration) and waits, as Run
   does, while a STOP left N1 low (`IL.n1Low(status)`, the text `IL.n1LowText(status)`). `IL.gate(btn, reason, reasonEl?)` disables with the reason (title + optional visible `.reason` line).
 
 ### Router, panel, dialogs, messages
@@ -318,7 +327,8 @@ modules (H-P9 in `index.html`). Every hook in another module's file is a no-op w
   `estimate(request)` (the preview, cached per request); `taskParts(run)`, `verdict(status)`, `jobLock(status)` (a
   job runs, decides or plans: everything else is locked), `jobActive(status)` (also while it waits for the readings),
   `needsHref()` (`#profile/needs` while the check has groups); `pendingForm(host, pending)` (readings of coupons whose
-  job is gone); `turnAdj(steps)` (`quarter-turn`, `half-turn`, `one-turn`).
+  job is gone, Save or Skip (two presses, `{skip: true}`) per coupon; either emits `coupon-reading`, on which Calibrate
+  reads its pending list again); `turnAdj(steps)` (`quarter-turn`, `half-turn`, `one-turn`).
 - **Fix-its** (`data-fix`): `profile-use` (arg: the group id; plans again), `profile-needs`, `pcal-open`, `pcal-area`,
   `pcal-wiped` (two-press).
 - **Views and routes**: Profile › Needs a profile is `#pt-needs` (the card above the pad types, filter button

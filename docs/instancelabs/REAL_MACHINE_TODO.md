@@ -376,10 +376,11 @@ job, or a test board.
     (or skips them with Setup › Settings › Refuse flagged pads off). Decide on a reflowed test board (one turn against
     half a turn) and raise the type by hand, or wait for the test-board ladder (`pc-ladder`, a follow-up).
 
-## Software limits to keep in mind on the machine (review 1, not fixed yet)
+## Software limits to keep in mind on the machine (review 1 and the final fix round)
 
-From the first review of the merged backend; each is listed for the final fix round. None changes what the items above
-ask, but each can explain a surprise on the machine.
+From the first review of the merged backend and the final fix round (E1 engine safety, E2 engine correctness, merged on
+`il/rc1`). Most are fixed; what is left is said in each. None changes what the items above ask, but each can explain a
+surprise on the machine.
 
 - **Board far below the needle anchor** (fixed in the final round). Planning accepts a board top up to 2.0 mm from
   the anchor, but the board probe's floor is 1.5 mm below the higher of the two. Register board now refuses before
@@ -396,11 +397,24 @@ ask, but each can explain a surprise on the machine.
 - **Pressure hold race** (fixed in the final round). Every engine task now looks at the hold again on the machine
   thread, prime, the test dot, shots, the dot ladder, the touch-off and the clean check included.
 - **After a failed Z check** (fixed in the final round) the remedy works under the same home, in this order: record
-  the needle frame again, probe the blank, touch off, register the board. Places carry no time: retake the waste
-  place's Z with N1 too, as nothing checks it against the move (the frame tolerance is 1.0 mm).
+  the needle frame again, probe the blank, touch off, register the board (the web UI's Z check blocker offers each
+  step in turn; the SIM browser test walks it). Places carry no time: retake the waste place's Z with N1 too, as
+  nothing checks it against the move (the frame tolerance is 1.0 mm).
 - **A STOP or failure during an engine home** (fixed in the final round) no longer leaves a stale start time behind.
+  A web STOP during the web home still answers `homing failed: machine disabled: User requested stop.` (OpenPnP's
+  disable listener writes its own reason), not "STOP pressed in the web UI".
+- **The pad calibration checks OpenPnP-busy only at its start**, not before each later engine step: do not use
+  OpenPnP's own Home or jog buttons while a calibration runs (its steps would refuse, or one could be dropped as
+  above).
 - **Fixed in the final fix round (E2):** the fiducial search frames tile the radius around the expected position (the
   first frame of a re-seated board's later fiducials may then hold the mark off-centre: one more centring look); the
   fit against the previous registration is compared in the machine frame (re-seat a board about 10° turned once to
   confirm it is accepted); two pads of one name are no split pad; a two-turn profile is refused by the settings; a test
   run with fewer dots lays whole pads; no run or probe starts while an upload reads its file.
+- **Left from E2:** a run started in the same instant an upload takes the import pipeline (well under a second) can
+  still overlap the parse: start runs with the upload dialog closed. A two-fiducial board near 45° re-seated by more
+  than about 13° can still be refused against its last registration (a similarity fit cannot separate the machine's
+  0.64 % X/Y anisotropy). The off-board check uses the outline's box: a part in a notch of a non-rectangular board is
+  not flagged. The clean-pad check keys its box by pad id, so two same-named pads of different sizes share one box. A
+  `dispense-config.json` still holding 200 or 3200 steps per dot refuses runs (CONFIG) until the profile is set to 400,
+  800 or 1600 (the bench uses 800).

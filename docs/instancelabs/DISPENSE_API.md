@@ -13,7 +13,11 @@ and the Z check (`AUTO_REGISTER_DESIGN.md`, marked *autoreg*), the board frame a
 (`PROFILE_CALIBRATION_DESIGN.md`, "PC", marked *profile*: the pure model `org.openpnp.instancelabs.padprofile`, the dose
 stream, `runDoseBlocks`, dose records and `applyPadCalibration`; the job that drives them is in the API layer,
 `WEB_API.md` §3.5). Written from the code on `il/pc-integration`; where it differs from PC §5–§7 this file follows the
-code. The test-board ladder (PC §20 decision 8, slice `pc-ladder`) is not in this PR: a follow-up.
+code. The test-board ladder (PC §20 decision 8, slice `pc-ladder`) is not in this PR: a follow-up. Updated on `il/rc1`
+for the final fix round (E1 engine safety, E2 engine correctness): the pressure hold looked at again on the machine
+thread by every task, a home that a STOP or a failure ends, the Z-check remedy under the same home, the blank's old
+points kept as a Z reference, the probe window against the board top, the stream's pad index, whole-pad test runs,
+the dose rule, the fiducial search and fit, and mass per dot laid.
 
 ## 1. Lifecycle
 
@@ -26,7 +30,7 @@ code. The test-board ladder (PC §20 decision 8, slice `pc-ladder`) is not in th
 | `public boolean isAvailable()` / `public String getUnavailableReason()` | Null-safe: if the dispenser nozzle (config `nozzle`, default `N2`, matched by id then name) does not exist, the service exists but every run method throws `IllegalStateException`. |
 | `public Nozzle getDispenserNozzle()` | May be null. |
 | `public Long getControllerConnectedAtMs()` | When OpenPnP last enabled (connected to) the controller; set by the machine listener. The B step count restarts at controller power-up, so the screw start angle is only valid after this time (I11). |
-| `public HomeTracker getHomeTracker()` · `public HomeTracker.Plan homePlan()` | *autoreg.* Whether a task must home first under `homeBeforeRun` and why (`whyCode` `always`, `home-unconfirmed`, `stopped`, `not-homed`, `homed`), the last home, and the estimate (the last home the engine timed, in memory; 25 s before). |
+| `public HomeTracker getHomeTracker()` · `public HomeTracker.Plan homePlan()` | *autoreg.* Whether a task must home first under `homeBeforeRun` and why (`whyCode` `always`, `home-unconfirmed`, `stopped`, `not-homed`, `homed`), the last home, and the estimate (the last home the engine timed, in memory; 25 s before). Every engine or API home ends with `HomeTracker.homeEnded()`, also one a STOP or a failure ended: no start time stays behind, so the next clean home (OpenPnP's own Home button) is `homed`, not `home-unconfirmed`. |
 | `public boolean isSimulatorConfirmed()` | *autoreg.* The controller answered as OpenPnP's simulator (`SimGuard`, or this service's `M115` at connect). Simulated registrations and surfaces are refused on a machine that is not. |
 | `public boolean hasTopCamera()` · `public Nozzle getProbeNozzle()` · `public double[] probeNozzleZ()` | *autoreg.* The top camera Register board needs; N1 (`PROBE_NOZZLE`); N1's raw Z and whether a STOP left it below the safe zone (`{z, low}`). |
 
@@ -97,7 +101,7 @@ One profile per pressure session, the same for the purge row and the work. Defau
 |---|---|---|
 | `name` | `"18 psi half turn"` | |
 | `pressurePsi` | 18 | A note: the regulator is set by hand (no sensor; I6). The window is narrow: 16 psi starved the screw, 20 psi drooled. Validated `0 < psi <= 21.7` (DV-5005 1.5 bar). |
-| `netStepsPerDot` | 800 | Net screw turn per dot in motor steps (half a revolution). Must divide 1600 (1600, 800, 400, …) or be 1600/3200, so the start angle repeats. |
+| `netStepsPerDot` | 800 | Net screw turn per dot in motor steps (half a revolution). Must be 400, 800 or 1600 (a quarter, half or whole turn of the 1600 steps of a revolution): the start angle repeats and a purge dot (the profile's dose) turns at most one revolution plus the 20° phase turn, the stream validator's cap. Anything else is a validation problem: `profile netStepsPerDot must be 400, 800 or 1600 steps (a quarter, half or whole turn of the 1600 steps of a revolution): the start angle repeats and a purge dot turns at most one revolution` (`PUT /api/config` 400, the `CONFIG` interlock for a stored profile). |
 | `suckBackDeg` | 10 | Suck-back after each dot, sent as `round(10 × 4.44)` = 44 steps. |
 | `startAngleDeg` | 298 | Screw angle at which the first work dot starts (calibration). |
 | `startAngleSetAtMs` | null | When it was set or confirmed; I11 needs it after the last controller connect. |
@@ -139,7 +143,10 @@ by `vision.PadCleanCheck` through `DotImager.brightFraction` (a default method; 
   needed;
 - `fiducialCheck {minFiducials 2 (2..10), searchRadiusMm 8.0 (1..12, at most 9 camera frames at the default camera
   size), seatToleranceMm 0.10 (0.01..1)}`: the radius bounds a fiducial's distance from its expected position (the
-  board's last registration, else its nominal seat);
+  board's last registration, else its nominal seat); the search frames tile that circle around the expected position
+  (at most 9, the one nearest the prediction first), and a fit is compared with the board's last registration in the
+  machine frame (the symmetric stretch of the polar decomposition, `FiducialLocator.machineFrame`), so a correct
+  re-seat at another angle is not refused for the machine's own X/Y anisotropy;
 - `vacuumProbe {startAboveMm 2.5, floorBelowMm 1.5, openAirMinCounts −1900000, openAirMaxCounts −1200000,
   alternates 4 (0..4), padKeepOutMm 1.4, vacuumSettleMs 1500, readDelayMs 70, boardSpots {}}` (`boardSpots`: board
   file name → 3..9 proven `[bx, by]` spots). Off the simulator a probe task refuses `vacuumSettleMs` below 1000 and
@@ -271,8 +278,9 @@ of PC §20.1: per pad, not per group). A type calibrated with another tip is `ST
 |---|---|
 | `public Future<RunResult> runBoard(BoardLocation bl) throws Exception` | `planBoard` + `runPlan`. |
 | `public Future<RunResult> runPlan(DispensePlan plan) throws Exception` | Never completes exceptionally for dispense failures: inspect `RunResult.status` (`OK`, `ABORTED`, `ERROR`, `REFUSED`), `message`, `interlocks`. |
-| `public Future<PadCleanReport> checkCleanPads(DispensePlan plan) throws Exception` | The clean-pad guard alone (camera only, pressure off), so the operator can wipe before a run. A run repeats it. |
+| `public Future<PadCleanReport> checkCleanPads(DispensePlan plan) throws Exception` | The clean-pad guard alone (camera only, pressure off), so the operator can wipe before a run. A run repeats it. Refused at its start (a STOP since it was queued, the machine not started, the pressure hold on): the returned report is empty (`ok` false, no pads, `checkedAtMs` 0, `isComplete()` false) and the reason is the run's (`getLastRun()`, `status.run`). |
 | `public Future<RunResult> runShots(String locationName, double rotationDeg, int count, boolean referenceSurface) throws Exception` | Manual prime / test dot at the waste place (`referenceSurface` true: the place is checked against the needle frame) and the scale workflow (shots into a cup: only the floor). Full I4. |
+
 | `public void abort(String reason)` | Thread-safe. The stream stops before its next line and sends the Stop sequence (I1). Also triggered by OpenPnP Stop/disable. |
 | `public boolean isBusy()`, `public RunResult getActiveRun()`, `public RunResult getLastRun()` | |
 | `public void addListener(DispenseListener l)` / `removeListener` | `onPhase(RunResult, String)`, `onDot(RunResult, RunResult.DotTiming, int done, int total)` (work dots only), `onDetail(RunResult, Map)` (*autoreg:* structured progress of Register board, the probes and a run's home and Z check), `onFinished(RunResult)`; called on the machine thread. |
@@ -280,14 +288,19 @@ of PC §20.1: per pad, not per group). A type calibrated with another tip is `ST
 | `public void setDotImager(DotImager imager)` | Override the camera/vision (default: top camera + `CameraCapture`/`DotInspector`; `brightFraction` for I10). |
 | `public Future<RegistrationResult> registerBoard(RegisterRequest req) throws Exception` | *autoreg.* Register board (`AUTO_REGISTER_DESIGN.md` §5.2): home if needed, the fiducials (`FiducialLocator`, the light on), the seat (`first` / `same` / `reseated`, §3.6), then for `probe` `AUTO` / `ALWAYS` the N1 probe of the board targets (`ProbeTargets`, each spot looked at first with `BareSpotCheck`) or, for a same seat with a tied surface, 3 stored points touched again; the surface saved tied to the registration; then `req.replanner` plans again. `RegisterRequest`: `plan`, `nominal`, `boardKey`, `nominalSeat`, `planToBoard`, `nominalZ`, `probe` (`AUTO` \| `ALWAYS` \| `NEVER`), `replanner`. Never completes exceptionally for registration failures: `RegistrationResult.ok`, `message`, `stoppedStage`, `run` (a `RunResult` of kind `board-registration`). |
 | `public Future<SurfaceProbeResult> probeSurface(SurfaceProbeRequest req) throws Exception` | *autoreg.* The automatic N1 probe of a needle-frame surface (the blank): `surfaceName`, `nominalZ`, `targets` (null: either side of the purge row, `ProbeTargets.forRow`). Saves the plane when it fits. |
-| `public Future<RunResult> checkZ() throws Exception` | *autoreg.* One N1 touch at a point measured before the last home (kind `z-check`): passes within `ZCheck.TOLERANCE_MM` 0.03 mm; a pass vouches for the data of that point's Z frame (§7, I4). |
+| `public Future<RunResult> checkZ() throws Exception` | *autoreg.* One N1 touch at a point measured before the last home (kind `z-check`): passes within `ZCheck.TOLERANCE_MM` 0.03 mm; a pass vouches for the data of that point's Z frame (§7, I4). A failed check ("Z moved") refuses every task whose Z data predate the home, with the remedy, which works under the same home in this order: `Record the needle frame again (Setup › Needle Z frame), probe the blank, touch off and register the board again.` A needle frame recorded after the home replaces the touch-off it covers (`ZCheck.touchOffReplaced`: the touch-off is no Z datum any more, and I4 asks for a new one); data not measured again keep the refusal. The blank probed again after a home keeps the points it replaces as a reference of their Z frame (`SurfaceMap.replaced`, `ZCheck.kept`; one frame kept), so a later check of older data still has a point to touch. Places carry no time: after "Z moved" retake the waste place's Z with N1 too. |
 | `public HomeReport homeSafely() throws Exception` | *autoreg.* OpenPnP's home on the machine thread with N1 raised Z-only to the travel Z first when a STOP left it low; a STOP during the home disconnects the drivers. `{needed, whyCode, why, done, seconds, n1RaisedFromZ}`. Every engine task that may move calls `homeIfNeeded` first (`homeBeforeRun`). |
-| `public VacuumProber.Window probePreflight(boolean board, String what, double nominalZ)` · `public ZCheckPlan zCheckPlan(DispensePlan plan, boolean homeFirst)` · `public InterlockReport checkBasicInterlocks(boolean homeFirst)` | *autoreg.* The checks the API runs before 202: the probe window (start = nominal + `startAboveMm`, floor = the higher of the nominal and the anchor − `floorBelowMm`, refused against the needle frame), whether Z must be checked and where, and the interlocks of a task without a plan. |
+| `public VacuumProber.Window probePreflight(boolean board, String what, double nominalZ)` · `public ZCheckPlan zCheckPlan(DispensePlan plan, boolean homeFirst)` · `public InterlockReport checkBasicInterlocks(boolean homeFirst)` | *autoreg.* The checks the API runs before 202: the probe window (start = nominal + `startAboveMm`, floor = the higher of the nominal and the anchor − `floorBelowMm`, refused against the needle frame), whether Z must be checked and where, and the interlocks of a task without a plan. A floor at or above the board top is refused before anything moves (`PROBE: the board top Z 3.500 lies 2.000 mm under the needle-frame surface 5.500, and the probe goes at most 1.5 mm under the higher of the two (down to Z 4.000): it cannot reach that height. Set the board top Z to roughly the N1 contact height, or record the needle frame again; if both are right, probe by hand`): planning accepts a board top up to 2.0 mm from the anchor, so a board 1.5 to 2.0 mm under it is probed by hand. A weigh coupon's window is ±`couponWindowMm` around its own place Z (`Window.narrow`), never the needle frame's. |
 | `public Future<DoseBlocksResult> runDoseBlocks(DoseBlocksRequest req) throws Exception` | *profile.* One engine step of a pad calibration (PC §7.3), `runs.kind` `pad-ladder` (test dots on the calibration area of the blank) or `pad-weigh` (weigh dots on the coupons): refuses at its start when a STOP came after `req.stopEpoch`, a dose the tip does not take (`PCAL: 533 steps is not a dot the 22G tip takes …`), a coupon place unset or carrying dots still to be weighed, a coupon touched before the last home with no Z check since (`I4: the 'coupon1' coupon was touched before the home at 13:02, …: touch it again before laying dots on it`); homes if needed; the basic interlocks and I4 on the area's or the coupon's surface; then, pressure off, the top camera looks at every spot in tiles (`PadLadder.tiles`: each spot ≥ 2 mm inside a frame) and refuses everything if one spot is not bare (`the calibration area is not clean or not flat under 3 of the dots …`; no camera: `the pad calibration needs the top camera …`); stamps the area's band as used (`areaReserveMm`) before streaming; one pressure session with `GcodeStreamBuilder.forBlocks` (the M114 count is required for a partial turn: `I11: the controller did not report the B step count (M114 Count): …. Nothing was sent.`); the after frames: every dot found (`DotInspector`), its landing offset, the screw phase it started at (by the count), a thread to the next dot (the corridor between them), three crops per block (`Crop`: the first dot, the median one and the worst one or a miss, before and after, PNG); parks N2 at the travel Z over the next unused purge spot. `DoseBlocksResult`: `ok`, `message`, `home`, `zCheck`, `stoppedStage`, `bCountAtStart`, `blocks` (`BlockOut`: `netSteps`, `label`, `couponPlace`, `hopMm`, `dots` (`DotOut`: `x`, `y`, `startCount`, `phase`, `found`, `dxMm`, `dyMm`, `threadToNext`, `string`)), `crops`, `refusedSpots`, `frames`, `run`. Never completes exceptionally for task failures. |
 | `public GcodeProgram estimateBlocks(List<DoseBlocksRequest.Block> blocks) throws Exception` | *profile.* The program a dose-blocks step would stream, for the before-start time and the I7/I6-feed checks. |
 | `public long stopEpoch()` | *profile.* Incremented by every STOP (`abort`): a step queued before it refuses at its start (`StopEpochTest`). |
 | `public String couponReservation(String place)` · `public static boolean weighable(DoseRecord coupon, long nowMs, DispenseConfig c, DoseRecord.Epochs e)` | *profile.* Why no step may lay dots on or probe a coupon place now (`coupon1 carries 136 dots waiting to be weighed: type the readings or skip them (Calibrate › Pad calibration)`), else null; whether a coupon record's reading would still be a fresh mass record (the recipe, regulator, tip, paste, age and simulator flag; a reconnect does not change what lies on a coupon). |
 | `public synchronized PadCalibrationRecord applyPadCalibration(PadCalibrationRecord rec, PadType version) throws SQLException` | *profile.* Writes one pad type's outcome (PC §7.7): the type's new version (when the calibration wrote one) and the `pad_calibrations` row, with a `PCAL` event. A `characterized` version needs a record whose every check passed; a calibration never writes `validated` (`IllegalArgumentException`). |
+
+Every engine task (`runPlan`, `runShots`, `runDotLadder`, `runNeedleTouchOff`, `checkCleanPads`, `runDoseBlocks`, the
+registration, the probes and `checkZ`) checks at its start, on the machine thread, a STOP since it was queued, that
+the machine is started, and the pressure hold (`refuseWhilePressureHeld` inside `submit` / `submitResult`): a hold
+switched on after the API's own check refuses it REFUSED with `the pressure hold is on: Pressure off first`.
 
 What `runPlan` does, in order:
 1. Refuses (REFUSED, nothing sent, before the session opens) if the profile's fingerprint differs from the plan's: plan
@@ -364,8 +377,9 @@ abort flag is checked again right before every line (also after a keepalive ping
 `GcodeStreamValidator` refuses a program with: a line `ControllerCommands.check()` refuses (and any N1 vacuum or I2C
 line: they belong to the probe); valve ON before pump ON or pump OFF while the valve is ON; *profile:* a dot whose turn
 differs from its plan's, is not an allowed dose or is below the tip's smallest, two doses without a block start between
-them, a block that does not start at the start angle, a pad whose dots are split, a purge dot of more than one
-revolution plus the 20° phase turn, a program that turns the screw more than its plan allows; a B move before `G92 B0`
+them, a block that does not start at the start angle, a pad whose dots are split (a dot's pad is the planner's
+`PlannedDot.padIndex`, so two pads of one name in a footprint are two pads; the pad id only for a plan made without the
+index), a purge dot of more than one revolution plus the 20° phase turn, a program that turns the screw more than its plan allows; a B move before `G92 B0`
 (I2) or outside a pressure session; any G0/G1 with a non-B axis word while the last `M204 S` exceeds
 `max(travelAccelMmS2, zLiftAccelMmS2)` ("X/Y/Z move under the screw acceleration"); a B feed above `bMaxFeedDegS × 60`;
 an `M400` inside a dot; a raw Z outside the window between the I4 needle floor and the travel Z; pneumatics ON or the
@@ -415,14 +429,15 @@ partial turn also the controller's connect and the start angle). `DoseRecords.ev
 pools every fresh record of a dose into a `padprofile.DoseEvidence` (`LadderStats`: the transfer, threads against
 `k95`, the repeat CV, the half-turn split or the quarter-turn harmonic fit, drift, landing; the mass readings and
 whether two confirm each other); a failed record is not erased by a later passing one. The mass per dot of a reading
-is its total over the dots the camera found on the coupon (PC §7.5 says the dots laid: E2 item 12 of the final round
-changes it). `padprofile.Decider` decides each group from that evidence (`characterized` only when every check
+is its total over the dots laid on the coupon (PC §7.5; the dots the camera found still set the plausibility check's
+expected mass). `padprofile.Decider` decides each group from that evidence (`characterized` only when every check
 passes: optical, mass confirmed, amount within −25 %/+10 %, R6, geometry, the control dot, tip, regulator, not
 validated; a fallback plan stays `provisional`, `validated` is never written), and the API's job writes it with
 `applyPadCalibration`. The job itself (steps, readings, the result) is the API's `PadCalibrationJob` (`WEB_API.md`
 §3.5). Pure helpers: `PadLadder` (doses, pitch, the area's band, camera tiles, bare looks, crops, the corridor thread
 test), `WeighPlan` (the dots per coupon for `weighTargetMg`, their grid inside the coupon margin, the coupon looks and
-touches, which dose goes on which coupon), `DoseRecords`, and the `padprofile` package (`DoseModel`, `DotGeometry`,
+touches, which dose goes on which coupon; `within`: whether a new grid stays inside the margin the camera checked,
+else the job's post-ladder reweigh keeps the checked grid and dose and says so), `DoseRecords`, and the `padprofile` package (`DoseModel`, `DotGeometry`,
 `LadderStats`, `ProfileCheck`, `Suggester`, `Decider`, `Texts`, `Limits`).
 
 ## 7. Interlocks (§5.5)
