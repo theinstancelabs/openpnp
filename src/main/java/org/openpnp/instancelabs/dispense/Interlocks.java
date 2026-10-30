@@ -298,7 +298,8 @@ public final class Interlocks {
         if (in.xyChecked) {
             return;
         }
-        if (sc.landingWaiver != null) {
+        if (sc.landingWaiver != null || DispenseService.onlyAtTheWaste(in.cfg, sc)) {
+            // the waste is the place for stray paste: prime and the test dot dispense before the landing check
             r.notes.add("I4: " + (Scope.LANDING_CHECK.equals(sc.landingWaiver) ? "the landing check" : "at the waste")
                     + " before the landing is checked");
             return;

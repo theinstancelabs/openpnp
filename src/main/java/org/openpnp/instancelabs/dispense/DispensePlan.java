@@ -178,8 +178,14 @@ public class DispensePlan {
      */
     public String boardArtId, boardArtKind, boardArtNote;
 
-    /** Copies the board frame, fiducials and art reference to a plan made from this one (a subset). */
+    /**
+     * Copies the board frame, fiducials and art reference to a plan made from this one (a subset), and the tip setup
+     * it was made for (tip setups design §22.3: a subset of a plan is the same tip's).
+     */
     public void copyBoardFieldsTo(DispensePlan sub) {
+        sub.setupKey = setupKey;
+        sub.setupName = setupName;
+        sub.setupVersion = setupVersion;
         sub.boardToMachine = boardToMachine == null ? null : boardToMachine.clone();
         sub.boardFile = boardFile;
         sub.boardWidthMm = boardWidthMm;

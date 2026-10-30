@@ -247,7 +247,7 @@ public class DispensePlanner {
                 // §22.2: a dose the mounted setup never measured at this recipe and paste: no dots
                 p.flags.add(PadFlag.DOSE_UNKNOWN);
                 unknownDose.merge(steps, 1, Integer::sum);
-                p.dotsPerPad = t.dotsPerPad;
+                p.dotsPerPad = t.dotsPerPad != null ? t.dotsPerPad : 0;
                 p.dotCount = 0;
                 continue;
             }

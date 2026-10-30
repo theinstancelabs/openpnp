@@ -159,11 +159,27 @@ public final class DispenseService {
     private volatile String tipCacheKey;
     /** The last mount of another setup, kept for its undo (§22.3), or null. */
     private volatile UndoSnapshot undo;
+    /** The token the last needle change wrote and the one it replaced {new, old} (old null: none), for the undo. */
+    private volatile Long[] lastChange;
 
     /** An undo window: how long after a mount of another setup it may be undone (§22.3). */
     public static final long UNDO_MS = 2 * 60 * 1000L;
-    /** A frame (or touch-off) this far from the setup's previous one asks whether the setup is on (§22.3). */
+    /** The events code of the tip setup facts (§22.3, §22.4): needle changes, mounts, landing, trims, pictures. */
     public static final String TIP_EVENT = "TIP";
+
+    /**
+     * Tests only (tip setups design §22.8, the race tests): called at named points of a path ("switch": a mount holding
+     * the lock and the busy flag; "dose-blocks": a step on the machine thread before its checks) so a latch can pause
+     * it there. Null in every other use.
+     */
+    static volatile java.util.function.Consumer<String> testHook;
+
+    private static void hook(String point) {
+        java.util.function.Consumer<String> h = testHook;
+        if (h != null) {
+            h.accept(point);
+        }
+    }
 
     /** The configuration before a mount of another setup, and what has to stay untouched for its undo. */
     private static final class UndoSnapshot {
@@ -649,6 +665,7 @@ public final class DispenseService {
         DispenseConfig c = before.copy();
         c.needleChangedAtMs = token;
         writeConfig(c); // a fact: never refused, so never held back by a check of other settings
+        lastChange = new Long[] {token, before.needleChangedAtMs};
         String at = ZCheck.clock(token);
         DoseRecord.Epochs ep = new DoseRecord.Epochs(getControllerConnectedAtMs(), isSimulatorConfirmed());
         for (DoseRecord coupon : db.pendingCoupons(now - (long) (before.padCalibration.doseRecordMaxAgeH * 3600e3))) {
@@ -745,6 +762,7 @@ public final class DispenseService {
                 throw new EngineRefusal(409, "refused", "The " + in.name + " has no " + in.missing() + " yet: fill it in "
                         + "first (Edit…)." + recordedWords(in.name));
             }
+            hook("switch");
             long now = System.currentTimeMillis();
             MountResult r = new MountResult();
             r.mounted = key;
@@ -760,6 +778,11 @@ public final class DispenseService {
                 return r;
             }
             DispenseConfig before = cfg.copy();
+            Long[] change = lastChange;
+            if (change != null && change[0].equals(before.needleChangedAtMs)) {
+                // the mount's own needle change came just before: an undo puts back the token from before it
+                before.needleChangedAtMs = change[1];
+            }
             DispenseConfig c = cfg.copy();
             DispenseConfig.ParkedTip park = new DispenseConfig.ParkedTip();
             DispenseConfig.ParkedTip was = c.parkedTips.get(fromKey);
@@ -2081,10 +2104,6 @@ public final class DispenseService {
         in.estimatedPressurisedSeconds = est;
         in.opticalCheckAvailable = imager() != null && imager().isAvailable();
         in.scope = scope == null ? new Interlocks.Scope() : scope;
-        if (in.scope.landingWaiver == null && onlyAtTheWaste(c, in.scope)) {
-            // §22.3: the waste is the place for stray paste: prime and the test dot dispense before the landing check
-            in.scope.landingWaiver = Interlocks.Scope.LANDING_WASTE;
-        }
         in.controllerConnectedAtMs = homeTracker.getConnectedAtMs();
         in.boardRun = plan != null;
         in.purgeDots = plan == null ? 0 : DoseBlocks.purgeSpotsNeeded(plan, c);
@@ -2302,6 +2321,9 @@ public final class DispenseService {
         if (!setup.equals(cfg.tip.key)) {
             throw new EngineRefusal(409, "refused", "Only the mounted tip can be photographed: mount the "
                     + nameOf(setup) + " first.");
+        }
+        if (pressureHoldActive.getAsBoolean()) {
+            throw new EngineRefusal(409, "refused", "Switch the pressure off first: the head moves to the bottom camera.");
         }
         RunResult r = newRun("tip-picture", null, "tip picture", 0, 0);
         TipPictureResult res = new TipPictureResult();
@@ -4067,6 +4089,7 @@ public final class DispenseService {
 
     private void doseBlocks(DoseBlocksRequest req, DoseBlocksResult res, Task t) throws Exception {
         RunResult r = t.r;
+        hook("dose-blocks");
         DispenseConfig c = cfg;
         if (stopEpoch.get() != req.stopEpoch) {
             throw refused(STOPPED_SINCE_QUEUED);
