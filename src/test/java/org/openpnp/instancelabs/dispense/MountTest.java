@@ -156,6 +156,55 @@ public class MountTest {
     }
 
     @Test
+    public void madeWithAnotherTipFlagsTheJobAndRestoresTheVersionItWrote() throws Exception {
+        // §22.3 "Made with another tip…": the job's dose records leave the setup's evidence and dot table, its coupons
+        // waiting for readings get skip rows, and the version it wrote gives way to the setup's previous own one
+        try (TipFixture f = new TipFixture()) {
+            DispenseService svc = f.svc;
+            DispenseConfig c = svc.getConfig();
+            long now = System.currentTimeMillis();
+            DoseRecord dots = DoseRecordTest.record(DoseRecord.OPTICAL, 800, c, now);
+            dots.jobId = "job-w";
+            dots.pass = true;
+            dots.diameterMeanMm = 1.10;
+            dots.diameterP95Mm = 1.20;
+            dots.simulated = svc.isSimulatorConfirmed();
+            svc.getDb().insertDoseRecord(dots);
+            DoseRecord coupon = DoseRecordTest.record(DoseRecord.COUPON, 800, c, now);
+            coupon.jobId = "job-w";
+            coupon.simulated = svc.isSimulatorConfirmed();
+            long couponId = svc.getDb().insertDoseRecord(coupon).id;
+            assertTrue(svc.dotTable().doses.containsKey(800), "the job's dots are in the 22G's dot table");
+            PadType was = svc.getDb().currentPadType("chip-0603", Tip.SEED_KEY);
+            PadType v = was.copy();
+            v.status = PadTypeStatus.PROVISIONAL;
+            v.dotSteps = 800;
+            v.dotsPerPad = 1;
+            PadCalibrationRecord rec = new PadCalibrationRecord();
+            rec.jobId = "job-w";
+            rec.typeKey = "chip-0603";
+            rec.outcome = PadCalibrationRecord.PROVISIONAL;
+            rec = svc.applyPadCalibration(rec, v);
+            assertEquals((int) rec.versionTo, svc.getDb().currentPadType("chip-0603", Tip.SEED_KEY).version);
+            List<PadType> restored = svc.markWrongTip("job-w", "tester");
+            assertEquals(1, restored.size());
+            PadType back = svc.getDb().currentPadType("chip-0603", Tip.SEED_KEY);
+            assertEquals(restored.get(0).version, back.version);
+            assertEquals(was.status, back.status, "the dose fields of the previous own version");
+            assertEquals(was.dotSteps, back.dotSteps);
+            assertEquals("restored: calibration " + rec.id + " was made with another tip", back.notes);
+            assertTrue(svc.getDb().flaggedJobs().contains("job-w"));
+            assertFalse(svc.dotTable().doses.containsKey(800), "the job's dots left the dot table");
+            assertEquals(1, svc.getDb().query("SELECT * FROM dose_records WHERE kind = 'mass' AND coupon_record_id = ? "
+                    + "AND why = 'the calibration was made with another tip'", couponId).size());
+            // a second press changes nothing; an unknown job is not found
+            assertTrue(svc.markWrongTip("job-w", "tester").isEmpty());
+            assertEquals(back.version, svc.getDb().currentPadType("chip-0603", Tip.SEED_KEY).version);
+            assertEquals("not-found", assertThrows(EngineRefusal.class, () -> svc.markWrongTip("job-none", null)).code);
+        }
+    }
+
+    @Test
     public void aSwitchWithoutTheNeedleChangeBeforeItIsRefused() throws Exception {
         // the mount route records the needle change, then switches: a switch on its own (a route that forgot the
         // change) would let a parked frame newer than the token count for the needle put on now
