@@ -1164,7 +1164,7 @@
       return;
     }
     IL.setText($('pt-ph-n'), t.name);
-    IL.setText($('pt-ph-e'), 'v' + t.version + ' · ' + t.family);
+    IL.setText($('pt-ph-e'), (t.standIn ? 'not for the ' + tipName(s) + ' yet' : 'v' + t.version) + ' · ' + t.family);
     IL.keyed($('pt-ph-b'), t.status + t.retired, () => pcr.badge(t.status, t.retired));
     const st = IL.pt.planStats()[t.typeKey];
     const m = matchedPackages(t.packagePattern);
@@ -1185,7 +1185,8 @@
             ['Dot plan', IL.pt.texts.dotPlan(t, srvProfile(s))],
             ['Stencil equivalent', 't ' + IL.fmt(t.tMm, 2) + ' mm · k ' + IL.fmt(t.k, 2) + ' → ' + IL.fmt(t.targetMassMg, 3) + ' mg (information)'],
             ['In this plan', st ? IL.plural(st.pads, 'pad') + ', ' + IL.plural(st.dots, 'dot') + (st.blocked ? ', ' + st.blocked + ' blocked' : '') : S.plan ? 'not used' : 'no plan shown'],
-            ['Versions', t.versions + ' · this one ' + IL.fmtDateTime(t.createdAtMs - S.skewMs) + (t.operator ? ' by ' + t.operator : '')],
+            ['Versions', t.standIn ? 'none for the ' + tipName(s) + ' yet (the pad: version ' + t.padVersion + ')'
+              : t.versions + ' · this one ' + IL.fmtDateTime(t.createdAtMs - S.skewMs) + (t.operator ? ' by ' + t.operator : '')],
             ['Last validated', t.lastValidatedAtMs ? IL.fmtDateTime(t.lastValidatedAtMs - S.skewMs) : 'never'],
           ].flatMap(([k, v]) => [el('dt', { text: k }), el('dd', { text: IL.nb(v) })])),
         t.notes ? el('p', { class: 'panel__lead', text: t.notes }) : null,

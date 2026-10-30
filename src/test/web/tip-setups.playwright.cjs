@@ -61,6 +61,7 @@ async function shoot(page, name, prep, panel) {
       await sleep(400);
       if (panel && w < 1100) await page.evaluate(() => window.scrollBy(0, document.getElementById('panel').getBoundingClientRect().top - document.getElementById('strip').getBoundingClientRect().bottom));
       else if (prep) await prep(w);
+      else if (panel) await page.evaluate(() => window.scrollTo(0, 0));   // the panel beside the main column: the page from its top
       await sleep(300);
       await page.evaluate(() => { const t = document.getElementById('toast'); if (t) t.hidden = true; for (const n of document.querySelectorAll('.flash')) n.classList.remove('flash'); });
       const f = path.join(SHOTS, name + '-' + w + '-' + theme + '.png');
@@ -79,7 +80,8 @@ const toTop = (page, sel) => page.evaluate((x) => {
   let sc = n.parentElement;
   while (sc && sc !== document.body && !(sc.scrollHeight > sc.clientHeight + 1 && /(auto|scroll)/.test(getComputedStyle(sc).overflowY))) sc = sc.parentElement;
   const win = !sc || sc === document.body;
-  const top = win ? document.getElementById('strip').getBoundingClientRect().bottom : sc.getBoundingClientRect().top;
+  const area = document.getElementById('msg-area');
+  const top = win ? Math.max(document.getElementById('strip').getBoundingClientRect().bottom, area && area.offsetHeight ? area.getBoundingClientRect().bottom : 0) : sc.getBoundingClientRect().top;
   const dy = n.getBoundingClientRect().top - top - 12;
   if (win) window.scrollBy(0, dy); else sc.scrollTop += dy;
 }, sel);
@@ -348,7 +350,8 @@ const ticks = (page) => page.evaluate(() => { IL.attest.set('regulator', IL.S.st
     check('(3) Profile\'s #pf-h1-sub says "for the 25G straight" with Change tip…', /for the 25G straight/.test(c3b.sub) && /Change tip…/.test(c3b.sub), c3b);
     check('(3) chip-0603 is "not started" for the 25G: "Not calibrated for the 25G straight yet"', c3b.badge === 'not started' && c3b.standin === 'Not calibrated for the 25G straight yet', c3b);
     check('(3) the profile card: the recipe of the 25G straight', /the recipe of the 25G straight/.test(c3b.cardSub), c3b.cardSub);
-    await shoot(page, 'profile-25g', () => toTop(page, '#pt-section'));
+    await shoot(page, 'profile-25g', () => page.evaluate(() => window.scrollTo(0, 0)));
+    await shoot(page, 'profile-25g-standin', () => toTop(page, '#profiles tr[data-key="chip-0603"]'));
     await page.click('#pt-by-tip');
     await page.waitForSelector('.pt-bytip__t', { timeout: 10000 });
     const c3c = await page.evaluate(() => {
@@ -358,7 +361,7 @@ const ticks = (page) => page.evaluate(() => { IL.attest.set('regulator', IL.S.st
       return { heads, chip22: cell ? cell.querySelector('.badge').textContent : null, first: heads[0] };
     });
     check('(3) By tip: both columns, the mounted one first, chip-0603 characterized under the 22G', c3c.heads.includes('ad22tta-b') && c3c.first === k25 && ['characterized', 'validated'].includes(c3c.chip22), c3c);
-    await shoot(page, 'profile-by-tip', () => toTop(page, '#pt-section'));
+    await shoot(page, 'profile-by-tip', () => toTop(page, '.pt-bytip'));
     // the side panel at Other tips (a By tip cell of the 22G)
     await page.click('.pt-bytip__t button.pt-bt[data-setup="ad22tta-b"][data-type="chip-0603"]');
     await page.waitForSelector('#pt-side-tips .pt-tip[data-setup="ad22tta-b"]', { timeout: 10000 });
@@ -398,7 +401,7 @@ const ticks = (page) => page.evaluate(() => { IL.attest.set('regulator', IL.S.st
     });
     check('(4) #pt-needs-for: "for the 25G straight"', c4.for === ' for the 25G straight', c4.for);
     // (a 25G of an earlier run is measured already: then nothing asks for its dots)
-    check('(4) #pt-needs-measure: measure the 25G\'s dots first', c4.measure === (c4.dots === 'none') && (!c4.measure || /Measure the 25G straight’s dots first/.test(c4.measureText)) && (!!old25 || c4.dots === 'none'), c4);
+    check('(4) #pt-needs-measure: measure the 25G\'s dots first', c4.measure === (c4.dots === 'none') && (!c4.measure || /Measure the 25G straight['’]s dots first/.test(c4.measureText)) && (!!old25 || c4.dots === 'none'), c4);
     check('(4) the other-tip note follows profileCheck.otherTips (the 22G bent taper when it has every pad type of the board)',
       c4.other === c4.otherTips.length > 0 && (!c4.other || /The 22G bent taper has/.test(c4.otherText)), c4);
     await shoot(page, 'needs-for-25g', () => toTop(page, '#pt-needs'));
@@ -576,7 +579,7 @@ const ticks = (page) => page.evaluate(() => { IL.attest.set('regulator', IL.S.st
     const c9 = await page.evaluate((k) => ({ s25: ((document.querySelector('.pt-bytip__t button.pt-bt[data-setup="25g-straight"][data-type="' + k + '"] .badge')) || {}).textContent || null,
       s22: (document.querySelector('.pt-bytip__t td[data-setup="ad22tta-b"] button.pt-bt[data-type="' + k + '"] .badge') || {}).textContent || 'not calibrated' }), swKey);
     check('(9) By tip: the SW type characterized under the 25G; its 22G cell is the 22G\'s own', !!swKey && ['characterized', 'provisional', 'validated'].includes(c9.s25), c9);
-    await shoot(page, 'profile-by-tip-22g', () => toTop(page, '#pt-section'));
+    await shoot(page, 'profile-by-tip-22g', () => toTop(page, '.pt-bytip'));
     await page.click('#pt-filter button[data-filter="all"]');
     await page.evaluate(() => IL.go('#setup/needle'));
     await page.waitForFunction(() => /recorded for the 22G bent taper on /.test((document.getElementById('anchor-k-cap') || {}).textContent || ''), null, { timeout: 15000 });
@@ -597,14 +600,23 @@ const ticks = (page) => page.evaluate(() => { IL.attest.set('regulator', IL.S.st
     const jq = await runCal(page, 'landing', 240000);
     await page.waitForSelector('#pcal-landing:not([hidden])', { timeout: 15000 });
     const c10 = await page.evaluate(() => ({ text: document.getElementById('pcal-landing').textContent, save: !!document.getElementById('btn-pcal-landing-save'), xy: IL.S.status.dispense.needle.xyChecked }));
-    check('(10) the landing check asks "is the 22G bent taper on the dispenser?", nothing saved', /is the 22G bent taper on the dispenser/.test(c10.text) && c10.save && !c10.xy, { c10, sentence: jq.result && jq.result.sentence });
+    check('(10) the landing check asks "is the 22G bent taper on the dispenser?", nothing saved', /is the 22G bent taper on the dispenser/i.test(c10.text) && c10.save && !c10.xy, { c10, sentence: jq.result && jq.result.sentence });
     await shoot(page, 'landing-question', null, true);
     // the operator says it is (the wrong answer): saved, so a calibration may run
     await page.click('#btn-pcal-landing-save');
     await page.waitForFunction(() => IL.S.status.dispense.needle.xyChecked, null, { timeout: 15000 });
     await wipeBlank(page);
     await planPadcal();   // the plan of the 25G is stale with the 22G mounted
-    await page.evaluate(() => IL.padProfile.openCal({ planId: IL.S.plan.planId, typeKeys: ['chip-0603'] }));
+    // a group of the board the 22G can calibrate (SW is a stand-in for it when only the 25G has it; else Test_Strip)
+    const g10 = await page.evaluate(() => {
+      const gs = (IL.S.plan.profileCheck.groups || []).filter((x) => x.suggestion && ['new', 'calibrate-existing'].includes(x.suggestion.kind));
+      const g = gs.find((x) => /SW_SPST/.test(x.label)) || gs[0];
+      return g ? g.group : null;
+    });
+    check('(10) a group of the board to calibrate with the 22G mounted', !!g10, g10);
+    await page.evaluate((g) => IL.go('#profile/needs/' + g), g10);
+    await page.waitForSelector('#btn-pt-sugg-auto:not([hidden]):enabled', { timeout: 20000 });
+    await page.click('#btn-pt-sugg-auto');
     await page.waitForFunction(() => { const b = document.getElementById('btn-pcal-start'); return !!b && /^Calibrate/.test(b.textContent) && !b.disabled; }, null, { timeout: 30000 });
     const jw = await runCal(page, 'calibrate', 600000);
     const ctl = jw.result && jw.result.control ? jw.result.control.text || '' : '';

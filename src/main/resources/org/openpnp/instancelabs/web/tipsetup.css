@@ -43,7 +43,7 @@
 .tip-photo-cap { font-size: 12.5px; line-height: 1.35; color: var(--ink-2); overflow-wrap: anywhere; }
 .tip-photo-cap[hidden] { display: none; }
 .tip-pic__acts { gap: 8px; }
-.tip-pic__acts .btn { flex: 1 1 auto; }
+.tip-pic__acts .btn { flex: 1 1 auto; height: auto; min-height: 40px; padding-top: 6px; padding-bottom: 6px; white-space: normal; line-height: 1.2; text-align: left; }
 .tip-pic .reason { margin-top: 0; }
 .tip-facts { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .tip-name { margin: 0; font: 700 19px/1.25 var(--font-ui); }

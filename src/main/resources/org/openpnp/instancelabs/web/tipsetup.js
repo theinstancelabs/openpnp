@@ -105,21 +105,26 @@
   IL.on('taskend', () => load());
 
   // ================================================================================== strip cell (core.js renders it)
-  /** The strip's Tip cell: {kind, v ([main, long, level] or text), t (title)}. */
+  /**
+   * The strip's Tip cell: {kind, v ([main, long, level] or text), t (title)}. The name's first word stays when the strip
+   * is narrow ("22G" of "22G bent taper", 1024 px): the rest goes with the strip's other long parts (cells--t2).
+   */
   function cellView(s) {
     const d = disp(s), t = tipOf(s), n = needleOf(s);
     if (!d.running) return { kind: 'off', v: '—', t: 'The dispenser engine is not running.' };
     const name = t.name || 'Tip';
+    const sp = name.indexOf(' ');
+    const head = sp > 0 ? name.slice(0, sp) : name, rest = sp > 0 ? name.slice(sp) : '';
     if (t.complete === false) return { kind: 'block', v: 'Incomplete', t: 'The ' + name + ' has no bore, OD, form or taper yet: fill it in (Setup › Dispenser & tip › Edit…).' };
     const todo = [];
     if (!n.anchor || !n.anchored) todo.push('frame');
     if (!n.xyChecked) todo.push('landing');
     if (todo.length) {
       const since = isNum(n.changedAtMs) ? 'put on at ' + clock(n.changedAtMs) : 'on the dispenser';
-      return { kind: 'block', v: [name, ' · ' + todo.join(' and ') + ' to do', 2],
+      return { kind: 'block', v: [head, rest + ' · ' + todo.join(' and ') + ' to do', 2],
         t: 'The ' + name + ' was ' + since + ': ' + (todo.length === 2 ? 'record its needle Z frame and check where it lands' : todo[0] === 'frame' ? 'record its needle Z frame' : 'check where it lands') + ' (Setup › Dispenser & tip).' };
     }
-    return { kind: 'ok', v: name, t: 'The ' + name + ' is on the dispenser' + (t.mountedAtMs ? ' (mounted ' + when(t.mountedAtMs) + ')' : '') + '. Setup › Dispenser & tip' };
+    return { kind: 'ok', v: rest ? [head, rest, 2] : name, t: 'The ' + name + ' is on the dispenser' + (t.mountedAtMs ? ' (mounted ' + when(t.mountedAtMs) + ')' : '') + '. Setup › Dispenser & tip' };
   }
 
   // ================================================================================== the order after a needle change (§22.3)

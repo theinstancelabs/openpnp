@@ -185,6 +185,19 @@
     const fam = String(t.family || '').replace(/\s*\([^)]*\)\s*/g, ' ').trim();
     return (/^\S+$/.test(fam) && !/^custom$/i.test(fam) && !String(t.name || '').includes(' · ') ? fam + ' ' : '') + t.name;
   }
+  /** A record's check in words (its stored text is short: "ok", "132 dots"). */
+  const CHECK = {
+    optical: (k) => 'Camera checks on the blank: ' + (k.measured || k.text || '—'),
+    mass: (k) => 'Weighed ' + (k.measured || '—') + (k.predicted ? ' (predicted ' + k.predicted + ')' : '') + (k.limit ? '; ' + k.limit : ''),
+    amount: (k) => 'Amount ' + (k.measured || '—') + (k.predicted ? ' (target ' + k.predicted + (k.limit ? ', ' + k.limit : '') + ')' : ''),
+    r6: (k) => (k.measured || k.text || '') + (k.limit ? ' (' + k.limit + ')' : ''),
+    geometry: (k) => (k.measured || 'Geometry') + (k.limit ? ' (limits ' + k.limit + ')' : ''),
+    control: (k) => (k.pass ? 'The control dot matched' : 'The control dot did not match') + (k.text && k.text !== 'ok' ? ': ' + k.text : ''),
+    tip: (k, x) => (k.pass ? 'Made with the ' : 'Not made with the ') + (x.setupName || 'mounted tip'),
+    regulator: (k) => (k.pass ? 'The regulator read at the profile’s pressure' : 'The regulator: ' + k.text),
+    validated: (k) => (k.pass ? 'No validated pad type was changed' : k.text),
+  };
+  const checkWords = (k, x) => (CHECK[k.key] ? CHECK[k.key](k, x) : k.text || [k.key, k.measured, k.limit].filter(Boolean).join(': '));
   const OUTCOME_KIND = { characterized: 'ok', validated: 'ok', measured: 'ok', partly: 'need', provisional: 'need', failed: 'block', stopped: 'block', cancelled: 'off' };
   function outcomeBadge(x) {
     if ((x.flags || []).includes('wrong-tip')) return el('span', { class: 'badge badge--block', title: 'Made with another tip: its versions were restored' }, IL.glyph('block', 'xs'), el('span', { text: 'wrong tip' }));
@@ -566,7 +579,7 @@
           ['Job', x.jobId || '—'], ['Evidence', ev.length ? IL.plural(ev.length, 'dose record') + ': ' + ev.join(', ') : '—'],
         ].flatMap(([a, b]) => [el('dt', { text: a }), el('dd', { text: IL.nb(String(b)) })])),
         checks.length ? el('ul', { class: 'pcal__checks' }, checks.map((k) => el('li', { class: k.pass === false ? 'bad' : null }, IL.glyph(k.pass === false ? 'block' : 'ok', 'xs'),
-          el('span', { text: k.text || [k.key, k.measured, k.limit].filter(Boolean).join(': ') })))) : null,
+          el('span', { text: checkWords(k, x) })))) : null,
         IL.sectionK('Pictures', live.length || null),
         live.length ? el('div', { class: 'rec-photos' }, live.map((ph) => {
           const b = el('button', { type: 'button', class: 'photo-thumb rec-photo__b', 'data-photo': ph.id, title: (ph.caption || 'Picture') + ': open' },

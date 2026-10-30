@@ -860,6 +860,7 @@
       },
     });
     pt.renderExtras.push((s) => { if (P.calforBtn) IL.gate(P.calforBtn, IL.tips ? IL.tips.chooserLock(s) : null, $('pt-photo-why')); });
+    const calfor = pt.editorExtras.pop();   // built after the dot fields (below): it follows the status raise
     pt.editorExtras.push({
       build() {
         const steps = el('select', { class: 'input', id: 'pt-dotsteps' },
@@ -897,6 +898,7 @@
         return errs;
       },
     });
+    pt.editorExtras.push(calfor);
   }
   // ---------------------------------------------------------------- the editor's "Calibrated for" (§22.5, §22.7)
   const RANK = { 'not-started': 0, provisional: 1, characterized: 2, validated: 3 };
@@ -963,7 +965,7 @@
   /** Read-only facts of a type's calibration: tip, recipe, calibrated area, mass per pad, origin, last calibration. */
   function calInfo(t) {
     const rows = [];
-    if (t.tipKey) rows.push(['Tip', t.tipKey]);
+    if (t.tipKey) rows.push(['Tip', ((IL.tips && IL.tips.setup(t.tipKey)) || {}).name || t.tipKey]);
     if (t.doseFp) rows.push(['Recipe', 'calibrated at ' + t.doseFp]);
     if (isNum(t.calAreaMm2)) rows.push(['Calibrated for', IL.fmt(t.calAreaMm2, 3) + ' mm² pads']);
     if (isNum(t.massPerPadMg)) rows.push(['Mass per pad', IL.fmt(t.massPerPadMg, 2) + ' mg (weighed)']);
@@ -1534,7 +1536,10 @@
           }, { ok: 'Saved where the ' + name + ' lands: every dot is corrected by it.' }));
           const other = el('button', { type: 'button', class: 'btn btn--sm', id: 'btn-pcal-landing-other' }, 'Another tip is on: Change tip…');
           other.addEventListener('click', () => { if (IL.tips) IL.tips.openChange({}); });
-          out.push(el('div', { class: 'notebox notebox--need pcal-landing__q' }, el('b', { text: L.question }), nums ? el('div', { class: 'pcal__sd', text: 'This check: ' + nums + '.' }) : null,
+          // the verdict above says how far it lands from before: here the question and its two answers
+          const ci = L.question.indexOf(': ');
+          const q = ci > 0 ? IL.cap(L.question.slice(ci + 2)) : L.question;
+          out.push(el('div', { class: 'notebox notebox--need pcal-landing__q' }, el('b', { text: q }), nums ? el('div', { class: 'pcal__sd', text: 'This check: ' + nums + '.' }) : null,
             el('div', { class: 'btn-row' }, save, other)));
         } else {
           const acts = [];
@@ -1722,12 +1727,15 @@
     }, { ok: 'The automatic label is back.' }));
     return b;
   }
-  /** One result photo per dose (§22.7: figure.pcal-photo, the blank's first): buttons opening #photo-view. */
-  function renderResultPhotos(res) {
+  /**
+   * One result photo per dose (§22.7: figure.pcal-photo, the blank's first): buttons opening #photo-view. A measure
+   * shows each of its frames (the landing check: the locator's and the row's).
+   */
+  function renderResultPhotos(res, j) {
     const rp = (res.photos || []).filter((p) => p.kind === 'result' && !p.removedAtMs);
     const byDose = new Map();
     for (const p of rp) { const k = p.doseSteps || 0; const cur = byDose.get(k); if (!cur || (cur.couponPlace && !p.couponPlace)) byDose.set(k, p); }
-    const list = Array.from(byDose.values()).sort((a, b) => (a.doseSteps || 0) - (b.doseSteps || 0));
+    const list = j && j.measure ? rp.slice().sort((a, b) => a.id - b.id) : Array.from(byDose.values()).sort((a, b) => (a.doseSteps || 0) - (b.doseSteps || 0));
     IL.keyed($('pcal-photos'), JSON.stringify(list.map((p) => p.id)), () => (list.length ? list.map((p) => {
       const b = el('button', { type: 'button', class: 'photo-thumb pcal-photo__b', 'data-photo': p.id, title: (p.caption || 'Result photo') + ': open' },
         el('img', { src: p.thumbUrl, alt: p.caption || 'Result photo', width: '160', height: '120' }));
@@ -1744,12 +1752,15 @@
     amount: (k) => 'Amount ' + (k.measured || '—') + (k.predicted ? ' (target ' + k.predicted + ', ' + (k.limit || '') + ')' : ''),
     r6: (k) => (k.measured || '') + (k.limit ? ' (' + k.limit + ')' : ''),
     geometry: (k) => (k.measured || 'Geometry') + (k.limit ? ' (limits ' + k.limit + ')' : ''),
-    control: () => 'The control dot matches the bench’s half turn',
-    tip: (k) => 'Calibrated with the mounted tip' + (k.limit ? ' (' + k.limit + ')' : ''),
+    control: (k, j) => {
+      const bench = !j || !IL.tips || ((IL.tips.setup(j.forTip) || {}).model === 'bench-22g');
+      return 'The control dot matches ' + (bench ? 'the bench’s half turn' : 'the ' + jobTip(j) + '’s own dots');
+    },
+    tip: (k, j) => 'Calibrated with the ' + (j ? jobTip(j) : 'mounted tip'),
     regulator: () => 'The regulator read at the profile’s pressure',
     validated: () => 'No validated pad type is changed',
   };
-  const checkText = (k) => k.text || (CHECK_WORD[k.key] ? CHECK_WORD[k.key](k) : [k.key, k.measured, k.limit].filter(Boolean).join(': '));
+  const checkText = (k, j) => k.text || (CHECK_WORD[k.key] ? CHECK_WORD[k.key](k, j) : [k.key, k.measured, k.limit].filter(Boolean).join(': '));
   const OUT_KIND = { characterized: 'ok', partly: 'need', provisional: 'need', measured: 'ok', stopped: 'block', cancelled: 'need', failed: 'block', question: 'need', 'not-found': 'block' };
   /** "Characterized 14:05: SW … planned again." → the verdict and its time in bold, the rest as the sentence goes on. */
   function headSplit(t) {
@@ -1784,14 +1795,14 @@
           ['Weighed', isNum(g.massReadings) ? IL.plural(g.massReadings, 'reading') + (g.massConfirmed ? ', confirmed' : ', not confirmed yet') : '—'],
         ].flatMap(([k, v]) => [el('dt', { text: k }), el('dd', { text: IL.nb(v) })])),
         checks.length ? el('ul', { class: 'pcal__checks' }, checks.slice().sort((a, b) => (a.ok ? 1 : 0) - (b.ok ? 1 : 0)).map((k) => el('li', { class: k.ok ? null : 'bad', 'data-check': k.key },
-          IL.glyph(k.ok ? 'ok' : 'block', 'xs'), el('span', { text: checkText(k) })))) : null);
+          IL.glyph(k.ok ? 'ok' : 'block', 'xs'), el('span', { text: checkText(k, j) })))) : null);
     }));
     IL.show($('pcal-groups'), !j.measure);
     for (const li of $('pcal-groups').children) {
       const g = (res.groups || []).find((x) => x.group === li.dataset.group);
       if (g) renderLabel(li, g, j);
     }
-    renderResultPhotos(res);
+    renderResultPhotos(res, j);
     // the blank's crops (first, median, last of each dose); the coupons' only when the blank has none
     const all = res.crops || [];
     IL.show($('pcal-crops-box'), all.length > 0 || !j.measure);
@@ -1809,7 +1820,7 @@
     IL.keyed($('pcal-pred').tBodies[0], JSON.stringify(pred), () => pred.map((p) => el('tr', {},
       el('td', { class: 'nowrap', text: p.id }), el('td', { text: p.prediction + (p.band ? ' (' + p.band + ')' : '') }), el('td', { text: p.measured === null || p.measured === undefined ? '—' : String(p.measured) }),
       el('td', {}, p.pass === null || p.pass === undefined ? el('span', { class: 'muted', text: '—' }) : IL.glyph(p.pass ? 'ok' : 'block', 'xs')))));
-    IL.show($('pcal-pred-d'), pred.length > 0);
+    IL.show($('pcal-pred-d'), pred.length > 0 && !j.measure);
     IL.setText($('pcal-drift'), res.control && res.control.text ? res.control.text : '');
   }
   /** A finished job's new plan, once per job id, when it is of the plan shown (AR's catch-up rule). */
