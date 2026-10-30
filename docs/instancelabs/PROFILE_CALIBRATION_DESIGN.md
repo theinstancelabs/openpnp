@@ -1837,14 +1837,21 @@ pc-ladder; pc-integration with the wave-3 integration.
 - **Merged** on `il/bench-sync-autoreg` (b81d73d21): `pc-model`, `pc-data`, `pc-sim` and `pc-stream` (per-type doses in
   the planner, the stream, the validator and the interlocks), with review 1's dose-stream fix: one tight instance no
   longer fails its whole group, and the planner holds back each pad that is too close to a neighbour (decision 14).
-- **Built, not merged yet:** `pc-api` on `il/pc-api` (cd8d54f52, checked; `PadProfileApiSimTest`). The routes are in
-  `WEB_API.md` §3.4.
-- **To come (pc-task):** the calibration job (`runDoseBlocks`, the weighing, the decision, `applyPadCalibration`, the
-  stop epoch), `/api/pad-calibrations…`, `/api/dose-records`, `/api/coupons…`, `status.padCalibration` and the SIM
-  routes of §12.4.
-- **To come (pc-web):** `padprofile.js` and its hooks, Profile › Needs a profile, the suggestion card, the `pad-cal`
-  view and Calibrate › Pad calibration (§13); the PC integration slice then finishes the docs of §16 (UI_DESIGN.md,
-  DEV_NOTES.md) and the `padcal` acceptance. `pc-ladder` (decision 8) follows if there is time.
+- **Merged** after it (a4bb6d20d and `il/pc-web`): `pc-api` (the routes of `WEB_API.md` §3.4), `pc-task` (the job,
+  `runDoseBlocks`, the weighing, the decision, `applyPadCalibration`, the stop epoch, `/api/pad-calibrations…`,
+  `/api/dose-records`, `/api/coupons…`, `status.padCalibration`, the SIM routes: `WEB_API.md` §3.5) with review 2's
+  fixes, and `pc-web` (`padprofile.js` and its hooks, Needs a profile, the suggestion card, the `pad-cal` view,
+  Calibrate › Pad calibration; `UI_DESIGN.md` §8.3–8.4, `DEV_NOTES.md` §5).
+- **`pc-integration`** (`il/pc-integration`): the `padcal` SIM acceptance (`il_sim_acceptance.py padcal`: §14.5 on
+  `padcal.kicad_pcb`, the Nano's upload and calibration, every negative control of §11.7), `il_ui_session.py
+  --padcal`, and the docs of §16 written from the code.
+- **Not in this PR: `pc-ladder`** (the test-board ladder, decision 8) is a follow-up; `validated` stays on the
+  existing Validate guide until it comes. Decision 6's per-run skip has no API yet (`RunResult.skippedPads` exists):
+  runs skip undispensable pads only with `refuseFlaggedPads: false`.
+- **Seen in the SIM acceptance:** the Nano's LED_0805 stays `provisional` after Calibrate automatically (decision 3's
+  one turn is +33 % on the machine, +47 % with the SIM's 2.30 mg per turn; half a turn −33 % / −27 %: no allowed dose
+  is within −25 %/+10 %), so the Nano's 8 LED pads need a reflowed test board or a hand raise; a block switch from
+  half to quarter turns can make the phase dot a whole turn on the purge row (`REAL_MACHINE_TODO.md` items 42, 54).
 
 Where `pc-api` differs from §12, the code is right:
 
@@ -1870,4 +1877,4 @@ the purge-row cap (1600 + 89 steps per purge dot) refuses every run of a two-tur
 still accepts; a "Test run with fewer dots" cut in the middle of a multi-dot pad keeps the pad's full dot count, so the
 dose check (R6) does not see the shorter pad.
 
-§15 is in `REAL_MACHINE_TODO.md` (items 38–52).
+§15 is in `REAL_MACHINE_TODO.md` (items 38–52; 53–54 from the integration slice).
