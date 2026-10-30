@@ -59,4 +59,9 @@ public final class RegistrationResult {
     public ProbeReport probe;
     public String newPlanId;
     public boolean simulated;
+    /**
+     * A board without the fiducials Register board needs, probed only (F10): no fiducial fit, no seat and no
+     * registration stored; the surface is tied to the board where the plan puts it.
+     */
+    public boolean probeOnly;
 }

@@ -2680,6 +2680,18 @@ Where the code differs from the sections above, the code is right:
 - **§6.1, settings.** `vacuumProbe.alternates` defaults to **4** (valid 0..4; a saved file keeps its own value). The
   rest of the table stands. `fiducialCheck.searchRadiusMm` is checked against the 9-frame cap at the default camera
   size (1920 × 1080 at 0.01068 × 0.01073 mm/px) in `validate()`, and at the real camera's size inside the task.
+- **§5.2, probe only (F10, real session 4).** A board file with no fiducials could not get a `board` surface: the
+  surface probe refuses `board`, and Register board refused fewer than `minFiducials` fiducials (the workaround was a
+  probe under another name, then `PUT /api/surfaces/board {points, planId}`). Now Register with `probe: "always"` on a
+  plan without a registration (`registration: "none"`, or `auto` with nothing stored) of a board with fewer
+  fiducials than `minFiducials` probes it only: home if needed, the camera look and the N1 probe of the board's
+  targets where the plan puts the board (X/Y as planned), no fiducial fit and no registration stored, the surface tied
+  to that seat (`boardRegistration` of the nominal board: a plan at another X/Y, rotation or side is refused by I4
+  until probed there), the new-seat flag cleared, the board planned again on the surface. The result says
+  `no fiducials: probed only, X/Y as planned` (`probeOnly: true`); the preview has `probeOnly`. Other probe modes keep
+  the refusal (it names the way out), and a board with enough fiducials always registers by them (every refusal of
+  §5.2 stands). `RegistrationSimTest.aBoardWithoutFiducialsIsProbedOnlyWhereItIsPlanned`,
+  `probeOnlyNeverSkipsTheFiducialsOfABoardThatHasThem`.
 - **Departures accepted during the build.** `FiducialDetector` keeps only marks brighter than their ring (contrast > 0:
   drops dark via centres). `VacuumProber` releases one coarse step higher when the last open step does not let go
   (verified on `runs/serial.log`). `BoardRegistration.matches` also compares the fiducials' board coordinates (a

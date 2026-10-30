@@ -1895,8 +1895,9 @@ public final class DispenseService {
      * Register board (§5.2): home if needed, find the fiducials with the top camera, fit the board ->
      * machine affine, decide the seat, touch the board with N1's vacuum (or re-touch 3 stored points of
      * a same seat), save the surface tied to the registration and plan the board again. A registration
-     * once stored stays (also after a refused probe or a STOP) and the board is planned with it. The
-     * Future never throws for task failures; see the result.
+     * once stored stays (also after a refused probe or a STOP) and the board is planned with it. A board
+     * with fewer fiducials than needed is refused, or probed only when the request says so
+     * ({@link RegisterRequest#probeOnly}, F10). The Future never throws for task failures; see the result.
      */
     public Future<RegistrationResult> registerBoard(RegisterRequest req) throws Exception {
         requireAvailable();
@@ -1945,7 +1946,7 @@ public final class DispenseService {
         BoardFeatures f = BoardFeatures.of(board, new PadTypeResolver(db.currentPadTypes(), db.packageMappings()),
                 req.fiducialHints);
         String few = fewFiducials(f, c.fiducialCheck.minFiducials);
-        if (few != null) {
+        if (few != null && !req.probeOnly) {
             throw refused(few);
         }
         DotImager im = imager();
@@ -1954,6 +1955,11 @@ public final class DispenseService {
         }
         boolean sim = isSimulatorConfirmed();
         res.simulated = sim;
+        if (few != null) {
+            probeOnly(req, res, t, f, few, sim);
+            s.ok();
+            return;
+        }
         BoardRegistration prev = c.boardRegistrations.get(req.boardKey);
         if (prev != null && prev.refusal(req.boardKey, req.nominalSeat, board, () -> sim) != null) {
             prev = null;
@@ -2136,7 +2142,6 @@ public final class DispenseService {
     /** The probe part of Register board: the same-seat check, or every target; the surface saved and tied. */
     private void probeBoard(RegisterRequest req, RegistrationResult res, Task t, BoardFeatures f, BoardRegistration reg,
             boolean announced, boolean sim) throws Exception {
-        RunResult r = t.r;
         Session s = t.s;
         DispenseConfig c = cfg;
         ProbeReport pr = res.probe;
@@ -2170,10 +2175,80 @@ public final class DispenseService {
             pr.why = "same seat, surface changed: probed again";
             res.sameSeat.note = pr.why;
         }
+        probeAll(req, res, t, p, f, reg.transform(), tie, "registration " + reg.shortId(), sim);
+    }
+
+    /**
+     * Register board on a board with fewer fiducials than it needs (F10), asked with probe "always" on a plan
+     * without a registration: no fiducial fit and no registration stored; N1 probes the board's targets where the
+     * plan puts the board (each spot looked at first), the surface is tied to that seat (a board planned at another
+     * X/Y, rotation or side is not tied to it), and the board is planned again on it.
+     */
+    private void probeOnly(RegisterRequest req, RegistrationResult res, Task t, BoardFeatures f, String few,
+            boolean sim) throws Exception {
+        RunResult r = t.r;
+        DispenseConfig c = cfg;
+        ProbeReport pr = res.probe;
+        if (req.probe != RegisterRequest.ProbeMode.ALWAYS) {
+            throw refused(few);
+        }
+        String tie = boardRegistration(req.nominal);
+        if (!tie.equals(req.plan.boardRegistration)) {
+            throw refused("REG: probe only needs a plan of the board where its file or job puts it, without a "
+                    + "registration: plan the board again with registration none");
+        }
+        res.probeOnly = true;
+        t.stage = "probe";
+        pr.needed = true;
+        pr.why = probeOnlyNote(f.fiducials.size(), c.fiducialCheck.minFiducials);
+        Probe p = new Probe(t.s, t::aborted, pt -> t.point("probe", Math.max(1, t.points.size()), pt));
+        pr.window = VacuumProber.preflight(c, true, "the board top Z", req.nominalZ, p.travelZ, p.settings,
+                p.n1.getNozzle());
+        try {
+            probeAll(req, res, t, p, f, req.planToBoard.createInverse(), tie, pr.why, sim);
+        }
+        finally {
+            // a new surface: plan the board on it (nothing else changed when the probe was refused or stopped)
+            if (pr.saved && req.replanner != null) {
+                String was = t.stage;
+                t.stage = "plan";
+                try {
+                    res.newPlanId = req.replanner.replan(null);
+                    r.nextPlanId = res.newPlanId;
+                    phase(r, "plan: planned again");
+                }
+                catch (Exception e) {
+                    r.warnings.add("plan again failed: " + e.getMessage());
+                }
+                t.stepsDone = t.stepsPlanned;
+                t.secondsLeft = 0;
+                t.send();
+                t.stage = was;
+            }
+        }
+    }
+
+    /** The result's word for a probe-only Register board (F10). */
+    static String probeOnlyNote(int fiducials, int min) {
+        return (fiducials == 0 ? "no fiducials" : String.format(Locale.ROOT, "%d of the %d fiducials needed", fiducials,
+                min)) + ": probed only, X/Y as planned";
+    }
+
+    /**
+     * Every target of the board probed (§5.2), the plane checked and saved as the board surface tied to {@code tie}:
+     * the targets and the plan's dots go to the machine through {@code boardToMachine} (the registration's affine, or
+     * the plan's own seat when probing only); {@code what} names it in the surface's note.
+     */
+    private void probeAll(RegisterRequest req, RegistrationResult res, Task t, Probe p, BoardFeatures f,
+            AffineTransform boardToMachine, String tie, String what, boolean sim) throws Exception {
+        RunResult r = t.r;
+        Session s = t.s;
+        DispenseConfig c = cfg;
+        ProbeReport pr = res.probe;
         t.stage = "probe";
         t.points.clear();
         List<VacuumProber.Target> targets = ProbeTargets.map(ProbeTargets.forBoard(f, ProbeTargets.dotsBoard(req.plan,
-                req.planToBoard), c, req.keepOuts), reg.transform());
+                req.planToBoard), c, req.keepOuts), boardToMachine);
         t.stepsPlanned = t.stepsDone + targets.size() + 1;
         t.secondsLeft = targets.size() * PROBE_POINT_ESTIMATE_S;
         for (VacuumProber.Target x : targets) {
@@ -2201,7 +2276,7 @@ public final class DispenseService {
         if (band != null) {
             throw refused(band);
         }
-        AffineTransform planToMachine = new AffineTransform(reg.transform());
+        AffineTransform planToMachine = new AffineTransform(boardToMachine);
         planToMachine.concatenate(req.planToBoard);
         int outside = 0;
         for (DispensePlan.PlannedDot d : req.plan.dots) {
@@ -2219,8 +2294,8 @@ public final class DispenseService {
         if (t.aborted()) {
             throw new DispenseExecutor.AbortedException(abortReason(s.exec, "stopped before the surface was saved"));
         }
-        String note = String.format(Locale.ROOT, "Register board %s: %d points by N1 vacuum touch (registration %s, run %s)",
-                ZCheck.clock(System.currentTimeMillis()), sp.size(), reg.shortId(), shortRun(r.runId));
+        String note = String.format(Locale.ROOT, "Register board %s: %d points by N1 vacuum touch (%s, run %s)",
+                ZCheck.clock(System.currentTimeMillis()), sp.size(), what, shortRun(r.runId));
         setSurface(c.boardSurfaceName, sp, note, tie, sim ? Boolean.TRUE : null);
         pr.saved = true;
         pr.surfaceSetAtMs = cfg.surface(c.boardSurfaceName).setAtMs;
@@ -3302,11 +3377,18 @@ public final class DispenseService {
     /** The result card's first sentence of a registration that ended OK. */
     private static String registrationSentence(RegistrationResult res) {
         StringBuilder sb = new StringBuilder("Registered " + ZCheck.clock(System.currentTimeMillis()) + ": ");
+        ProbeReport p = res.probe;
+        if (res.probeOnly) {
+            sb.append(p.why);
+            if (p.saved) {
+                sb.append(String.format(Locale.ROOT, "; board probed at %d points", p.points.size()));
+            }
+            return sb.append('.').toString();
+        }
         sb.append("first".equals(res.seat) ? "first seat" : "same".equals(res.seat) ? "same seat" : "re-seated");
         if (res.movedMm != null) {
             sb.append(String.format(Locale.ROOT, " (moved %.2f mm)", res.movedMm));
         }
-        ProbeReport p = res.probe;
         if (p != null && p.saved) {
             sb.append(String.format(Locale.ROOT, ", board probed at %d points", p.points.size()));
         }
