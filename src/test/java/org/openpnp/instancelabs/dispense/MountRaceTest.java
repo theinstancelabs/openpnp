@@ -149,6 +149,72 @@ public class MountRaceTest {
     }
 
     @Test
+    public void aConfigurationCopiedBeforeAMountOrANeedleChangeIsRefused() throws Exception {
+        // a settings form, or a request that copies the configuration outside the lock (PUT /api/config, the paste,
+        // the calibration area) and writes it back: it must never put back the tip that came off, nor make the frame
+        // of the needle before count again
+        try (TipFixture f = new TipFixture()) {
+            DispenseService svc = f.svc;
+            f.add25();
+            DispenseConfig form = svc.getConfig(); // copied with the 22G mounted
+            form.hopHeightMm = 1.2;
+            f.mount(K25);
+            Long token = svc.getConfig().needleChangedAtMs;
+            EngineRefusal e = assertThrows(EngineRefusal.class, () -> svc.updateConfig(form));
+            assertEquals("tip-changed", e.code);
+            assertTrue(e.getMessage().startsWith("The tip changed while this was open (the 25G straight was mounted at "),
+                    e.getMessage());
+            DispenseConfig now = svc.getConfig();
+            assertEquals(K25, now.tip.key);
+            assertEquals(token, now.needleChangedAtMs, "the needle change stays recorded");
+            assertFalse(now.isNeedleAnchored(), "the 22G's frame does not come back");
+            assertEquals(new DispenseConfig().hopHeightMm, now.hopHeightMm, 0, "nothing written");
+            // a copy taken before a needle change of the mounted tip: the frame of the needle before stays stale
+            f.frame(-2.59);
+            DispenseConfig before = svc.getConfig();
+            NeedleChange nc = svc.recordNeedleChange(null, null);
+            EngineRefusal n = assertThrows(EngineRefusal.class, () -> svc.updateConfig(before));
+            assertEquals("needle-changed", n.code);
+            assertEquals("The needle was changed at " + ZCheck.clock(nc.atMs) + " while this was open: reload.",
+                    n.getMessage());
+            assertEquals(nc.atMs, (long) svc.getConfig().needleChangedAtMs);
+            assertFalse(svc.getConfig().isNeedleAnchored());
+            // a tip changed by hand in the settings is no mount: 400
+            DispenseConfig hand = svc.getConfig();
+            hand.tip.key = "x30";
+            IllegalArgumentException h = assertThrows(IllegalArgumentException.class, () -> svc.updateConfig(hand));
+            assertEquals("The tip is the mounted tip setup: change it in Setup › Dispenser & tip.", h.getMessage());
+            // the live configuration edited is written
+            assertEquals(1.2, svc.updateConfigAtomically(live -> {
+                live.hopHeightMm = 1.2;
+                return live;
+            }).hopHeightMm, 0);
+        }
+    }
+
+    @Test
+    public void theResultPhotosOfAStepStayItsSetupWhenAnotherIsMountedBeforeTheyAreStored() throws Exception {
+        try (TipFixture f = new TipFixture()) {
+            DispenseService svc = f.svc;
+            f.add25();
+            // a step of the 22G ended (the machine thread stamps its setup and needle) ...
+            DoseBlocksResult step = new DoseBlocksResult();
+            step.setupKey = svc.getConfig().tip.key;
+            step.needleSinceMs = svc.getConfig().needleChangedAtMs;
+            DoseBlocksResult.BlockPhoto bp = new DoseBlocksResult.BlockPhoto();
+            bp.doseSteps = 800;
+            bp.jpeg = PhotoStore.jpeg(new java.awt.image.BufferedImage(200, 150,
+                    java.awt.image.BufferedImage.TYPE_INT_RGB));
+            step.photos.add(bp);
+            // ... and the 25G was mounted before the job stored its photos
+            f.mount(K25);
+            Photo p = svc.storeResultPhotos("job-22g", step).get(0);
+            assertEquals(Tip.SEED_KEY, p.setupKey);
+            assertEquals(step.needleSinceMs, p.needleSinceMs);
+        }
+    }
+
+    @Test
     public void aFrameTakenUnderTheOldNeedleIsRefused() throws Exception {
         try (TipFixture f = new TipFixture()) {
             DispenseService svc = f.svc;

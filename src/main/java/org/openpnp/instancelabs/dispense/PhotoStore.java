@@ -212,7 +212,8 @@ public final class PhotoStore {
     /**
      * A photo may be linked to a calibration record (§22.4): the record exists and was made with the photo's setup
      * (409 {@code setup-mismatch}); a bottom-camera picture only to a record of the same needle (409
-     * {@code needle-changed}).
+     * {@code needle-changed}). A record without a needle token (no change recorded before it, or made before schema
+     * 3) is of the needle before any change made after it.
      */
     static PadCalibrationRecord checkLink(DispenseDb db, String setupKey, String source, Long needleSinceMs,
             long calibrationId) throws SQLException {
@@ -224,8 +225,9 @@ public final class PhotoStore {
             throw new EngineRefusal(409, "setup-mismatch", "This picture is of the " + nameOf(db, setupKey)
                     + "; calibration " + calibrationId + " was made with the " + nameOf(db, r.setupKey) + ".");
         }
-        if (Photo.SOURCE_BOTTOM_CAMERA.equals(source) && r.needleSinceMs != null
-                && !r.needleSinceMs.equals(needleSinceMs)) {
+        boolean sameNeedle = r.needleSinceMs != null ? r.needleSinceMs.equals(needleSinceMs)
+                : needleSinceMs == null || needleSinceMs <= r.createdAtMs;
+        if (Photo.SOURCE_BOTTOM_CAMERA.equals(source) && !sameNeedle) {
             throw new EngineRefusal(409, "needle-changed", "This picture was taken with another needle than calibration "
                     + calibrationId + ": a needle change came between them.");
         }

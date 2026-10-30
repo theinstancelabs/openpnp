@@ -366,4 +366,34 @@ public class PhotoStoreTest {
             assertEquals("too-many", assertThrows(EngineRefusal.class, () -> s.store(seventh)).code);
         }
     }
+
+    @Test
+    public void aRecordWithoutANeedleTokenTakesOnlyPicturesOfItsNeedle() throws Exception {
+        // a record made before any needle change was recorded (or before schema 3) has no token: a bottom-camera
+        // picture taken after a later change is of another needle (review of §22.4)
+        try (DispenseDb db = DispenseDb.inMemory()) {
+            PhotoStore s = store(db);
+            PadCalibrationRecord rec = new PadCalibrationRecord();
+            rec.jobId = "job-old";
+            rec.typeKey = "chip-0603";
+            rec.outcome = PadCalibrationRecord.PROVISIONAL;
+            rec.setupKey = Tip.SEED_KEY;
+            rec = db.insertPadCalibration(rec);
+            PhotoStore.Input in = upload(encode(picture(100, 100, BufferedImage.TYPE_INT_RGB), "jpg"));
+            in.kind = Photo.KIND_TIP;
+            in.source = Photo.SOURCE_BOTTOM_CAMERA;
+            in.calibrationIds.add(rec.id);
+            in.needleSinceMs = rec.createdAtMs + 1; // the needle was changed after the record
+            EngineRefusal e = assertThrows(EngineRefusal.class, () -> s.store(in));
+            assertEquals("needle-changed", e.code);
+            in.needleSinceMs = rec.createdAtMs - 1; // the needle the record was made with
+            assertEquals(Arrays.asList(rec.id), s.store(in).links);
+            PhotoStore.Input never = upload(encode(picture(101, 100, BufferedImage.TYPE_INT_RGB), "jpg"));
+            never.kind = Photo.KIND_TIP;
+            never.source = Photo.SOURCE_BOTTOM_CAMERA;
+            never.calibrationIds.add(rec.id);
+            never.needleSinceMs = null; // no change was ever recorded
+            assertEquals(Arrays.asList(rec.id), s.store(never).links);
+        }
+    }
 }

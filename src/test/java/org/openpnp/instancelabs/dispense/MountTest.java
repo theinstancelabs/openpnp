@@ -325,6 +325,26 @@ public class MountTest {
             assertEquals(g.toJson(before.needleLanding), g.toJson(back.needleLanding));
             assertEquals(TipSetups.Mount.UNDO, svc.getDb().tipMounts(1).get(0).kind);
             assertNull(svc.undoUntilMs());
+            assertNotNull(back.parkedTips.get(K25), "the 25G parked again");
+            // a tip added between the mount and its undo keeps its entry: the undo puts back the mount only
+            f.mount(K25);
+            TipSetup s27 = TipSetupsTest.straight25();
+            s27.key = "27g-straight";
+            s27.name = "27G straight";
+            s27.gauge = 27;
+            s27.idMm = 0.20;
+            s27.odMm = 0.41;
+            TipSetup added = svc.getDb().insertTipSetupVersion(s27);
+            svc.updateConfigAtomically(live -> {
+                live.parkedTips.put(added.key, TipSetups.newEntry(live, new DispenseProfile(), "default", added.name));
+                return live;
+            });
+            svc.undoMount("tester");
+            assertEquals(Tip.SEED_KEY, svc.getConfig().tip.key);
+            assertTrue(svc.getConfig().parkedTips.containsKey("27g-straight"), svc.getConfig().parkedTips.keySet()
+                    .toString());
+            assertTrue(svc.getConfig().parkedTips.containsKey(K25));
+            assertFalse(svc.getConfig().parkedTips.containsKey(Tip.SEED_KEY), "the mounted tip is not parked");
             // after a frame was recorded: too late
             f.mount(K25);
             f.frame(-3.0);

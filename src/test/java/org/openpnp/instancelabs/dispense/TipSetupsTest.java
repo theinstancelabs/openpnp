@@ -512,6 +512,45 @@ public class TipSetupsTest {
     }
 
     @Test
+    public void aSettingsFileTheReconcileCannotTakeStillStartsTheEngine() throws Exception {
+        // a tip name longer than a setup's 40 characters is cut
+        String json = withTip(fixture(), o -> {
+            o.getAsJsonObject("tip").addProperty("key", "x99");
+            o.getAsJsonObject("tip").addProperty("name", "a 25G straight steel tip that someone named at length");
+        });
+        try (SimMachine sim = new SimMachine(false)) {
+            DispenseService svc = start(sim, json);
+            try {
+                TipSetup s = svc.getDb().currentTipSetup("x99");
+                assertTrue(s.name.length() <= TipSetup.MAX_NAME && s.name.endsWith("…"), s.name);
+                assertEquals(s.name, svc.getConfig().tip.name);
+            }
+            finally {
+                svc.shutdown();
+            }
+        }
+        // a bore the settings allowed and a setup does not: the reconcile fails, the settings stay as they are and the
+        // engine starts (the next start tries again)
+        String odd = withTip(fixture(), o -> {
+            o.getAsJsonObject("tip").addProperty("key", "x98");
+            o.getAsJsonObject("tip").addProperty("idMm", 0.04);
+        });
+        try (SimMachine sim = new SimMachine(false)) {
+            DispenseService svc = start(sim, odd);
+            try {
+                assertEquals("x98", svc.getConfig().tip.key);
+                assertNull(svc.getDb().currentTipSetup("x98"));
+                assertFalse(svc.mountedTip().benchModel, "only the seeded setup has the bench model");
+                assertFalse(svc.getDb().query("SELECT * FROM events WHERE code = 'TIP' AND message LIKE 'the tip setup "
+                        + "reconcile at start failed%'").isEmpty());
+            }
+            finally {
+                svc.shutdown();
+            }
+        }
+    }
+
+    @Test
     public void theLandingOfAnOpenNeedleChangeIsStillToCheck() throws Exception {
         // the needle was changed after the touch-off: the change was not finished at the update
         String json = withTip(fixture(), o -> o.addProperty("needleChangedAtMs", 1793300150000L));

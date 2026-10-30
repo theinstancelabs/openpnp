@@ -27,6 +27,12 @@ public final class DoseBlocksResult {
      * as JPEG bytes (never a BufferedImage); the job stores them when the step ends and drops them.
      */
     public final List<BlockPhoto> photos = new ArrayList<>();
+    /**
+     * The tip setup and the needle token the step ran with (§22.3, §22.4): its result photos are of that setup and
+     * needle, whatever is mounted when the job stores them; null before the step ran.
+     */
+    public String setupKey;
+    public Long needleSinceMs;
     /** Every new blob of the after frames in machine mm (the landing check's locator and fit, §22.3). */
     public final List<Blob> newBlobs = new ArrayList<>();
 

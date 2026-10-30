@@ -154,4 +154,24 @@ public class InterlocksXyTest {
             f.sim.n2.setHeadOffsets(ho);
         }
     }
+
+    @Test
+    public void aLandingCheckedAfterTheClockWasSetBackStillCounts() throws Exception {
+        // the needle token can lie ahead of the clock (the clock set back after the change, or two changes in one
+        // millisecond): a landing measured after the change is stamped no earlier than it, as the frame and offset are
+        try (TipFixture f = new TipFixture()) {
+            DispenseService svc = f.svc;
+            long ahead = System.currentTimeMillis() + 60_000;
+            svc.updateConfigAtomically(live -> {
+                live.needleChangedAtMs = ahead;
+                return live;
+            });
+            f.frame(-2.59);
+            assertTrue(svc.getConfig().isNeedleAnchored());
+            assertFalse(svc.isNeedleXyChecked());
+            f.land(0.1, 0.1);
+            assertTrue(svc.isNeedleXyChecked(), svc.needleXyProblem());
+            assertEquals(ahead, (long) svc.getConfig().needleLanding.setAtMs);
+        }
+    }
 }

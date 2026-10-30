@@ -154,6 +154,9 @@ public class LandingCheckBlocksTest {
             assertTrue(p.jpeg.length > 100 && (p.jpeg[0] & 0xff) == 0xff && (p.jpeg[1] & 0xff) == 0xd8, "JPEG bytes");
             assertTrue(p.widthPx <= PhotoStore.RESULT_MAX_WIDTH_PX);
             assertEquals(BandImager.MM_PER_PX, p.mmPerPx, 1e-9);
+            // the step says which setup and needle laid its dots: its photos are theirs whatever is mounted later
+            assertEquals(Tip.SEED_KEY, r.setupKey);
+            assertEquals(svc.getConfig().needleChangedAtMs, r.needleSinceMs);
             // the landing saved: every dot of every step is laid where the tip lands
             f.land(0.8, -0.3);
             assertTrue(svc.isNeedleXyChecked());
