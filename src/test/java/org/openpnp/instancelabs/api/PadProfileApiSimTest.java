@@ -164,7 +164,7 @@ public class PadProfileApiSimTest {
     }
 
     void characterize(String key) throws Exception {
-        ok(call("PUT", "/api/pad-types/" + key, "{\"status\":\"characterized\"}"));
+        ok(call("PUT", "/api/pad-types/" + key, "{\"forSetup\":\"ad22tta-b\",\"status\":\"characterized\"}"));
     }
 
     static JsonObject group(JsonObject check, String packageId) {
@@ -747,7 +747,7 @@ public class PadProfileApiSimTest {
         assertEquals(1, ok(get("/api/pad-types/chip-0805")).getAsJsonObject("current").get("version").getAsInt());
 
         // a pad type added since the check was shown: the plan's check is computed again and the shown id is stale
-        ok(call("POST", "/api/pad-types", "{\"name\":\"Other\",\"family\":\"Custom\",\"padWMm\":3,\"padHMm\":3,"
+        ok(call("POST", "/api/pad-types", "{\"forSetup\":\"ad22tta-b\",\"name\":\"Other\",\"family\":\"Custom\",\"padWMm\":3,\"padHMm\":3,"
                 + "\"layout\":\"single\"}"));
         JsonObject again = check("planId=" + planId);
         JsonObject r2 = group(again, "R_0805_2012Metric");
@@ -842,7 +842,10 @@ public class PadProfileApiSimTest {
         assertTrue(paste.get("loadedAtMs").getAsLong() >= t0);
         refused(call("PUT", "/api/config", "{\"paste\":{\"loadedAtMs\":5}}"), 400, "bad-request");
         refused(call("POST", "/api/paste", "{\"key\":\"Not A Key\"}"), 400, "bad-request");
-        ok(call("PUT", "/api/config", "{\"paste\":{\"name\":\"GC50 T5, the new jar\"},\"tip\":{\"odMm\":0.70}}"));
+        ok(call("PUT", "/api/config", "{\"paste\":{\"name\":\"GC50 T5, the new jar\"}}"));
+        // the tip is the mounted tip setup (§22.1): its OD is a plain edit of the setup, which refreshes cfg.tip
+        refused(call("PUT", "/api/config", "{\"tip\":{\"odMm\":0.70}}"), 400, "bad-request");
+        ok(call("PUT", "/api/tip-setups/ad22tta-b", "{\"odMm\":0.70}"));
         assertEquals(0.70, svc.getConfig().tip.odMm, 0);
         assertEquals(paste.get("loadedAtMs").getAsLong(), (long) svc.getConfig().paste.loadedAtMs, "kept");
 
@@ -880,7 +883,7 @@ public class PadProfileApiSimTest {
 
     @Test
     public void ownDoseStatusEvidenceAndHandEdits() throws Exception {
-        String body = "{\"name\":\"0805 one turn\",\"family\":\"Chip (2-terminal SMD)\",\"padWMm\":1.025,"
+        String body = "{\"forSetup\":\"ad22tta-b\",\"name\":\"0805 one turn\",\"family\":\"Chip (2-terminal SMD)\",\"padWMm\":1.025,"
                 + "\"padHMm\":1.40,\"layout\":\"two-terminal\",\"pitchMm\":1.825";
         refused(call("POST", "/api/pad-types", body + ",\"dotSteps\":533}"), 400, "bad-request");
         JsonObject r6 = refused(call("POST", "/api/pad-types", body + ",\"dotSteps\":400,\"dotsPerPad\":1}"), 400,
@@ -894,18 +897,18 @@ public class PadProfileApiSimTest {
         assertEquals("manual", str(created, "origin"));
         assertEquals("ad22tta-b", str(created, "tipKey"), "the tip the dose was set for");
 
-        JsonObject ev = refused(call("PUT", "/api/pad-types/" + key, "{\"status\":\"characterized\"}"), 409,
+        JsonObject ev = refused(call("PUT", "/api/pad-types/" + key, "{\"forSetup\":\"ad22tta-b\",\"status\":\"characterized\"}"), 409,
                 "status-evidence");
         assertEquals("0805 one turn uses one-turn dots, which have no fresh camera check on the blank and no confirmed "
                 + "weighing at this recipe: run the ladder and Weigh dots (Calibrate) first.", str(ev, "reason"));
-        refused(call("PUT", "/api/pad-types/" + key, "{\"status\":\"validated\"}"), 409, "status-evidence");
+        refused(call("PUT", "/api/pad-types/" + key, "{\"forSetup\":\"ad22tta-b\",\"status\":\"validated\"}"), 409, "status-evidence");
         // a fresh passing camera record and two weighings that agree
         DoseRecord optical = record(DoseRecord.OPTICAL, 1600);
         optical.pass = true;
         optical.diameterMeanMm = 1.30;
         optical.diameterP95Mm = 1.40;
         svc.getDb().insertDoseRecord(optical);
-        ev = refused(call("PUT", "/api/pad-types/" + key, "{\"status\":\"characterized\"}"), 409, "status-evidence");
+        ev = refused(call("PUT", "/api/pad-types/" + key, "{\"forSetup\":\"ad22tta-b\",\"status\":\"characterized\"}"), 409, "status-evidence");
         assertTrue(str(ev, "reason").contains("which have no confirmed weighing at this recipe"), ev.toString());
         long first = 0;
         for (int k = 0; k < 2; k++) {
@@ -922,10 +925,10 @@ public class PadProfileApiSimTest {
             mass.confirmedBy = k == 0 ? null : first;
             first = svc.getDb().insertDoseRecord(mass).id;
         }
-        JsonObject ch = ok(call("PUT", "/api/pad-types/" + key, "{\"status\":\"characterized\"}"))
+        JsonObject ch = ok(call("PUT", "/api/pad-types/" + key, "{\"forSetup\":\"ad22tta-b\",\"status\":\"characterized\"}"))
                 .getAsJsonObject("padType");
         assertEquals("characterized", str(ch, "status"));
-        assertEquals("validated", str(ok(call("PUT", "/api/pad-types/" + key, "{\"status\":\"validated\"}"))
+        assertEquals("validated", str(ok(call("PUT", "/api/pad-types/" + key, "{\"forSetup\":\"ad22tta-b\",\"status\":\"validated\"}"))
                 .getAsJsonObject("padType"), "status"), "its previous version was characterized with this dose");
 
         // the list row: the type's own dots and turn, its calibration fields, the newest pad calibration
@@ -941,7 +944,11 @@ public class PadProfileApiSimTest {
         assertEquals(1, row.get("dotsPerPad").getAsInt());
         assertEquals(1600 / svc.getConfig().bStepsPerDeg, row.get("rotationPerDotDeg").getAsDouble(), 1e-9);
         assertTrue(row.has("calAreaMm2") && row.has("massPerPadMg") && row.has("lastCalibration"), row.toString());
-        assertTrue(row.get("lastCalibration").isJsonNull());
+        // the status raised by hand is a calibration record of its own (§22.5): method by-hand, outcome validated
+        JsonObject last = row.getAsJsonObject("lastCalibration");
+        assertEquals("by-hand", str(last, "method"), last.toString());
+        assertEquals("validated", str(last, "outcome"));
+        assertEquals("ad22tta-b", str(last, "setupKey"));
 
         // a hand edit of the pad or the dose drops the calibration it had (decision 17); notes keep it
         org.openpnp.instancelabs.dispense.PadType cal = svc.getDb().currentPadType(key, Tip.SEED_KEY).copy();
@@ -949,11 +956,11 @@ public class PadProfileApiSimTest {
         cal.massPerPadMg = 2.0;
         cal.origin = org.openpnp.instancelabs.dispense.PadType.ORIGIN_AUTO_CALIBRATED;
         svc.savePadType(cal, Tip.SEED_KEY, cal.padVersion);
-        JsonObject notes = ok(call("PUT", "/api/pad-types/" + key, "{\"notes\":\"after reflow: fine\"}"))
+        JsonObject notes = ok(call("PUT", "/api/pad-types/" + key, "{\"forSetup\":\"ad22tta-b\",\"notes\":\"after reflow: fine\"}"))
                 .getAsJsonObject("padType");
         assertEquals("auto-calibrated", str(notes, "origin"));
         assertEquals(2.0, notes.get("massPerPadMg").getAsDouble(), 0);
-        JsonObject edited = ok(call("PUT", "/api/pad-types/" + key, "{\"padWMm\":1.10}")).getAsJsonObject("padType");
+        JsonObject edited = ok(call("PUT", "/api/pad-types/" + key, "{\"forSetup\":\"ad22tta-b\",\"padWMm\":1.10}")).getAsJsonObject("padType");
         assertEquals("manual", str(edited, "origin"));
         assertTrue(edited.get("doseFp").isJsonNull());
         assertTrue(edited.get("massPerPadMg").isJsonNull());

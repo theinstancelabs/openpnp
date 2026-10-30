@@ -200,8 +200,8 @@ public class PadCalibrationJobTest {
         ok(call("PUT", "/api/locations/blank", "{\"x\":290,\"y\":240,\"z\":5.5}"));
         ok(call("PUT", "/api/locations/coupon1", "{\"x\":350,\"y\":55,\"z\":5.80}"));
         ok(call("PUT", "/api/locations/coupon2", "{\"x\":350,\"y\":90,\"z\":5.80}"));
-        ok(call("POST", "/api/needle/anchor", "{\"surfaceZ\":5.5,\"needleContactRawSum\":65.59}"));
-        ok(call("POST", "/api/needle/offset", "{\"offsetMm\":-2.59}"));
+        ok(call("POST", "/api/needle/anchor", "{\"needleChangedAtMs\":null,\"surfaceZ\":5.5,\"needleContactRawSum\":65.59}"));
+        ok(call("POST", "/api/needle/offset", "{\"needleChangedAtMs\":null,\"offsetMm\":-2.59}"));
         ok(call("PUT", "/api/surfaces/blank", "{\"points\":[[272,217,5.5],[343,217,5.5],[272,273,5.5],[343,273,5.5]]}"));
         ok(call("PUT", "/api/config", "{\"purgeRow\":{\"x0Mm\":275,\"y0Mm\":220,\"pitchXMm\":2.0,\"spots\":33},"
                 + "\"vacuumProbe\":{\"vacuumSettleMs\":300,\"readDelayMs\":0}}"));

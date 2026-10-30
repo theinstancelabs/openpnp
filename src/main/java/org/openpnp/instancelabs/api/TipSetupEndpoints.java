@@ -337,12 +337,13 @@ final class TipSetupEndpoints {
         if (s.key.equals(cfg.tip.key)) {
             // "I changed the needle" for the same kind of tip: (a) alone
             Map<String, Object> change = Views.needleChange(nc);
+            List<String> stale = new ArrayList<>(Arrays.asList("needle Z frame", "needle Z offset", "where it lands",
+                    "regulator reading", "prime"));
             return Views.map("mounted", s.key, "mountedName", s.name, "from", s.key, "fromName", s.name, "atMs",
                     nc.atMs, "needleChangedAtMs", nc.atMs, "same", true, "needleChange", change, "voided",
-                    change.get("voided"), "stale", Arrays.asList("needle Z frame", "offset", "landing"), "next",
-                    next(svc, cfg, false), "undoUntilMs", null, "text", "A new " + s.name + " at "
-                            + ZCheck.clock(nc.atMs) + ". Next: record its needle Z frame (Setup › Needle Z frame), "
-                            + "then check where it lands.");
+                    change.get("voided"), "stale", stale, "next", next(svc, cfg, false), "undoUntilMs", null, "text",
+                    "A new " + s.name + " at " + ZCheck.clock(nc.atMs) + ". Next: record its needle Z frame (Setup › "
+                            + "Needle Z frame), then check where it lands.");
         }
         MountResult m;
         try {

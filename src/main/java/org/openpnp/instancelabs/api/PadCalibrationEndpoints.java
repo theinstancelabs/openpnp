@@ -333,8 +333,11 @@ final class PadCalibrationEndpoints {
             m.put("label", label[0]);
             m.put("labelAuto", label[1]);
             m.put("photos", Views.photos(db.photos(null, x.id, null, null, true, 50)));
-            m.put("flags", flagged.contains(x.jobId) ? Collections.singletonList("wrong-tip")
-                    : Collections.<String>emptyList());
+            List<String> flags = new ArrayList<>();
+            if (flagged.contains(x.jobId)) {
+                flags.add("wrong-tip");
+            }
+            m.put("flags", flags);
             m.put("jobInMemory", x.jobId != null && ctx.padCalJobs.get(x.jobId) != null);
             out.add(m);
         }

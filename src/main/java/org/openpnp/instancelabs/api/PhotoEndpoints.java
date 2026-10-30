@@ -8,7 +8,6 @@ import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
-import java.util.concurrent.Semaphore;
 
 import org.openpnp.instancelabs.dispense.DispenseConfig;
 import org.openpnp.instancelabs.dispense.DispenseService;
@@ -26,11 +25,6 @@ import com.google.gson.JsonObject;
  * records. No LAN route: pictures arrive as files (§22.11 item 14).
  */
 final class PhotoEndpoints {
-    /**
-     * One upload at a time (§22.4): held for header, decode, encode and store, taken without waiting (409 busy). The
-     * API's thread pool is unbounded, so this also bounds the memory the decodes take.
-     */
-    static final Semaphore PIPELINE = new Semaphore(1);
     static final String TOO_LARGE = "The picture is larger than 8 MB: send a smaller one (phones can share a reduced "
             + "size).";
     private static final String ID = "([0-9]{1,12})";
@@ -79,7 +73,8 @@ final class PhotoEndpoints {
         if (bytes == null || bytes.length == 0) {
             throw ApiException.badRequest("Send the picture as the request body (a JPEG or PNG).");
         }
-        if (!PIPELINE.tryAcquire()) {
+        // one upload at a time (§22.4, the engine's pipeline): header, decode, encode and store; never waiting
+        if (!PhotoStore.PIPELINE.tryAcquire()) {
             throw new ApiException(409, "busy", "Another picture is being stored: try again in a moment.");
         }
         try {
@@ -99,7 +94,7 @@ final class PhotoEndpoints {
             return ApiServer.Response.json(201, Views.map("photo", Views.photo(p)));
         }
         finally {
-            PIPELINE.release();
+            PhotoStore.PIPELINE.release();
         }
     }
 

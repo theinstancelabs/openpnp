@@ -138,12 +138,12 @@ public class PadCalibrationSimTest {
         ok(call("PUT", "/api/locations/blank", "{\"x\":290,\"y\":240,\"z\":5.5}"));
         ok(call("PUT", "/api/locations/coupon1", "{\"x\":350,\"y\":55,\"z\":5.80}"));
         ok(call("PUT", "/api/locations/coupon2", "{\"x\":350,\"y\":90,\"z\":5.80}"));
-        ok(call("POST", "/api/needle/anchor", "{\"surfaceZ\":5.5,\"needleContactRawSum\":65.59}"));
-        ok(call("POST", "/api/needle/offset", "{\"offsetMm\":-2.59}"));
+        ok(call("POST", "/api/needle/anchor", "{\"needleChangedAtMs\":null,\"surfaceZ\":5.5,\"needleContactRawSum\":65.59}"));
+        ok(call("POST", "/api/needle/offset", "{\"needleChangedAtMs\":null,\"offsetMm\":-2.59}"));
         ok(call("PUT", "/api/surfaces/blank", "{\"points\":[[272,217,5.5],[343,217,5.5],[272,273,5.5],[343,273,5.5]]}"));
         ok(call("PUT", "/api/config", "{\"purgeRow\":{\"x0Mm\":275,\"y0Mm\":220,\"pitchXMm\":2.0,\"spots\":33},"
                 + "\"vacuumProbe\":{\"vacuumSettleMs\":300,\"readDelayMs\":0},\"cleanPadCheck\":{\"enabled\":false}}"));
-        ok(call("PUT", "/api/pad-types/chip-0603", "{\"status\":\"characterized\"}"));
+        ok(call("PUT", "/api/pad-types/chip-0603", "{\"forSetup\":\"ad22tta-b\",\"status\":\"characterized\"}"));
         ok(call("POST", "/api/screw/start-angle", "{}"));
         regulatorAtMs = System.currentTimeMillis();
     }
@@ -942,7 +942,7 @@ public class PadCalibrationSimTest {
     @Test
     public void aShortDwellWithOneTurnDotsIsRefusedBeforeAnythingMoves() throws Exception {
         start(null);
-        ok(call("PUT", "/api/config", "{\"profile\":{\"dwellMs\":50}}"));
+        ok(call("PUT", "/api/config", "{\"forTip\":\"ad22tta-b\",\"profile\":{\"dwellMs\":50}}"));
         ok(call("POST", "/api/screw/start-angle", "{}"));
         JsonObject job = ladder(1600, "chip-0805");
         assertEquals("failed", str(job, "state"), job.toString());

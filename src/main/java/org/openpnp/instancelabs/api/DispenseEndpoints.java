@@ -462,9 +462,7 @@ final class DispenseEndpoints {
                     + "needs its landing checked (Setup › Dispenser & tip › Check where it lands).");
         }
         Long token = token(b);
-        if (svc.isBusy()) {
-            throw ApiException.refused("the trim cannot change while a dispense task runs");
-        }
+        ctx.requireEngineIdle(svc); // a task, or a pad calibration between its steps (the landing check's E + trim)
         String note = Json.str(b, "note", null);
         DispenseConfig.NeedleXyTrim t = svc.setXyTrim(dx, dy, note, token);
         return Views.map("needleXyTrim", t);
@@ -484,9 +482,7 @@ final class DispenseEndpoints {
                     + "the landing check found)");
         }
         Long token = token(b);
-        if (svc.isBusy()) {
-            throw ApiException.refused("where the needle lands cannot change while a dispense task runs");
-        }
+        ctx.requireEngineIdle(svc);
         DispenseConfig.NeedleLanding l;
         if (keep) {
             l = svc.keepLanding(token);

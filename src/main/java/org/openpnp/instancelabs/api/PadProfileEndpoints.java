@@ -426,12 +426,14 @@ final class PadProfileEndpoints {
         JsonObject b = r.json();
         DispenseService svc = ctx.svc();
         ctx.requireEngineIdle(svc);
-        DispenseConfig c = svc.getConfig();
-        c.paste.key = Json.str(b, "key", c.paste.key);
-        c.paste.name = Json.str(b, "name", c.paste.name);
-        c.paste.lot = Json.str(b, "lot", null);
-        c.paste.loadedAtMs = System.currentTimeMillis();
-        svc.updateConfig(c); // validates the key and name (400)
+        // on the live settings under the engine's lock (§22.1): a mount or a needle change meanwhile is kept
+        DispenseConfig c = svc.updateConfigAtomically(live -> {
+            live.paste.key = Json.str(b, "key", live.paste.key);
+            live.paste.name = Json.str(b, "name", live.paste.name);
+            live.paste.lot = Json.str(b, "lot", null);
+            live.paste.loadedAtMs = System.currentTimeMillis();
+            return live; // validates the key and name (400)
+        });
         svc.getDb().event(null, "INFO", "PASTE", "new paste loaded: " + c.paste.name + " (" + c.paste.key + ")"
                 + (c.paste.lot == null ? "" : ", lot " + c.paste.lot));
         return svc.getConfig().paste;
@@ -441,34 +443,35 @@ final class PadProfileEndpoints {
         JsonObject b = r.json();
         DispenseService svc = ctx.svc();
         ctx.requireEngineIdle(svc);
-        DispenseConfig c = svc.getConfig();
-        CalibrationArea a = c.calibrationArea;
-        a.surfaceName = Json.str(b, "surfaceName", a.surfaceName);
-        a.x0Mm = Json.num(b, "x0Mm", null);
-        a.y0Mm = Json.num(b, "y0Mm", null);
-        a.widthMm = Json.num(b, "widthMm", null);
-        a.heightMm = Json.num(b, "heightMm", null);
-        List<String> problems = new ArrayList<>();
-        for (String p : c.validate()) {
-            if (p.startsWith("calibrationArea")) {
-                problems.add(p);
+        return area(svc.updateConfigAtomically(c -> {
+            CalibrationArea a = c.calibrationArea;
+            a.surfaceName = Json.str(b, "surfaceName", a.surfaceName);
+            a.x0Mm = Json.num(b, "x0Mm", null);
+            a.y0Mm = Json.num(b, "y0Mm", null);
+            a.widthMm = Json.num(b, "widthMm", null);
+            a.heightMm = Json.num(b, "heightMm", null);
+            List<String> problems = new ArrayList<>();
+            for (String p : c.validate()) {
+                if (p.startsWith("calibrationArea")) {
+                    problems.add(p);
+                }
             }
-        }
-        if (!problems.isEmpty()) {
-            throw ApiException.badRequest(String.join("; ", problems));
-        }
-        svc.updateConfig(c);
-        return area(svc.getConfig());
+            if (!problems.isEmpty()) {
+                throw ApiException.badRequest(String.join("; ", problems));
+            }
+            return c;
+        }));
     }
 
     /** "Blank wiped": the whole area is free again. */
     Object resetArea() throws Exception {
         DispenseService svc = ctx.svc();
         ctx.requireEngineIdle(svc);
-        DispenseConfig c = svc.getConfig();
-        c.calibrationArea.usedMm = 0;
-        c.calibrationArea.resetAtMs = System.currentTimeMillis();
-        svc.updateConfig(c);
+        DispenseConfig c = svc.updateConfigAtomically(live -> {
+            live.calibrationArea.usedMm = 0;
+            live.calibrationArea.resetAtMs = System.currentTimeMillis();
+            return live;
+        });
         svc.getDb().event(null, "INFO", "PAD_CALIBRATION", "calibration area wiped (" + c.calibrationArea.heightMm()
                 + " mm free)");
         return area(svc.getConfig());

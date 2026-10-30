@@ -248,6 +248,10 @@ final class Views {
         m.put("needleZOffsetMm", p.needleZOffsetMm);
         m.put("hopHeightMm", p.hopHeightMm);
         m.put("surfaceProbed", p.surfaceFingerprint != null);
+        // the tip setup the plan was made for (§22.3: another mounted since, or a new version of it, makes it stale)
+        m.put("setupKey", p.setupKey);
+        m.put("setupName", p.setupName);
+        m.put("setupVersion", p.setupVersion);
 
         Map<String, Object> s = new LinkedHashMap<>();
         int blocked = p.blockedPads().size();
@@ -280,6 +284,8 @@ final class Views {
             d.put("packageId", x.packageId);
             d.put("typeKey", x.typeKey);
             d.put("typeVersion", x.typeVersion);
+            d.put("typePadVersion", x.typePadVersion);
+            d.put("typeTipKey", x.typeTipKey);
             d.put("typeStatus", x.typeStatus == null ? null : x.typeStatus.dbName);
             d.put("source", x.source == null ? null : x.source.name());
             d.put("x", x.xMm);
