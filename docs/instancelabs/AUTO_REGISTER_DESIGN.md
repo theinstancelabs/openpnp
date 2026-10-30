@@ -1640,6 +1640,13 @@ plan chip during the task (`renderChip`, W/run.js:595-611) reads `Registering ·
   - `#plan-next-hint`: `then: register the board`;
   - the Next board dialog body: `… the surface check goes back to needs you until Register board has checked this seat.`;
   - page-head meta (W/run.js:573, 582): `registered 13:05` / `not registered`.
+- **Probe only** (§5.2, F10; web UI of fix round 2). When `registrationTargets.probeOnly` is true the foot's primary
+  is `Probe only (X/Y as planned) · ≈ M:SS` (two-press, `POST …/register {probe: "always"}`) with the note `This board
+  has no fiducials: N1 probes it where it is planned; its X/Y are not checked.`; Do it by hand stays. The result card
+  reads `Probed 13:05: no fiducials: probed only, X/Y as planned; 5 points, worst 0.012 mm; planned again.` (with
+  `Probe again`). A REG refusal that ends ` Or probe it only, where it is planned: Register with probe "always".` offers
+  `Probe only (X/Y as planned)` first; the readiness item, the I4 seat fixes and the Z-moved step offer it instead of
+  Register board for such a plan.
 
 ### 8.2 Readiness, strip, fix-its
 

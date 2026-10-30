@@ -623,6 +623,12 @@ profile), **Dot batch** (`#sd-*`, `#btn-sd-save`), **Dot ladder** (`#dl-*`, `#bt
 records `#cal-current`, `#cal-table`, `#ladder-table` (ladder of any record via `GET /api/calibrations/{id}/ladder`),
 `#cal-result`. Set up / Validate from a pad type open this workspace with `#setup-guide` filled.
 
+**As built (fix round 2, F9, F14):** the touch-off has `#to-pitch` (`Pitch`, mm, placeholder `1.6`, `at least the dot +
+0.4 mm`; sent as `pitchMm` when typed), the plan line ends `· 1.6 mm apart`, and the engine's 400 for a pitch with no
+room between the dots is the field's error. Its result table reads `not measured` (with the engine's note, e.g. `joined
+to the dot at gap 0.200 mm`) for a dot the camera could not measure, and `no dot` only where there was no paste; a run
+that recorded nothing shows its message word for word.
+
 **As built (pc-web, PC §8, §13.5–13.6):** the page meta `The touch-off sets the needle offset, the start angle sets
 where dots start and the pad calibration sets a pad type’s dots. Everything else is a record.`; the banner
 `#cal-history-note` now reads `Boards use the profile’s dot unless a pad type has its own turn (set by Calibrate

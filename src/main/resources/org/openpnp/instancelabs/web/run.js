@@ -422,6 +422,9 @@
   // Register board and its fix-its (AUTO_REGISTER_DESIGN.md §8.2)
   const regGate = (s) => { const w = registerWhy(s); return w ? w.text : null; };
   IL.fix('register', { press2: 'register board', gate: regGate, run: () => postRegister('auto'), ok: (r) => regOk(r) });
+  // a board without fiducials (F10): Register board with probe "always" probes it only, where the plan puts it
+  IL.fix('register-probe-only', { press2: 'probe only', gate: (s) => { const w = registerWhy(s, true); return w ? w.text : null; },
+    run: () => postRegister('always'), ok: (r) => regOk(r) });
   // a new seat on a board with fiducials: the fiducials decide (the 0.1 mm rule and the 3-point check), not trust
   IL.fix('register-check', {
     press2: 'check the fiducials',
@@ -1538,16 +1541,21 @@
     if (IL.active() === 'run' && currentStep(S.status) !== 'probe') goStep('probe');
     return r;
   }
-  const regOk = (r) => 'Register board started' + (r && r.home && r.home.needed ? ': homes first (≈ ' + IL.fmtSecs(r.home.estimateS) + '), then ' : ': ')
-    + IL.plural(((r && r.fiducials) || []).length, 'fiducial') + ' and ' + IL.plural(((r && r.probeTargets) || []).length, 'N1 spot')
-    + (r && isNum(r.estimatedSeconds) ? ', ≈ ' + IL.fmtSecs(r.estimatedSeconds) : '') + '. STOP stops it at once.';
-  /** Registration targets of the plan (null without them): {fids, probes, frame, window, est, error, count}. */
+  const regOk = (r) => (r && r.probeOnly ? 'Probe only started' : 'Register board started') + (r && r.home && r.home.needed ? ': homes first (≈ ' + IL.fmtSecs(r.home.estimateS) + '), then ' : ': ')
+    + (r && r.probeOnly ? '' : IL.plural(((r && r.fiducials) || []).length, 'fiducial') + ' and ') + IL.plural(((r && r.probeTargets) || []).length, 'N1 spot')
+    + (r && r.probeOnly ? ' where the board is planned' : '') + (r && isNum(r.estimatedSeconds) ? ', ≈ ' + IL.fmtSecs(r.estimatedSeconds) : '') + '. STOP stops it at once.';
+  /** Registration targets of the plan (null without them): {fids, probes, frame, window, est, error, count, probeOnly}. */
   function regTargets(p) {
     const t = p && p.registrationTargets;
     if (!t) return null;
     return { fids: t.fiducials || [], probes: t.probes || [], frame: t.frame || null, window: t.window || null,
-      est: t.estimatedSeconds || {}, error: t.error || null, count: isNum(t.fiducialCount) ? Number(t.fiducialCount) : (t.fiducials || []).length };
+      est: t.estimatedSeconds || {}, error: t.error || null, count: isNum(t.fiducialCount) ? Number(t.fiducialCount) : (t.fiducials || []).length,
+      probeOnly: !!t.probeOnly };
   }
+  /** A board without fiducials on a plan without a registration (F10): Register board probes it only (probe "always"). */
+  const probeOnlyPlan = (p) => { const t = regTargets(p); return !!t && t.probeOnly; };
+  /** What probe only does, in #register-note before the press. */
+  const PROBE_ONLY_NOTE = 'This board has no fiducials: N1 probes it where it is planned; its X/Y are not checked.';
   /** The home plan now: status.machine.home (the live one), else the plan's preview. */
   function homePlan(s, p) {
     const h = s && s.machine && s.machine.home;
@@ -1567,8 +1575,11 @@
   const boardSurface = (s) => (s && s.dispense && s.dispense.surfaces && s.dispense.surfaces[s.dispense.boardSurfaceName || 'board']) || null;
   const anchorOf = (s) => (s && s.dispense && s.dispense.needle && s.dispense.needle.anchor) || null;
   const hasCamera = (s) => (((s && s.machine && s.machine.positions) || []).some((t) => t.kind === 'camera'));
-  /** Why Register board cannot start now (first of AUTO_REGISTER_DESIGN.md §8.1 `#register-why`), or null. */
-  function registerWhy(s) {
+  /**
+   * Why Register board cannot start now (first of AUTO_REGISTER_DESIGN.md §8.1 `#register-why`), or null. only: probe
+   * only (F10), where the board's missing fiducials are no reason.
+   */
+  function registerWhy(s, only) {
     const p = plan();
     // it homes by itself when needed: not while a STOP left N1 low (Run waits too), the operator looks and homes first
     const lock = IL.lockReason(s, { connected: true, engine: true, homes: true });
@@ -1581,7 +1592,7 @@
     }
     if (t && t.count < 2 && !t.error) return { text: 'This board has ' + IL.plural(t.count, 'fiducial') + ' (2 needed): do it by hand' };
     if (!hasCamera(s)) return { text: 'No top camera in OpenPnP: do it by hand' };
-    if (t && t.error) return { text: String(t.error).replace(IL.CODE_RE, '$2') };
+    if (t && t.error && !(only && t.probeOnly)) return { text: String(t.error).replace(IL.CODE_RE, '$2') };
     if (!anchorOf(s)) return { text: 'Record the needle Z frame first: the probe checks its heights against it.', href: '#setup/needle', link: 'Open Needle Z frame' };
     if (t && t.frame && t.frame.ok === false && t.frame.message) {
       const text = String(t.frame.message).replace(IL.CODE_RE, '$2');
@@ -1596,9 +1607,10 @@
   /** Seconds Register board takes now: the plan's estimate with the live home plan (never hard-coded). */
   function regSeconds(s, p) {
     const t = regTargets(p);
-    if (!t || t.error) return null;
+    if (!t || (t.error && !t.probeOnly)) return null;
     const h = homePlan(s, p);
     const home = h && h.needed ? Number(h.estimateS) || 0 : 0;
+    if (t.probeOnly) return home + (Number(t.est.probe) || 0);
     const same = regSameSeatLikely(s, p);
     const body = (Number(t.est.fiducials) || 0) + (same ? Number(t.est.sameSeat) || 0 : Number(t.est.probe) || 0);
     return home + body;
@@ -1610,12 +1622,18 @@
   /** The pre-press line of the foot (#register-note, §8.1). */
   function registerNote(s, p) {
     const t = regTargets(p);
-    if (!t || t.error || !t.fids.length) return '';
+    if (!t || ((t.error || !t.fids.length) && !t.probeOnly)) return '';
     const h = homePlan(s, p);
     const parts = [];
     if (h && h.needed) {
       const why = IL.homeWhy(h);
       parts.push('Homes first' + (why ? ' (' + why + ')' : '') + ', ≈ ' + IL.fmtSecs(h.estimateS) + '.');
+    }
+    if (t.probeOnly) {
+      parts.push(PROBE_ONLY_NOTE, (h && h.needed ? 'Then N1' : 'N1') + ' touches it at ' + IL.plural(t.probes.length, 'bare spot')
+        + ' with its vacuum, after a camera look at each (≈ ' + IL.fmtSecs(t.est.probe) + ').',
+      'The paste pressure stays off. Before you press: N1 has its tip, no part on it; hands clear of the head.');
+      return parts.join(' ');
     }
     const same = regSameSeatLikely(s, p);
     const sf = boardSurface(s);
@@ -1656,6 +1674,8 @@
     }
     const where = st === 'same-seat' ? 'the same-seat check (point ' + Math.max(1, k) + ' of 3)' : st === 'probe' ? 'probe point ' + Math.max(1, k) + ' of ' + Math.max(1, nPts)
       : st === 'save' ? 'the save' : 'planning again';
+    // probe only (F10) stores no registration: the surface is all it saves, and it plans again after the save
+    if (v.probeOnly) return head + where + (st === 'plan' ? ': the board surface was saved; plan the board again.' : ': nothing was saved.');
     if (v.seat === 'same') {
       const mine = regOf(v);
       const held = mine ? (mine.lastCheckedAtMs > mine.atMs ? mine.lastCheckedAtMs : mine.atMs) : v.previousAtMs || v.atMs;
@@ -1684,9 +1704,13 @@
     const again = v.newPlanId && v.newPlanId !== from ? '; planned again.' : v.newPlanId ? '; plan unchanged.' : '.';
     if (!v.ok) {
       const why = strip(v.message).replace(/([^.!?])$/, '$1.');
+      if (v.probeOnly) return 'Not probed: ' + why;
       if (!v.registrationStored) return 'Not registered: ' + why;
       return 'Registered ' + at + ', but the probe failed: ' + why;
     }
+    // a board without fiducials, probed where it is planned (F10): no fit, no seat, no registration
+    if (v.probeOnly) return 'Probed ' + at + ': ' + (pr.why || 'no fiducials: probed only, X/Y as planned') + '; '
+      + (pr.saved ? IL.plural(pts.length, 'point') + worst : 'the surface was not saved') + again;
     const lim = S.config && S.config.fiducialCheck && isNum(S.config.fiducialCheck.seatToleranceMm) ? S.config.fiducialCheck.seatToleranceMm : 0.1;
     const since = v.previousAtMs ? ' since ' + IL.fmtTime(v.previousAtMs - S.skewMs) : '';
     const probed = (n) => (pr.saved ? 'probed ' + IL.plural(n, 'point') + (n ? ' again' : '') + worst : pr.skipped ? 'not probed' : 'the surface was not saved');
@@ -1761,7 +1785,9 @@
     // the register set (R.byHand false)
     const reg = el('button', { type: 'button', class: 'btn btn--primary btn--lg btn--block', id: 'btn-register',
       title: 'Home if needed, find the fiducials with the top camera, touch the board with N1 at bare spots, plan again. Press twice.' });
-    IL.press2(reg, 'register board', () => postRegister('auto'), { ok: regOk, what: 'Register board' });
+    // on a board without fiducials it is "Probe only (X/Y as planned)": probe "always" (F10, renderProbeFoot)
+    const only = () => reg.dataset.mode === 'probe-only';
+    IL.press2(reg, () => (only() ? 'probe only' : 'register board'), () => postRegister(only() ? 'always' : 'auto'), { ok: regOk, what: 'Register board' });
     const cont = el('button', { type: 'button', class: 'btn btn--primary btn--lg btn--block', id: 'btn-reg-continue', hidden: true }, 'Checks ›');
     cont.addEventListener('click', () => { setRegResult(null); goStep('checks'); });
     const regSet = el('div', { class: 'stack reg-foot', id: 'reg-foot', style: 'gap:8px', 'data-refusals': '' },
@@ -1793,7 +1819,7 @@
     // the engine's targets (bare spots away from pads, fiducials and holes, through the plan's transform): one set on the
     // board for both paths; the client's bounding box stays only as the fallback
     const rt = regTargets(p);
-    if (rt && !rt.error && rt.probes.length) {
+    if (rt && (!rt.error || rt.probeOnly) && rt.probes.length) {
       const key0 = p.planId + '|engine';
       if (R.targetsFor === key0) return R.targets;
       R.targetsFor = key0;
@@ -1868,7 +1894,7 @@
     // the engine found no bare spots (Register board is locked and says where): no numbered spots on the board, the
     // client's fallback rectangle would draw them on pads or off the outline (by hand still lists them, for a person)
     const rt = regTargets(st.p);
-    const targets = rt && rt.error ? [] : st.targets;
+    const targets = rt && rt.error && !rt.probeOnly ? [] : st.targets;
     return { margin: st.margin, points: surfPts, targets: targets.map((t) => ({ x: t.x, y: t.y, alts: t.alts || [] })) };
   }
   /** The fiducial layer of the hero (g.pv-l-fids): expected search circles and the fiducials found. */
@@ -1958,17 +1984,19 @@
     IL.show(det, !!p && mode !== 'live');
     // banner: the seat state (idle only; the result card and the live phases say the rest)
     IL.show($('probe-banner'), mode === 'idle');
-    IL.keyed($('probe-banner'), [mode, !!p, tied, !!S.newSeatAtMs, sfItem && sfItem.detail].join('|'), () => {
+    const only = probeOnlyPlan(p);   // no fiducials (F10): N1 probes the board where it is planned
+    IL.keyed($('probe-banner'), [mode, !!p, tied, !!S.newSeatAtMs, sfItem && sfItem.detail, only].join('|'), () => {
       if (mode !== 'idle') return null;
       if (!p) return el('div', { class: 'notebox', text: 'Plan the board first (Board step): Register board takes its fiducials and probe spots from the plan.' });
       if (tied && !S.newSeatAtMs) {
         return el('div', { class: 'notebox notebox--info' }, el('b', { text: p.registration ? 'This seat is registered and tied' : 'This seat is probed and tied' }),
-          el('div', { class: 'muted', text: (sfItem.detail || '') + ' Register again only if the board moved.' }));
+          el('div', { class: 'muted', text: (sfItem.detail || '') + (only ? ' Probe again only if the board moved.' : ' Register again only if the board moved.') }));
       }
       const fixes = (sfItem && sfItem.fixes || []).filter((f) => f.fix === 'register-check' || f.fix === 'same-seat');
       return el('div', { class: 'notebox notebox--need probe-banner' },
-        el('div', {}, el('b', { text: S.newSeatAtMs ? 'New seat: register it' : 'This seat needs its surface' }),
-          el('div', { class: 'muted', text: sfItem && sfItem.state === 'block' ? sfItem.detail : 'The fiducials say where the board sits; then N1 touches it at bare spots. A re-seated board can sit tilted.' })),
+        el('div', {}, el('b', { text: S.newSeatAtMs ? (only ? 'New seat: probe it' : 'New seat: register it') : 'This seat needs its surface' }),
+          el('div', { class: 'muted', text: sfItem && sfItem.state === 'block' ? sfItem.detail : only ? 'No fiducials: N1 touches the board at bare spots where it is planned. A re-seated board can sit tilted.'
+            : 'The fiducials say where the board sits; then N1 touches it at bare spots. A re-seated board can sit tilted.' })),
         fixes.map((f) => fixBtn(Object.assign({}, f, { label: f.fix === 'same-seat' ? 'Same seat? Keep them' : f.label }), 'btn--sm')));
     });
     // what the plan's dots use now
@@ -1993,9 +2021,9 @@
     const sf = boardSurface(s);
     const alts = t ? Math.max(0, ...t.probes.map((q) => (q.alternates || []).length)) : 0;
     const key = JSON.stringify([p.planId, !!t, t && t.probes.length, alts, !!same, sf && sf.setAtMs]);
-    IL.keyed(box, key + (t && t.error ? 'e' : ''), () => {
+    IL.keyed(box, key + (t && t.error ? 'e' : '') + (t && t.probeOnly ? 'o' : ''), () => {
       if (!t) return el('div', { class: 'notebox', text: 'This plan has no registration preview (an older plan): plan again.' });
-      if (t.error || !t.probes.length) return null;   // the reason is under the button
+      if ((t.error && !t.probeOnly) || !t.probes.length) return null;   // the reason is under the button
       return el('div', { class: 'reg-expect' }, el('span', {}, same
         ? ['Same seat as ', el('b', { text: IL.fmtTime(same.atMs - S.skewMs) }), ' if every fiducial moved at most 0.10 mm: N1 re-touches 3 points of that surface. Else it probes ',
           el('b', { text: IL.plural(t.probes.length, 'spot') }), '.']
@@ -2017,16 +2045,20 @@
     const est = (p && p.registrationTargets && p.registrationTargets.estimatedSeconds) || {};
     rows.push({ k: 'home', st: home.needed ? stOf(0) : 'done', t: 'Home', d: home.needed ? (stage === 'home' ? 'the head goes to its home corner · pressure off' : 'done') : 'not needed',
       v: home.needed && stage === 'home' ? '≈ ' + IL.fmtSecs(home.estimateS) : '' });
+    // probe only (F10): no fiducials to find or fit, N1 probes the board where it is planned
+    const only = probeOnlyPlan(p);
     const fids = d.fiducials || [];
     const nf = fids.filter((f) => f.state === 'found').length;
     const ph = String(live.phase || '');
     const fidNow = /^fiducials: (.+)$/.exec(ph);
-    rows.push({ k: 'fiducials', st: stOf(1), t: 'Fiducials · ' + nf + ' of ' + (fids.length || '…') + ' found',
-      d: stage === 'fiducials' && fidNow ? 'looking at ' + fidNow[1].replace(/ \((\d+) of (\d+)\)/, '').replace(/ · /g, ', ') : at > 1 ? names(fids) + ' found' : 'top camera, light on',
-      v: stage === 'fiducials' ? '≈ ' + IL.fmtSecs(Math.max(0, fids.length - nf) * 5) : '' });
-    const seatTxt = d.seat === 'same' ? 'same seat' + (isNum(d.movedMm) ? ' · moved ' + mmText(d.movedMm) : '') : d.seat === 'reseated' ? 're-seated' + (isNum(d.movedMm) ? ' · moved ' + mmText(d.movedMm) : '')
-      : d.seat === 'first' ? 'first registration of this seat' : '';
-    rows.push({ k: 'fit', st: at > 1 ? 'done' : 'todo', t: 'Fit the board to the fiducials', d: at > 1 ? seatTxt : 'shift, rotation and scale from the fiducials', v: '' });
+    if (!only) {
+      rows.push({ k: 'fiducials', st: stOf(1), t: 'Fiducials · ' + nf + ' of ' + (fids.length || '…') + ' found',
+        d: stage === 'fiducials' && fidNow ? 'looking at ' + fidNow[1].replace(/ \((\d+) of (\d+)\)/, '').replace(/ · /g, ', ') : at > 1 ? names(fids) + ' found' : 'top camera, light on',
+        v: stage === 'fiducials' ? '≈ ' + IL.fmtSecs(Math.max(0, fids.length - nf) * 5) : '' });
+      const seatTxt = d.seat === 'same' ? 'same seat' + (isNum(d.movedMm) ? ' · moved ' + mmText(d.movedMm) : '') : d.seat === 'reseated' ? 're-seated' + (isNum(d.movedMm) ? ' · moved ' + mmText(d.movedMm) : '')
+        : d.seat === 'first' ? 'first registration of this seat' : '';
+      rows.push({ k: 'fit', st: at > 1 ? 'done' : 'todo', t: 'Fit the board to the fiducials', d: at > 1 ? seatTxt : 'shift, rotation and scale from the fiducials', v: '' });
+    }
     const pr = d.probes || [];
     const nOk = pr.filter((q) => q.state === 'contact').length;
     const cur = pr.find((q) => q.state === 'now' || q.state === 'look');
@@ -2035,7 +2067,7 @@
     const pd = cur ? (cur.state === 'look' ? 'camera look' : 'N1 touching') + (cur.alternate ? ' at nearby spot ' + cur.alternate : '')
       + (lastC ? ' · last Z ' + IL.fmt(lastC.z, 3) + ' mm' : '') : lastC ? 'last Z ' + IL.fmt(lastC.z, 3) + ' mm' : at > 3 ? 'done' : 'N1 vacuum touch, pressure off';
     const nAll = same ? 3 : pr.length || (p && p.registrationTargets ? p.registrationTargets.probes.length : 0);
-    rows.push({ k: 'probe', st: stOf(3), t: (same ? 'Same-seat check' : 'Probe') + (at === 3 && nAll ? ' · point ' + Math.min(nAll, nOk + 1) + ' of ' + nAll : nAll ? ' · ' + nAll + ' points' : ''),
+    rows.push({ k: 'probe', st: stOf(3), t: (same ? 'Same-seat check' : only ? 'Probe where it is planned' : 'Probe') + (at === 3 && nAll ? ' · point ' + Math.min(nAll, nOk + 1) + ' of ' + nAll : nAll ? ' · ' + nAll + ' points' : ''),
       d: pd, v: at === 3 ? '≈ ' + IL.fmtSecs(Math.max(0, (same ? 3 : pr.length) - nOk) * ((est.probe && pr.length ? est.probe / pr.length : 17))) : '' });
     rows.push({ k: 'plan', st: stOf(4), t: 'Plan again', d: '', v: '' });
     IL.keyed($('reg-phases'), JSON.stringify(rows), () => rows.map((x, i) => el('li', { class: x.st === 'done' ? '' : x.st, 'data-ph': x.k },
@@ -2072,7 +2104,10 @@
       for (const w of (v.warnings || []).slice(0, 2)) lines.push(el('div', { class: 'ri__d', text: IL.cap(w) + '.' }));
       // the fixes (§8.2): REG / PROBE / I4 by the message's code; "Register again" is the foot's button
       let fixes = [];
-      if (ok) {
+      if (ok && v.probeOnly) {
+        // no fiducials to find again: its one way again is probe only
+        fixes.push({ id: 'btn-reg-probe', label: 'Probe again', title: 'Touch the board again at every spot where it is planned (N1 probe) and save that surface. Press twice.' });
+      } else if (ok) {
         if (v.seat === 'same' && v.sameSeat && v.sameSeat.pass) fixes.push({ id: 'btn-reg-probe', label: 'Probe again', title: 'Touch the board at every spot again (N1 probe) and save that surface. Press twice.' });
         fixes.push({ id: 'btn-reg-again', label: 'Register again', title: 'Find the fiducials again (after a move). Press twice.' });
       } else if (status === 'ABORTED') {
@@ -2090,7 +2125,10 @@
       return [IL.glyph(ok ? 'ok' : kind), el('div', { class: 'reg-result__main' }, el('div', { class: 'ri__t reg-result__t', id: 'reg-result-t' }, title), lines),
         buttons.length ? el('div', { class: 'ri__act reg-result__act' }, buttons) : null];
     });
-    for (const b of box.querySelectorAll('#btn-reg-again, #btn-reg-probe')) IL.gate(b, regGate(s));
+    for (const b of box.querySelectorAll('#btn-reg-again, #btn-reg-probe')) {
+      const w = registerWhy(s, b.id === 'btn-reg-probe' && probeOnlyPlan(p));
+      IL.gate(b, w ? w.text : null);
+    }
   }
   /** "Register again" / "Probe again" in the result card: two-press, like the foot's button. */
   function regActionBtn(f) {
@@ -2228,17 +2266,24 @@
       const btn = $('btn-register'), cont = $('btn-reg-continue');
       IL.show(cont, ok);
       IL.show(btn, !ok);
+      // a board without fiducials (F10): the button probes it only, where it is planned (probe "always")
+      const only = probeOnlyPlan(p);
       // N1 low: the home comes first (the reason below says so), and the press it describes comes after that home
       const note = live || mode === 'result' || IL.n1Low(s) ? '' : IL.nb(registerNote(s, p));
       IL.setText($('register-note'), note);
       IL.show($('register-note'), !!note);
-      const why = live ? null : registerWhy(s);
+      const why = live ? null : registerWhy(s, only);
       const secs = p ? regSeconds(s, p) : null;
       const run = live ? regLive(s) : null;
       const g = run ? IL.regProgress(run) : null;
-      setBtnLabel(btn, live ? ['Registering…' + (g.left !== null ? ' · ≈ ' + IL.fmtClock(g.left) + ' left' : '')]
-        : [IL.icon('i-capture'), (mode === 'result' ? 'Register again' : 'Register board') + (isNum(secs) ? ' · ≈ ' + IL.fmtClock(secs) : '')]);
-      IL.gate(btn, live ? 'Registering: STOP stops it' : why && why.text);
+      btn.dataset.mode = only ? 'probe-only' : 'register';
+      setBtnLabel(btn, live ? [(only ? 'Probing…' : 'Registering…') + (g.left !== null ? ' · ≈ ' + IL.fmtClock(g.left) + ' left' : '')]
+        : [IL.icon('i-capture'), (only ? 'Probe only (X/Y as planned)' : mode === 'result' ? 'Register again' : 'Register board') + (isNum(secs) ? ' · ≈ ' + IL.fmtClock(secs) : '')]);
+      const idle = only ? 'Home if needed, touch the board with N1 at bare spots where it is planned (its X/Y are not checked), plan again. Press twice.'
+        : 'Home if needed, find the fiducials with the top camera, touch the board with N1 at bare spots, plan again. Press twice.';
+      if (btn.dataset.titleIdle !== undefined) btn.dataset.titleIdle = idle;
+      else IL.setAttr(btn, 'title', idle);
+      IL.gate(btn, live ? (only ? 'Probing' : 'Registering') + ': STOP stops it' : why && why.text);
       const whyLinks = why ? (why.links || [why]).filter((x) => x.href || x.fix) : [];
       IL.keyed($('register-why'), why ? why.text + '|' + whyLinks.map((x) => (x.href || '') + (x.fix || '')).join(',') : '', () => (why ? [IL.icon('i-lock'), el('span', {}, why.text,
         whyLinks.map((x, i) => [i ? ' · ' : ' ', x.href ? el('button', { type: 'button', class: 'link', onclick: () => IL.go(x.href) }, x.link || 'Open')

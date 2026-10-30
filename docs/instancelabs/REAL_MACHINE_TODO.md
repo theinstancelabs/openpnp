@@ -170,6 +170,13 @@ The fork ran in real mode on a **copy** of the config (`~/instancelabs/realcfg-s
      3. Run the touch-off on the blank (`POST /api/calibrations/touch-off`, one profile dot per step). The contact it
         finds should be within about 0.05 mm of the anchor; apply it only if it found one. If it is far off, the
         anchor's K was wrong: record the anchor with the K the touch-off implies and touch off again.
+        - Start at a gap of 0.2 mm or less (the default 0.125 is fine): the session-4 ladder started at 0.45 mm and
+          its first dots were droplets (0.37–0.43 mm), which the touch-off now refuses as its reference (fix round 2).
+          The dots stand 1.6 mm apart; a pitch under the dot + 0.4 mm is refused.
+        - Confirm the string cut (0.45 × the dot of the dose, tuned on one real ladder): each dot is measured at its
+          spot with the strings cut off. Rows "not measured" in Calibrate › Needle touch-off (`analysis.dotStates`,
+          `dotNotes`: "joined to the dot at gap …") are dots the cut did not separate; one before the contact refuses
+          the run ("dots touch or are strung together …"). Note the dot sizes and any joined pairs.
    - Every Z datum now carries the home it was measured under (review 1): after the next home one Z check touch is
      enough again.
 
