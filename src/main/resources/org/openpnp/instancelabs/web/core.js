@@ -2582,7 +2582,8 @@
     const lines = viol.length ? viol : codeFromMessage(e && e.message);
     // a form filled before a mount or a needle change (409 tip-changed / needle-changed, §22.3): its values are another
     // tip's or needle's; Reload reads the page again (the values are taken again from the mounted tip)
-    if (e && (e.code === 'tip-changed' || e.code === 'needle-changed')) {
+    if (e && (e.code === 'tip-changed' || e.code === 'needle-changed'
+      || /^(The tip changed while this was open|The needle was changed at \d\d:\d\d (while this was open|after these values were taken))/.test(String(e.message || '')))) {
       box.appendChild(el('div', { class: 'btn-row' }, IL.fixButton({ fix: 'reload-page', label: 'Reload' }, { cls: 'btn--sm' })));
     }
     if (lines.length) {

@@ -323,7 +323,7 @@
             pcr.field('ss-count', 'Shots', 'count', pcr.numInput('ss-count', '30', '1', { min: '1' })),
             pcr.field('ss-total', 'Total mass', 'mg', pcr.numInput('ss-total', null, '0.1', { min: '0' })),
             pcr.field('ss-each', 'Mass of each shot', 'mg · optional, gives the spread', pcr.textInput('ss-each', null, { placeholder: 'e.g. 1.81, 1.79, 1.84' }), null, 'span3'),
-            pcr.field('ss-tip', 'Tip', null, pcr.textInput('ss-tip', '22G 0.41 mm')),
+            pcr.field('ss-tip', 'Tip', 'the mounted tip', pcr.textInput('ss-tip', '', { readonly: true, title: 'the mounted tip (Setup › Dispenser & tip)' })),
             pcr.field('ss-lot', 'Paste lot', null, pcr.textInput('ss-lot')),
             pcr.field('ss-psi', 'Set pressure', 'psi', pcr.numInput('ss-psi', null, '0.1', { min: '0' })),
             pcr.field('ss-temp', 'Barrel temperature', '°C', pcr.numInput('ss-temp', null, '0.1')),
@@ -494,8 +494,15 @@
     IL.planRefreshSoon();
     return p;
   }
+  /** The needle token each touch-off row was first seen under (a row from before a needle change is refused, §22.3). */
+  const toTokens = {};
+  function touchToken(id) {
+    if (!(id in toTokens)) toTokens[id] = IL.tips ? IL.tips.token() : null;
+    return toTokens[id];
+  }
   async function useTouchOff(v) {
-    const r = await IL.api('POST', '/api/needle/offset', { offsetMm: Number(v.row.z_offset_mm.toFixed(4)), note: 'touch-off #' + v.row.id + ' (web UI)' });
+    const r = await IL.api('POST', '/api/needle/offset', { offsetMm: Number(v.row.z_offset_mm.toFixed(4)), note: 'touch-off #' + v.row.id + ' (web UI)',
+      needleChangedAtMs: touchToken(v.row.id) });
     IL.planRefreshSoon();
     await loadCalibrations();
     return r;
@@ -538,6 +545,7 @@
     const v = pcr.touchOffView(latest);
     const needle = (s.dispense && s.dispense.needle) || {};
     const inUse = v && isNum(needle.zOffsetMm) && Math.abs(needle.zOffsetMm - v.row.z_offset_mm) < 5e-4;
+    if (v) touchToken(v.row.id);
     IL.keyed(host, JSON.stringify([v ? v.row.id : null, inUse, C.ver]), () => {
       if (!v) return [sub('Last touch-off'), el('p', { class: 'muted cal-none', text: C.data ? 'No touch-off with dots yet.' : C.error ? 'Could not load the records: ' + C.error : 'Loading the records…' })];
       const a = v.analysis || {};
@@ -620,6 +628,9 @@
     IL.gate($('btn-shots-run'), runReason(s, blockers, Object.values(p.errs).find(Boolean) || (!place ? 'Add a cup place in Setup › Places first.' : null)), $('shots-reason'));
     renderLive($('shots-live'), s, 'scale shots');
     prefill('ss-psi', isNum(prof.pressurePsi) ? IL.fmtPsi(prof.pressurePsi) : null);
+    // the record names the tip on the dispenser (§22.7); older records keep their own text
+    const tipName = d.tip && d.tip.name ? d.tip.name : '';
+    if ($('ss-tip').value !== tipName) $('ss-tip').value = tipName;
     const r = shotsRecordPlan();
     const typed = ['ss-total', 'ss-each'].some((id) => $(id).value.trim() !== '');
     showErrs(typed ? r.errs : { 'ss-rot': r.errs['ss-rot'], 'ss-count': r.errs['ss-count'] });
@@ -827,7 +838,8 @@
     const j = S.status && S.status.padCalibration;
     const mine = j && j.manual && (j.typeKeys || []).includes(t.typeKey) ? j : null;
     const lad = mine ? (mine.ladder || []).find((x) => x.steps === d.steps) : null;
-    IL.keyed(g, JSON.stringify([C.guide.key, sg.id, lad ? [lad.dots, lad.pass] : null, !!S.config]), () => {
+    const photoId = mine && mine.result ? ((mine.result.photos || []).find((p) => p.kind === 'result' && p.doseSteps === d.steps) || {}).id : null;
+    IL.keyed(g, JSON.stringify([C.guide.key, sg.id, lad ? [lad.dots, lad.pass] : null, !!S.config, photoId || null]), () => {
       const close = el('button', { type: 'button', class: 'btn btn--sm btn--quiet', 'aria-label': 'Close the guide' }, IL.icon('i-close'), 'Close');
       close.addEventListener('click', () => { C.guide = null; IL.render(); });
       const ladder = el('button', { type: 'button', class: 'btn btn--hold btn--sm', id: 'btn-guide-ladder' }, IL.icon('i-play'), 'Lay the ladder');
@@ -846,11 +858,20 @@
           el('li', { text: 'Needle Z frame recorded, blank place and blank surface set, needle touched off (the touch-off card below).' }),
           el('li', {}, 'Lay the ladder: ' + turn + ' dots on the blank with the profile’s dot first as the control, the same phase-locked dots as Calibrate automatically. ' + limits + ' ',
             lad ? el('b', { text: lad.pass === null || lad.pass === undefined ? 'Measuring…' : lad.pass ? 'Last ladder: every check passed.' : 'Last ladder: ' + ((lad.failures || [])[0] || 'a check failed') + '.' }) : null,
-            el('div', { class: 'btn-row', 'data-refusals': '' }, ladder)),
+            el('div', { class: 'btn-row', 'data-refusals': '' }, ladder), guidePhoto(mine, d.steps)),
           el('li', {}, 'Weigh dots: ' + turn + ' dots on a coupon, then weigh it, wipe it and weigh it again. ', el('div', { class: 'btn-row' }, weigh)),
           el('li', {}, 'In Profile, set the dots per pad (' + d.perPad + ') and the turn (' + turn + ') and then the status: characterized needs a passing ladder and a confirmed weighing at this turn. ',
             el('div', { class: 'btn-row' }, prof)))];
     });
+  }
+  /** The by-hand ladder's result photo of this dose (§22.7: img.guide-photo, a button opening the picture), or null. */
+  function guidePhoto(j, steps) {
+    const p = j && j.result ? (j.result.photos || []).find((x) => x.kind === 'result' && x.doseSteps === steps) : null;
+    if (!p) return null;
+    const b = el('button', { type: 'button', class: 'photo-thumb guide-photo__b', title: (p.caption || 'Result photo') + ': open' },
+      el('img', { class: 'guide-photo', src: p.thumbUrl, alt: p.caption || 'The ladder’s result photo', width: '160', height: '120' }));
+    b.addEventListener('click', () => { if (IL.photos) IL.photos.view(p, { from: b }); });
+    return el('figure', { class: 'guide-photo__f' }, b, el('figcaption', { text: p.caption || 'The ladder on the blank' }));
   }
   /** Set up / Validate from a pad type: fill the turns around one profile dot and show the steps. opts: true (validate) or {validate, suggestion}. */
   pcr.openGuide = function (t, opts) {

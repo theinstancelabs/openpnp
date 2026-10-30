@@ -65,9 +65,18 @@
   const f2 = (v) => IL.fmt(Math.round(v * 100 + 1e-6) / 100, 2);
   const dRange = (d) => (!d ? '—' : Math.abs(d[0] - d[1]) < 0.005 ? f2(d[1]) + ' mm' : f2(d[0]) + '–' + f2(d[1]) + ' mm');
   const reasonKind = (g) => (g.reason === 'outside' ? 'info' : TIPS.has(g.reason) ? 'block' : 'need');
+  /** The mounted tip setup's name (status dispense.tip, §22.6); the check's own when it names one. */
+  const tipNameOf = (pc) => (pc && pc.tip && pc.tip.name) || (S.status && S.status.dispense && S.status.dispense.tip && S.status.dispense.tip.name) || 'mounted tip';
+  /** The check's tip measured nothing yet (§22.2: no suggestions without its dot sizes and paste per turn). */
+  const unmeasured = (pc) => !!(pc && pc.tip && pc.tip.dots === 'none') || !!(!pc && S.status && S.status.dispense && S.status.dispense.tip && S.status.dispense.tip.dots === 'none');
+  /** Other tips that have every pad type of this board at or above the gate (profileCheck.otherTips, covers == of). */
+  const otherTipsAll = (pc) => ((pc && pc.otherTips) || []).filter((x) => x.covers === x.of && x.of > 0);
+  /** "The 22G bent taper has all 5 pad types of this board" (one: "has this board’s pad type"). */
+  const otherTipsWords = (ot) => ot.map((x) => 'The ' + x.name + (x.of === 1 ? ' has this board’s pad type' : ' has all ' + x.of + ' pad types of this board')).join('; ');
   /** The suggestion in a few words: "Use Chip 0603", "New: 2 quarter turns per pad, ≈ 1.06 mg". */
   function suggShort(g) {
     const s = g.suggestion;
+    if (s && s.kind === 'measure-tip') return 'Measure the tip’s dots first';
     if (!s || s.kind === 'none') return TIPS.has(g.reason) ? 'none: not dispensable' : '—';
     if (s.kind === 'use') return 'Use ' + typeLabel(s);
     const d = s.dots || {};
@@ -211,6 +220,10 @@
       return Array.from(m.values()).map((x) => x.pkg + ' (' + (x.short ? x.short + ', ' : '') + IL.plural(x.pads, 'pad') + ')').join(', ');
     };
     const tipName = (pc.tip && pc.tip.name) || 'tip';
+    // another tip has all of this board's pad types (§22.7): said in the item, with Change tip…
+    const ot = otherTipsAll(pc);
+    const otText = ot.length ? ' ' + otherTipsWords(ot) + '.' : '';
+    const otFix = ot.length ? [{ fix: 'tip-change', label: 'Change tip…' }] : [];
     if (fix.length) {
       const fixes = [];
       for (const g of fix.slice(0, 3)) {
@@ -225,14 +238,14 @@
       return Object.assign(it, { state: 'block', value: (pads.length - blockedN) + '/' + pads.length, short: 'needs a profile',
         chip: IL.plural(blockedN, 'pad') + ' cannot be dispensed',
         detail: IL.plural(blockedN, 'pad') + ' cannot be dispensed: ' + fixN + ' ' + (fixN === 1 ? 'needs' : 'need') + ' a profile'
-          + (fix.length > 3 ? ' (' + names(fix) + ')' : '') + (tipN ? ', ' + tipN + ' not with the ' + tipName + ' (' + names(tip) + ')' : '') + '.', fixes });
+          + (fix.length > 3 ? ' (' + names(fix) + ')' : '') + (tipN ? ', ' + tipN + ' not with the ' + tipName + ' (' + names(tip) + ')' : '') + '.' + otText, fixes: fixes.concat(otFix) });
     }
     if (tip.length) {
       const n = tip.reduce((a, g) => a + g.pads, 0);
       return Object.assign(it, { state: 'block', value: (pads.length - blockedN) + '/' + pads.length, short: 'the ' + tipName,
         chip: IL.plural(n, 'pad') + ' cannot be dispensed',
-        detail: IL.plural(n, 'pad') + ' cannot be dispensed with the ' + tipName + ': ' + list(tip) + '.',
-        fixes: [{ href: '#setup/settings/refuse-flagged', label: 'Dispense the rest (Setup › Settings › Refuse flagged pads)' }, { href: '#profile/needs', label: 'Why' }] });
+        detail: IL.plural(n, 'pad') + ' cannot be dispensed with the ' + tipName + ': ' + list(tip) + '.' + otText,
+        fixes: [{ href: '#setup/settings/refuse-flagged', label: 'Dispense the rest (Setup › Settings › Refuse flagged pads)' }, { href: '#profile/needs', label: 'Why' }].concat(otFix) });
     }
     if (sp.notes.length && !blockedN) {
       return Object.assign(it, { state: 'info', value: pads.length + '/' + pads.length + ' · ' + IL.plural(sp.notes.length, 'note'), short: 'pad types',
@@ -288,6 +301,9 @@
     if (isNum(req.doseSteps)) q.set('doseSteps', String(req.doseSteps));
     if (isNum(req.weighDots)) q.set('weighDots', String(req.weighDots));
     if (req.suggestionIds) q.set('suggestionIds', Object.entries(req.suggestionIds).map(([g, s]) => g + ':' + s).join(','));
+    // Check where it lands, Measure its dots (§22.3): records only, no pad type changes
+    if (req.measure) q.set('measure', req.measure);
+    if (req.wide) q.set('wide', 'true');
     return q.toString();
   }
   /** Which ticks the summary was read with (browser times): a new tick reads it again. */
@@ -335,12 +351,19 @@
       const gs = split(c && c.check).fix.filter(calibrates);
       if (gs.length) openCal(calRequest(c, gs));
     });
+    // an unmeasured tip (§22.2): its dots first; another tip that has every pad type of this board: say so (§22.7)
+    const measure = el('button', { type: 'button', class: 'btn btn--primary', id: 'btn-needs-measure', 'data-fix': 'measure-tip' }, 'Measure its dots… · ≈ 8 min');
+    measure.addEventListener('click', (ev) => IL.runFix('measure-tip', measure, null, ev));
+    const other = el('div', { class: 'notebox notebox--info pt-needs__other', id: 'pt-needs-other', hidden: true });
     const sec = el('section', { class: 'card pt-needs', id: 'pt-needs', hidden: true, 'data-refusals': '' },
       el('div', { class: 'card__head' },
-        el('div', {}, el('h2', { class: 'card__title' }, 'Needs a profile', el('span', { class: 'count', id: 'pt-needs-count' })),
+        el('div', {}, el('h2', { class: 'card__title' }, 'Needs a profile', el('span', { id: 'pt-needs-for', class: 'pt-needs__for' }), el('span', { class: 'count', id: 'pt-needs-count' })),
           el('div', { class: 'card__sub', id: 'pt-needs-src' })),
         el('span', { class: 'card__state', id: 'pt-needs-state' })),
       el('div', { class: 'card__body' },
+        el('div', { class: 'notebox notebox--need pt-needs__measure', id: 'pt-needs-measure', hidden: true },
+          el('span', { id: 'pt-needs-measure-t' }), el('div', { class: 'btn-row' }, measure)),
+        other,
         el('p', { class: 'pt-needs__lead', id: 'pt-needs-lead' }),
         el('div', { class: 'pt-needs__wrap' }, el('table', { class: 'tbl pt-needs__t', id: 'pt-needs-table' },
           el('thead', {}, el('tr', {}, ['Package', 'Why', 'Suggestion'].map((h) => el('th', { scope: 'col', text: h })))),
@@ -382,7 +405,7 @@
         el('div', { class: 'pt-needs__s', text: IL.nb(pair2(ap.wMm, ap.hMm) + ' mm openings'), title: IL.fmt(ap.areaMm2, 3) + ' mm²' + (ap.roundness ? ', corners ' + IL.fmt(ap.roundness, 0) + ' %' : '') }), partial),
       el('td', {}, el('span', { class: 'pp-badge', 'data-reason': g.reason }, IL.glyph(reasonKind(g), 'xs'), el('span', { text: g.short }))),
       el('td', { class: 'pt-needs__sugg' }, el('div', { class: 'pt-needs__st' }, suggShort(g),
-        s.confidence ? el('span', { class: 'pt-needs__conf', text: ' · ' + s.confidence + ' confidence' }) : null),
+        s.confidence && s.kind !== 'measure-tip' ? el('span', { class: 'pt-needs__conf', text: ' · ' + s.confidence + ' confidence' }) : null),
       el('div', { class: 'pt-needs__btns' }, acts)));
   }
   /** A long KiCad name with line-break chances after "_" and "-". */
@@ -405,11 +428,24 @@
     const nb = $('btn-padtype-new');
     if (nb) nb.classList.toggle('btn--primary', !sp.fix.length);
     IL.setText($('pt-needs-src'), c.label);
+    const tn = tipNameOf(pc);
+    IL.setText($('pt-needs-for'), ' for the ' + tn);
+    // the mounted tip's dots are not measured: no suggestion can say a dot size (§22.2)
+    const meas = unmeasured(pc) && sp.fix.length > 0;
+    IL.show($('pt-needs-measure'), meas);
+    const mg = sp.fix.map((g) => g.suggestion).find((x) => x && x.kind === 'measure-tip');
+    IL.setText($('pt-needs-measure-t'), mg && mg.sentence ? mg.sentence : 'Measure the ' + tn + '’s dots first (Setup › Dispenser & tip › Measure its dots, ≈ 8 min and two coupons to weigh): suggestions need its dot sizes and paste per turn.');
+    // another tip has every pad type of this board at the gate (profileCheck.otherTips)
+    const ot = otherTipsAll(pc);
+    IL.show($('pt-needs-other'), ot.length > 0);
+    IL.keyed($('pt-needs-other'), JSON.stringify(ot.map((x) => [x.key, x.of])), () => (ot.length ? [IL.glyph('info', 'xs'),
+      el('span', { text: otherTipsWords(ot) + '.' }),
+      IL.fixButton({ fix: 'tip-change', label: 'Change tip…' }, { cls: 'btn--sm btn--quiet' })] : null));
     const st = $('pt-needs-state');
     const kind = sp.fix.length ? 'need' : sp.tip.length ? 'block' : 'ok';
     const word = sp.fix.length ? IL.plural(sp.fix.length, 'pad size') + ' to choose' : sp.tip.length ? 'Only the tip blocks' : pc ? 'Every pad has a profile' : 'Reading the board…';
     if (st.dataset.sig !== kind + word) { st.dataset.sig = kind + word; st.className = 'card__state card__state--' + kind; st.replaceChildren(IL.glyph(kind, 'sm'), word); }
-    const tipName = (pc && pc.tip && pc.tip.name) || '22G tip';
+    const tipName = tn;
     IL.setText($('pt-needs-lead'), c.error ? 'Could not read the board: ' + c.error : !pc ? 'Reading the board…'
       : sp.fix.length ? 'These pads get no paste until each has a pad type. Use an existing type of the same size, or let the machine calibrate the suggested one.'
         : 'Every pad that the ' + tipName + ' can dispense has a pad type.');
@@ -446,8 +482,9 @@
     IL.gate(autoAll, calWhy, nu > 1 ? null : $('needs-why'));
     // one clear next action: the side panel's while it shows the calibration or a suggestion with its own buttons
     const shown = IL.panel.isPushed() ? null : findGroup(c, P.sel);
-    const lead = !IL.panel.isPushed('pad-cal') && !(shown && (FIX.has(shown.reason) || shown.reason === 'outside') && (usable(shown) || calibrates(shown)));
+    const lead = !meas && !IL.panel.isPushed('pad-cal') && !(shown && (FIX.has(shown.reason) || shown.reason === 'outside') && (usable(shown) || calibrates(shown)));
     autoAll.classList.toggle('btn--primary', lead);
+    $('btn-needs-measure').classList.toggle('btn--primary', meas && !IL.panel.isPushed('pad-cal'));
     if (sp.fix.length === 1) for (const b of sec.querySelectorAll('#pt-needs-table button[data-action=use], #pt-needs-table button[data-action=auto]')) b.classList.toggle('btn--primary', lead);
   }
 
@@ -467,6 +504,8 @@
         el('figure', { class: 'pt-sugg__fig', id: 'pt-sugg-preview' }, host, el('figcaption', { id: 'pt-sugg-cap' })),
         el('dl', { class: 'kv kv--wrap pt-sugg__kv', id: 'pt-sugg-kv' }),
         el('details', { class: 'disclose', id: 'pt-sugg-alt' }, el('summary', { text: 'Other plans' }), el('ul', { class: 'pt-sugg__alt' })),
+        el('details', { class: 'disclose', id: 'pt-sugg-tips', hidden: true }, el('summary', { id: 'pt-sugg-tips-s', text: 'Calibrated for other tips' }),
+          el('div', { class: 'pt-sugg__tips', id: 'pt-sugg-tips-l' })),
         el('div', { id: 'pt-sugg-tip', class: 'notebox notebox--block', hidden: true })));
       const use = el('button', { type: 'button', class: 'btn btn--primary', id: 'btn-pt-sugg-use' });
       const auto = el('button', { type: 'button', class: 'btn btn--primary', id: 'btn-pt-sugg-auto' });
@@ -523,6 +562,29 @@
     IL.show($('pt-sugg-alt'), !none && alts.length > 0);
     IL.keyed($('pt-sugg-alt').querySelector('ul'), JSON.stringify(alts), () => alts.map((a) => el('li', {},
       el('b', { text: a.perPad + ' ' + turnAdj(a.steps) + ' ' + (a.perPad === 1 ? 'dot' : 'dots') + ', ' + mg(a.mgPerPad) + ': ' }), a.why)));
+    // the type calibrated for other tips (§22.7): their status and label, and a copy of their dots to start from
+    const tk = g.typeKey || (sg.kind && sg.kind !== 'new' ? sg.typeKey : null);
+    const row = tk && IL.pcr && IL.pcr.padTypes() ? IL.pcr.padTypes().families.flatMap((f) => f.types).find((t) => t.typeKey === tk) : null;
+    const others = (row && row.others) || [];
+    IL.show($('pt-sugg-tips'), others.length > 0);
+    IL.setText($('pt-sugg-tips-s'), 'Calibrated for other tips (' + others.length + ')');
+    IL.keyed($('pt-sugg-tips-l'), JSON.stringify([tk, row && row.version, row && row.status, others]), () => others.map((o) => {
+      const below = !row || row.standIn || !['characterized', 'validated'].includes(row.status);
+      let copy = null;
+      if (below && o.status && o.status !== 'not-started') {
+        copy = el('button', { type: 'button', class: 'btn btn--sm', 'data-action': 'copy-from', 'data-setup': o.setupKey }, 'Copy its dots to start from');
+        copy.addEventListener('click', () => IL.act(copy, async () => {
+          const r = await IL.api('POST', '/api/pad-types/' + encodeURIComponent(tk) + '/copy', { fromSetup: o.setupKey, forSetup: S.status.dispense.tip.key });
+          if (IL.pcr && IL.pcr.loadPadTypes) IL.pcr.loadPadTypes();
+          refresh();
+          return r;
+        }, { ok: (r) => 'Saved ' + tk + ' v' + r.padType.version + ' for the ' + tipNameOf(null) + ' as provisional: copied from the ' + o.setupName + ', nothing measured.' }));
+      }
+      return el('div', { class: 'pt-tip', 'data-setup': o.setupKey },
+        el('div', { class: 'pt-tip__h' }, el('b', { text: o.setupName }), IL.pcr && IL.pcr.badge ? IL.pcr.badge(o.status) : null, el('span', { class: 'dim', text: 'v' + o.version })),
+        o.label ? el('div', { class: 'pt-tip__l', text: 'Calibrated for ' + o.label }) : null, copy,
+        copy ? el('div', { class: 'pt-tip__note', text: 'Saves a provisional version for the ' + tipNameOf(null) + ' with its plan. Nothing measured comes with it.' }) : null);
+    }));
     // actions
     const use = $('btn-pt-sugg-use'), auto = $('btn-pt-sugg-auto'), man = $('btn-pt-sugg-manual'), edit = $('pt-sugg-edit');
     const fixable = FIX.has(g.reason) || g.reason === 'outside';
@@ -753,6 +815,50 @@
       });
       return b;
     });
+    // "Calibrated for" (§22.7): shown when the status rises to characterized or validated (a by-hand calibration)
+    pt.editorExtras.push({
+      build() {
+        const ch = IL.photos ? IL.photos.chooser({ id: 'btn-pt-upload', inputId: 'pt-file', label: 'Add a photo…', cls: 'btn btn--sm', onFile: (f) => calforUpload(f, ch.btn) }) : null;
+        P.calforBtn = ch && ch.btn;
+        const lab = el('textarea', { class: 'input', id: 'pt-label', rows: '2', maxlength: '160' });
+        lab.addEventListener('input', () => { if (P.calfor) P.calfor.labelEdited = true; });
+        return el('fieldset', { class: 'pt-calfor', id: 'pt-calfor', hidden: true }, el('legend', { text: 'Calibrated for' }),
+          el('p', { class: 'field__h', text: 'Raising the status saves a calibration record by hand: this label, the pictures you tick and the result photos of its evidence.' }),
+          field('pt-label', 'Label', '1 to 160 characters', lab, 'Filled in for you: type, tip, dispenser, pressure and paste. Edit it if it says it better.'),
+          el('div', { class: 'field__l' }, el('span', { text: 'Pictures of the tip' }), el('span', { class: 'unit', text: 'optional, at most 6' })),
+          el('div', { class: 'pt-cal-photos', id: 'pt-cal-photos' }),
+          ch ? el('div', { class: 'btn-row' }, ch.btn, ch.input) : null,
+          el('div', { class: 'reason', id: 'pt-photo-why', hidden: true }),
+          IL.photos ? IL.photos.dropZone({ id: 'pt-drop', onFile: (f) => calforUpload(f, null) }) : null);
+      },
+      open(t) {
+        P.calfor = { status0: t ? t.status : 'not-started', standIn: !!(t && t.standIn), photos: [], ticked: new Set(), labelEdited: false, loaded: false };
+        $('pt-label').value = '';
+        if (!P.calforWired) {
+          P.calforWired = true;
+          for (const id of ['pt-status', 'pt-name', 'pt-family']) { const n = $(id); if (n) n.addEventListener(n.tagName === 'SELECT' ? 'change' : 'input', () => renderCalfor()); }
+        }
+        if (!S.config) IL.loadConfig();
+        calforPhotos();
+        renderCalfor();
+      },
+      body(b) {
+        if (!raisedNow()) return b;
+        const k = P.calfor;
+        const label = String($('pt-label').value || '').replace(/\s+/g, ' ').trim();
+        b.calibration = { photoIds: Array.from(k.ticked) };
+        if (k.labelEdited && label) b.calibration.label = label;
+        return b;
+      },
+      check(errs) {
+        if (!raisedNow()) return errs;
+        const label = String($('pt-label').value || '').trim();
+        if (P.calfor && P.calfor.labelEdited && (!label || label.length > 160)) errs['pt-label'] = 'The label must be 1 to 160 characters.';
+        if (P.calfor && P.calfor.ticked.size > 6) errs['pt-label'] = 'A calibration shows at most 6 pictures of the tip: choose fewer.';
+        return errs;
+      },
+    });
+    pt.renderExtras.push((s) => { if (P.calforBtn) IL.gate(P.calforBtn, IL.tips ? IL.tips.chooserLock(s) : null, $('pt-photo-why')); });
     pt.editorExtras.push({
       build() {
         const steps = el('select', { class: 'input', id: 'pt-dotsteps' },
@@ -790,6 +896,62 @@
         return errs;
       },
     });
+  }
+  // ---------------------------------------------------------------- the editor's "Calibrated for" (§22.5, §22.7)
+  const RANK = { 'not-started': 0, provisional: 1, characterized: 2, validated: 3 };
+  /** The status in the editor raises the type to characterized or validated: a by-hand calibration record. */
+  function raisedNow() {
+    const k = P.calfor;
+    const st = $('pt-status') && $('pt-status').value;
+    return !!k && RANK[st] >= 2 && RANK[st] > RANK[k.status0 || 'not-started'];
+  }
+  /** The label the engine writes when none is typed (Texts.calLabel): "{type} · {tip} · {dispenser} · {psi} psi · {paste}". */
+  function autoLabel() {
+    const fam = $('pt-family') ? ($('pt-family').value === '__other' ? IL.str('pt-family-other') : $('pt-family').value) : '';
+    const name = IL.str('pt-name') || '';
+    const t = tipOfStatus(), prof = (S.status && S.status.dispense && S.status.dispense.profile) || {};
+    const paste = S.config && S.config.paste ? [S.config.paste.name, S.config.paste.lot ? 'lot ' + S.config.paste.lot : null].filter(Boolean).join(' ') : null;
+    const type = typeLabel({ family: fam, name: name.includes(' · ') ? '(' + name + ')' : name });
+    return [type, t.name, t.dispenser, isNum(prof.pressurePsi) ? IL.fmtPsi(prof.pressurePsi) + ' psi' : null, paste].filter(Boolean).join(' · ').slice(0, 160);
+  }
+  function calforPhotos() {
+    const k = P.calfor;
+    const key = tipOfStatus().key;
+    if (!k || !key) return;
+    IL.api('GET', '/api/photos?setup=' + encodeURIComponent(key) + '&limit=24').then((l) => { k.photos = (l || []).filter((p) => p.kind !== 'result' && !p.removedAtMs); }, () => { k.photos = []; })
+      .then(() => { k.loaded = true; renderCalfor(); });
+  }
+  function renderCalfor() {
+    const fs = $('pt-calfor');
+    if (!fs || !P.calfor) return;
+    const k = P.calfor;
+    const on = raisedNow();
+    IL.show(fs, on);
+    if (!on) return;
+    const lab = $('pt-label');
+    if (!k.labelEdited && document.activeElement !== lab) { const a = autoLabel(); if (lab.value !== a) lab.value = a; }
+    IL.keyed($('pt-cal-photos'), JSON.stringify([(k.photos || []).map((p) => p.id), !!k.loaded]), () => {
+      if (!k.loaded) return el('p', { class: 'muted', text: 'Reading the tip’s pictures…' });
+      if (!k.photos.length) return el('p', { class: 'muted', id: 'pt-cal-photos-none', text: 'No picture of the ' + (tipOfStatus().name || 'tip') + ' yet: add one below (optional).' });
+      return k.photos.map((p) => {
+        const cb = el('input', { type: 'checkbox', value: String(p.id), 'data-photo': p.id });
+        cb.checked = k.ticked.has(p.id);
+        cb.addEventListener('change', () => { if (cb.checked) k.ticked.add(p.id); else k.ticked.delete(p.id); });
+        return el('label', { class: 'check pt-cal-photo' }, cb, el('img', { src: p.thumbUrl, alt: p.caption || 'Picture ' + p.id, width: '56', height: '42', loading: 'lazy' }),
+          el('span', { class: 'pt-cal-photo__t', text: (p.caption || 'Picture') + ' · ' + IL.fmtDateTime(IL.toClient(p.atMs)) }));
+      });
+    });
+  }
+  /** A picture for the record before it exists: stored as the mounted tip's (kind tip), then ticked. */
+  function calforUpload(file, btn) {
+    const k = P.calfor;
+    if (!k || !IL.photos) return;
+    IL.act(btn, async () => {
+      const p = await IL.photos.send(file, { kind: 'tip', setup: tipOfStatus().key, caption: 'Picture of the ' + (tipOfStatus().name || 'tip') + ' (uploaded)' });
+      if (p) { k.ticked.add(p.id); k.photos = [p].concat(k.photos || []); k.loaded = true; }
+      renderCalfor();
+      return p;
+    }, { ok: 'Picture added: it goes with the calibration when you save.', refusalIn: $('pt-error') });
   }
   const TURN_NAME = (steps) => ({ 400: 'quarter turn', 800: 'half turn', 1600: 'one turn' }[steps] || IL.turnLabel(steps));
   function field(id, label, unit, input, help) {
@@ -858,6 +1020,7 @@
   /** What the view shows: before (a request not started), job (the job of this tab or a running one), idle. */
   function calMode(s) {
     const j = job(s);
+    if (routeJob()) return 'job';   // a job opened from Records (?panel=pad-cal&job=<id>)
     if (j && ACTIVE.has(j.state)) return 'job';
     if (C.mode === 'before' && C.req) return 'before';
     if (j && (j.id === IL.ssJson(JOB_KEY, null) || C.mode === 'job')) return 'job';
@@ -878,6 +1041,7 @@
     if (reg) body.regulator = { psi: Number(reg.value), atMs: Math.round(reg.atMs + S.skewMs) };
     if (life) body.pasteLifeAtMs = Math.round(life.atMs + S.skewMs);
     const r = await IL.api('POST', '/api/pad-calibrations', body, { timeoutMs: 60000 });
+    r.measure = r.measure || req.measure || null;
     IL.ssSet(JOB_KEY, r.id);
     IL.ssSet(REQ_KEY, null);
     C.req = null;
@@ -895,8 +1059,55 @@
     return r;
   }
 
+  // ---------------------------------------------------------------- the job a view shows; modes (§22.7)
+  /** The job id of ?panel=pad-cal&job=<id> (Records' "Open the result"), unless it is the status' own job. */
+  function routeJob() {
+    const p = S.route && S.route.panel === 'pad-cal' && S.route.params;
+    const id = p && p.get ? p.get('job') : null;
+    const live = job(S.status);
+    return id && !(live && live.id === id) ? id : null;
+  }
+  /** The job the view shows: the status' job, or the one of ?job= read once (GET /api/pad-calibrations/{id}). */
+  function viewJob(s) {
+    const id = routeJob();
+    if (!id) return job(s);
+    if (!C.other || C.other.id !== id) {
+      const x = C.other = { id, j: null, loading: true, error: null };
+      IL.api('GET', '/api/pad-calibrations/' + encodeURIComponent(id)).then((j) => { x.j = j; }, (e) => { x.error = IL.errorText(e); })
+        .then(() => { x.loading = false; IL.render(); });
+    }
+    return C.other.j;
+  }
+  /** calibrate | landing (Check where it lands) | tip (Measure its dots): of the request before start, else of the job. */
+  function modeOf(s) {
+    const m = calMode(s);
+    if (m === 'before') return (C.req && C.req.measure) || 'calibrate';
+    const j = viewJob(s);
+    return (j && j.measure) || 'calibrate';
+  }
+  const tipOfStatus = () => (S.status && S.status.dispense && S.status.dispense.tip) || {};
+  /** The tip a job is for (its own, else the mounted one). */
+  const jobTip = (j) => (j && j.tipName) || tipOfStatus().name || 'mounted tip';
+  const MODE_TITLE = { landing: (n) => 'Check where the ' + n + ' lands', tip: (n) => 'Measure the ' + n + '’s dots' };
+  /** "For the 22G bent taper (on since 10-27 18:30)" with the tip's picture: the first line in every mode. */
+  function tipLine(host, j) {
+    const t = tipOfStatus();
+    const name = jobTip(j);
+    const mounted = !j || !j.forTip || j.forTip === t.key;
+    const since = mounted ? (t.mountedAtMs ? IL.fmtDateTime(IL.toClient(t.mountedAtMs)) : 'before the update') : null;
+    const thumbUrl = mounted ? t.thumbUrl : null;
+    IL.keyed(host, JSON.stringify([name, since, thumbUrl]), () => [
+      thumbUrl ? el('img', { class: 'tip-thumb tip-thumb--sm', src: thumbUrl, alt: 'The ' + name }) : el('span', { class: 'tip-thumb tip-thumb--sm tip-thumb--none' }, IL.tips ? IL.tips.noPicture() : null),
+      el('span', { class: 'pcal-tipline__t' }, 'For the ', el('b', { text: name }), since ? ' (on since ' + since + ')' : '')]);
+  }
+
   IL.view('pad-cal', {
-    title: (s) => { const j = job(s); return j && ACTIVE.has(j.state) ? (j.manual ? 'Pad calibration · by hand' : 'Pad calibration') : calMode(s) === 'before' ? 'Calibrate automatically' : 'Pad calibration'; },
+    title: (s) => {
+      const mode = modeOf(s);
+      if (MODE_TITLE[mode]) return MODE_TITLE[mode](jobTip(calMode(s) === 'job' ? viewJob(s) : null));
+      const j = job(s);
+      return j && ACTIVE.has(j.state) ? (j.manual ? 'Pad calibration · by hand' : 'Pad calibration') : calMode(s) === 'before' ? 'Calibrate automatically' : 'Pad calibration';
+    },
     render(parts, s, first) {
       const mode = calMode(s);
       if (first || C.built !== mode) {
@@ -917,23 +1128,30 @@
   function buildBefore(parts) {
     const start = el('button', { type: 'button', class: 'btn btn--primary btn--lg btn--block', id: 'btn-pcal-start' }, IL.icon('i-play'), el('span', { id: 'pcal-start-l', text: 'Calibrate' }));
     const refusal = el('div', { id: 'pcal-refusal' });
-    IL.press2(start, 'calibrate', () => startCal(), { ok: () => 'Pad calibration started: STOP stops it at once (F9).', refusalIn: refusal });
+    // the verb names what the second press starts (§22.7): calibrate, lay 17 dots (the landing check), measure
+    const VERB = { landing: 'lay 17 dots', tip: 'measure' };
+    const STARTED = { landing: 'Check where it lands started: STOP stops it at once (F9).', tip: 'Measure its dots started: STOP stops it at once (F9).' };
+    IL.press2(start, () => VERB[C.req && C.req.measure] || 'calibrate', () => startCal(), { ok: (r) => STARTED[r && r.measure] || 'Pad calibration started: STOP stops it at once (F9).', refusalIn: refusal });
     parts.body.append(el('div', { class: 'pcal', 'data-refusals': '' },
+      el('div', { class: 'pcal-tipline', id: 'pcal-tipline' }),
       el('p', { class: 'pcal__note', id: 'pcal-note' }),
       el('div', { class: 'notebox notebox--info pcal__needs', id: 'pcal-needs', hidden: true }),
       IL.sectionK('Steps'),
       el('table', { class: 'tbl pcal__plan', id: 'pcal-plan' }, el('tbody')),
-      IL.sectionK('Pad sizes'),
-      el('ul', { class: 'pcal__groups', id: 'pcal-groups-list' }),
+      el('div', { id: 'pcal-for' }, IL.sectionK('Pad sizes'),
+        el('ul', { class: 'pcal__groups', id: 'pcal-groups-list' })),
       el('div', { id: 'pcal-fixes', class: 'pcal__fixes', hidden: true }),
       refusal));
     parts.foot.append(start, el('div', { class: 'reason', id: 'pcal-why', hidden: true }));
   }
   const STEP_TITLE = { blank: 'Probe the blank', coupons: 'Find and touch the coupons', ladder: 'Test dots on the blank', weigh: 'Weigh dots on the coupons',
-    readings: 'Your readings', decide: 'Decide', plan: 'Plan again', home: 'Home', zcheck: 'Z check' };
+    readings: 'Your readings', decide: 'Decide', plan: 'Plan again', home: 'Home', zcheck: 'Z check', locator: 'One dot to find the needle', row: 'Purge and a row of 8 dots' };
   function renderBefore(s) {
     const e = estimate(C.req);
     const pv = e && e.s;
+    const mode = (C.req && C.req.measure) || 'calibrate';
+    tipLine($('pcal-tipline'), null);
+    IL.show($('pcal-for'), mode === 'calibrate');
     IL.setText($('pcal-note'), pv ? IL.nb(pv.sentence) : e && e.error ? 'Could not read the summary: ' + e.error : 'Reading the summary…');
     IL.setText($('pcal-needs'), pv && pv.needsText ? IL.nb(pv.needsText) : '');
     IL.show($('pcal-needs'), !!(pv && pv.needsText));
@@ -968,7 +1186,7 @@
     IL.show(fx, !!ref);
     IL.keyed(fx, ref || '', () => (ref ? [el('div', { class: 'notebox notebox--need' }, IL.glyph('need', 'xs'), el('span', { text: ref })), IL.fixRow(fixesFor(ref, s), 'btn-row')] : null));
     const start = $('btn-pcal-start');
-    if (!IL.isArmed(start)) IL.setText($('pcal-start-l'), 'Calibrate' + estText(e));
+    if (!IL.isArmed(start)) IL.setText($('pcal-start-l'), ({ landing: 'Check where it lands', tip: 'Measure the dots' }[mode] || 'Calibrate') + estText(e));
     // it homes by itself when needed: not while a STOP left N1 low (as Run, Register board and Probe the blank)
     const why = IL.lockReason(s, { connected: true, engine: true, homes: true }) || jobLockText(s) || (jobActive(s) ? 'A pad calibration is waiting for its readings: finish or cancel it first' : null)
       || (!pv ? 'Reading the summary…' : ref ? 'Fix the item above first.' : null);
@@ -1027,8 +1245,31 @@
       if (gg && calibrates(gg)) manual(man, c, gg);
       else IL.go('#calibrate');
     });
-    plan.addEventListener('click', () => { IL.panel.close(); IL.go('#run/checks'); });
+    // Checks ›: a calibrated-for label edited and not saved stops it once (§22.7, UI_DESIGN.md §15)
+    plan.addEventListener('click', () => {
+      if (labelsDirty() && !(C.checksAt && Date.now() - C.checksAt < 6000)) { C.checksAt = Date.now(); focusDirtyLabel(); return; }
+      C.labels = {};
+      IL.panel.close();
+      IL.go('#run/checks');
+    });
+    // the next step after Check where it lands / Measure its dots (§22.7 "result primary")
+    const next = el('button', { type: 'button', class: 'btn btn--primary', id: 'btn-pcal-next', hidden: true }, el('span', { class: 'lbl', text: 'Next' }));
+    next.addEventListener('click', (ev) => nextStep(next, ev));
+    // Made with another tip… (§22.3): the job's records restored, its dose records leave the tip's evidence
+    const wrong = el('button', { type: 'button', class: 'btn btn--quiet', id: 'btn-pcal-wrongtip', hidden: true }, 'Made with another tip…');
+    IL.press2(wrong, 'made with another tip', () => wrongTip(), { ok: (r) => (r && r.text) || 'Flagged: made with another tip.' });
+    C.tipUp = IL.photos ? IL.photos.chooser({ id: 'btn-pcal-upload', inputId: 'pcal-file', label: 'Add a photo…', cls: 'btn btn--sm', onFile: (f) => sendTipPhoto(f, C.tipUp.btn) }) : null;
+    C.tipPic = el('button', { type: 'button', class: 'btn btn--sm', id: 'btn-pcal-picture', title: 'N2 goes to the bottom camera at travel height and the camera takes one picture of the tip. About 5 s.' },
+      IL.icon('i-camera'), el('span', { class: 'lbl', text: 'Take a picture from below' }));
+    IL.press2(C.tipPic, 'move to the camera', () => jobPicture(), { ok: (r) => (IL.tips ? IL.tips.pictureOk(r) : 'Picture taken.'), refusalIn: null });
+    const tipBox = el('div', { class: 'pcal-tip', id: 'pcal-tip', hidden: true, 'data-refusals': '' },
+      IL.sectionK('The tip'),
+      el('div', { class: 'pcal-tip__pics', id: 'pcal-tip-pics' }),
+      el('div', { class: 'btn-row' }, C.tipUp ? C.tipUp.btn : null, C.tipPic, C.tipUp ? C.tipUp.input : null),
+      el('div', { class: 'reason', id: 'pcal-tip-why', hidden: true }),
+      IL.photos ? IL.photos.dropZone({ id: 'pcal-drop', onFile: (f) => sendTipPhoto(f, null) }) : null);
     parts.body.append(el('div', { class: 'pcal pcal--job' },
+      el('div', { class: 'pcal-tipline', id: 'pcal-tipline' }),
       el('div', { class: 'ri ri--need', id: 'pcal-ask', role: 'status', hidden: true, 'data-refusals': '' },
         IL.glyph('need'), el('div', { class: 'pcal-ask' },
           el('div', { class: 'ri__t', text: 'Weigh the coupons' }),
@@ -1037,10 +1278,19 @@
           el('div', { id: 'pcal-ask-ref' }),
           el('div', { class: 'ri__act' }, skip))),
       el('div', { class: 'ri', id: 'pcal-result', role: 'status', hidden: true, 'data-refusals': '' }),
+      el('div', { class: 'pcal-landing', id: 'pcal-landing', hidden: true, 'data-refusals': '' }),
+      el('div', { id: 'pcal-tipdots-box', hidden: true }, IL.sectionK('Dot sizes of the tip'),
+        el('div', { class: 'pcal__tblwrap' }, el('table', { class: 'tbl pcal__ladder', id: 'pcal-tipdots' },
+          el('thead', {}, el('tr', {}, [['Turn'], ['Found', 'dots found of dots laid'], ['Mean', 'mean diameter (mm)'], ['d95', '95th percentile diameter (mm)'],
+            ['Threads', 'paste threads to the next dot, of the moves'], ['Spread', 'residual spread of the dot area'], ['Pass']].map(([h, t]) => el('th', { scope: 'col', title: t || null, text: h })))), el('tbody'))),
+        el('ul', { class: 'pcal__checks', id: 'pcal-tipdots-fail' }),
+        el('p', { class: 'pcal__sd', id: 'pcal-tipdots-mg' })),
+      tipBox,
       el('div', { class: 'pcal__more', id: 'pcal-result-more', hidden: true },
         el('ul', { class: 'pcal__res', id: 'pcal-groups' }),
-        IL.sectionK('Camera crops (before · after)'),
-        el('div', { class: 'pcal__crops', id: 'pcal-crops' }),
+        el('div', { id: 'pcal-photos-box' }, IL.sectionK('Result photos'), el('div', { class: 'pcal__photos', id: 'pcal-photos' })),
+        el('div', { id: 'pcal-crops-box' }, IL.sectionK('Camera crops (before · after)'),
+          el('div', { class: 'pcal__crops', id: 'pcal-crops' })),
         el('details', { class: 'disclose', id: 'pcal-pred-d' }, el('summary', { text: 'Predicted and measured' }),
           el('table', { class: 'tbl pcal__pred', id: 'pcal-pred' }, el('thead', {}, el('tr', {}, ['', 'Predicted', 'Measured', ''].map((h) => el('th', { scope: 'col', text: h })))), el('tbody')),
           el('p', { class: 'pcal__sd', id: 'pcal-drift' }))),
@@ -1053,7 +1303,7 @@
             ['Angle', 'dot area between the screw angles, and its limit'], ['Size', 'mean and 95th percentile diameter (mm)'], ['']].map(([h, t]) => el('th', { scope: 'col', title: t || null, text: h })))), el('tbody'))))));
     // the pinned foot: Save the readings while they are asked for (always in view); Cancel while the job is active (an
     // engine step is aborted; the coupons laid keep waiting for their readings); the next step after it ended
-    parts.foot.append(el('div', { class: 'btn-row pcal__foot', 'data-refusals': '' }, save, plan, weighNow, finish, again, man, cancel),
+    parts.foot.append(el('div', { class: 'btn-row pcal__foot', 'data-refusals': '' }, save, next, plan, weighNow, finish, again, man, wrong, cancel),
       el('div', { class: 'reason', id: 'pcal-foot-why', hidden: true }),
       el('p', { class: 'pcal-stop', id: 'pcal-stopline', text: 'STOP stops it at once (F9).' }));
   }
@@ -1091,9 +1341,16 @@
     IL.render();
   }
   function renderJob(s) {
-    const j = job(s);
-    if (!j) { IL.setText($('pcal-live'), 'The pad calibration is no longer known (OpenPnP restarted): its coupons are in Calibrate › Pad calibration.'); return; }
-    if (!IL.ssJson(JOB_KEY, null) || ACTIVE.has(j.state)) IL.ssSet(JOB_KEY, j.id);
+    const other = routeJob();
+    const j = viewJob(s);
+    if (!j) {
+      IL.setText($('pcal-live'), other ? (C.other && C.other.error ? 'This calibration is no longer in OpenPnP’s memory (it keeps the last 5 since its start): ' + C.other.error : 'Reading the calibration…')
+        : 'The pad calibration is no longer known (OpenPnP restarted): its coupons are in Calibrate › Pad calibration.');
+      return;
+    }
+    if (!other && (!IL.ssJson(JOB_KEY, null) || ACTIVE.has(j.state))) IL.ssSet(JOB_KEY, j.id);
+    const mode = j.measure || 'calibrate';
+    tipLine($('pcal-tipline'), j);
     const active = ACTIVE.has(j.state);
     const run = s.run && s.run.running && s.run.label === 'pad calibration' ? s.run : null;
     // phases
@@ -1126,8 +1383,10 @@
     const res = j.result;
     const box = $('pcal-result');
     IL.show(box, !!res && !active);
-    IL.show($('pcal-result-more'), !!res && !active && ((res.groups || []).length > 0 || (res.crops || []).length > 0));
+    IL.show($('pcal-result-more'), !!res && !active && ((res.groups || []).length > 0 || (res.crops || []).length > 0 || (res.photos || []).length > 0));
     if (res && !active) renderResult(j, res, s);
+    renderMeasured(j, res && !active ? res : null, s);
+    renderTipBlock(j, res && !active ? res : null, s);
     // pending coupons of a stopped job
     const pend = (j.pendingCoupons || []).filter((x) => !x.error);
     pendingForm($('pcal-pending'), !active && C.pending ? pend : []);
@@ -1151,15 +1410,22 @@
     const weighNow = ended && !C.pending && (pend.length > 0 || (!!res && !!res.pendingCoupons && offline));
     const finishNow = ended && !!(res && res.finishable) && !weighNow;
     const good = !!res && (res.outcome === 'characterized' || res.outcome === 'measured');
+    const measure = mode !== 'calibrate';
+    const nx = ended && !other && measure ? nextOf(j, res, s) : null;
+    IL.show($('btn-pcal-next'), !!nx);
+    if (nx && !IL.isArmed($('btn-pcal-next'))) IL.setText($('btn-pcal-next').querySelector('.lbl'), nx.label);
     IL.show($('btn-pcal-plan'), ended && !!(res && res.newPlanId));
     IL.show($('btn-pcal-weigh-now'), weighNow);
     IL.show($('btn-pcal-finish'), finishNow);
-    IL.show($('btn-pcal-again'), ended && !!res && res.outcome !== 'characterized');
-    // one clear next action: the readings still to type, else finishing, else Checks after a characterization, else again
-    const lead = weighNow ? 'btn-pcal-weigh-now' : finishNow ? 'btn-pcal-finish' : good ? 'btn-pcal-plan' : 'btn-pcal-again';
-    for (const id of ['btn-pcal-weigh-now', 'btn-pcal-finish', 'btn-pcal-plan', 'btn-pcal-again']) IL.setClass($(id), 'btn' + (id === lead ? ' btn--primary' : ''));
+    IL.show($('btn-pcal-again'), ended && !!res && res.outcome !== 'characterized' && !measure && !other);
+    const recs = res ? (res.groups || []).filter((g) => isNum(g.calibrationId)) : [];
+    IL.show($('btn-pcal-wrongtip'), ended && !measure && recs.length > 0 && !(res.groups || []).some((g) => g.flagged));
+    // one clear next action: the readings still to type, else finishing, else the next step of a measure, else Checks
+    // after a characterization, else again
+    const lead = weighNow ? 'btn-pcal-weigh-now' : finishNow ? 'btn-pcal-finish' : nx ? 'btn-pcal-next' : good ? 'btn-pcal-plan' : 'btn-pcal-again';
+    for (const id of ['btn-pcal-weigh-now', 'btn-pcal-finish', 'btn-pcal-plan', 'btn-pcal-again', 'btn-pcal-next']) IL.setClass($(id), 'btn' + (id === lead ? ' btn--primary' : ''));
     IL.gate($('btn-pcal-weigh-now'), weighNow && !pend.length ? IL.lockReason(s, { idle: false, pressureOff: false, connected: true }) || 'Reading the coupons…' : null, $('pcal-foot-why'));
-    IL.show($('btn-pcal-manual'), ended && !!res && res.outcome !== 'characterized' && !j.manual);
+    IL.show($('btn-pcal-manual'), ended && !!res && res.outcome !== 'characterized' && !j.manual && !measure && !other);
     IL.show($('pcal-stopline'), active && j.state !== 'awaiting-reading');
     IL.show($('btn-pcal-cancel'), active);
     IL.show($('btn-pcal-readings'), !!asking);
@@ -1214,6 +1480,241 @@
               field(eid, 'Wiped', 'g', el('input', { class: 'input', id: eid, type: 'text', inputmode: 'decimal', autocomplete: 'off', placeholder: '0.000' })), save, skip)));
       })]);
   }
+  // ---------------------------------------------------------------- tip setups on the result card (§22.7)
+  /** The records a job wrote (groups with a calibration id). */
+  const recIds = (res) => (res ? (res.groups || []).filter((g) => isNum(g.calibrationId)).map((g) => g.calibrationId) : []);
+  /** Read the shown job again: a job from Records is fetched again, the status' own comes with the next poll. */
+  function refreshJob() {
+    if (routeJob()) C.other = null;
+    IL.pollNow();
+    IL.render();
+  }
+  /** Check where it lands and Measure its dots: #pcal-landing (saved, the question, not found) and table#pcal-tipdots. */
+  function renderMeasured(j, res, s) {
+    const lb = $('pcal-landing');
+    const L = res && res.landing;
+    const warn = res ? res.landingWarnings || [] : [];
+    const nd = (s.dispense && s.dispense.needle) || {};
+    IL.show(lb, !!L || warn.length > 0);
+    IL.keyed(lb, JSON.stringify([j.id, L, warn, nd.changedAtMs]), () => {
+      const out = [];
+      if (L) {
+        const name = jobTip(j);
+        const nums = isNum(L.dxMm) ? 'lands ' + IL.fmtSigned(L.dxMm, 2) + ', ' + IL.fmtSigned(L.dyMm, 2) + ' mm from the N2 head offset' + (isNum(L.n) ? ' · ' + IL.plural(L.n, 'dot') : '')
+          + (isNum(L.sdMm) ? ' · scatter ' + IL.fmt(L.sdMm, 2) + ' mm' : '') : null;
+        if (L.saved) {
+          // the verdict above says where it lands: here only that it is saved and in use
+          const ndl = (s.dispense && s.dispense.needle) || {};
+          const inUse = ndl.landing && ndl.landing.jobId === j.id;
+          out.push(el('div', { class: 'notebox pcal-landing__ok' }, IL.glyph('ok', 'xs'), el('span', {}, el('b', { text: 'Saved' }),
+            inUse ? ': every dot of the ' + name + ' is corrected by it.' : ': a later check or a needle change replaced it since.')));
+        } else if (L.question) {
+          const save = el('button', { type: 'button', class: 'btn btn--primary btn--sm', id: 'btn-pcal-landing-save' }, 'Save it: the ' + name + ' is on');
+          save.addEventListener('click', () => IL.act(save, async () => {
+            const r = await IL.api('POST', '/api/needle/landing', { jobId: j.id, accept: true, needleChangedAtMs: isNum(j.needleSinceMs) ? j.needleSinceMs : (isNum(L.needleSinceMs) ? L.needleSinceMs : null) });
+            refreshJob();
+            return r;
+          }, { ok: 'Saved where the ' + name + ' lands: every dot is corrected by it.' }));
+          const other = el('button', { type: 'button', class: 'btn btn--sm', id: 'btn-pcal-landing-other' }, 'Another tip is on: Change tip…');
+          other.addEventListener('click', () => { if (IL.tips) IL.tips.openChange({}); });
+          out.push(el('div', { class: 'notebox notebox--need pcal-landing__q' }, el('b', { text: L.question }), nums ? el('div', { class: 'pcal__sd', text: 'This check: ' + nums + '.' }) : null,
+            el('div', { class: 'btn-row' }, save, other)));
+        } else {
+          const acts = [];
+          if (!L.found && isNum(L.searchMm) && L.searchMm < 9) {
+            const wide = el('button', { type: 'button', class: 'btn btn--sm', id: 'btn-pcal-landing-wide' }, 'Search ±9 mm…');
+            wide.addEventListener('click', () => openCal({ measure: 'landing', wide: true }));
+            acts.push(wide);
+          }
+          const again = el('button', { type: 'button', class: 'btn btn--sm', id: 'btn-pcal-landing-again' }, 'Check where it lands again…');
+          again.addEventListener('click', () => openCal({ measure: 'landing' }));
+          acts.push(again);
+          out.push(el('div', { class: 'notebox notebox--block' }, el('span', { text: L.text || 'Nothing was saved.' }), el('div', { class: 'btn-row' }, acts)));
+        }
+      }
+      for (const w of warn) out.push(el('div', { class: 'notebox notebox--need' }, IL.glyph('need', 'xs'), el('span', { text: w + ' ' }), IL.fixButton({ fix: 'landing-check', label: 'Check where it lands…' }, { cls: 'btn--sm btn--quiet' })));
+      return out;
+    });
+    const td = res && res.tipDots;
+    IL.show($('pcal-tipdots-box'), !!td);
+    if (td) {
+      IL.keyed($('pcal-tipdots').tBodies[0], JSON.stringify(td.doses), () => (td.doses || []).map((x) => el('tr', { 'data-steps': x.steps },
+        el('td', { text: { 400: 'quarter', 800: 'half', 1600: 'one' }[x.steps] || turnAdj(x.steps) }),
+        el('td', { class: 'r nowrap', text: x.dots ? (isNum(x.found) ? x.found + '/' : '') + x.dots : '—' }),
+        el('td', { class: 'r nowrap', text: isNum(x.dMeanMm) ? IL.fmt(x.dMeanMm, 2) + ' mm' : '—' }),
+        el('td', { class: 'r nowrap', text: isNum(x.d95Mm) ? IL.fmt(x.d95Mm, 2) + ' mm' : '—' }),
+        el('td', { class: 'r nowrap', text: isNum(x.hops) ? (x.threads || 0) + '/' + x.hops : '—' }),
+        el('td', { class: 'r', text: isNum(x.spread) ? IL.fmt(100 * x.spread, 0) + ' %' : '—' }),
+        el('td', { title: x.pass === false ? (x.failures || []).join('; ') : null }, x.pass === null || x.pass === undefined ? el('span', { class: 'muted', text: '—' })
+          : IL.glyph(x.pass ? 'ok' : 'block', 'xs', x.pass ? 'pass' : 'failed')))));
+      const fails = (td.doses || []).filter((x) => x.pass === false).map((x) => ({ 400: 'Quarter turn', 800: 'Half turn', 1600: 'One turn' }[x.steps] || turnAdj(x.steps)) + ': ' + ((x.failures || [])[0] || 'a check failed'));
+      IL.keyed($('pcal-tipdots-fail'), JSON.stringify(fails), () => fails.map((f) => el('li', {}, IL.glyph('block', 'xs'), el('span', { text: f }))));
+      IL.setText($('pcal-tipdots-mg'), isNum(td.mgPerTurn) ? IL.fmt(td.mgPerTurn, 2) + ' mg per turn (' + (td.confirmed ? 'weighed, confirmed' : 'weighed once') + ').'
+        : 'Not weighed: the paste per turn is not known yet.');
+    }
+  }
+  /** div#pcal-tip "The tip" (§22.7): the reference picture and the pictures taken for this calibration; add one. */
+  function renderTipBlock(j, res, s) {
+    const box = $('pcal-tip');
+    const ids = recIds(res);
+    const show = !!res && (j.measure || 'calibrate') === 'calibrate' && ids.length > 0;
+    IL.show(box, show);
+    if (!show) return;
+    const seen = new Set();
+    const pics = [];
+    for (const g of res.groups || []) for (const p of g.photos || []) if (p.kind !== 'result' && !seen.has(p.id)) { seen.add(p.id); pics.push(p); }
+    const mounted = IL.tips && IL.tips.mountedSetup();
+    const ref = !pics.length && mounted && mounted.key === j.forTip && mounted.mainPhoto ? mounted.mainPhoto : null;
+    IL.keyed($('pcal-tip-pics'), JSON.stringify([pics.map((p) => p.id), ref && ref.id]), () => {
+      const list = pics.length ? pics : ref ? [ref] : [];
+      if (!list.length) return el('p', { class: 'muted pcal-tip__none', id: 'pcal-tip-none', text: 'No picture of this tip yet: add one, it shows later which needle this was calibrated for.' });
+      return IL.photos.strip(list, { max: 6, list });
+    });
+    const mine = (s.dispense && s.dispense.tip && s.dispense.tip.key) === j.forTip;
+    const tok = s.dispense && s.dispense.needle ? s.dispense.needle.changedAtMs : null;
+    const sameNeedle = !isNum(j.needleSinceMs) && !isNum(tok) ? true : j.needleSinceMs === tok;
+    if (C.tipUp) IL.gate(C.tipUp.btn, IL.tips ? IL.tips.chooserLock(s) : null);
+    const why = (IL.tips ? IL.tips.pictureLock(s) : null) || (!mine ? 'Only the mounted tip can be photographed: mount the ' + jobTip(j) + ' first.' : null)
+      || (!sameNeedle ? 'The needle was changed after this calibration: a picture now shows another needle.' : null);
+    IL.gate(C.tipPic, why, $('pcal-tip-why'));
+  }
+  function sendTipPhoto(file, btn) {
+    const j = viewJob(S.status);
+    const ids = recIds(j && j.result);
+    if (!j || !ids.length || !IL.photos) return Promise.resolve();
+    return IL.act(btn, async () => {
+      const p = await IL.photos.send(file, { kind: 'tip', setup: j.forTip, calibrations: ids, job: j.id, caption: 'Picture of the ' + jobTip(j) + ' (uploaded)' });
+      refreshJob();
+      return p;
+    }, { ok: 'Picture added: it shows with ' + (ids.length === 1 ? 'this calibration' : 'these calibrations') + '.', refusalIn: $('pcal-tip') });
+  }
+  async function jobPicture() {
+    const j = viewJob(S.status);
+    const r = await IL.tips.takePicture(recIds(j && j.result));
+    refreshJob();
+    return r;
+  }
+  /** Made with another tip… (§22.3): one record names its job; the engine flags the job and restores the versions. */
+  async function wrongTip() {
+    const j = viewJob(S.status);
+    const ids = recIds(j && j.result);
+    if (!ids.length) throw new Error('This calibration saved no record.');
+    const r = await IL.api('POST', '/api/pad-calibrations/' + ids[0] + '/wrong-tip', {});
+    if (IL.pcr && IL.pcr.loadPadTypes) IL.pcr.loadPadTypes();
+    refresh();
+    refreshJob();
+    if (IL.tips) IL.tips.openChange({});
+    return r;
+  }
+  /** The result primary of a measure (§22.7): the next step after the landing check, or calibrate the board's types. */
+  function nextOf(j, res, s) {
+    if (!res) return null;
+    const name = jobTip(j);
+    const c = current();
+    const gs = split(c && c.check).fix.filter(calibrates);
+    const board = (c && (c.boardName || (S.plan && S.plan.boardName))) || 'the board';
+    const cal = { label: 'Calibrate ' + (gs.length ? 'the ' + IL.plural(gs.length, 'pad type') : 'the pad types') + ' of ' + board + ' for the ' + name + '…', board: true, gs, c };
+    if (j.measure === 'tip') return res.tipDots && res.tipDots.measured ? cal : res.outcome === 'measured' ? { label: 'Measure its dots again…', fix: { fix: 'measure-tip', label: 'Measure its dots again…' } } : null;
+    const nd = (s.dispense && s.dispense.needle) || {};
+    if (!(res.landing && res.landing.saved) && !nd.xyChecked) return null;
+    const steps = IL.tips ? IL.tips.nextSteps(s) : [];
+    const after = steps.slice(steps.findIndex((x) => x.key === 'landing') + 1).find((x) => !x.done);
+    return after ? { label: after.fix.label, fix: after.fix } : cal;
+  }
+  function nextStep(btn, ev) {
+    const s = S.status;
+    const nx = nextOf(viewJob(s), (viewJob(s) || {}).result, s);
+    if (!nx) return;
+    if (nx.board) {
+      if (nx.gs.length) openCal(calRequest(nx.c, nx.gs));
+      else { IL.panel.close(); IL.go('#profile/needs'); }
+      return;
+    }
+    if (nx.fix.href) { IL.panel.close(); IL.go(nx.fix.href); } else IL.runFix(nx.fix.fix, btn, null, ev);
+  }
+  /** A calibrated-for label edited and not saved (any group of the result card). */
+  const labelsDirty = () => Object.values(C.labels || {}).some((x) => x.editing && x.value !== x.orig);
+  function focusDirtyLabel() {
+    const id = Object.keys(C.labels || {}).find((k) => C.labels[k].editing && C.labels[k].value !== C.labels[k].orig);
+    const ta = id && $('pcal-label-' + id);
+    if (!ta) return;
+    const bar = ta.parentElement.querySelector('.pcal-label__bar');
+    ta.focus();
+    if (bar) { bar.scrollIntoView({ block: 'nearest' }); IL.flash(bar); }
+    IL.toast('The label is not saved: Save or Discard it (Checks › again discards it).', 'need');
+  }
+  /**
+   * The group's "calibrated for" label (§22.5) inside its li: the text with the outcome badge (Calibration for below
+   * characterized), Edit (a textarea, maxlength 160, with the dirty bar Save · Discard), Use the automatic label.
+   */
+  function renderLabel(li, g, j) {
+    const id = g.calibrationId;
+    if (!isNum(id)) return;
+    let box = li.querySelector(':scope > .pcal-label');
+    if (!box) { box = el('div', { class: 'pcal-label', 'data-cal': id, 'data-refusals': '' }); li.insertBefore(box, li.children[1] || null); }
+    C.labels = C.labels || {};
+    const st = C.labels[id] = C.labels[id] || { editing: false };
+    const raised = g.outcome === 'characterized' || g.outcome === 'validated';
+    const label = g.calibrationLabel || '';
+    IL.keyed(box, JSON.stringify([label, g.calibrationLabelAuto, st.editing, g.outcome]), () => {
+      if (!st.editing) {
+        const edit = el('button', { type: 'button', class: 'link', 'data-action': 'label-edit', 'data-focus-key': 'label-edit:' + id }, 'Edit');
+        edit.addEventListener('click', () => { st.editing = true; st.orig = label; st.value = label; IL.render(); requestAnimationFrame(() => { const t = $('pcal-label-' + id); if (t) t.focus(); }); });
+        const out = [el('div', { class: 'pcal-label__v' }, el('span', { class: 'pcal-label__k', text: raised ? 'Calibrated for' : 'Calibration for' }),
+          IL.pcr && IL.pcr.badge ? IL.pcr.badge(g.outcome === 'partly' ? 'provisional' : g.outcome) : null),
+        el('div', { class: 'pcal-label__t', id: 'pcal-label-t-' + id, text: label || '—' }),
+        el('div', { class: 'pcal-label__a' }, edit, g.calibrationLabelAuto === false ? autoBtn(id, j) : null)];
+        return out;
+      }
+      const ta = el('textarea', { class: 'input pcal-label__in', id: 'pcal-label-' + id, rows: '2', maxlength: '160', 'aria-label': 'Calibrated for (1 to 160 characters)' });
+      ta.value = st.value === undefined ? label : st.value;
+      const save = el('button', { type: 'button', class: 'btn btn--primary btn--sm', id: 'btn-pcal-label-save-' + id }, 'Save');
+      const discard = el('button', { type: 'button', class: 'btn btn--sm', 'data-action': 'label-discard' }, 'Discard');
+      const bar = el('div', { class: 'pcal-label__bar', hidden: true }, IL.glyph('need', 'xs'), el('span', { text: 'Unsaved:' }), save, discard);
+      const dirtyNow = () => { st.value = ta.value; const d = ta.value !== st.orig; ta.classList.toggle('input--dirty', d); IL.show(bar, d); };
+      ta.addEventListener('input', dirtyNow);
+      // Enter saves only this label (data-enter-submits); Shift+Enter is a new line
+      ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); save.click(); } });
+      save.addEventListener('click', () => IL.act(save, async () => {
+        const text = String(ta.value).replace(/\s+/g, ' ').trim();
+        if (!text || text.length > 160) throw new IL.ApiError(400, { error: 'label', reason: 'The label must be 1 to 160 characters.' }, 'The label must be 1 to 160 characters.');
+        const r = await IL.api('PUT', '/api/pad-calibrations/' + id + '/label', { label: text });
+        st.editing = false;
+        st.value = undefined;
+        refreshJob();
+        return r;
+      }, { ok: 'Label saved.', refusalIn: box }));
+      discard.addEventListener('click', () => { st.editing = false; st.value = undefined; IL.render(); });
+      requestAnimationFrame(dirtyNow);
+      return [el('div', { class: 'pcal-label__v' }, el('label', { class: 'pcal-label__k', for: 'pcal-label-' + id, text: raised ? 'Calibrated for' : 'Calibration for' })),
+        el('div', { class: 'pcal-label__e', 'data-enter-submits': 'btn-pcal-label-save-' + id }, ta, bar,
+          el('div', { class: 'pcal-label__a' }, g.calibrationLabelAuto === false ? autoBtn(id, j) : null))];
+    });
+  }
+  function autoBtn(id, j) {
+    const b = el('button', { type: 'button', class: 'link', 'data-action': 'label-auto' }, 'Use the automatic label');
+    b.addEventListener('click', () => IL.act(b, async () => {
+      const r = await IL.api('PUT', '/api/pad-calibrations/' + id + '/label', { auto: true });
+      if (C.labels && C.labels[id]) { C.labels[id].editing = false; C.labels[id].value = undefined; }
+      refreshJob();
+      return r;
+    }, { ok: 'The automatic label is back.' }));
+    return b;
+  }
+  /** One result photo per dose (§22.7: figure.pcal-photo, the blank's first): buttons opening #photo-view. */
+  function renderResultPhotos(res) {
+    const rp = (res.photos || []).filter((p) => p.kind === 'result' && !p.removedAtMs);
+    const byDose = new Map();
+    for (const p of rp) { const k = p.doseSteps || 0; const cur = byDose.get(k); if (!cur || (cur.couponPlace && !p.couponPlace)) byDose.set(k, p); }
+    const list = Array.from(byDose.values()).sort((a, b) => (a.doseSteps || 0) - (b.doseSteps || 0));
+    IL.keyed($('pcal-photos'), JSON.stringify(list.map((p) => p.id)), () => (list.length ? list.map((p) => {
+      const b = el('button', { type: 'button', class: 'photo-thumb pcal-photo__b', 'data-photo': p.id, title: (p.caption || 'Result photo') + ': open' },
+        el('img', { src: p.thumbUrl, alt: p.caption || 'Result photo', width: '160', height: '120' }));
+      b.addEventListener('click', () => IL.photos.view(p, { list, from: b }));
+      return el('figure', { class: 'pcal-photo' }, b, el('figcaption', { text: p.caption || (isNum(p.doseSteps) ? turnAdj(p.doseSteps) + ' dots' : 'Result photo') }));
+    }) : el('p', { class: 'muted', id: 'pcal-photos-none', text: 'No result photo: the top camera gave no frame.' })));
+  }
+
   /** A decision check in words when the engine gave none (§7.6: key, predicted, measured, limit). */
   const CHECK_WORD = {
     optical: (k) => 'Camera checks on the blank' + (k.measured ? ': ' + k.measured : ''),
@@ -1227,7 +1728,7 @@
     validated: () => 'No validated pad type is changed',
   };
   const checkText = (k) => k.text || (CHECK_WORD[k.key] ? CHECK_WORD[k.key](k) : [k.key, k.measured, k.limit].filter(Boolean).join(': '));
-  const OUT_KIND = { characterized: 'ok', partly: 'need', provisional: 'need', measured: 'ok', stopped: 'block', cancelled: 'need', failed: 'block' };
+  const OUT_KIND = { characterized: 'ok', partly: 'need', provisional: 'need', measured: 'ok', stopped: 'block', cancelled: 'need', failed: 'block', question: 'need', 'not-found': 'block' };
   /** "Characterized 14:05: SW … planned again." → the verdict and its time in bold, the rest as the sentence goes on. */
   function headSplit(t) {
     const m = /^(\S+(?: \S+)? \d\d:\d\d(?: during [^:]+)?:)(\s[\s\S]*)$/.exec(String(t || ''));
@@ -1243,7 +1744,8 @@
         res.control && res.control.drift ? el('div', { class: 'ri__d', text: IL.cap(res.control.drift) + '.' }) : null,
         res.planError ? el('div', { class: 'ri__d', text: 'Not planned again: ' + res.planError }) : null,
         Array.from(new Set(j.warnings || [])).slice(0, 3).map((w) => el('div', { class: 'ri__d', text: IL.cap(w) + '.' })))]);
-    IL.keyed($('pcal-groups'), JSON.stringify(res.groups), () => (res.groups || []).map((g) => {
+    const gkey = JSON.stringify((res.groups || []).map((g) => Object.assign({}, g, { calibrationLabel: undefined, calibrationLabelAuto: undefined, photos: undefined })));
+    IL.keyed($('pcal-groups'), gkey, () => (res.groups || []).map((g) => {
       const ok = g.outcome === 'characterized';
       const checks = g.checks || [];
       return el('li', { 'data-group': g.group, 'data-outcome': g.outcome || '' },
@@ -1262,8 +1764,15 @@
         checks.length ? el('ul', { class: 'pcal__checks' }, checks.slice().sort((a, b) => (a.ok ? 1 : 0) - (b.ok ? 1 : 0)).map((k) => el('li', { class: k.ok ? null : 'bad', 'data-check': k.key },
           IL.glyph(k.ok ? 'ok' : 'block', 'xs'), el('span', { text: checkText(k) })))) : null);
     }));
+    IL.show($('pcal-groups'), !j.measure);
+    for (const li of $('pcal-groups').children) {
+      const g = (res.groups || []).find((x) => x.group === li.dataset.group);
+      if (g) renderLabel(li, g, j);
+    }
+    renderResultPhotos(res);
     // the blank's crops (first, median, last of each dose); the coupons' only when the blank has none
     const all = res.crops || [];
+    IL.show($('pcal-crops-box'), all.length > 0 || !j.measure);
     const blankCrops = all.filter((c) => !c.weigh);
     const crops = (blankCrops.length ? blankCrops : all).slice(0, 9);
     const ck = JSON.stringify(crops.map((c) => c.id));
@@ -1291,6 +1800,14 @@
     IL.ssSet(LOADED_KEY, done.concat([j.id]).slice(-10));
     if (!S.plan || S.plan.planId !== j.result.newPlanId) IL.loadPlan(j.result.newPlanId);
     if (IL.pcr && IL.pcr.loadPadTypes) IL.pcr.loadPadTypes();
+    refresh();
+  });
+  /** A measure that ended (§22.3): the tip's landing or dot table changed, so the check and the library are read again. */
+  IL.on('status', (s) => {
+    const j = job(s);
+    if (!j || !j.measure || ACTIVE.has(j.state) || C.refreshedJob === j.id) return;
+    C.refreshedJob = j.id;
+    if (IL.tips) IL.tips.load();
     refresh();
   });
   /** A job that this tab did not see start (a reload, a second browser): show it in the view. */

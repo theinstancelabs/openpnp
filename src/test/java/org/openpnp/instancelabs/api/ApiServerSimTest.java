@@ -233,7 +233,8 @@ public class ApiServerSimTest {
         assertTrue(index.body.contains("id=\"btn-stop\""));
         // the web UI: core + one module per workspace (index.html loads every one of them)
         for (String f : new String[] {"app.js", "app.css", "favicon.svg", "core.js", "boardview.js", "run.js", "run.css",
-                "setup.js", "setup.css", "profile.js", "profile.css", "calibrate.js", "records.js"}) {
+                "setup.js", "setup.css", "profile.js", "profile.css", "calibrate.js", "records.js", "tipsetup.js",
+                "tipsetup.css"}) {
             Res r = get("/static/" + f);
             assertEquals(200, r.status, f);
             assertFalse(r.body.isEmpty(), f);

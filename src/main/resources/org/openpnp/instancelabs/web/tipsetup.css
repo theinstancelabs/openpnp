@@ -133,3 +133,55 @@ details.menu[open] > summary .ic { transform: rotate(-90deg); }
 @media (max-width: 1100px) {
   .tip-grid { grid-template-columns: minmax(150px, 180px) minmax(0, 1fr); }
 }
+
+/* ------------------------------------------------------------------ Profile: the mounted tip, By tip, Other tips */
+#pf-h1-sub { display: inline-flex; align-items: center; gap: 8px; vertical-align: middle; }
+#pf-h1-sub .tip-thumb { align-self: center; }
+.pf-tip-change { font-size: 14px; }
+.pt-tips { margin-left: 8px; height: 22px; padding: 0 8px; border: 1px solid var(--line-2); border-radius: var(--r-pill); background: var(--tile);
+  color: var(--accent-ink); font: 650 12px/1 var(--font-ui); cursor: pointer; vertical-align: 1px; white-space: nowrap; }
+.pt-tips:hover { border-color: var(--accent); }
+.pt-standin { font-size: 12px; color: var(--ink-2); margin-top: 4px; line-height: 1.3; }
+.pt-bytip__wrap { overflow-x: auto; }
+.pt-bytip__t { width: 100%; }
+.pt-bytip__t th, .pt-bytip__t td { vertical-align: top; }
+.pt-bytip__h { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; text-transform: none; letter-spacing: 0; }
+.pt-bytip__hn { font-weight: 700; color: var(--ink); }
+.pt-bytip__none { font-size: 13px; }
+.pt-bt { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 4px 6px; margin: -4px -6px; border: 1px solid transparent; border-radius: var(--r-sm);
+  background: none; cursor: pointer; text-align: left; color: var(--ink); font: inherit; }
+.pt-bt:hover, .pt-bt:focus-visible { border-color: var(--line-2); background: var(--tile); }
+.pt-bt__l { font-size: 12px; color: var(--ink-2); line-height: 1.3; max-width: 260px; }
+.pt-side-tips { display: flex; flex-direction: column; gap: 8px; margin: 14px 0 6px; }
+.pt-side-tips:empty { display: none; }
+.pt-tip { padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-md); display: flex; flex-direction: column; gap: 4px; background: var(--surface); }
+.pt-tip__h { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.pt-tip__l, .pt-tip__p, .pt-tip__note { font-size: 13px; color: var(--ink-2); line-height: 1.35; overflow-wrap: anywhere; }
+.pt-tip__a { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pt-tip__none { margin: 0; font-size: 13.5px; }
+.pt-hist__tools { padding: 0 24px 4px; }
+.su-frame-q { display: flex; gap: 12px; align-items: flex-start; }
+.su-frame-q[hidden] { display: none; }
+.su-frame-q__t { display: flex; flex-direction: column; gap: 6px; }
+
+/* ------------------------------------------------------------------ Records: pad calibrations */
+.rec-pcals td { vertical-align: top; }
+.rec-label__t { font-weight: 600; overflow-wrap: anywhere; line-height: 1.35; }
+.rec-label__s { font-size: 12.5px; color: var(--ink-2); margin-top: 2px; }
+.rec-thumbs { display: inline-flex; gap: 4px; }
+.rec-thumb { width: 40px; height: 30px; }
+.rec-thumb--more { font-size: 12px; }
+.rec-photos { display: flex; flex-direction: column; gap: 12px; }
+.rec-photo { margin: 0; display: flex; flex-direction: column; gap: 4px; }
+.rec-photo__b { width: 100%; height: auto; aspect-ratio: 4 / 3; }
+.rec-photo figcaption { font-size: 12.5px; color: var(--ink-2); }
+.rec-label-ed { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; }
+.rec-label__in { min-height: 60px; resize: vertical; }
+.rec-upload { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; }
+.rec-pcal-acts:empty { display: none; }
+.rec-cals-old { margin-top: 14px; }
+.rec-cals-old > summary .rec-sum { margin-left: 10px; font-weight: 500; color: var(--ink-3); }
+
+/* ------------------------------------------------------------------ Run: the tip in the run confirm and the recipe token */
+#run-confirm-tip .tip-thumb { flex: none; }
+.recipe .recipe__tip { color: var(--ink-2); }

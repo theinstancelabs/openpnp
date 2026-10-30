@@ -246,13 +246,15 @@ async function weighCoupon(page, place) {
     s = await status(page);
     const nd = s.dispense.needle;
     const bzMid = Number(bz((bx0 + bx1) / 2, (by0 + by1) / 2).toFixed(3));
+    // needle values carry the needle change they were taken after, pad-type writes the tip setup (§22.3)
+    const token = nd.changedAtMs === undefined ? null : nd.changedAtMs;
     if (!nd.anchored || !nd.anchor || Math.abs(nd.anchor.surfaceZMm - bzMid) > 0.5 || !nd.touchedOff) {
-      await api(page, 'POST', '/api/needle/anchor', { surfaceZ: bzMid, needleContactRawSum: 65.59, note: 'pad-profile test (SIM)' });
-      await api(page, 'POST', '/api/needle/offset', { offsetMm: -2.59, note: 'pad-profile test (SIM)' });
+      await api(page, 'POST', '/api/needle/anchor', { surfaceZ: bzMid, needleContactRawSum: 65.59, note: 'pad-profile test (SIM)', needleChangedAtMs: token });
+      await api(page, 'POST', '/api/needle/offset', { offsetMm: -2.59, note: 'pad-profile test (SIM)', needleChangedAtMs: token });
     }
     await api(page, 'POST', '/api/screw/start-angle', { note: 'pad-profile test (SIM)' });
     const chip = await api(page, 'GET', '/api/pad-types/chip-0603');
-    if (!['characterized', 'validated'].includes(chip.current.status)) await api(page, 'PUT', '/api/pad-types/chip-0603', { status: 'characterized' });
+    if (!['characterized', 'validated'].includes(chip.current.status)) await api(page, 'PUT', '/api/pad-types/chip-0603', { status: 'characterized', forSetup: s.dispense.tip.key });
     await page.evaluate(() => { IL.attest.set('regulator', IL.S.status.dispense.profile.pressurePsi); IL.attest.set('paste-life', true); });
     check('(0) set-up: SIM-only shortened calibration accepted, places, blank and area set', true);
 

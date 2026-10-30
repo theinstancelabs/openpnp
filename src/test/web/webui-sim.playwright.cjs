@@ -144,7 +144,7 @@ async function runFirstDots(page, n) {
   await page.waitForSelector('#dlg-run', { timeout: 10000 });
   const shown = { psi: await textOf(page, 'run-confirm-psi'), test: await textOf(page, 'run-test-line'),
     goBefore: await textOf(page, 'btn-run-go'), goDisabled: await page.isDisabled('#btn-run-go') };
-  for (const t of ['#run-tick-gauge', '#run-tick-paste', '#run-tick-hands']) if (!(await page.isChecked(t))) await page.check(t);
+  for (const t of ['#run-tick-gauge', '#run-tick-tip', '#run-tick-paste', '#run-tick-hands']) if (!(await page.isChecked(t))) await page.check(t);
   await page.waitForSelector('#btn-run-go:enabled', { timeout: 10000 });
   shown.go = await textOf(page, 'btn-run-go');
   await page.click('#btn-run-go');
@@ -683,7 +683,7 @@ async function runFirstDots(page, n) {
     await page.click('#btn-run');
     await page.waitForSelector('#dlg-run', { timeout: 10000 });
     check('Finish 140 pads left: the confirm names them', /Dispense the 140 pads left\?/.test(await textOf(page, 'dlg-run-t')), await textOf(page, 'dlg-run-t'));
-    for (const t of ['#run-tick-gauge', '#run-tick-paste', '#run-tick-hands']) if (!(await page.isChecked(t))) await page.check(t);
+    for (const t of ['#run-tick-gauge', '#run-tick-tip', '#run-tick-paste', '#run-tick-hands']) if (!(await page.isChecked(t))) await page.check(t);
     await page.waitForSelector('#btn-run-go:enabled', { timeout: 10000 });
     await page.click('#btn-run-go');
     await page.waitForSelector('#dlg-run', { state: 'detached', timeout: 15000 });
@@ -1104,7 +1104,7 @@ async function runFirstDots(page, n) {
         /^Homes first/.test(hf) && /2 N1 touches .*check Z/.test(hf), hf);
       await page.screenshot({ path: path.join(OUT, 'run-confirm-home-first.png') });
       g1 = gcodeNext();
-      for (const t of ['#run-tick-gauge', '#run-tick-paste', '#run-tick-hands']) if (!(await page.isChecked(t))) await page.check(t);
+      for (const t of ['#run-tick-gauge', '#run-tick-tip', '#run-tick-paste', '#run-tick-hands']) if (!(await page.isChecked(t))) await page.check(t);
       await page.waitForSelector('#btn-run-go:enabled', { timeout: 10000 });
       await page.click('#btn-run-go');
       await page.waitForSelector('#dlg-run', { state: 'detached', timeout: 15000 });
