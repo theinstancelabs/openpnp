@@ -160,6 +160,13 @@ details.menu[open] > summary .ic { transform: rotate(-90deg); }
 .pt-tip__a { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .pt-tip__none { margin: 0; font-size: 13.5px; }
 .pt-hist__tools { padding: 0 24px 4px; }
+/* Profile › Pad types in this plan (the narrow side panel): the name has the row's width, the pad count goes under it
+   (a long name squeezed beside the count ran over it) */
+.pt-plan .pt-plan__i { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; column-gap: 10px; row-gap: 1px; }
+.pt-plan .pt-plan__i > :first-child { grid-row: 1 / span 2; }
+.pt-plan .pt-plan__n { grid-column: 2; overflow-wrap: break-word; }
+.pt-plan .pt-plan__v { grid-column: 2; white-space: normal; }
+.pt-plan .pt-plan__i > .ic { grid-column: 3; grid-row: 1 / span 2; }
 /* the history's Tip column made the table wider than 1000 px: a wide screen shows it whole (narrower ones scroll it) */
 #dlg-history { width: min(1360px, calc(100vw - 48px)); }
 .su-frame-q { display: flex; gap: 12px; align-items: flex-start; }
