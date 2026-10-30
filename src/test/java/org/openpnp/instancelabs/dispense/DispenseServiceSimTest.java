@@ -15,6 +15,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.openpnp.instancelabs.vision.Dot;
+import org.openpnp.instancelabs.vision.SpotDot;
 import org.openpnp.model.Configuration;
 import org.openpnp.model.LengthUnit;
 import org.openpnp.model.Location;
@@ -577,6 +578,86 @@ public class DispenseServiceSimTest {
         RunResult shots = svc.runShots("waste", 360, 3, true).get(60, TimeUnit.SECONDS);
         assertEquals(RunResult.Status.OK, shots.status, shots.toString());
         assertEquals(3, shots.dotsDone);
+    }
+
+    /**
+     * F9: a camera that finds the touch-off's dots at their spots, but the dots at gaps 0.075 and 0.050 joined by a
+     * thick neck. It keeps what the engine asked: the cut, the spot radius and the spots of each frame.
+     */
+    static final class StrungImager implements DotImager {
+        final List<List<double[]>> spots = new ArrayList<>();
+        double cutMm, radiusMm;
+
+        @Override
+        public boolean isAvailable() {
+            return true;
+        }
+
+        @Override
+        public Frame capture(double x, double y) {
+            return new Frame(null, 0.01, 0.01, x, y);
+        }
+
+        @Override
+        public List<Dot> inspect(Frame before, Frame after) {
+            throw new AssertionError("the touch-off finds its dots at their spots");
+        }
+
+        @Override
+        public List<SpotDot> inspectSpots(Frame before, Frame after, List<double[]> s, double cut, double radius) {
+            spots.add(s);
+            cutMm = cut;
+            radiusMm = radius;
+            List<SpotDot> l = new ArrayList<>();
+            for (int j = 0; j < s.size(); j++) {
+                l.add(j == 2 || j == 3 ? SpotDot.unmeasured("joined to the paste at another spot", Arrays.asList(5 - j))
+                        : SpotDot.dot(new Dot(s.get(j)[0], s.get(j)[1], 0.62, 0.3, 0.9)));
+            }
+            return l;
+        }
+    }
+
+    /**
+     * F9 + F14 on the SIM machine: strung dots refuse the touch-off's conclusion (nothing recorded or applied), each
+     * frame measures its dot among its neighbours a pitch apart with the strings cut off at 0.45 x the dot, and a
+     * pitch with no room between the dots is refused before anything moves.
+     */
+    @Test
+    public void touchOffRefusesStrungDotsAndATightPitch() throws Exception {
+        StrungImager cam = new StrungImager();
+        svc.setDotImager(cam);
+        double offset = svc.getConfig().needleZOffsetMm;
+        int rows = svc.getDb().query("SELECT id FROM needle_touchoff").size();
+        DispenseService.TouchOffResult t = svc.runNeedleTouchOff(new NeedleTouchOff.Request(), true)
+                .get(60, TimeUnit.SECONDS);
+        assertEquals(RunResult.Status.OK, t.run.status, t.run.toString());
+        assertFalse(t.analysis.found());
+        assertEquals("dots touch or are strung together: the paste at gap 0.075 mm is joined to the dot at gap 0.050 mm; "
+                + "use a larger pitch", t.run.message);
+        assertFalse(t.applied);
+        assertEquals(null, t.newOffsetMm);
+        assertEquals(offset, svc.getConfig().needleZOffsetMm, 1e-12, "the offset is kept");
+        assertEquals(rows, svc.getDb().query("SELECT id FROM needle_touchoff").size(), "nothing recorded");
+        assertEquals(0.45 * 1.16, cam.cutMm, 1e-9);
+        assertEquals(0.8, cam.radiusMm, 1e-9, "half the default pitch of 1.6 mm");
+        assertEquals(6, cam.spots.size(), "one frame per dot");
+        for (int i = 0; i < 6; i++) {
+            for (int j = 0; j < 6; j++) {
+                assertEquals((j - i) * 1.6, cam.spots.get(i).get(j)[0], 1e-9, "frame " + i + ", spot " + j);
+                assertEquals(0, cam.spots.get(i).get(j)[1], 1e-9);
+            }
+        }
+
+        // F14: 1.0 mm leaves no room between half-turn dots: refused before the pressure or any move
+        sim.server.mark();
+        NeedleTouchOff.Request tight = new NeedleTouchOff.Request();
+        tight.pitchMm = 1.0;
+        RunResult r = svc.runNeedleTouchOff(tight, true).get(60, TimeUnit.SECONDS).run;
+        assertEquals(RunResult.Status.REFUSED, r.status, r.toString());
+        assertEquals(NeedleTouchOff.pitchProblem(tight, svc.getConfig()), r.message);
+        for (String l : sim.server.sinceMark()) {
+            assertFalse(l.startsWith("M106") || l.startsWith("G1") || l.startsWith("G0"), "nothing sent: " + l);
+        }
     }
 
     static double primeRawZ(List<String> sent) {

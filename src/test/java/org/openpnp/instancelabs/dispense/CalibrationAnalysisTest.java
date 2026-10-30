@@ -11,6 +11,7 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.openpnp.instancelabs.vision.Dot;
+import org.openpnp.instancelabs.vision.SpotDot;
 
 /** Pure parts of the dot-ladder and needle touch-off calibrations, and the I9 test-dot check. */
 public class CalibrationAnalysisTest {
@@ -50,7 +51,109 @@ public class CalibrationAnalysisTest {
         assertEquals(6, l.size());
         assertEquals(1.5 - 0.2 + 0.125, l.get(0).dispenseZ, 1e-12);
         assertEquals(1.5 - 0.2 + 0.0, l.get(5).dispenseZ, 1e-12);
-        assertEquals(10 + 5 * 1.5, l.get(5).x, 1e-12);
+        assertEquals(1.6, req.pitchMm, 1e-12, "F14: the default pitch");
+        assertEquals(10 + 5 * 1.6, l.get(5).x, 1e-12);
+    }
+
+    /**
+     * F14: the touch-off's pitch leaves room between the dots (the expected dot diameter + 0.4 mm): half-turn dots
+     * (~1.07 mm on the real machine, 1.16 mm in the dose model) merged at 1.0 mm and stood apart at 1.6 mm.
+     */
+    @Test
+    public void touchOffPitchLeavesRoomBetweenTheDots() {
+        DispenseConfig c = new DispenseConfig();
+        NeedleTouchOff.Request req = new NeedleTouchOff.Request();
+        assertEquals(800, c.profile.netStepsPerDot, "the profile's half-turn dot");
+        assertEquals(1.16, NeedleTouchOff.expectedDotDiameterMm(req, c), 1e-9);
+        assertEquals(1.56, NeedleTouchOff.minPitchMm(req, c), 1e-9);
+        assertNull(NeedleTouchOff.pitchProblem(req, c), "1.6 mm");
+        assertEquals(1.6, NeedleTouchOff.defaultPitchMm(req, c), 1e-9);
+        req.pitchMm = 1.0;
+        assertEquals("the touch-off pitch 1.00 mm is too small for these dots: a half-turn dot is about 1.16 mm across, "
+                + "so dots 1.00 mm apart touch or string together and cannot be measured; use a pitch of at least "
+                + "1.56 mm (the dot + 0.40 mm)", NeedleTouchOff.pitchProblem(req, c));
+        req.pitchMm = 1.56;
+        assertNull(NeedleTouchOff.pitchProblem(req, c), "the bound itself");
+        // a one-turn dot (360 deg of B) is 1.345 mm: at least 1.745 mm, and the default grows to 1.75 mm
+        req.rotationDeg = 1600 / c.bStepsPerDeg;
+        req.pitchMm = 1.6;
+        assertTrue(NeedleTouchOff.pitchProblem(req, c).contains("use a pitch of at least 1.75 mm"),
+                NeedleTouchOff.pitchProblem(req, c));
+        assertEquals(1.75, NeedleTouchOff.defaultPitchMm(req, c), 1e-9);
+        // the disc that cuts the strings: 0.45 x the expected dot, 0.52 mm for a half turn (real strings 0.28-0.36 mm)
+        assertEquals(0.522, NeedleTouchOff.cutMm(1.16), 1e-9);
+    }
+
+    /**
+     * F9: paste at a dot's spot that could not be measured (joined to a neighbour, strings) is not "no dot": before
+     * the contact it refuses the conclusion; after it, the contact stands.
+     */
+    @Test
+    public void touchOffRefusesOnPasteItCannotMeasure() {
+        double[] g = {0.125, 0.100, 0.075, 0.050, 0.025, 0.000};
+        Double[] d = {0.62, 0.63, null, null, 1.05, null};
+        String[] u = {null, null, "joined to the dot at gap 0.050 mm", "joined to the dot at gap 0.075 mm", null,
+            null};
+        NeedleTouchOff.Analysis a = NeedleTouchOff.analyze(g, d, u, 0.25);
+        assertFalse(a.found());
+        assertEquals("dots touch or are strung together: the paste at gap 0.075 mm is joined to the dot at gap 0.050 mm; "
+                + "use a larger pitch", a.reason);
+        assertTrue(a.reason.startsWith(NeedleTouchOff.STRUNG));
+        assertEquals(Arrays.asList("dot", "dot", "unmeasured", "unmeasured", "dot", "none"), Arrays.asList(a.dotStates));
+        assertEquals(0.625, a.referenceDiameterMm, 1e-12);
+        // the same paste read as "no dot", as before F9: contact between 0.100 and 0.075
+        assertEquals(0.0875, NeedleTouchOff.analyze(g, d, 0.25).contactGapMm, 1e-12);
+        // in the reference, too
+        String[] first = {"no dot, only strings or a smear (0.10 mm²)", null, null, null, null, null};
+        NeedleTouchOff.Analysis top = NeedleTouchOff.analyze(g, new Double[] {null, 0.6, 0.6, 0.6, 0.6, 0.6}, first,
+                0.25);
+        assertEquals("dots touch or are strung together: the paste at gap 0.125 mm is no dot, only strings or a smear "
+                + "(0.10 mm²); use a larger pitch", top.reason);
+        // after the contact (squashed at 0.050) unmeasured paste does not matter: squashed dots touch more easily
+        Double[] squash = {0.62, 0.63, 0.61, 0.95, null, null};
+        String[] after = {null, null, null, null, "joined to the dot at gap 0.000 mm", "joined to the dot at gap "
+                + "0.025 mm"};
+        NeedleTouchOff.Analysis c = NeedleTouchOff.analyze(g, squash, after, 0.25);
+        assertTrue(c.found(), c.reason);
+        assertEquals(0.0625, c.contactGapMm, 1e-12);
+    }
+
+    /**
+     * The first two dots are the reference only when both formed and they agree (the real ladder's first dot was a
+     * 0.37 mm droplet: dots laid too high miss, and the next one carries their paste).
+     */
+    @Test
+    public void touchOffReferenceDotsMustFormAndAgree() {
+        double[] g = {0.45, 0.40, 0.35, 0.30, 0.25};
+        NeedleTouchOff.Analysis a = NeedleTouchOff.analyze(g, new Double[] {0.373, 1.00, 1.02, 0.98, 1.01}, 0.25);
+        assertFalse(a.found(), "not contact between 0.45 and 0.40: " + a.reason);
+        assertEquals("the first two dots differ too much to be the reference (0.373 mm at gap 0.450, 1.000 mm at gap "
+                + "0.400: more than 25 %): the dots far from the surface did not form evenly, or the needle reached "
+                + "the surface at once; run the ladder again from another start gap", a.reason);
+        // a droplet, then nothing, then the paste both left on the needle: no contact at 0.425 either
+        NeedleTouchOff.Analysis b = NeedleTouchOff.analyze(g, new Double[] {0.373, null, 1.5, 1.0, 1.0}, 0.25);
+        assertFalse(b.found(), b.reason);
+        assertEquals("only the first dot formed before a missing one (0.373 mm at gap 0.450, none at gap 0.400): a "
+                + "contact needs two steady dots before it (the first may be a droplet from too high); run the ladder "
+                + "again from another start gap", b.reason);
+        // two steady dots, then none: the contact
+        assertEquals(0.375, NeedleTouchOff.analyze(g, new Double[] {1.0, 1.02, null, null, null}, 0.25).contactGapMm,
+                1e-12);
+    }
+
+    /** What the camera saw at each spot, as the analysis reads it: the joined dots named by their gaps. */
+    @Test
+    public void touchOffAnalysisOfTheSpots() {
+        double[] g = {0.10, 0.075, 0.05, 0.025};
+        List<SpotDot> seen = Arrays.asList(SpotDot.dot(new Dot(0, 0, 0.62, 0.3, 0.9)), SpotDot.dot(new Dot(0, 0, 0.63,
+                0.31, 0.9)), SpotDot.unmeasured("joined to the paste at another spot", Arrays.asList(3)),
+                SpotDot.none());
+        NeedleTouchOff.Analysis a = NeedleTouchOff.analyze(g, seen, 0.25);
+        assertEquals(Arrays.asList(0.62, 0.63, null, null), Arrays.asList(a.diametersMm));
+        assertEquals("joined to the dot at gap 0.025 mm", a.dotNotes[2]);
+        assertEquals(Arrays.asList("dot", "dot", "unmeasured", "none"), Arrays.asList(a.dotStates));
+        assertTrue(a.reason.startsWith("dots touch or are strung together: the paste at gap 0.050 mm is joined"),
+                a.reason);
     }
 
     /**
@@ -76,12 +179,12 @@ public class CalibrationAnalysisTest {
             double surface = 5.95 + slope * (l.get(i).x - 340);
             assertEquals(g[i], l.get(i).dispenseZ - c.needleZOffsetMm - surface, 1e-9, "gap of dot " + i);
         }
-        // flat layout for comparison: the real gap step is 0.025 - 1.5 * 0.0092 = 0.0112 mm
+        // flat layout for comparison: the real gap step is 0.025 - 1.6 * 0.0092 = 0.0103 mm
         List<GcodeStreamBuilder.DotSpec> flat = NeedleTouchOff.layout(req, new DispenseConfig.NamedLocation(350, 233.5,
                 5.86), c, null);
         double realStep = (flat.get(0).dispenseZ - (5.95 + slope * (flat.get(0).x - 340)))
                 - (flat.get(1).dispenseZ - (5.95 + slope * (flat.get(1).x - 340)));
-        assertEquals(0.025 + 1.5 * slope, realStep, 1e-9);
+        assertEquals(0.025 + req.pitchMm * slope, realStep, 1e-9);
         // the dot ladder follows the plane too
         DotLadderCalibration.Request dl = new DotLadderCalibration.Request();
         for (GcodeStreamBuilder.DotSpec d : DotLadderCalibration.layout(dl, new DispenseConfig.NamedLocation(350, 233.5,

@@ -28,6 +28,7 @@ import org.openpnp.instancelabs.sim.SimGuard;
 import org.openpnp.instancelabs.vision.BareSpotCheck;
 import org.openpnp.instancelabs.vision.Dot;
 import org.openpnp.instancelabs.vision.FiducialLocator;
+import org.openpnp.instancelabs.vision.SpotDot;
 import org.openpnp.machine.reference.ReferenceMachine;
 import org.openpnp.machine.reference.axis.ReferenceControllerAxis;
 import org.openpnp.machine.reference.driver.GcodeDriver;
@@ -1214,7 +1215,11 @@ public final class DispenseService {
         public RunResult run;
     }
 
-    /** Needle touch-off by dot ladder at stepped gaps (plan §6.1). Applies the new offset if found and asked. */
+    /**
+     * Needle touch-off by dot ladder at stepped gaps (plan §6.1). Applies the new offset if found and asked. Each dot
+     * is found at its spot with the strings cut off; paste at a spot that is not one dot refuses the conclusion
+     * ({@link NeedleTouchOff#analyze}). A pitch with no room between the dots is refused before anything is sent.
+     */
     public Future<TouchOffResult> runNeedleTouchOff(NeedleTouchOff.Request req, boolean apply) throws Exception {
         requireAvailable();
         String blankName = req.locationName == null ? cfg.blankLocationName : req.locationName;
@@ -1224,6 +1229,11 @@ public final class DispenseService {
         res.run = r;
         return submitResult(r, res, () -> {
             DispenseConfig c = cfg;
+            String pitch = NeedleTouchOff.pitchProblem(req, c);
+            if (pitch != null) {
+                throw refused(pitch);
+            }
+            double dotMm = NeedleTouchOff.expectedDotDiameterMm(req, c);
             Session s = new Session(c, r);
             SurfacePlane plane = planeOf(c, blankName);
             if (Double.isNaN(req.rotationDeg)) {
@@ -1243,16 +1253,13 @@ public final class DispenseService {
             if (!s.preflight(scope, p.estimatedPressurisedSeconds)) {
                 return;
             }
-            List<Dot> found = s.imageDots(specs, req.primeAtWaste, primeExtra, req.pitchMm / 2);
-            double[] gaps = NeedleTouchOff.gaps(req);
-            Double[] d = new Double[gaps.length];
-            for (int i = 0; i < d.length; i++) {
-                d[i] = found.get(i) == null ? null : found.get(i).diameterMm;
-            }
-            res.analysis = NeedleTouchOff.analyze(gaps, d, req.jumpRatio);
+            List<SpotDot> seen = s.imageSpots(specs, req.primeAtWaste, primeExtra, NeedleTouchOff.cutMm(dotMm),
+                    req.pitchMm / 2);
+            res.analysis = NeedleTouchOff.analyze(NeedleTouchOff.gaps(req), seen, req.jumpRatio);
             res.previousOffsetMm = c.needleZOffsetMm;
             java.util.Map<String, Object> det = new java.util.LinkedHashMap<>();
             det.put("analysis", res.analysis);
+            det.put("pitchMm", req.pitchMm);
             det.put("blank", blankName);
             det.put("blankPlane", plane == null ? null : java.util.Arrays.asList(plane.a, plane.b, plane.c));
             det.put("blankPlaneMaxResidualMm", plane == null ? null : plane.maxAbsResidualMm);
@@ -3573,6 +3580,11 @@ public final class DispenseService {
         }
     };
 
+    /** What one before/after pair of a calibration dot gives (the dot nearest the centre, the dot at its spot). */
+    private interface FrameMeasure<T> {
+        T of(DotImager im, int i, DotImager.Frame before, DotImager.Frame after) throws Exception;
+    }
+
     /** One task on the machine thread: OpenPnP motion settled, mapper, channel, executor. */
     private final class Session {
         final DispenseConfig c;
@@ -3714,6 +3726,28 @@ public final class DispenseService {
         /** Before/after images of every spec around one pressure session; returns the dot per spec. */
         List<Dot> imageDots(List<GcodeStreamBuilder.DotSpec> specs, boolean primeAtWaste, double primeExtra,
                 double radius) throws Exception {
+            return imageEach(specs, primeAtWaste, primeExtra, (im, i, before, after) -> TestDotCheck.nearest(
+                    im.inspect(before, after), radius));
+        }
+
+        /**
+         * As {@link #imageDots}, each dot found at its spot with the strings cut off ({@link DotImager#inspectSpots}):
+         * the frame of dot i is centred on it, the other dots are its neighbours there.
+         */
+        List<SpotDot> imageSpots(List<GcodeStreamBuilder.DotSpec> specs, boolean primeAtWaste, double primeExtra,
+                double cutMm, double radiusMm) throws Exception {
+            return imageEach(specs, primeAtWaste, primeExtra, (im, i, before, after) -> {
+                List<double[]> spots = new ArrayList<>();
+                for (GcodeStreamBuilder.DotSpec d : specs) {
+                    spots.add(new double[] {d.x - specs.get(i).x, d.y - specs.get(i).y});
+                }
+                return im.inspectSpots(before, after, spots, cutMm, radiusMm).get(i);
+            });
+        }
+
+        /** Before images of every spec, one pressure session, then each spec's after image and its measure. */
+        private <T> List<T> imageEach(List<GcodeStreamBuilder.DotSpec> specs, boolean primeAtWaste, double primeExtra,
+                FrameMeasure<T> measure) throws Exception {
             DotImager im = imager();
             if (im == null || !im.isAvailable()) {
                 throw new IllegalStateException("no top camera / dot vision available");
@@ -3726,10 +3760,10 @@ public final class DispenseService {
             runSegment(() -> GcodeStreamBuilder.forDots(c, mapper, specs, bZeroed.get(), keepalive, primeAtWaste,
                     primeExtra, "calibration dots"), "dispensing calibration dots");
             phase(r, "after images");
-            List<Dot> found = new ArrayList<>();
+            List<T> found = new ArrayList<>();
             for (int i = 0; i < specs.size(); i++) {
                 DotImager.Frame after = im.capture(specs.get(i).x, specs.get(i).y);
-                found.add(TestDotCheck.nearest(im.inspect(before.get(i), after), radius));
+                found.add(measure.of(im, i, before.get(i), after));
             }
             return found;
         }

@@ -786,6 +786,14 @@ public class RegistrationSimTest {
         org.openpnp.instancelabs.dispense.DispenseConfig noAnchor = svc.getConfig();
         noAnchor.needleAnchor = null;
         assertEquals(null, DispenseService.boardZProblem(noAnchor, 0.0), "nothing to compare without a needle frame");
+        // F14: a touch-off pitch with no room between half-turn dots (1.0 mm merged them on the machine)
+        sim.server.mark();
+        Res tight = post("/api/calibrations/touch-off", "{\"pitchMm\":1.0}");
+        assertEquals(400, tight.status, tight.toString());
+        assertTrue(tight.body.contains("the touch-off pitch 1.00 mm is too small for these dots: a half-turn dot is "
+                + "about 1.16 mm across") && tight.body.contains("use a pitch of at least 1.56 mm"), tight.toString());
+        assertFalse(commands(sim.server.sinceMark()).stream().anyMatch(x -> x.startsWith("G") || x.startsWith("M106")),
+                "nothing moved or switched on");
         // a task queued while the machine is stopped ends refused and does not stay busy (§2.7)
         sim.machine.setEnabled(false);
         org.openpnp.instancelabs.dispense.RunResult r = svc.checkZ().get(30, java.util.concurrent.TimeUnit.SECONDS);
