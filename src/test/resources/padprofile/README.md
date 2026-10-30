@@ -26,6 +26,16 @@ Attribution and notices:
 - Changes: only the pad data listed above was extracted, by `extract_pads.py`; positions are moved to
   the board frame below.
 
+`padcal.kicad_pcb` is not taken from a design: it is PROFILE_CALIBRATION_DESIGN.md §14.3's test board written as a
+KiCad 9 file for the browser test (`src/test/web/pad-profile.playwright.cjs`) and the sim acceptance. 46 × 30 mm
+(Edge.Cuts from (100, 100) to (146, 130) in KiCad's frame), three 1 mm fiducials (FID1 2.5, 27.5; FID2 43.5, 27.5;
+FID3 43.5, 2.5 in the board frame), all parts on top: R1–R4 `R_0603_1608Metric` (0.80 × 0.95 mm, 50 % round, at
+±0.825 mm), T1 `TestChip_A` (the same pads), J1–J2 `SW_SPST_3.9x2.9mm` (0.864 × 1.829 mm, 18 % round, at ±2.0 mm),
+Q1–Q3 `Test_Strip_0.62x1.50` (0.62 × 1.50 mm at ±1.0 mm), U1 `WSON-8-1EP_2x2mm_P0.5mm_EP0.9x1.6mm` (eight 0.55 ×
+0.25 mm pins 0.5 mm apart, the 0.9 × 1.6 mm exposed pad), at the positions of `PadCalibrationSimTest.writeBoard` (its
+S1–S3 are not on this board). With chip-0603 characterized its upload preview needs a profile for J, Q and T (new,
+new, use) and the 22G tip cannot dispense U's two groups (`PadProfileUiSimTest`).
+
 ## Format
 
 One JSON object per board: `board`, `source`, `licence`, `generator`, `kicadVersion`, `boardMm`

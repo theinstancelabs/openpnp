@@ -156,7 +156,7 @@
     n.key = el('div', { class: 'bi-key', 'aria-hidden': 'true' },
       el('span', { 'data-k': 'paste' }, el('i', { class: 'bi-sw' }), 'gets paste'),
       el('span', { 'data-k': 'wait' }, el('i', { class: 'bi-sw bi-sw--wait' }), 'pad type to characterize'),
-      el('span', { 'data-k': 'block' }, el('i', { class: 'bi-sw bi-sw--block' }), 'no pad type yet'),
+      el('span', { 'data-k': 'block' }, el('i', { class: 'bi-sw bi-sw--block' }), IL.padProfile ? 'needs a profile' : 'no pad type yet'),   // H-P6
       el('span', { 'data-k': 'none' }, el('i', { class: 'bi-sw bi-sw--dim' }), 'not dispensed'));
     n.found = el('div', { class: 'bi-found', id: 'board-import-found' });
     n.attach = el('div', { class: 'notebox notebox--info bi-attach', id: 'board-import-attach', hidden: true });
@@ -403,7 +403,7 @@
     const out = new Map();
     for (const p of pv.placements || []) {
       const k = pk.get(p.packageId);
-      let o = p.type === 'Fiducial' || p.outcome === 'not-dispensed' ? 'none' : p.outcome === 'no-pad-type' ? 'block' : 'paste';
+      let o = p.type === 'Fiducial' || p.outcome === 'not-dispensed' ? 'none' : p.outcome === 'no-pad-type' || p.outcome === 'needs-profile' ? 'block' : 'paste';
       if (o === 'paste' && k && !k.fiducial) o = blocked(k) ? 'block' : waiting(k) ? 'wait' : 'paste';
       out.set(p.id, o);
     }
@@ -544,6 +544,7 @@
       tr.addEventListener('focus', hi);
       return tr;
     }));
+    if (IL.padProfile) IL.padProfile.importRows(n.pkgs, pv);   // the profile column (PROFILE_CALIBRATION_DESIGN.md §13.7, H-P6)
   }
   /** No pad type for some of the package's pads; its pad types not all characterized yet. */
   const blocked = (p) => !p.fiducial && (!(p.padTypes || []).length || (p.padTypes || []).some((t) => !t.typeKey));
@@ -654,6 +655,22 @@
       IL.pollNow();
     }
   }
+  /**
+   * The name the drawing of board file c is kept under (instancelabs/boards/<slug>/): its earlier drawing's, else the
+   * board's OpenPnP name (else its file name). A name another board holds (an import, the drawing of another board file;
+   * taken: slugs the server answered "exists" for) is never replaced: the next free one is used ("ftp-board-xml-2").
+   */
+  function attachName(c, base, taken) {
+    const files = (IL.run && IL.run.boards && IL.run.boards.files) || [];
+    const own = files.find((x) => x.file === c.file && x.imported && x.imported.how === 'attach' && x.imported.slug);
+    if (own && !taken.includes(own.imported.slug)) return own.imported.slug;
+    const want = !nameProblem(c.name) ? String(c.name).trim() : base.replace(/\.board\.xml$/i, '');
+    const held = new Set(files.filter((x) => x.file !== c.file && x.imported && x.imported.slug).map((x) => x.imported.slug).concat(taken));
+    if (!held.has(slugOf(want))) return want;
+    const stem = (slugOf(want) || 'board').slice(0, 37).replace(/-+$/, '');
+    for (let k = 2; k < 100; k++) if (!held.has(stem + '-' + k)) return stem + '-' + k;
+    return want;
+  }
   async function attach(c) {
     const n = M.n;
     const pv = M.pv;
@@ -661,9 +678,21 @@
     n.refusals.replaceChildren();
     M.state = 'saving';
     paint();
-    const q = query({ file: M.file.name, board: c.file, name: c.name || base.replace(/\.board\.xml$/i, ''), replace: M.attachReplace ? 1 : 0, sha256: pv.file && pv.file.sha256 });
+    const taken = [];
     try {
-      const r = await post('/api/boards/import/attach?' + q, M.file, null);
+      let r = null;
+      while (!r) {
+        const name = attachName(c, base, taken);
+        const q = query({ file: M.file.name, board: c.file, name, replace: M.attachReplace ? 1 : 0, sha256: pv.file && pv.file.sha256 });
+        try {
+          r = await post('/api/boards/import/attach?' + q, M.file, null);
+        } catch (e) {
+          // the name belongs to another board (not in the board list: its folder only): the next free name, at most 3 times
+          const d = e.data || {};
+          if (!(e.status === 409 && d.error === 'exists' && d.exists && d.exists.file && d.exists.file !== c.file && taken.length < 3)) throw e;
+          taken.push(slugOf(name));
+        }
+      }
       if (!M) { IL.toast('The KiCad drawing is now used for ' + base + '.', 'ok'); return; }
       saved(Object.assign({ file: c.file, name: c.name }, r), 'attach', c.name || base);
     } catch (e) {
@@ -671,7 +700,8 @@
       M.state = 'preview';
       paint();
       const d = e.data || {};
-      if (e.status === 409 && d.error === 'exists') {
+      if (e.status === 409 && d.error === 'exists' && !(d.exists && d.exists.file && d.exists.file !== c.file)) {
+        // this board file's own earlier drawing under that name: replacing it is the operator's second press
         M.attachReplace = true;
         IL.toast((d.reason || 'A drawing with this name exists') + ' Press again to replace it.', 'need');
         paintAttach(pv);
@@ -717,12 +747,15 @@
       return el('li', {}, el('div', { class: 'bi-todo__t' }, el('b', { text: typeLabel(t) }),
         el('span', { class: 'muted', text: ' · ' + (t.status ? statusText(t.status) : 'not characterized') + ' · ' + refList(refs, 3) })), b);
     });
+    // with the profile check: the packages that need a profile and their actions instead of "New pad type" (H-P6)
+    const pp = how !== 'attach' && IL.padProfile ? IL.padProfile.importSaved(pv, { file: M.saved.file, name: M.saved.name, leaveTo }) : null;
     n.saved.replaceChildren(...[
       el('div', { class: 'bi-saved__head' }, IL.glyph('ok'), el('div', {}, head)),
-      todo.length ? el('div', { class: 'bi-todo' },
+      pp || null,
+      !pp && todo.length ? el('div', { class: 'bi-todo' },
         el('h3', { text: IL.plural(todo.length, 'package needs', 'packages need') + ' a pad type before ' + (todo.length === 1 ? 'its' : 'their') + ' parts get paste' }),
         el('ul', {}, rows)) : null,
-      crows.length ? el('div', { class: 'bi-todo' },
+      !pp && crows.length ? el('div', { class: 'bi-todo' },
         el('h3', { text: crows.length === 1 ? 'Characterize this pad type before its parts get paste' : 'Characterize these pad types before their parts get paste' }),
         el('ul', {}, crows)) : null,
       el('p', { class: 'bi-saved__next', text: how === 'attach'

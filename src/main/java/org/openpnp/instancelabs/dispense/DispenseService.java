@@ -103,9 +103,7 @@ public final class DispenseService {
     private MachineListener identityListener;
     /**
      * Whether the controller of the current connection said it is OpenPnP's simulator (M115 at the
-     * connect or of the last task), null when not asked yet. Kept here as well as in SimGuard because
-     * OpenPnP's listeners run in no fixed order: SimGuard may forget the answer of the connect after
-     * it was noted.
+     * connect or of the last task), null when not asked yet on this connection.
      */
     private volatile Boolean connectionSimulated;
     /** Connects, disables and homes: whether a task must home first, and Z data older than the last home. */
@@ -150,8 +148,7 @@ public final class DispenseService {
             instance.shutdown();
         }
         instance = new DispenseService(configuration);
-        SimGuard.attach(configuration.getMachine());
-        instance.askIdentityOnConnect(); // after SimGuard's listener, which forgets the last connection's answer
+        instance.askIdentityOnConnect();
         Logger.info("Instance Labs dispense service started: {}", instance.isAvailable() ? "available"
                 : "unavailable (" + instance.unavailableReason + ")");
         return instance;
@@ -214,6 +211,7 @@ public final class DispenseService {
         }
         if (machine != null && identityListener != null) {
             machine.removeListener(identityListener);
+            SimGuard.askAtConnect(machine, null);
         }
         try {
             db.close();
@@ -227,29 +225,25 @@ public final class DispenseService {
      * Asks the controller who it is (M115) right after every connect, so whether it is the simulator
      * is known from the start of a connection, not only after its first engine task: the API's checks
      * of records made on the simulator then hold right after a Start ({@link #isSimulatorConfirmed}).
+     * SimGuard asks, and notes the answer, right after it forgot the last connection's answer.
      */
     private void askIdentityOnConnect() {
         Machine machine = configuration.getMachine();
         if (machine == null) {
             return;
         }
-        identityListener = new MachineListener.Adapter() {
-            @Override
-            public void machineEnabled(Machine m) {
-                connectionSimulated = null;
-                if (!(m instanceof ReferenceMachine) || nozzle == null) {
-                    return;
-                }
-                try {
-                    OpenPnpRawMapper mapper = new OpenPnpRawMapper((ReferenceMachine) m, nozzle, cfg.bAxisName);
-                    noteIdentity(new DriverGcodeChannel(mapper.getDriver())
-                            .sendAndCollect(ControllerCommands.CAPABILITY_QUERY, cfg.commandTimeoutMs));
-                }
-                catch (Exception e) {
-                    Logger.debug("controller identity not read at connect: {}", e.getMessage());
-                }
+        SimGuard.askAtConnect(machine, () -> {
+            connectionSimulated = null;
+            if (!(machine instanceof ReferenceMachine) || nozzle == null) {
+                return null;
             }
-
+            OpenPnpRawMapper mapper = new OpenPnpRawMapper((ReferenceMachine) machine, nozzle, cfg.bAxisName);
+            List<String> m115 = new DriverGcodeChannel(mapper.getDriver())
+                    .sendAndCollect(ControllerCommands.CAPABILITY_QUERY, cfg.commandTimeoutMs);
+            connectionSimulated = SimGuard.isSimulatorIdentity(m115);
+            return m115;
+        });
+        identityListener = new MachineListener.Adapter() {
             @Override
             public void machineEnableFailed(Machine m, String reason) {
                 connectionSimulated = null;
@@ -2742,7 +2736,7 @@ public final class DispenseService {
         List<DotImager.Frame> before = new ArrayList<>();
         if (req.image) {
             t.stage = "before images";
-            phase(r, "pad calibration: looking at " + all.size() + " spots (" + tiles.size() + " frames)");
+            phase(r, "pad calibration: looking at " + all.size() + " spots (" + frames(tiles.size()) + ")");
             for (int k = 0; k < tiles.size(); k++) {
                 if (t.aborted()) {
                     throw new DispenseExecutor.AbortedException(abortReason(s.exec, "stopped before dispensing"));
@@ -2848,7 +2842,7 @@ public final class DispenseService {
         }
         if (req.image) {
             t.stage = "after images";
-            phase(r, "pad calibration: measuring the dots (" + tiles.size() + " frames)");
+            phase(r, "pad calibration: measuring the dots (" + frames(tiles.size()) + ")");
             afterImages(req, res, t, im, tiles, tileOf, before, all, blockOf);
         }
         if (req.parkAfter) {
@@ -2923,6 +2917,11 @@ public final class DispenseService {
                     + "its place Z %.3f: probe it again", b.surfaceName, plane.minZ, plane.maxZ, window, place.z);
         }
         return null;
+    }
+
+    /** "1 frame", "4 frames": the camera frames of a pad calibration step, as its phase text says them. */
+    private static String frames(int n) {
+        return n + (n == 1 ? " frame" : " frames");
     }
 
     /**

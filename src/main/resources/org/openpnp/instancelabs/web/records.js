@@ -27,6 +27,9 @@
       case 'board-registration': return 'Registration' + (r.board ? ' · ' + r.board : '');
       case 'surface-probe': return 'Surface probe' + (r.board ? ' · ' + r.board : '');
       case 'z-check': return 'Z check';
+      // the pad calibration's engine steps (PROFILE_CALIBRATION_DESIGN.md §13.5)
+      case 'pad-ladder': return 'Pad calibration · blank';
+      case 'pad-weigh': return 'Pad calibration · coupons';
       default: return IL.cap(r.kind || 'Task');
     }
   }

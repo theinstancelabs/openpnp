@@ -69,6 +69,10 @@ svg.pv-art[data-silk="yellow"] { --pv-a-silk: #e8d44d; }
 .pv-art .pv-a-hole--pth, .pv-art .pv-a-hole--npth, .pv-art .pv-a-hole--via { fill: var(--pv-a-hole); }
 .pv-art .pv-a-fab path { fill: none; stroke: var(--pv-a-fab); stroke-linecap: round; stroke-linejoin: round; }
 .pv-art .pv-a-edge { fill: none; stroke: var(--pv-a-edge); stroke-width: 1px; vector-effect: non-scaling-stroke; fill-rule: evenodd; }
+/* dark theme: a dark board (a black mask, every board in Quiet) is within 1.4:1 of the dark stage, so a 3 px light rim
+   (3.2:1 on the stage) sets it off: the substrate's own stroke, under every other layer, shows only outside the edge and
+   round its cut-outs */
+[data-theme="dark"] .pv-art .pv-a-sub { stroke: rgba(140, 162, 171, .6); stroke-width: 6px; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
 .pv-art .pv-a-refs text { fill: var(--pv-a-ref); font-family: var(--font-ui); font-weight: 650; text-anchor: middle; dominant-baseline: central; }
 /* a reference KiCad does not put on the silkscreen (boardart: at the body centre, like KiCad's fab text): fainter than the
    silkscreen, so a board without printed references (nano) does not look printed, and the overlay over the part wins */

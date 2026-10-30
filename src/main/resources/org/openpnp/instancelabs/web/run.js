@@ -36,6 +36,7 @@
     seatSame: null,                            // remembered-entry atMs the operator said "same seat" for
     section: null,                             // step chosen in the route (#run/<step>), else automatic
     built: null,                               // step built in the panel now
+    pending: null,                             // the plan kept while the Board step has another board chosen (main column: that board)
     resultRunId: null,                         // show Result after this board run (until the operator moves on)
     refused: null,                             // a board run of this plan ended REFUSED: banner on Checks
     test: false, maxDots: '',                  // "Test run with fewer dots" (cleared after every run)
@@ -559,12 +560,25 @@
     if (partialDecision(s)) return 'stopped';
     return 'idle';
   }
+  /** The board chosen in the Board step when it is not the plan's (picked, or "Use this board" after an upload), else null. */
+  function otherBoard(p) {
+    const sel = selectedBoard();
+    const src = (p && p.source) || {};
+    if (!sel || !p) return null;
+    if (sel.kind === 'job') return src.source === 'job' && String(src.boardLocationId) === String(sel.id) ? null : sel;
+    return src.source === 'file' && src.file === sel.file ? null : sel;
+  }
   function renderMain(s) {
     const n = R.n;
     if (!n.hero) return;
-    const p = plan();
     const step = currentStep(s);
-    const mode = mainMode(s, step);
+    let p = plan();
+    let mode = mainMode(s, step);
+    // another board chosen in the Board step: the main column shows it before planning (its drawing at the form's seat,
+    // BOARD_IMPORT_DESIGN.md §5.9), not the plan of the board before; that plan stays (and shows on the other steps)
+    // until Plan
+    R.pending = p && step === 'board' && (mode === 'idle' || mode === 'result') && otherBoard(p) ? p : null;
+    if (R.pending) { p = null; mode = 'empty'; }
     R.mode = mode;
     const r = IL.ready();
     renderHead(s, p, mode);
@@ -590,13 +604,19 @@
     const no = p ? boardNumber(p.planId) : null;
     const dec0 = mode === 'stopped' ? decision(s) : null;
     const partial = !!dec0 && dec0.cause === 'partial';
-    IL.show(n.actions, mode !== 'stopped' || partial);
+    // another board chosen: Plan (the Board step's) is the one action; "Plan again" would plan the board before
+    IL.show(n.actions, (mode !== 'stopped' || partial) && !R.pending);
     // the lock note names what is locked during any task (board run, pad check, prime ...): greyed controls say why
     const taskLock = IL.taskRunning(s) ? IL.lockReason(s, { pressureOff: false }) : null;
     IL.show(n.lock, !!taskLock);
     if (taskLock) IL.setText(n.lock.lastChild, 'Change board, Plan again, the board position, setup saves and Home: ' + taskLock.charAt(0).toLowerCase() + taskLock.slice(1) + '.');
     let eb = '', ebCls = 'eyebrow', title = '', meta = [];
-    if (mode === 'empty') {
+    if (mode === 'empty' && R.pending) {
+      eb = 'Run · not planned yet';
+      title = (selectedBoard() || {}).name || 'Choose a board';
+      meta = [el('span', { text: 'Enter where it sits on the right, then Plan. Until then the plan of ' + boardShort(R.pending.boardName)
+        + ' stays. Planning moves nothing.' })];
+    } else if (mode === 'empty') {
       const sel = selectedBoard();
       eb = S.planForgotten ? 'Plan forgotten (OpenPnP restarted)' : 'Run · no board planned';
       ebCls += S.planForgotten ? ' eyebrow--need' : '';
@@ -639,6 +659,7 @@
     IL.setText(n.eyebrow, eb);
     IL.setClass(n.eyebrow, ebCls);
     IL.setText(n.title, title);
+    IL.setAttr(n.title, 'title', title || null);
     IL.keyed(n.meta, mode + '|' + meta.map((m) => m.textContent).join('|'), () => meta);
     IL.show(n.meta, mode !== 'live');
     // Change board / Plan again: locked while a task runs
@@ -653,6 +674,7 @@
     const run = s.run;
     if (!p) {
       if (S.planForgotten) { kind = 'need'; glyph = 'need'; text = 'Plan forgotten (OpenPnP restarted): plan again'; title = 'OpenPnP keeps plans in memory only: plan the board again (nothing moves).'; }
+      else if (R.pending) { kind = 'off'; glyph = 'off'; text = 'Not planned yet'; title = 'Enter where the board sits, then Plan (nothing moves).'; }
       else { kind = 'off'; glyph = 'off'; text = 'No plan yet'; title = 'Choose a board and plan it.'; }
     } else if (mode === 'live') {
       kind = 'live'; glyph = 'live';
@@ -1105,7 +1127,7 @@
     const sf = r.items.find((x) => x.key === 'surface');
     const surf = s.dispense && s.dispense.surfaces && s.dispense.surfaces[s.dispense.boardSurfaceName || 'board'];
     // Register: "registered", "same seat" (the 3-point check kept the surface), "by hand" (the time in the title: the
-    // five steps share about 400 px), "this seat"
+    // five steps share about 400 px), "this seat", "again" (blocked: register the board again)
     const reg = p && p.registration;
     const at = (ms) => IL.fmtTime(ms ? ms - S.skewMs : null);
     const live = regLive(s);
@@ -1116,7 +1138,7 @@
       st.probe = sameAt ? { kind: 'ok', sub: 'same seat', title: 'same seat ' + at(sameAt) }
         : surf && /^Register board/.test(surf.note || '') ? { kind: 'ok', sub: 'registered', title: 'registered ' + at(surf.setAtMs) }
           : { kind: 'ok', sub: 'by hand', title: 'by hand ' + at(surf && surf.setAtMs) };
-    } else st.probe = sf.state === 'block' ? { kind: 'block', sub: 'register again' } : { kind: 'need', sub: 'this seat' };
+    } else st.probe = sf.state === 'block' ? { kind: 'block', sub: 'again', title: 'register the board again' } : { kind: 'need', sub: 'this seat' };
     const needs = r.needs.filter((x) => x.state !== 'wait');
     st.checks = !p ? { kind: 'num', sub: '—' } : r.blocked.length ? { kind: 'block', sub: 'blocked' }
       : needs.length ? { kind: 'need', sub: IL.plural(needs.length, 'needs you', 'need you') } : { kind: 'ok', sub: '9 of 9' };
@@ -1204,8 +1226,10 @@
       }
       if (b && (b.files || []).length) {
         opts.push(el('optgroup', { label: 'Board files' }, b.files.filter((x) => x.file).map((x) => {
+          // the folder tells boards of one name apart; an upload's folder is its name ("mobo · mobo" said it twice)
           const dir = x.file.split('/').slice(-2, -1)[0];
-          return el('option', { value: 'file:' + x.file, title: x.file + (x.placements ? ' · ' + x.placements + ' placements' : ''), text: x.name + (dir ? ' · ' + dir : '') });
+          const own = !!dir && String(x.name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').startsWith(dir);
+          return el('option', { value: 'file:' + x.file, title: x.file + (x.placements ? ' · ' + x.placements + ' placements' : ''), text: x.name + (dir && !own ? ' · ' + dir : '') });
         })));
       }
       if (!b && !R.boardsLoading && R.form.sel && R.form.sel !== 'other') opts.push(el('option', { value: R.form.sel, text: (selectedBoard() || {}).name || R.form.sel }));
@@ -1545,8 +1569,9 @@
   /** Why Register board cannot start now (first of AUTO_REGISTER_DESIGN.md §8.1 `#register-why`), or null. */
   function registerWhy(s) {
     const p = plan();
-    const lock = IL.lockReason(s, { connected: true, engine: true });
-    if (lock) return { text: lock };
+    // it homes by itself when needed: not while a STOP left N1 low (Run waits too), the operator looks and homes first
+    const lock = IL.lockReason(s, { connected: true, engine: true, homes: true });
+    if (lock) return IL.n1Low(s) ? { text: lock, fix: 'home', link: 'Home now' } : { text: lock };
     if (!p) return { text: 'Plan a board first' };
     const t = regTargets(p);
     // the plan's own registration no longer applies (registered again elsewhere, a simulator record): plan again first
@@ -2057,6 +2082,7 @@
       return [IL.glyph(ok ? 'ok' : kind), el('div', { class: 'reg-result__main' }, el('div', { class: 'ri__t reg-result__t', id: 'reg-result-t' }, title), lines),
         buttons.length ? el('div', { class: 'ri__act reg-result__act' }, buttons) : null];
     });
+    for (const b of box.querySelectorAll('#btn-reg-again, #btn-reg-probe')) IL.gate(b, regGate(s));
   }
   /** "Register again" / "Probe again" in the result card: two-press, like the foot's button. */
   function regActionBtn(f) {
@@ -2194,7 +2220,8 @@
       const btn = $('btn-register'), cont = $('btn-reg-continue');
       IL.show(cont, ok);
       IL.show(btn, !ok);
-      const note = live || mode === 'result' ? '' : IL.nb(registerNote(s, p));
+      // N1 low: the home comes first (the reason below says so), and the press it describes comes after that home
+      const note = live || mode === 'result' || IL.n1Low(s) ? '' : IL.nb(registerNote(s, p));
       IL.setText($('register-note'), note);
       IL.show($('register-note'), !!note);
       const why = live ? null : registerWhy(s);
@@ -2206,7 +2233,7 @@
       IL.gate(btn, live ? 'Registering: STOP stops it' : why && why.text);
       IL.keyed($('register-why'), why ? why.text + '|' + (why.href || '') + (why.fix || '') : '', () => (why ? [IL.icon('i-lock'), el('span', {}, why.text,
         why.href ? [' ', el('button', { type: 'button', class: 'link', onclick: () => IL.go(why.href) }, why.link || 'Open')] : null,
-        why.fix ? [' ', el('button', { type: 'button', class: 'link', 'data-fix': why.fix, onclick: (ev) => IL.runFix(why.fix, ev.currentTarget) }, 'Plan again')] : null)] : null));
+        why.fix ? [' ', el('button', { type: 'button', class: 'link', 'data-fix': why.fix, onclick: (ev) => IL.runFix(why.fix, ev.currentTarget) }, why.link || 'Plan again')] : null)] : null));
       IL.show($('register-why'), !!why && !live);
       return;
     }
@@ -2325,12 +2352,12 @@
   }
   const SEG_CLASS = { ok: 'ok', you: 'you', info: 'you', off: '', need: 'need', block: 'block', live: 'live', checking: 'checking', wait: 'wait' };
   const TILE_GO = { machine: { view: 'machine' }, angle: { view: 'angle' }, needle: { href: '#setup/needle' }, regulator: { view: 'pressure' },
-    padtypes: { href: '#profile' }, surface: { step: 'probe' }, plan: { view: 'interlocks' }, purge: { view: 'purge' }, clean: { view: 'camera' } };
+    padtypes: { href: '#profile', hrefNow: () => IL.padProfile && IL.padProfile.needsHref() }, surface: { step: 'probe' }, plan: { view: 'interlocks' }, purge: { view: 'purge' }, clean: { view: 'camera' } };
   function tileGo(key) {
     const g = TILE_GO[key];
     if (!g) return;
     if (g.view) IL.openView(g.view, { keep: true });
-    else if (g.href) IL.go(g.href);
+    else if (g.href) IL.go((g.hrefNow && g.hrefNow()) || g.href);
     else if (g.step) goStep(g.step);
   }
   function cleanCard(it, first, s) {

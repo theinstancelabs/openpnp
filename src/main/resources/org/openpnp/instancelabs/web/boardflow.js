@@ -17,6 +17,7 @@
      onPad(padId, ev), onPart(ref, ev)    H2: a click on a pad or a part opens the pad inspector (padinspect.js)
      recordsMap(bv, plan)                 H4: the plan's drawing under Records' done-dot map, Quiet
      onImported(saved)                    "Use this board" in the upload dialog: the board list again, the board chosen
+     preview() → the hero's path preview (IL.pathPreview: play, pause, seek, state), null before the hero is drawn
    Board drawings come from IL.boardart.get (the browser's HTTP cache keeps them: the server marks them immutable). */
 'use strict';
 (function () {
@@ -101,6 +102,12 @@
   }
   const entryKey = (e, job) => (job ? 'job:' + e.boardLocationId : 'file:' + e.file);
   const partsOf = (e) => Math.max(0, (Number(e.placements) || 0) - ((e.fiducials || []).length));
+  /** "75 × 75 mm", "51.6 × 89.0 mm" (both to the same tenth when either needs it), or '' when the list has no size. */
+  function sizeText(e) {
+    if (!isNum(e.widthMm) || !isNum(e.heightMm) || !(e.widthMm > 0) || !(e.heightMm > 0)) return '';
+    const d = [e.widthMm, e.heightMm].some((v) => Math.abs(v - Math.round(v)) >= 0.05) ? 1 : 0;
+    return IL.fmt(e.widthMm, d) + '\u00a0×\u00a0' + IL.fmt(e.heightMm, d) + '\u00a0mm';
+  }
   /** The board's first fiducial by name (FID1 before FID2 and FID10): the one "Camera is on FID1" names. */
   const NAT = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
   const firstFid = (e) => ((e && e.fiducials) || []).slice().sort((a, b) => NAT.compare(String(a.id), String(b.id)))[0] || null;
@@ -184,7 +191,7 @@
     }
     IL.show(st.thumbs, list.length > 0);
     const shown = list.slice(0, THUMBS_MAX);
-    const key = JSON.stringify(shown.map((t) => [t.key, t.e.art.id, t.e.name, t.e.placements]).concat([list.length]));
+    const key = JSON.stringify(shown.map((t) => [t.key, t.e.art.id, t.e.name, t.e.placements, t.e.widthMm, t.e.heightMm]).concat([list.length]));
     if (IL.keyed(st.thumbs, key, () => {
       if (st.io) st.io.disconnect();
       st.io = window.IntersectionObserver ? new IntersectionObserver((ents) => {
@@ -194,10 +201,11 @@
         const e = t.e;
         const kicad = e.art.kind === 'kicad';
         const img = el('img', { class: 'board-thumb__img', alt: '', width: '56', height: '48', 'data-art': e.art.id });
-        const size = isNum(e.widthMm) && isNum(e.heightMm) ? IL.fmt(e.widthMm, 1) + ' × ' + IL.fmt(e.heightMm, 1) + ' mm · ' : '';
+        const size = sizeText(e);
         const btn = el('button', { type: 'button', class: 'board-thumb', 'data-board': t.key, 'aria-pressed': String(t.key === sel),
-          title: e.name + '\n' + size + IL.plural(partsOf(e), 'part') + (e.file ? '\n' + e.file : '') + (kicad ? '\nKiCad drawing' : '\nDrawn from the board file') },
+          title: e.name + '\n' + (size ? size + ' · ' : '') + IL.plural(partsOf(e), 'part') + (e.file ? '\n' + e.file : '') + (kicad ? '\nKiCad drawing' : '\nDrawn from the board file') },
         img, el('span', { class: 'board-thumb__t' }, el('span', { class: 'board-thumb__n', text: e.name }),
+          size ? el('span', { class: 'board-thumb__s board-thumb__size', text: size }) : null,
           el('span', { class: 'board-thumb__s' }, IL.plural(partsOf(e), 'part'), kicad ? el('span', { class: 'board-thumb__tag', text: 'KiCad' }) : null)));
         btn.addEventListener('click', () => { if (st.o.select && !btn.disabled) st.o.select(t.key); });
         return btn;
@@ -428,11 +436,14 @@
   }
 
   // ------------------------------------------------------------------------------------------ H2 and H4
+  // the inspector shows the plan's parts: only while the hero draws that plan (before planning, or with another board
+  // chosen in the Board step, it draws a board that has no plan yet)
+  const heroPlan = () => (IL.S.plan && (!M.bv || M.bv.plan) ? IL.S.plan : null);
   function onPad(padId) {
-    if (IL.S.plan) IL.padInspect.open({ padId }, { bv: M.bv || (IL.run && IL.run.bv) || null });
+    if (heroPlan()) IL.padInspect.open({ padId }, { bv: M.bv || (IL.run && IL.run.bv) || null });
   }
   function onPart(ref) {
-    if (IL.S.plan) { IL.padInspect.open({ ref }, { bv: M.bv || (IL.run && IL.run.bv) || null }); return; }
+    if (heroPlan()) { IL.padInspect.open({ ref }, { bv: M.bv || (IL.run && IL.run.bv) || null }); return; }
     IL.toast(ref + ': plan the board to inspect its pads and dots.', 'info');
   }
   function recordsMap(bv, plan) {
@@ -445,5 +456,5 @@
     });
   }
 
-  IL.boardFlow = { mountBoardStep, hero, onPad, onPart, recordsMap, onImported, kicadMajor };
+  IL.boardFlow = { mountBoardStep, hero, onPad, onPart, recordsMap, onImported, kicadMajor, preview: () => (M.stage ? M.stage.pp : null) };
 })();

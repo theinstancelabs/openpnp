@@ -193,6 +193,11 @@ kbd {
 .cell--live { color: var(--on-live); background: var(--live); border-color: var(--live); }
 .cell--verdict { margin-left: auto; padding-right: 12px; }
 .cell--verdict .cell__v { font-size: 16px; }
+/* still too long once every long part is gone (1024 px): the verdict ends in "…" instead of running under STOP; it
+   is measured at its full width (cells--fit) to decide what goes first */
+.cell--verdict { flex: 0 1 auto; }
+.cell--verdict .cell__v { overflow: hidden; text-overflow: ellipsis; }
+.cells--fit .cell--verdict { flex: none; }
 .cell-act { height: 44px; padding: 0 16px; border-radius: 10px; border: 0; background: var(--accent); color: var(--on-accent); font: 700 15px/1 var(--font-ui); flex: none; position: relative; overflow: hidden; white-space: nowrap; }
 .cell-act:hover { background: var(--accent-hover); }
 .cell-act:disabled { background: var(--disabled-bg); color: var(--ink-disabled); }
@@ -497,7 +502,7 @@ h3 { font: 650 15.5px/1.25 var(--font-ui); margin: 0; }
 .step--done::after { background: var(--ok-line); }
 .step[aria-current="step"] { border-bottom-color: var(--accent); }
 .step__t { font: 650 14px/1.15 var(--font-ui); color: var(--ink); }
-.step__s { font: 500 12px/1.15 var(--font-ui); color: var(--ink-3); white-space: nowrap; }
+.step__s { font: 500 12px/1.15 var(--font-ui); color: var(--ink-3); white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .step--need .step__s { color: var(--need); font-weight: 650; }
 .step--live .step__s { color: var(--live); font-weight: 650; }
 .step--block .step__s { color: var(--block); font-weight: 650; }

@@ -694,9 +694,19 @@
     || !!(s.pressure && ((s.pressure.state && s.pressure.state !== 'off') || s.pressure.engineRunActive))
     || !!(s.machine && s.machine.busy));
   IL.interlock = (s, id) => ((s && s.interlocks) || []).find((i) => i.id === id) || null;
+  /** A STOP left N1 low and nothing homed since (status.machine.home.n1Low, with a home policy): the operator looks first. */
+  IL.n1Low = function (status) {
+    const m = ((status || S.status) || {}).machine || {};
+    return !!(m.enabled && !m.homed && m.home && m.home.policy && m.home.n1Low);
+  };
+  /** What the Machine item says then; also why a task that homes by itself waits. */
+  IL.n1LowText = function (status) {
+    const hm = (((status || S.status) || {}).machine || {}).home || {};
+    return 'N1 stopped low (Z ' + IL.fmt(hm.n1Z, 2) + ' mm): look at the board under it. Home raises N1 first, then homes.';
+  };
   /**
    * Why a control is locked now, or null. need: {connected, homed, idle (default true), pressureOff (default true),
-   * engine}. Texts are the spec's (§13 "Locked control").
+   * engine, homes (the task homes by itself: it waits while N1 is low)}. Texts are the spec's (§13 "Locked control").
    */
   IL.lockReason = function (status, need) {
     const s = status || S.status;
@@ -708,9 +718,13 @@
       const lab = s.run && s.run.running ? s.run.label : 'task';
       return lab === 'board' ? 'Locked while the board runs' : 'Locked while the ' + (lab === 'z check' ? 'Z check' : lab) + ' runs';
     }
+    if (n.idle && IL.padProfile && IL.padProfile.jobLock(s)) return 'Locked while the pad calibration runs';
     if (n.pressureOff && pr.state && pr.state !== 'off') return 'Pressure is held: switch it off first';
     if (n.connected && !m.enabled) return 'Not connected: connect first';
     if (n.homed && !m.homed) return 'Not homed: home first';
+    // a task that homes by itself (Register board, Probe the blank, the pad calibration) waits, as Run does, while a STOP
+    // left N1 low: an automatic home must not drag N1 across the board (AUTO_REGISTER_DESIGN.md §8.2)
+    if (n.homes && IL.n1Low(s)) return IL.n1LowText(s);
     if (n.engine && (!d.running || !d.available)) return 'Dispenser unavailable' + (d.unavailableReason ? ': ' + d.unavailableReason : '');
     return null;
   };
@@ -950,9 +964,8 @@
         detail: 'Not connected to the controller.', fixes: [{ fix: 'connect', label: 'Connect', primary: true }] });
     } else if (!m.homed && m.busy) {
       add({ key: 'machine', code: 'MACHINE', title: 'Machine', state: 'live', value: 'homing', short: 'homing', detail: 'Homing…' });
-    } else if (!m.homed && hm && hm.policy && hm.n1Low) {
-      add({ key: 'machine', code: 'MACHINE', title: 'Machine', state: 'need', value: 'N1 low', short: 'N1 low',
-        detail: 'N1 stopped low (Z ' + IL.fmt(hm.n1Z, 2) + '): look at the board under it. Home raises N1 first, then homes.',
+    } else if (IL.n1Low(s)) {
+      add({ key: 'machine', code: 'MACHINE', title: 'Machine', state: 'need', value: 'N1 low', short: 'N1 low', detail: IL.n1LowText(s),
         fixes: [{ fix: 'home', label: 'Home now' }] });
     } else if (!m.homed && hm && hm.policy) {
       const why = IL.homeWhy(hm);
@@ -1036,9 +1049,12 @@
         fixes: [{ view: 'pressure', label: 'Pressure on to read the gauge' }, { fix: 'attest-regulator', label: 'Reads ' + psi + ' psi' }] });
     }
 
-    // 5 Pad types (PLAN)
+    // 5 Pad types (PLAN); with the profile check, padprofile.js words it (PROFILE_CALIBRATION_DESIGN.md §13.2, H-P1)
     const gate = d.minPadTypeStatus || 'the gate';
-    if (!plan) {
+    const ppItem = IL.padProfile && plan && plan.profileCheck ? IL.padProfile.padTypesItem(plan, d, viol) : null;
+    if (ppItem) {
+      add(ppItem);
+    } else if (!plan) {
       add({ key: 'padtypes', code: 'PLAN', title: 'Pad types', state: 'wait', value: '—', short: 'pad types', detail: 'Known after planning.' });
     } else {
       const pads = plan.pads || [];
@@ -1286,9 +1302,10 @@
     // NEXT: the first not-ready item in the fixed order; items that only wait for a plan never come first
     const next = notReady.find((x) => x.state !== 'wait') || notReady[0] || null;
     let verdict;
-    if (blocked.length) verdict = { state: 'block', text: 'Blocked · ' + blocked[0].short, title: blocked.map((x) => x.title + ': ' + x.detail).join('\n') };
+    // the strip drops the part after " · " when it would run under STOP (cells--t2); the title keeps it
+    if (blocked.length) verdict = { state: 'block', text: 'Blocked · ' + blocked[0].short, value: ['Blocked', ' · ' + blocked[0].short, 2], title: blocked.map((x) => x.title + ': ' + x.detail).join('\n') };
     else if (!plan && !c.planForgotten) verdict = { state: 'need', text: 'No plan yet', title: 'Choose a board and plan it (Run).' };
-    else if (notReady.length) verdict = { state: 'need', text: count + ' of 9 · ' + next.short, title: notReady.map((x) => x.title + ': ' + x.detail).join('\n') };
+    else if (notReady.length) verdict = { state: 'need', text: count + ' of 9 · ' + next.short, value: [count + ' of 9', ' · ' + next.short, 2], title: notReady.map((x) => x.title + ': ' + x.detail).join('\n') };
     else if (items[0].homeFirst) {
       // the strip drops the long part when it would run under STOP (cells--t1)
       verdict = { state: 'ok', text: 'Ready to run · homes first (≈ ' + IL.fmtSecs(homeS) + ')', value: ['Ready to run', ' · homes first (≈\u00a0' + IL.fmtSecs(homeS) + ')', 1],
@@ -1364,7 +1381,7 @@
   // ================================================================================== verdict (strip "Board run")
   const TASK_WORD = { prime: 'Prime', 'test dot': 'Test dot', 'needle touch-off': 'Touch-off', 'dot ladder': 'Dot ladder',
     'scale shots': 'Shots', 'clean-pad check': 'Pad check', board: 'Board', 'board registration': 'Register', 'blank probe': 'Blank probe',
-    'z check': 'Z check' };
+    'z check': 'Z check', 'pad calibration': 'Pad calibration' };
   IL.TASK_WORD = TASK_WORD;
   const VENT_S = 1;
   /**
@@ -1407,6 +1424,7 @@
       if (st === 'z check') return ['Checking Z', ' · 0/' + run.dotsPlanned];
       return ['0/' + run.dotsPlanned, ' · starting'];
     }
+    if (run.label === 'pad calibration' && IL.padProfile) return IL.padProfile.taskParts(run);
     if (run.label === 'board registration' || run.label === 'blank probe') {
       const g = IL.regProgress(run);
       return [word + ' · ' + g.part, g.left !== null ? ' · ≈ ' + IL.fmtClock(g.left) + ' left' : ''];
@@ -1459,6 +1477,8 @@
       const r = S.recovery;
       return { state: 'block', text: 'Stopped ' + IL.fmtTime(r.atMs), title: recoveryHeadline(r) + '. Back to ready: see the Recovery panel.' };
     }
+    const pcal = IL.padProfile ? IL.padProfile.verdict(s) : null;
+    if (pcal) return pcal;
     const d = s.dispense || {};
     if (!d.running || !d.available) return { state: 'block', text: 'Dispenser unavailable', title: d.unavailableReason || 'The dispense engine is not running.' };
     return IL.ready().verdict;
@@ -1562,7 +1582,7 @@
     const homeS = isNum(hm.estimateS) ? hm.estimateS : 25;
     steps.push(m.enabled && !m.homed && hm.policy && hm.n1Low
       ? { key: 'home', title: 'Home', wait: false, done: false,
-        detail: 'N1 stopped low (Z ' + IL.fmt(hm.n1Z, 2) + '): look at the board under it; Home raises N1 first, then homes.',
+        detail: 'N1 stopped low (Z ' + IL.fmt(hm.n1Z, 2) + ' mm): look at the board under it; Home raises N1 first, then homes.',
         fixes: [{ fix: 'home', label: 'Home now', primary: true }] }
       : autoHome
         ? { key: 'home', title: 'Home first', state: 'info', done: true,
@@ -1897,10 +1917,12 @@
       return last.getBoundingClientRect().right > limit + 0.5;
     };
     cells.classList.remove('cells--t1', 'cells--t2');
-    if (!over()) return;
-    cells.classList.add('cells--t1');
-    if (!over()) return;
-    cells.classList.replace('cells--t1', 'cells--t2');
+    cells.classList.add('cells--fit');   // the verdict at its full width while measuring (it shrinks only after t2)
+    if (over()) {
+      cells.classList.add('cells--t1');
+      if (over()) cells.classList.replace('cells--t1', 'cells--t2');
+    }
+    cells.classList.remove('cells--fit');
   }
   window.addEventListener('resize', () => { fitSig = ''; IL.render(); });
   function pressureView(s) {
@@ -1966,7 +1988,7 @@
         } else {
           const hm = m.home || {};
           const auto = hm.policy && !hm.n1Low ? ' Register board and Run home first (≈ ' + IL.fmtSecs(isNum(hm.estimateS) ? hm.estimateS : 25) + ').'
-            : hm.n1Low ? ' N1 stopped low (Z ' + IL.fmt(hm.n1Z, 2) + '): Home raises it first, then homes.' : ' Home before any move.';
+            : hm.n1Low ? ' N1 stopped low (Z ' + IL.fmt(hm.n1Z, 2) + ' mm): Home raises it first, then homes.' : ' Home before any move.';
           setCell(mc, 'need', undefined, 'Connected, not homed: positions are unknown.' + auto);
           IL.setText(homed, 'Not homed');
           showHome = !IL.taskRunning(s) && (!s.pressure || s.pressure.state === 'off');
@@ -1989,7 +2011,9 @@
     const pc = $('pill-pressure'), ac = $('chip-angle'), uc = $('chip-purge');
     const d = (s && s.dispense) || {};
     const prof = d.profile || {};
-    IL.setText(pc.querySelector('.cell__k'), isNum(prof.pressurePsi) ? 'Pressure · set ' + IL.fmtPsi(prof.pressurePsi) + ' psi' : 'Pressure');
+    // the set pressure goes with the other long parts when the strip is narrow (cells--t2): the value stays
+    const pk = pc.querySelector('.cell__k'), set = isNum(prof.pressurePsi) ? ' · set ' + IL.fmtPsi(prof.pressurePsi) + ' psi' : '';
+    if (pk.dataset.v !== set) { pk.dataset.v = set; pk.replaceChildren('Pressure', set ? el('span', { class: 'long', 'data-l': 2, text: set }) : ''); }
     if (!s || off) {
       const t = off ? cap(since) : null;
       setCell(pc, 'off', off ? 'Unknown' : '…', t);
@@ -2028,6 +2052,7 @@
       if (S.online === false) return { sub: 'No answer', kind: 'block' };
       if (run && run.running) {
         if (run.label === 'board') return { sub: run.dotsDone + ' of ' + run.dotsPlanned, kind: 'live', badge: String(run.dotsDone), badgeKind: 'live', badgeLabel: run.dotsDone + ' dots done' };
+        if (run.label === 'pad calibration') return { sub: 'Calibrating pads', kind: 'live' };
         return { sub: (TASK_WORD[run.label] || cap(run.label)) + ' running', kind: 'live' };
       }
       if (IL.recoveryActive()) {
@@ -3152,6 +3177,7 @@
     for (const c of document.querySelectorAll('[data-open-view]')) c.addEventListener('click', () => IL.openView(c.dataset.openView));
     $('pill-engine').addEventListener('click', () => {
       const s = S.status;
+      if (IL.padProfile && IL.padProfile.jobActive(s) && !IL.recoveryActive()) { IL.openView('pad-cal', { keep: true }); return; }
       IL.go(IL.recoveryActive() ? '#run' : s && s.run && s.run.running ? '#run/run' : '#run/checks');
     });
     $('btn-start').addEventListener('click', (ev) => IL.runFix('connect', ev.currentTarget, null, ev));

@@ -17,9 +17,10 @@
  * moved board, the run confirm closing after a task its tab never saw running, STOP NOT CONFIRMED and
  * the offline band at 1024 px, then Register board (docs/instancelabs/AUTO_REGISTER_DESIGN.md §10.3: recovery without
  * Home, the Register step, a first registration that homes first with its G-code, the fiducial correction against the
- * SIM scene, a same seat, STOP mid-register and Home with N1 low, the by-hand path with the engine's targets, a run that
- * homes and checks Z by itself, the automatic blank probe, the home setting, a fiducial not found and a plan without
- * fiducial correction), no native dialogs, no JS errors.
+ * SIM scene, a same seat, STOP mid-register and Home with N1 low (Register board and Probe the blank locked like Run until
+ * then), the by-hand path with the engine's targets, a run that homes and checks Z by itself, the automatic blank probe,
+ * the home setting, a fiducial not found (its fixes two by two in the narrow card) and a plan without fiducial
+ * correction), no native dialogs, no JS errors.
  *
  * Env: IL_API_URL (http://127.0.0.1:PORT/), PLAYWRIGHT_DIR (dir with node_modules/playwright),
  *      UINAV (uinav CLI), UINAV_SESSION, OUT_DIR (screenshots + results.json), SIM_SCENE (the session's SIM scene file).
@@ -969,6 +970,19 @@ async function runFirstDots(page, n) {
       await answerI11();
       const home1 = await recStep('home');
       check('recovery: N1 stopped low: the home step is needed and names its Z', home1 && !home1.done && /N1 stopped low \(Z \d/.test(home1.detail), home1);
+      // what homes by itself waits as Run does (AUTO_REGISTER_DESIGN.md §8.2): Register board (its fix, the button every card
+      // offers; Run's own Register step is the recovery now) and Probe the blank are locked with N1's Z, the blank with "Home now"
+      const lowReg = await page.evaluate(() => { const b = IL.fixButton({ fix: 'register', label: 'Register board' }); return { disabled: b.disabled, why: b.title, canRun: IL.ready().canRun }; });
+      await page.evaluate(() => IL.go('#setup/surfaces'));
+      await page.waitForFunction(() => IL.S.route.ws === 'setup', null, { timeout: 10000 }).catch(() => {});
+      await page.evaluate(() => { if (IL.panel.isPushed()) IL.panel.close(); IL.openView('probe-blank', { keep: true }); });
+      await waitText(page, 'blank-why', /N1 stopped low/, 15000).catch(() => {});
+      const lowBlank = await page.evaluate(() => { const b = document.getElementById('btn-blank-auto'), w = document.getElementById('blank-why');
+        return { disabled: !!b && b.disabled, why: w ? w.textContent : null, home: !!document.querySelector('#blank-why [data-fix="home"]') }; });
+      const lowText = /^N1 stopped low \(Z [−-]?\d+\.\d\d mm\): look at the board under it\./;
+      check('N1 low: Register board and Probe the blank are locked like Run, the reason names N1\'s Z, the blank\'s with "Home now"',
+        !lowReg.canRun && lowReg.disabled && lowText.test(lowReg.why) && lowBlank.disabled && lowText.test(lowBlank.why) && lowBlank.home, { lowReg, lowBlank });
+      await page.evaluate(() => { if (IL.panel.isPushed()) IL.panel.close(); IL.go('#run/probe'); });
       g1 = gcodeNext();
       await press2(page, '#btn-home');
       await waitText(page, 'pill-homed', /^Homed$/, 120000);
@@ -1151,6 +1165,10 @@ async function runFirstDots(page, n) {
       check('REG fixes in order: look with the camera, change board, plan without correction, do it by hand (Register again in the foot)',
         JSON.stringify(fixes) === JSON.stringify(['Look with the camera', 'Change board', 'Plan without fiducial correction', 'Do it by hand'])
         && /^Register again/.test(await textOf(page, 'btn-register')), { fixes, foot: await textOf(page, 'btn-register') });
+      const fixRows = await page.$$eval('#reg-result .ri__act [data-fix]', (bs) => ({ vw: window.innerWidth,
+        rows: new Set(bs.map((b) => Math.round(b.getBoundingClientRect().top))).size,
+        inside: bs.every((b) => { const r = b.getBoundingClientRect(), c = b.closest('.ri').getBoundingClientRect(); return r.left >= c.left && r.right <= c.right; }) }));
+      check('REG fixes side by side in the narrow card: two rows of two, inside the card (not one per line)', fixRows.rows <= 2 && fixRows.inside, fixRows);
       await page.screenshot({ path: path.join(OUT, 'register-fid-not-found.png') });
       fs.writeFileSync(SIM_SCENE + '.tmp', JSON.stringify(scene));
       fs.renameSync(SIM_SCENE + '.tmp', SIM_SCENE);
