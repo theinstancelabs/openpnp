@@ -141,6 +141,8 @@
   pcr.loadPadTypes = loadPadTypes;
   const allTypes = () => (PT.data ? PT.data.families.flatMap((f) => f.types.map((t) => Object.assign({ retired: !!f.retired }, t))) : []);
   const typeByKey = (k) => allTypes().find((t) => t.typeKey === k) || null;
+  /** A long KiCad name with line-break chances after "_" and "-" (never inside a word or a number). */
+  const breakable = (id) => String(id).split(/(?<=[_-])/).flatMap((x, i) => (i ? [el('wbr'), x] : [x]));
   const gateStatus = (s) => (PT.data && PT.data.minPadTypeStatus) || (s && s.dispense && s.dispense.minPadTypeStatus) || 'characterized';
   /** Pads and dots of the plan shown, per pad type. */
   function planStats() {
@@ -1130,7 +1132,7 @@
         const t = typeByKey(k);
         const btn = el('button', { type: 'button', class: 'pt-plan__i', 'data-focus-key': 'plan:' + k },
           t ? pcr.badge(t.status, t.retired) : IL.glyph('block', 'xs'),
-          el('span', { class: 'pt-plan__n', text: t ? t.name : v.label || k }),
+          el('span', { class: 'pt-plan__n' }, breakable(t ? t.name : v.label || k)),
           el('span', { class: 'pt-plan__v' + (v.blocked ? ' pt-blocked' : ''), text: IL.plural(v.pads, 'pad') + (v.blocked ? ' · ' + v.blocked + ' blocked' : '') }),
           IL.icon('i-chev'));
         btn.addEventListener('click', () => (t ? IL.go('#profile/pad-types/' + k) : IL.go(v.href || '#profile/new-pad-type/' + ([...v.packages][0] || ''))));

@@ -219,6 +219,8 @@ const ticks = (page) => page.evaluate(() => { IL.attest.set('regulator', IL.S.st
     await api(page, 'PUT', '/api/surfaces/blank', { points: corners.map(([x, y]) => [x, y, Number(bz(x, y).toFixed(3))]), note: 'tip-setups test: the SIM blank' });
     await api(page, 'PUT', '/api/calibration-area', area);
     await wipeBlank(page);
+    // the coupons wiped and laid back: a test before this one may leave dots on a coupon whose weighing it skipped
+    await api(page, 'POST', '/api/sim/paste/wipe', { region: 'coupon' }).catch(() => null);
     for (const c of sc.coupons || [{ place: 'coupon1', rect: [330, 40, 370, 70], z: 5.8 }, { place: 'coupon2', rect: [330, 75, 370, 105], z: 5.8 }]) {
       await api(page, 'PUT', '/api/locations/' + c.place, { x: (c.rect[0] + c.rect[2]) / 2, y: (c.rect[1] + c.rect[3]) / 2, z: c.z });
     }
