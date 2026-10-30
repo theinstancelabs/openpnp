@@ -755,6 +755,13 @@ public class RegistrationSimTest {
         assertTrue(ok(post("/api/plan", planBody("auto"))).get("registration").isJsonNull());
         assertFalse(ok(get("/api/status")).getAsJsonObject("server").get("simulatorConfirmed").getAsBoolean());
         assertTrue(ok(get("/api/status")).getAsJsonObject("server").get("simulated").getAsBoolean(), "loopback");
+        // §10.2 case 22 (rc1 review: untested): the board surface Register probed on the simulator is refused here
+        JsonObject onMarlin = ok(post("/api/plan", planBody("none")));
+        String ilk = onMarlin.getAsJsonObject("interlocks").toString();
+        assertTrue(ilk.contains("the 'board' surface was probed on the simulator: probe it again on this machine"), ilk);
+        Res run = post("/api/run", "{\"planId\":\"" + onMarlin.get("planId").getAsString() + "\"}");
+        assertEquals(409, run.status, run.toString());
+        assertTrue(run.body.contains("the 'board' surface was probed on the simulator"), run.toString());
     }
 
     /** §10.2 cases 7, 13 and 16: refusals before N1 or anything else moves. */
