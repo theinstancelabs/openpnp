@@ -157,10 +157,14 @@ async function runCal(page, mode, maxMs) {
   await sleep(1500);
   return j;
 }
-/** Blank wiped: the SIM paste on the blank wiped off (the operator's lint-free wipe), then the area free again. */
+/**
+ * Blank wiped: the SIM paste on the blank wiped off (the operator's lint-free wipe), then the calibration area and the
+ * purge row on it free again (every job purges on the row).
+ */
 async function wipeBlank(page) {
   await api(page, 'POST', '/api/sim/paste/wipe', { region: 'blank' }).catch(() => null);
   await api(page, 'POST', '/api/calibration-area/reset', {});
+  await api(page, 'POST', '/api/purge-row/reset', {});
 }
 const ticks = (page) => page.evaluate(() => { IL.attest.set('regulator', IL.S.status.dispense.profile.pressurePsi); IL.attest.set('prime-seen', true); IL.attest.set('paste-life', true); });
 
@@ -497,6 +501,7 @@ const ticks = (page) => page.evaluate(() => { IL.attest.set('regulator', IL.S.st
     });
     check('(7) the label in the SW li: "SW_SPST_3.9x2.9mm … · 25G straight · Vieweg DV-5005 …"', /^SW_SPST_3\.9x2\.9mm/.test(c7.label || '') && /25G straight · Vieweg DV-5005/.test(c7.label || ''),
       { c7, sentence: jc.result && jc.result.sentence });
+    check('(7) the result card offers Made with another tip…', await page.isVisible('#btn-pcal-wrongtip'));
     await shoot(page, 'calibrate-result-card', () => toTop(page, '#pcal-result'), true);
     // Edit, change, Save
     await page.click('#pcal-groups .pcal-label[data-cal="' + c7.id + '"] button[data-action="label-edit"]');
@@ -620,29 +625,32 @@ const ticks = (page) => page.evaluate(() => { IL.attest.set('regulator', IL.S.st
     await page.waitForFunction(() => { const b = document.getElementById('btn-pcal-start'); return !!b && /^Calibrate/.test(b.textContent) && !b.disabled; }, null, { timeout: 30000 });
     const jw = await runCal(page, 'calibrate', 600000);
     const ctl = jw.result && jw.result.control ? jw.result.control.text || '' : '';
-    check('(10) the calibration\'s control text names another tip', /another tip than the 22G bent taper is on/.test(ctl) || /another tip than the 22G bent taper is on/.test(JSON.stringify(jw.result)), { ctl, sentence: jw.result && jw.result.sentence });
-    const wrongShown = await page.waitForSelector('#btn-pcal-wrongtip:not([hidden])', { timeout: 10000 }).then(() => true, () => false);
-    check('(10) Made with another tip… on the result card', wrongShown);
-    await press2(page, '#btn-pcal-wrongtip');
+    check('(10) the calibration\'s control text names another tip (nothing saved)', /or another tip than the 22G bent taper is on/.test(ctl) || /or another tip than the 22G bent taper is on/.test(jw.result && jw.result.sentence || ''),
+      { ctl, sentence: jw.result && jw.result.sentence });
+    // Made with another tip… (the SW record of (7): as if it was made with another tip than the 25G): Records, two presses
+    await closePanels(page);
+    await page.evaluate((id) => IL.go('#records/calibrations/p' + id), c7.id);
+    await page.waitForSelector('#panel #btn-rec-wrongtip', { timeout: 20000 });
+    await press2(page, '#btn-rec-wrongtip');
     const opened = await page.waitForFunction(() => IL.panel.isPushed('tip-change'), null, { timeout: 15000 }).then(() => true, () => false);
-    const wrongId = (jw.result.groups || []).map((g) => g.calibrationId).find((x) => x);
     const recs10 = await api(page, 'GET', '/api/pad-calibrations?limit=50');
-    const r10 = recs10.find((x) => x.id === wrongId);
+    const r10 = recs10.find((x) => x.id === c7.id);
     check('(10) Made with another tip… twice: the record shows wrong tip, Change tip opens', opened && r10 && (r10.flags || []).includes('wrong-tip'), { opened, flags: r10 && r10.flags });
     await closePanels(page);
     await page.evaluate(() => IL.go('#records/calibrations'));
     await page.click('#rec-pcals-tips button[data-tip="all"]').catch(() => null);
-    await page.waitForFunction((id) => { const b = document.querySelector('#rec-pcals-t button[data-focus-key="pcal:' + id + '"]'); return b && /wrong tip/.test(b.closest('tr').textContent); }, wrongId, { timeout: 20000 });
-    check('(10) Records shows "wrong tip" on that row', true);
+    const wrongRow = await page.waitForFunction((id) => { const b = document.querySelector('#rec-pcals-t button[data-focus-key="pcal:' + id + '"]'); return !!b && /wrong tip/.test(b.closest('tr').textContent); }, c7.id, { timeout: 20000 }).then(() => true, () => false);
+    check('(10) Records shows "wrong tip" on that row', wrongRow);
+    await shoot(page, 'records-wrong-tip', () => toTop(page, '#records-cals'));
     // the run confirm's tip tick lapsed at the mount
     const tickGone = await page.evaluate(() => !IL.attest.valid('tip-on', IL.S.status));
     await page.evaluate(() => IL.go('#run/checks'));
     await sleep(1000);
-    let confirmShown = false;
-    if (await page.isEnabled('#btn-run').catch(() => false)) {
-      await page.click('#btn-run');
-      confirmShown = await page.waitForSelector('#dlg-run #run-confirm-tip', { timeout: 8000 }).then(() => true, () => false);
-    }
+    // the confirm as a runnable board opens it (this plan is blocked: it opens anyway to show the tick, and says why
+    // it cannot run)
+    await page.waitForSelector('#btn-run', { timeout: 15000 });
+    await page.evaluate(() => { const b = document.getElementById('btn-run'); b.disabled = false; b.click(); });
+    const confirmShown = await page.waitForSelector('#dlg-run #run-confirm-tip', { timeout: 8000 }).then(() => true, () => false);
     const unticked = confirmShown ? !(await page.isChecked('#run-tick-tip')) : tickGone;
     check('(10) the run confirm\'s #run-confirm-tip is unticked after the mount', tickGone && unticked, { tickGone, confirmShown });
     if (confirmShown) {
