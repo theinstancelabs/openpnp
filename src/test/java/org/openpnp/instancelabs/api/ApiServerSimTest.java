@@ -802,6 +802,11 @@ public class ApiServerSimTest {
         JsonObject st = ok(get("/api/status")).getAsJsonObject("dispense");
         assertTrue(st.getAsJsonObject("needle").get("anchored").getAsBoolean());
         assertTrue(st.getAsJsonObject("surfaces").has("board"));
+        // Setup › Settings › Refuse flagged pads (rc1 review): the readiness reads it from the status
+        assertTrue(st.get("refuseFlaggedPads").getAsBoolean());
+        ok(call("PUT", "/api/config", "{\"refuseFlaggedPads\":false}"));
+        assertFalse(ok(get("/api/status")).getAsJsonObject("dispense").get("refuseFlaggedPads").getAsBoolean());
+        ok(call("PUT", "/api/config", "{\"refuseFlaggedPads\":true}"));
         // a needle change invalidates the frame
         assertTrue(st.getAsJsonObject("needle").get("kRefusal").isJsonNull());
         ok(post("/api/needle/changed", null));

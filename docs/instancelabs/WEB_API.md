@@ -132,7 +132,7 @@ is on: Pressure off first`).
 | `cleanPadCheck` | `enabled`, `grayLevel`, `minBrightFraction`, `boxWMm`, `boxHMm` (I10). |
 | `surfaces`, `boardSurfaceName`, `locations`, `wasteLocationName`, `blankLocationName` | Probed surfaces (with plane fit and `boundToBoard`) and named places. |
 | `primeRotationDeg`, `testDot` | Manual prime default; test-dot offset and `defaultRotationDeg` (one profile dot). |
-| `maxContinuousOnTimeS`, `minPadTypeStatus` | I7 limit, §5.7 rule. |
+| `maxContinuousOnTimeS`, `minPadTypeStatus`, `refuseFlaggedPads` | I7 limit, §5.7 rule; whether a plan with pads that cannot be dispensed is refused (`true`, the default) or those pads are skipped (`false`: the plan's interlocks note `… flagged pad(s) will be skipped`). |
 | `homeBeforeRun`, `newSeatAtMs` | `whenNeeded` \| `always`; the engine's new-seat flag (§3.2), null when cleared. |
 
 Also added for Register board and the home at run:
@@ -355,7 +355,7 @@ and refuses a weighing under `homeBeforeRun: always`; `GET /api/pad-calibrations
 wrong step is 409 `wrong-step`; `POST /api/coupons/{id}/reading` answers `{record, confirmed, text}`; the SIM balance
 view adds `mode` and `resolutionMg`, the deposits `place` and `string` (a smeared dot). Not built: PC §20 decision 6's
 per-run "Skip these N pads" (`RunResult.skippedPads` and `runs.skipped_pads` exist, but no route takes a skip list:
-Run › Checks points to Setup › Settings › Refuse flagged pads instead).
+Run › Checks points to Setup › Settings › Refuse flagged pads (`#set-refuseflagged`) instead; with it off the Pad types item is a note that counts ready and the run confirm names the pads skipped).
 
 ## 4. Pressure hold (Dispense tab)
 

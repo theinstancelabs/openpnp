@@ -211,6 +211,15 @@
       return Array.from(m.values()).map((x) => x.pkg + ' (' + (x.short ? x.short + ', ' : '') + IL.plural(x.pads, 'pad') + ')').join(', ');
     };
     const tipName = (pc.tip && pc.tip.name) || 'tip';
+    // Refuse flagged pads off (Setup › Settings, status.dispense.refuseFlaggedPads): the engine skips the pads it cannot
+    // dispense and runs the rest, so the item is a note that counts ready and names them (as the run confirm does)
+    if (d && d.refuseFlaggedPads === false && blockedN && (fix.length || tip.length)) {
+      const named = [fix.length ? list(fix) : '', tip.length ? list(tip) + ' not with the ' + tipName : ''].filter(Boolean).join('; ');
+      return Object.assign(it, { state: 'info', value: (pads.length - blockedN) + '/' + pads.length + ' · ' + blockedN + ' skipped', short: 'pad types',
+        chip: IL.plural(blockedN, 'pad') + ' skipped',
+        detail: IL.plural(blockedN, 'pad') + ' skipped (Refuse flagged pads is off): ' + named + '. The other ' + (pads.length - blockedN) + ' are dispensed.',
+        fixes: [{ href: '#setup/settings/refuse-flagged', label: 'Refuse flagged pads' }, { href: '#profile/needs', label: fix.length ? 'Needs a profile' : 'Why' }] });
+    }
     if (fix.length) {
       const fixes = [];
       for (const g of fix.slice(0, 3)) {

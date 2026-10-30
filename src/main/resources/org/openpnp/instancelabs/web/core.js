@@ -1098,7 +1098,13 @@
       const blocked = pads.filter((p) => p.blocked);
       // PLAN violations about a change after planning (gate, pad type versions) make the plan stale: item 7
       const planViol = viol.filter((v) => v.code === 'PLAN' && !/after planning/i.test(v.message));
-      if (blocked.length || (planViol.length && plan.dots && plan.dots.length)) {
+      if (blocked.length && !planViol.length && d.refuseFlaggedPads === false && plan.dots && plan.dots.length) {
+        // Refuse flagged pads off: the engine skips them and runs the rest (a note that counts ready)
+        add({ key: 'padtypes', code: 'PLAN', title: 'Pad types', state: 'info', value: (pads.length - blocked.length) + '/' + pads.length + ' · ' + blocked.length + ' skipped',
+          short: 'pad types', chip: IL.plural(blocked.length, 'pad') + ' skipped',
+          detail: IL.plural(blocked.length, 'pad') + ' skipped (Refuse flagged pads is off): ' + Array.from(new Set(blocked.map((p) => p.packageId || p.typeKey || 'no pad type'))).join(', ')
+            + '. The other ' + (pads.length - blocked.length) + ' are dispensed.', fixes: [{ href: '#setup/settings/refuse-flagged', label: 'Refuse flagged pads' }] });
+      } else if (blocked.length || (planViol.length && plan.dots && plan.dots.length)) {
         const groups = new Map();
         let belowGate = 0;
         for (const p of blocked) {

@@ -2757,7 +2757,9 @@
       return { kind: 'test', maxDots: lim.n, n: lim.n, pads, title: 'Dispense the first ' + lim.n + ' of ' + N + ' dots?',
         test: 'TEST: only the first ' + limitText(lim), scope: 'Test: the first ' + limitText(lim) + '.' };
     }
-    return { kind: kind === 'all' ? 'all' : 'full', n: N, pads: p.pads.length, title: 'Dispense ' + IL.plural(N, 'dot') + ' on ' + IL.plural(p.pads.length, 'pad') + '?',
+    // pads the engine skips (Refuse flagged pads off) are not dispensed: the confirm names them (updateDialog)
+    const nPads = p.pads.filter((x) => !x.blocked).length;
+    return { kind: kind === 'all' ? 'all' : 'full', n: N, pads: nPads, title: 'Dispense ' + IL.plural(N, 'dot') + ' on ' + IL.plural(nPads, 'pad') + '?',
       test: null, scope: kind === 'all' ? 'The whole board again, all ' + N + ' dots (wipe every pad first).' : 'Full board, all ' + N + ' dots.' };
   }
   function tick(id, text, sub) {
@@ -2900,6 +2902,9 @@
       cards.push([row.spotsLeft >= row.perBoard ? 'ok' : 'need', 'Purge spots ' + a + ' to ' + b,
         after >= 0 ? IL.plural(after, 'spot') + ' left after' + (after < row.perBoard ? ': wipe before board ' + (boardNumber(p.planId) + 1) : '') : 'only ' + row.spotsLeft + ' left: wipe and reset first']);
     } else cards.push(['block', 'Purge row not set', 'Setup › Purge row']);
+    // Refuse flagged pads off: the pads that cannot be dispensed are skipped, by package (PROFILE_CALIBRATION_DESIGN §21)
+    const skipped = (p.pads || []).filter((x) => x.blocked);
+    if (skipped.length) cards.push(['info', 'Skips ' + IL.plural(skipped.length, 'pad') + ' that cannot be dispensed', skippedText(skipped)]);
     const on = cleanEnabled(s);
     const tour = on ? '≈ ' + IL.fmtClock(tourSeconds(m.pads)) : '';
     const cc = S.cleanCheck && IL.planMatches(S.cleanCheck.planId || p.planId) ? S.cleanCheck : null;
@@ -2933,6 +2938,17 @@
     setBtnLabel(n.go, ticksLeft ? ['Tick ' + ticksLeft + ' more to run'] : [IL.icon('i-play'), 'Run ' + IL.plural(m.n, 'dot') + (est ? ' · ≈ ' + IL.fmtClock(est.total) : '')]);
     IL.gate(n.go, why || (ticksLeft ? 'Tick ' + ticksLeft + ' more to run' : null));
     IL.setClass(n.go, 'btn btn--lg ' + (m.kind === 'test' ? 'btn--test' : 'btn--primary'));
+  }
+
+  /** "WSON-8: U3.1, U3.2 … (9) · SW_SPST: J1.1 … (4)": the skipped pads by package, a few names each. */
+  function skippedText(pads) {
+    const by = new Map();
+    for (const x of pads) {
+      const k = x.packageId || x.typeKey || 'no pad type';
+      if (!by.has(k)) by.set(k, []);
+      by.get(k).push(x.padId);
+    }
+    return Array.from(by.entries()).map(([k, ids]) => k + ': ' + ids.slice(0, 3).join(', ') + (ids.length > 3 ? ' … (' + ids.length + ')' : '')).join(' · ');
   }
 
   /**

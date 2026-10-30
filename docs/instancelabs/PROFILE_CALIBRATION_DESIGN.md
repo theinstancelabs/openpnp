@@ -1847,7 +1847,9 @@ pc-ladder; pc-integration with the wave-3 integration.
   --padcal`, and the docs of §16 written from the code.
 - **Not in this PR: `pc-ladder`** (the test-board ladder, decision 8) is a follow-up; `validated` stays on the
   existing Validate guide until it comes. Decision 6's per-run skip has no API yet (`RunResult.skippedPads` exists):
-  runs skip undispensable pads only with `refuseFlaggedPads: false`.
+  runs skip undispensable pads only with `refuseFlaggedPads: false`, the switch Setup › Settings › Refuse flagged pads
+  (`#set-refuseflagged`, the link of `Dispense the rest`); with it off the Pad types item is a note that counts ready
+  (`9 pads skipped (Refuse flagged pads is off): …`) and the run confirm names the pads skipped (rc1 review).
 - **Seen in the SIM acceptance:** the Nano's LED_0805 stays `provisional` after Calibrate automatically (decision 3's
   one turn is +33 % on the machine, +47 % with the SIM's 2.30 mg per turn; half a turn −33 % / −27 %: no allowed dose
   is within −25 %/+10 %), so the Nano's 8 LED pads need a reflowed test board or a hand raise; a block switch from

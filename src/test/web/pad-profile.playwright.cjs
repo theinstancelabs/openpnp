@@ -242,12 +242,13 @@ async function weighCoupon(page, place) {
       await api(page, 'PUT', '/api/locations/' + c.place, { x: (c.rect[0] + c.rect[2]) / 2, y: (c.rect[1] + c.rect[3]) / 2, z: c.z });
     }
     // the needle's Z frame on the blank (webui-sim.playwright.cjs made it there; a config copied from a bench may carry
-    // the bench's): the bench relation K = 65.59 mm, then that offset confirmed (I4)
+    // the bench's): both tips on the blank, the needle 2.59 mm under N1 as the SIM's see-saw has it (K 65.59 mm; K is
+    // refused after a failed Z check of this home, which webui-sim's last step leaves), then that offset confirmed (I4)
     s = await status(page);
     const nd = s.dispense.needle;
     const bzMid = Number(bz((bx0 + bx1) / 2, (by0 + by1) / 2).toFixed(3));
     if (!nd.anchored || !nd.anchor || Math.abs(nd.anchor.surfaceZMm - bzMid) > 0.5 || !nd.touchedOff) {
-      await api(page, 'POST', '/api/needle/anchor', { surfaceZ: bzMid, needleContactRawSum: 65.59, note: 'pad-profile test (SIM)' });
+      await api(page, 'POST', '/api/needle/anchor', { surfaceZ: bzMid, needleContactZ: Number((bzMid - 2.59).toFixed(3)), note: 'pad-profile test (SIM)' });
       await api(page, 'POST', '/api/needle/offset', { offsetMm: -2.59, note: 'pad-profile test (SIM)' });
     }
     await api(page, 'POST', '/api/screw/start-angle', { note: 'pad-profile test (SIM)' });
@@ -448,6 +449,56 @@ async function weighCoupon(page, place) {
         : /^A test run lays whole pads: the first pad, \S+, has \d+ dots, so ask for at least \d+$/.test(t9.err), t9);
       await page.click('#btn-run-test');   // back to the full board
     } else check('(9) Test run with fewer dots: the plan has a two-dot pad to cut inside', false, 'no two dots of one pad in a row');
+
+    // ---- (9b) Refuse flagged pads (rc1 review): "Dispense the rest" opens the switch in Setup › Settings; off, the engine
+    // skips the pads it cannot dispense (WSON-8 with the 22G tip, Test_Strip with no profile yet) and runs the rest: Pad
+    // types is a note that counts ready, and the run confirm names the pads skipped
+    const tipOnly = await page.evaluate(() => {
+      const p = JSON.parse(JSON.stringify(IL.S.plan));
+      p.profileCheck.groups = p.profileCheck.groups.filter((g) => g.reason === 'tip' || g.reason === 'part' || g.reason === 'outside');
+      const it = IL.readiness(IL.S.status, p, IL.readyCtx()).items.find((x) => x.key === 'padtypes');
+      return { state: it.state, short: it.short, fixes: it.fixes.map((f) => [f.href || f.fix, f.label]) };
+    });
+    check('(9b) tip groups only: Blocked · the 22G tip, "Dispense the rest" links #setup/settings/refuse-flagged', tipOnly.state === 'block' && tipOnly.short === 'the 22G tip'
+      && tipOnly.fixes[0][0] === '#setup/settings/refuse-flagged', tipOnly);
+    await page.evaluate(() => IL.go('#setup/settings/refuse-flagged'));
+    await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'set-refuseflagged', null, { timeout: 15000 }).catch(() => null);
+    const sw = await page.evaluate(() => { const e = document.getElementById('set-refuseflagged'); const r = e && e.getBoundingClientRect();
+      return { focused: document.activeElement === e, checked: !!e && e.checked, inView: !!r && r.top >= 0 && r.bottom <= innerHeight,
+        label: (document.querySelector('label[for="set-refuseflagged"] .tick__t') || {}).textContent }; });
+    check('(9b) the link focuses Setup › Settings › Refuse flagged pads (on: "a board with pads that cannot be dispensed is refused")',
+      sw.focused && sw.checked && sw.inView && sw.label === 'On: a board with pads that cannot be dispensed is refused', sw);
+    await page.evaluate(() => { const e = document.getElementById('set-refuseflagged'); e.closest('.card').scrollIntoView({ block: 'center' }); });
+    await shoot(page, 'fix-refuse-flagged-setting', () => page.evaluate(() => document.getElementById('set-refuseflagged').closest('.card').scrollIntoView({ block: 'center' })));
+    await page.click('label[for="set-refuseflagged"]');
+    await page.click('#btn-settings');
+    await page.waitForFunction(() => IL.S.status.dispense.refuseFlaggedPads === false, null, { timeout: 15000 }).catch(() => null);
+    await page.waitForFunction(() => !IL.S.planPending && ((IL.S.plan.interlocks || {}).notes || []).some((n) => /flagged pad\(s\) will be skipped/.test(n)), null, { timeout: 20000 }).catch(() => null);
+    await api(page, 'POST', '/api/purge-row/reset', {});   // the operator wiped the purge row after the job
+    await page.evaluate(() => IL.go('#run/checks'));
+    await page.waitForFunction(() => { const it = IL.ready().items.find((x) => x.key === 'padtypes'); return it && it.state === 'info'; }, null, { timeout: 20000 }).catch(() => null);
+    const off = await page.evaluate(() => { const r = IL.ready(); const it = r.items.find((x) => x.key === 'padtypes');
+      return { state: it.state, value: it.value, detail: it.detail, verdict: r.verdict.text, canRun: r.canRun, runReason: r.runReason,
+        blocked: (IL.S.plan.pads || []).filter((x) => x.blocked).length }; });
+    check('(9b) off: Pad types is a note that counts ready, naming the pads skipped (WSON-8 not with the 22G tip, Test_Strip)', off.state === 'info'
+      && new RegExp('^\\d+/\\d+ · ' + off.blocked + ' skipped$').test(off.value) && /^\d+ pads skipped \(Refuse flagged pads is off\): .*Test_Strip.*WSON.* not with the 22G tip\. The other \d+ are dispensed\.$/.test(off.detail)
+      && !/needs a profile|22G tip/.test(off.verdict), off);
+    await shoot(page, 'fix-refuse-flagged-off-checks', () => toTop(page, '#chk-needs', null));
+    if (off.canRun) {
+      await page.click('#btn-run');
+      await page.waitForSelector('#dlg-run #run-sensed', { timeout: 10000 }).catch(() => null);
+      const cf = await page.evaluate(() => ({ title: (document.querySelector('#dlg-run .dialog__title') || document.querySelector('#dlg-run h2') || {}).textContent,
+        sensed: Array.from(document.querySelectorAll('#run-sensed .tick')).map((t) => t.textContent) }));
+      check('(9b) off: the run confirm names the pads skipped by package', cf.sensed.some((t) => new RegExp('^Skips ' + off.blocked + ' pads that cannot be dispensed.*WSON').test(t)), cf);
+      await shoot(page, 'fix-refuse-flagged-off-confirm', null);
+      await page.click('#btn-run-cancel');
+    } else check('(9b) off: Run can start (the confirm names the pads skipped)', false, off.runReason);
+    // back on for what follows
+    await page.evaluate(() => IL.go('#setup/settings/refuse-flagged'));
+    await page.waitForSelector('#set-refuseflagged', { state: 'visible', timeout: 10000 });
+    await page.click('label[for="set-refuseflagged"]');
+    await page.click('#btn-settings');
+    await page.waitForFunction(() => IL.S.status.dispense.refuseFlaggedPads === true, null, { timeout: 15000 }).catch(() => null);
     await page.evaluate(() => IL.go('#profile/needs'));   // (10) starts from the Needs list
     await sleep(1500);
 

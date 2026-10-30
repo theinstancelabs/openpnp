@@ -174,6 +174,7 @@ final class DispenseEndpoints {
                 "defaultRotationDeg", defaultTestDotRotation(cfg)));
         d.put("maxContinuousOnTimeS", cfg.maxContinuousOnTimeS);
         d.put("minPadTypeStatus", cfg.minPadTypeStatus);
+        d.put("refuseFlaggedPads", cfg.refuseFlaggedPads);
         d.put("homeBeforeRun", cfg.homeBeforeRun);
         d.put("newSeatAtMs", cfg.newSeatAtMs);
         RunResult last = svc.getLastRun();

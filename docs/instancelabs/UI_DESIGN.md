@@ -540,7 +540,9 @@ your tick is kept in this browser.`; filter `All steps | Needs you · 2`.
    controller connected time; `Open Profile ›`, `Measure the angle ›`.
 8. **Settings** (`#card-settings`, full width): `#set-maxon` (s, I7), `#set-valvesettle` (ms, `valveSettleMs`),
    `#set-pumpsettle` (ms), `#set-minstatus` labelled **Lowest pad-type status allowed on a board**, `#set-clean`
-   `Clean-pad check before each board (I10)` (with `Off (simulator)` wording in sim), I10 thresholds (gray level,
+   `Clean-pad check before each board (I10)` (with `Off (simulator)` wording in sim), `#set-refuseflagged`
+   **Refuse flagged pads** (`refuseFlaggedPads`; `On: a board with pads that cannot be dispensed is refused` / `Off:
+   those pads are skipped, the rest dispensed`; the deep link `#setup/settings/refuse-flagged` focuses it), I10 thresholds (gray level,
    min bright share, box) in a disclosure, `Save settings` (`#btn-settings`). Disclosure **All settings (advanced
    JSON)** (`#set-advanced`): `#set-json` editor, inline JSON validation, a diff of changed keys
    (`#set-json-diff`), stamped keys marked read-only, `Reload and keep my edits`, `Save changed keys`
@@ -691,7 +693,7 @@ the Run button state and the tab title. Nothing else may compute "ready". Unit-t
 | 2 | Start angle (I11) | I11 `ok` or `off` | reconnect → needs-you: the two answers in place; never set → blocked: `Measure the angle` |
 | 3 | Needle offset (I4 needle) | frame set, touched off or confirmed, drift ≤ 1.0 mm | not touched off but frame set → needs-you: `Confirm frame offset −2.590 mm`; frame missing / needle changed → blocked: `Open Needle Z frame` |
 | 4 | Regulator (I6, you) | a valid attestation (§9.4) | needs-you: `Pressure on to read the gauge` + `Reads 18 psi` |
-| 5 | Pad types (PLAN) | no blocked pads | blocked: `3 pads below characterized: chip-0603 ×2, sot-23 ×1` → each opens that type. **As built (pc-web), with the plan's profile check:** groups that need a profile → `Blocked · needs a profile`, `21 pads cannot be dispensed: 12 need a profile, 9 not with the 22G tip (WSON-8…)`, fixes `Use Chip 0603 for TestChip_A · plans again` / `Needs a profile: SW_SPST_3.9x2.9mm` (up to 3), `All 3 in Profile › Needs a profile`, `Lowest pad-type status`; only pads the tip cannot dispense → blocked, `9 pads cannot be dispensed with the 22G tip: WSON-8… (9 pads).`, fixes `Dispense the rest (Setup › Settings › Refuse flagged pads)` and `Why`; only notes → a Note that counts ready (`160/160 · 2 notes`). The Pad types tile goes to `#profile/needs` |
+| 5 | Pad types (PLAN) | no blocked pads | blocked: `3 pads below characterized: chip-0603 ×2, sot-23 ×1` → each opens that type. **As built (pc-web), with the plan's profile check:** groups that need a profile → `Blocked · needs a profile`, `21 pads cannot be dispensed: 12 need a profile, 9 not with the 22G tip (WSON-8…)`, fixes `Use Chip 0603 for TestChip_A · plans again` / `Needs a profile: SW_SPST_3.9x2.9mm` (up to 3), `All 3 in Profile › Needs a profile`, `Lowest pad-type status`; only pads the tip cannot dispense → blocked, `9 pads cannot be dispensed with the 22G tip: WSON-8… (9 pads).`, fixes `Dispense the rest (Setup › Settings › Refuse flagged pads)` and `Why`; with Refuse flagged pads off (`status.dispense.refuseFlaggedPads` false: the engine skips them) → a Note that counts ready, `151/160 · 9 skipped`, `9 pads skipped (Refuse flagged pads is off): WSON-8 (9 pads) not with the 22G tip. The other 151 are dispensed.`, fixes `Refuse flagged pads` and `Why` (or `Needs a profile`), and the run confirm adds `Skips 9 pads that cannot be dispensed` with the pads by package (its title counts only the pads dispensed); only notes → a Note that counts ready (`160/160 · 2 notes`). The Pad types tile goes to `#profile/needs` |
 | 6 | Board surface (I4 board) | tied to this plan's registration, covers every dot, fit ok, and the operator did not answer "new seat" since | needs-you: `Probe this seat` / `Same board, not moved`; fit or coverage problem → blocked with the bad points/dots. **As built:** the fix is `Register board` (`register`, two-press) or `Same seat? Check the fiducials` (`register-check`), with `Do it by hand`; texts `No board surface for this seat yet: register the board (fiducials, then N1 touches the board).`, `You said the board was re-seated: register it …`, `The board surface belongs to another seat of this board: register it again.` |
 | 7 | Plan current | plan exists on the server and its fingerprints match (profile, surface, needle, registration) | needs-you: `Plan again` (in place); 404 → `Plan forgotten (OpenPnP restarted): plan again` |
 | 8 | Purge row (I9) | `spotsLeft ≥ perBoard` | needs-you: `Wiped: reset row` (two-press); not set → blocked: `Set the purge row` |
@@ -1062,7 +1064,7 @@ verdict), `toast` (`Settings saved`, `STOPPED…`), `board-select`, `board-file`
 `trim-dx`, `trim-dy`, `trim-note`, `btn-trim`, `surf-name`, `btn-surf-add`, `btn-surf-clear`, `surf-points`,
 `btn-surf-save`, `surf-state`, `pr-state`, `pr-surface`, `pr-x0`, `pr-y0`, `pr-pitchx`, `pr-pitchy`, `pr-spots`,
 `btn-pr-usexy`, `btn-pr-save`, `btn-pr-reset`, `pr-kv`, `interlock-list` (`li.ok/.warning/.blocked/.off/.info`),
-`set-maxon`, `set-minstatus`, `set-clean`, `btn-settings`, `set-json`, `btn-settings-json`, `cal-history-note`,
+`set-maxon`, `set-minstatus`, `set-refuseflagged`, `set-clean`, `btn-settings`, `set-json`, `btn-settings-json`, `cal-history-note`,
 `setup-guide`, all `shots-*`, `ss-*`, `dl-*`, `sd-*`, `to-*` and their buttons, `cal-current`, `cal-table`,
 `ladder-table`, `cal-result`, `pf-card`, `pf-title-name`, `pf-name`, `pf-psi`, `pf-dwell`, `pf-psi-note`, `pf-turn`,
 `pf-suck`, `pf-gap`, `pf-turn-info`, `pf-rpm`, `pf-accel`, `pf-purge`, `pf-rpm-warn`, `pf-notes`, `pf-problems`,
@@ -1163,7 +1165,7 @@ The pad calibration (pc-task, pc-web) added `status.padCalibration` (the job vie
 per job id), `run.label` `pad calibration`, the plan's `profileCheck` and per-pad / per-dot dose fields, the upload
 preview's profile column, and the routes of `WEB_API.md` §3.4–3.5 (the crops as PNG; the SIM balance and paste for
 tests). Still missing for the UI: a per-run skip of undispensable pads (PC §20 decision 6: `POST /api/run`
-`{skipPads}` recorded as `skippedPads`); until then the Pad types card points to the Refuse flagged pads setting.
+`{skipPads}` recorded as `skippedPads`); until then the Pad types card points to the Refuse flagged pads setting (`#set-refuseflagged`; off, the item is a note that counts ready and the confirm names the pads skipped).
 | Run-only abort (stop after this dot, stay connected and homed) | softer stop | not offered; STOP is the only stop (open question, not required) |
 
 ## 18. Acceptance checklist

@@ -176,11 +176,11 @@
     if (W.filter === 'needs' && c.dataset.ok === '1') setFilter('all');
     IL.flash(c);
   }
-  /** A deep link to one field: #setup/places/<name> (its Z), #setup/settings/min-status | max-on. */
+  /** A deep link to one field: #setup/places/<name> (its Z), #setup/settings/min-status | max-on | refuse-flagged. */
   function focusTarget(sec, id) {
     let f = null;
     if (sec === 'places') { const r = P.rows.get(id); f = r && r.z.el; }
-    else if (sec === 'settings') f = $({ 'min-status': 'set-minstatus', 'max-on': 'set-maxon' }[id] || '');
+    else if (sec === 'settings') f = $({ 'min-status': 'set-minstatus', 'max-on': 'set-maxon', 'refuse-flagged': 'set-refuseflagged' }[id] || '');
     if (f && f.focus) { f.focus({ preventScroll: true }); if (f.select) f.select(); }
   }
   const SECTION_CARD = { needle: 'needle', trim: 'needle', surfaces: 'surfaces', blank: 'surfaces', purge: 'purge', pressure: 'pressure',
@@ -1888,6 +1888,12 @@
       el('option', { value: 'always', text: 'Always home first' })));
     F.homebefore.kind = 'select';
     F.clean = fld(el('input', { type: 'checkbox', id: 'set-clean' }));
+    // refuseFlaggedPads: a board with pads that cannot be dispensed (no profile, below the gate, not with this tip) is
+    // refused, or those pads are skipped and the rest dispensed (Run › Checks and the run confirm name them)
+    F.refuse = fld(el('input', { type: 'checkbox', id: 'set-refuseflagged' }));
+    c.refuseLbl = el('span', { class: 'tick__t' });
+    c.refuseHint = el('div', { class: 'field__h' });
+    c.refuseTick = el('label', { class: 'tick su-clean', for: 'set-refuseflagged' }, F.refuse.el, el('div', {}, c.refuseLbl));
     F.gray = fld(input('set-gray', { inputmode: 'numeric' }), {});
     F.bright = fld(input('set-minbright'), {});
     F.boxw = fld(input('set-boxw'), { d: 3 });
@@ -1906,7 +1912,8 @@
       field('Pump settle', 'ms', F.pump.el, { hint: 'pump on → valve open (pumpToValveSettleMs)' }),
       field('Lowest pad-type status allowed on a board', null, F.minstatus.el, { hint: 'pads below it are not dispensed: plan again after a change' }),
       field('Before Register board, Probe and Run', null, F.homebefore.el, { hint: 'needed: not homed, or stopped since the last home. They home by themselves (pressure off) and say so first; nothing else homes' }),
-      el('div', { class: 'field su-span2' }, el('div', { class: 'field__l' }, el('span', {}, 'Clean-pad check before each board (', abbr('I10', 'Interlock I10: pads clean before the pressure goes on'), ')')), c.cleanTick, c.cleanHint));
+      el('div', { class: 'field su-span2' }, el('div', { class: 'field__l' }, el('span', {}, 'Clean-pad check before each board (', abbr('I10', 'Interlock I10: pads clean before the pressure goes on'), ')')), c.cleanTick, c.cleanHint),
+      el('div', { class: 'field su-span2' }, el('div', { class: 'field__l' }, el('span', { text: 'Refuse flagged pads' })), c.refuseTick, c.refuseHint));
     c.setErr = el('div', { class: 'field__err su-set-err', id: 'settings-err', role: 'status', hidden: true });
     c.body.append(c.grid, c.i10, c.setErr, buildJson(c));
     c.bSave = btn('Save settings', { id: 'btn-settings' });
@@ -1925,6 +1932,7 @@
       if (dirty(F.pump)) patch.pumpToValveSettleMs = need(F.pump, 'the pump settle time in ms');
       if (dirty(F.minstatus)) patch.minPadTypeStatus = val(F.minstatus);
       if (dirty(F.homebefore)) patch.homeBeforeRun = val(F.homebefore);
+      if (dirty(F.refuse)) patch.refuseFlaggedPads = F.refuse.el.checked;
       const cp = {};
       if (dirty(F.clean)) cp.enabled = F.clean.el.checked;
       if (dirty(F.gray)) cp.grayLevel = need(F.gray, 'the gray level (0 to 255)');
@@ -1934,7 +1942,7 @@
       if (Object.keys(cp).length) patch.cleanPadCheck = cp;
       if (!Object.keys(patch).length) throw bad('No unsaved changes.');
       const r = await IL.api('PUT', '/api/config', patch);
-      clean(F.maxon, F.valve, F.pump, F.minstatus, F.homebefore, F.clean, F.gray, F.bright, F.boxw, F.boxh);
+      clean(F.maxon, F.valve, F.pump, F.minstatus, F.homebefore, F.refuse, F.clean, F.gray, F.bright, F.boxw, F.boxh);
       await IL.loadConfig();
       IL.planRefreshSoon();
       return r;
@@ -2073,6 +2081,7 @@
     sync(F.pump, cfg ? cfg.pumpToValveSettleMs : null);
     sync(F.minstatus, src.minPadTypeStatus || 'characterized');
     sync(F.homebefore, (cfg && cfg.homeBeforeRun) || d.homeBeforeRun || 'whenNeeded');
+    sync(F.refuse, (cfg ? cfg.refuseFlaggedPads : d.refuseFlaggedPads) !== false);
     sync(F.clean, !!cpc.enabled);
     sync(F.gray, cpc.grayLevel);
     sync(F.bright, cpc.minBrightFraction);
@@ -2086,8 +2095,13 @@
       : 'The run looks at every pad with the top camera (≈ 3 min) before the pressure goes on.')
       : sim ? 'Simulator: the camera is a static picture, so every pad would read dirty.' : 'The run does not look at the pads: wipe them by eye before each board.');
     c.cleanTick.classList.toggle('on', on);
+    const refuse = F.refuse.el.checked;
+    IL.setText(c.refuseLbl, refuse ? 'On: a board with pads that cannot be dispensed is refused' : 'Off: those pads are skipped, the rest dispensed');
+    IL.setText(c.refuseHint, refuse ? 'Pads with no profile, below the lowest status or not dispensable with the mounted tip block the run until they are fixed.'
+      : 'Run › Checks and the run confirm name the pads skipped.');
+    c.refuseTick.classList.toggle('on', refuse);
     const lock = IL.lockReason(s, { pressureOff: false });
-    const any = [F.maxon, F.valve, F.pump, F.minstatus, F.homebefore, F.clean, F.gray, F.bright, F.boxw, F.boxh].some(dirty);
+    const any = [F.maxon, F.valve, F.pump, F.minstatus, F.homebefore, F.refuse, F.clean, F.gray, F.bright, F.boxw, F.boxh].some(dirty);
     const errs = settingsErrors();
     IL.setText(c.setErr, errs.join(' '));
     IL.show(c.setErr, errs.length > 0);
