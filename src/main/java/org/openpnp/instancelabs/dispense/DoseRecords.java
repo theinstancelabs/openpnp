@@ -281,8 +281,8 @@ public final class DoseRecords {
     }
 
     /**
-     * As {@link #fresh(List, DispenseConfig, DoseRecord.Epochs, long)} without the records of the jobs flagged
-     * wrong-tip (tip setups design §22.3): they leave the setup's evidence.
+     * The records fresh for the current setup (§1.7), oldest first, without the records of the jobs flagged wrong-tip
+     * (tip setups design §22.3): they leave the setup's evidence.
      */
     public static List<DoseRecord> fresh(List<DoseRecord> records, DispenseConfig cfg, DoseRecord.Epochs epochs,
             long nowMs, Set<String> flaggedJobs) {
@@ -294,18 +294,6 @@ public final class DoseRecords {
             }
         }
         return l;
-    }
-
-    /**
-     * The records fresh for the current setup (§1.7), oldest first.
-     *
-     * @deprecated the records of jobs flagged wrong-tip count here: {@link #fresh(List, DispenseConfig,
-     *             DoseRecord.Epochs, long, Set)}
-     */
-    @Deprecated
-    public static List<DoseRecord> fresh(List<DoseRecord> records, DispenseConfig cfg, DoseRecord.Epochs epochs,
-            long nowMs) {
-        return fresh(records, cfg, epochs, nowMs, java.util.Collections.emptySet());
     }
 
     /**
@@ -332,26 +320,14 @@ public final class DoseRecords {
     }
 
     /**
-     * As {@link #evidence(List, DispenseConfig, DoseRecord.Epochs, long)} without the records of the jobs flagged
-     * wrong-tip (tip setups design §22.3).
+     * The pooled evidence of every dose from the fresh records (§1.7, §7.6): camera records (ladder and
+     * coupon) pooled through {@link LadderStats#of}, a record without dots by its own verdict, and the
+     * weighed mass of every fresh reading ({@link LadderStats#mass}); the records of the jobs flagged wrong-tip
+     * left out (tip setups design §22.3).
      */
     public static Map<Integer, DoseEvidence> evidence(List<DoseRecord> records, DispenseConfig cfg,
             DoseRecord.Epochs epochs, long nowMs, Set<String> flaggedJobs) {
         return pooled(records, fresh(records, cfg, epochs, nowMs, flaggedJobs), cfg);
-    }
-
-    /**
-     * The pooled evidence of every dose from the fresh records (§1.7, §7.6): camera records (ladder and
-     * coupon) pooled through {@link LadderStats#of}, a record without dots by its own verdict, and the
-     * weighed mass of every fresh reading ({@link LadderStats#mass}).
-     *
-     * @deprecated the records of jobs flagged wrong-tip count here: {@link #evidence(List, DispenseConfig,
-     *             DoseRecord.Epochs, long, Set)}
-     */
-    @Deprecated
-    public static Map<Integer, DoseEvidence> evidence(List<DoseRecord> records, DispenseConfig cfg,
-            DoseRecord.Epochs epochs, long nowMs) {
-        return evidence(records, cfg, epochs, nowMs, java.util.Collections.emptySet());
     }
 
     /** The evidence pooled from the fresh records ({@code all}: every record, for the coupons of the readings). */

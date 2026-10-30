@@ -387,19 +387,7 @@ final class DispenseEndpoints {
      */
     NeedleChange recordNeedleChange(DispenseService svc, String why, String operator) throws Exception {
         ctx.padCalJobs.needleChanging(System.currentTimeMillis());
-        NeedleChange nc = EngineFallback.orBefore(() -> svc.recordNeedleChange(why, operator), () -> {
-            svc.markNeedleChanged();
-            DispenseConfig c = svc.getConfig();
-            NeedleChange x = new NeedleChange();
-            x.atMs = c.needleChangedAtMs;
-            x.setupKey = c.tip.key;
-            x.setupName = c.tip.name;
-            x.why = why;
-            x.operator = operator;
-            x.text = "The needle change is recorded: dispensing is blocked (I4) until the needle Z frame is recorded "
-                    + "again (N1 and needle contact) and the needle is touched off.";
-            return x;
-        });
+        NeedleChange nc = svc.recordNeedleChange(why, operator);
         ctx.padCalJobs.needleChanged(nc);
         return nc;
     }
@@ -426,13 +414,7 @@ final class DispenseEndpoints {
         }
         Long token = token(b);
         String note = Json.str(b, "note", "entered in the web UI");
-        DispenseService.NeedleFrameResult f = EngineFallback.orBefore(() -> svc.setNeedleZOffset(off, "manual", note,
-                token), () -> {
-                    svc.setNeedleZOffset(off, "manual", note);
-                    DispenseService.NeedleFrameResult x = new DispenseService.NeedleFrameResult();
-                    x.offsetMm = off;
-                    return x;
-                });
+        DispenseService.NeedleFrameResult f = svc.setNeedleZOffset(off, "manual", note, token);
         return Views.map("zOffsetMm", off, "touchedOff", svc.getConfig().isNeedleTouchedOff(), "question", f.question,
                 "warning", f.warning);
     }
@@ -458,13 +440,7 @@ final class DispenseEndpoints {
         Long token = token(b);
         Double x = Json.num(b, "x", null);
         Double y = Json.num(b, "y", null);
-        DispenseService.NeedleFrameResult f = EngineFallback.orBefore(() -> svc.setNeedleAnchor(sz, nz, x, y, rawSum,
-                token), () -> {
-                    DispenseService.NeedleFrameResult o = new DispenseService.NeedleFrameResult();
-                    o.anchor = svc.setNeedleAnchor(sz, nz, x, y, rawSum);
-                    o.offsetMm = o.anchor.offsetMm();
-                    return o;
-                });
+        DispenseService.NeedleFrameResult f = svc.setNeedleAnchor(sz, nz, x, y, rawSum, token);
         DispenseConfig.NeedleAnchor a = f.anchor;
         return Views.map("anchor", a, "offsetMm", a.offsetMm(), "touchedOff", svc.getConfig().isNeedleTouchedOff(),
                 "note", "needle Z offset set to " + String.format(java.util.Locale.ROOT, "%.3f", a.offsetMm())
@@ -490,14 +466,7 @@ final class DispenseEndpoints {
             throw ApiException.refused("the trim cannot change while a dispense task runs");
         }
         String note = Json.str(b, "note", null);
-        DispenseConfig.NeedleXyTrim t = EngineFallback.orBefore(() -> svc.setXyTrim(dx, dy, note, token), () -> {
-            DispenseConfig c = svc.getConfig();
-            c.needleXyTrim.dxMm = dx;
-            c.needleXyTrim.dyMm = dy;
-            c.needleXyTrim.note = note;
-            svc.updateConfig(c);
-            return svc.getConfig().needleXyTrim;
-        });
+        DispenseConfig.NeedleXyTrim t = svc.setXyTrim(dx, dy, note, token);
         return Views.map("needleXyTrim", t);
     }
 
@@ -545,9 +514,9 @@ final class DispenseEndpoints {
      * or the trim was set.
      */
     static Map<String, Object> landingStatus(DispenseService svc, DispenseConfig cfg) {
-        boolean checked = EngineFallback.quietly(svc::isNeedleXyChecked, () -> true);
-        double[] now = EngineFallback.quietly(svc::headOffsetNow, () -> null);
-        String keepWhy = EngineFallback.quietly(svc::keepLandingProblem, () -> null);
+        boolean checked = svc.isNeedleXyChecked();
+        double[] now = svc.headOffsetNow();
+        String keepWhy = svc.keepLandingProblem();
         DispenseConfig.NeedleLanding l = cfg.needleLanding;
         DispenseConfig.NeedleXyTrim t = cfg.needleXyTrim;
         Map<String, Object> landing = Views.map("known", l != null, "dxMm", l == null ? null : l.dxMm, "dyMm",
@@ -685,11 +654,7 @@ final class DispenseEndpoints {
         }
         boolean simulated = SimGuard.isSimulated(ctx.machine());
         DispenseService.ConfigEdit edit = live -> merged(svc, live, patch, forTip, simulated);
-        EngineFallback.orBefore(() -> svc.updateConfigAtomically(edit), () -> {
-            svc.updateConfig(edit.apply(svc.getConfig())); // validates; IllegalArgumentException -> 400
-            return null;
-        });
-        return svc.getConfig();
+        return svc.updateConfigAtomically(edit); // validates; IllegalArgumentException -> 400
     }
 
     /** The patch merged into the live configuration; its protected settings compared with the live values. */

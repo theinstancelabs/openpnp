@@ -28,6 +28,7 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.openpnp.instancelabs.padprofile.Tip;
 import org.openpnp.instancelabs.board.EdtRunner;
 import org.openpnp.instancelabs.dispense.DispenseConfig;
 import org.openpnp.instancelabs.dispense.DispenseService;
@@ -629,7 +630,7 @@ public class PadCalibrationJobTest {
 
     @Test
     public void theEngineWritesCharacterizedOnlyWithEveryCheckAndNeverValidated() throws Exception {
-        org.openpnp.instancelabs.dispense.PadType t = svc.getDb().currentPadType("chip-0805").copy();
+        org.openpnp.instancelabs.dispense.PadType t = svc.getDb().currentPadType("chip-0805", Tip.SEED_KEY).copy();
         t.status = org.openpnp.instancelabs.dispense.PadTypeStatus.CHARACTERIZED;
         org.openpnp.instancelabs.dispense.PadCalibrationRecord rec = new org.openpnp.instancelabs.dispense
                 .PadCalibrationRecord();
@@ -638,7 +639,7 @@ public class PadCalibrationJobTest {
         rec.outcome = org.openpnp.instancelabs.dispense.PadCalibrationRecord.CHARACTERIZED;
         rec.checks.add(new org.openpnp.instancelabs.dispense.PadCalibrationRecord.Check("optical", true, "ok"));
         rec.checks.add(new org.openpnp.instancelabs.dispense.PadCalibrationRecord.Check("mass", false, "weighed once"));
-        int before = svc.getDb().currentPadType("chip-0805").version;
+        int before = svc.getDb().currentPadType("chip-0805", Tip.SEED_KEY).version;
         try {
             svc.applyPadCalibration(rec, t);
             throw new AssertionError("a failed check cannot write characterized");
@@ -655,11 +656,11 @@ public class PadCalibrationJobTest {
         catch (IllegalArgumentException e) {
             assertTrue(e.getMessage().startsWith("a pad calibration never writes validated"), e.getMessage());
         }
-        assertEquals(before, svc.getDb().currentPadType("chip-0805").version, "nothing was written");
+        assertEquals(before, svc.getDb().currentPadType("chip-0805", Tip.SEED_KEY).version, "nothing was written");
         t.status = org.openpnp.instancelabs.dispense.PadTypeStatus.CHARACTERIZED;
         org.openpnp.instancelabs.dispense.PadCalibrationRecord stored = svc.applyPadCalibration(rec, t);
         assertEquals(Integer.valueOf(before + 1), stored.versionTo);
-        assertEquals("characterized", svc.getDb().currentPadType("chip-0805").status.dbName);
+        assertEquals("characterized", svc.getDb().currentPadType("chip-0805", Tip.SEED_KEY).status.dbName);
     }
 
     // ------------------------------------------------------------------------------------------

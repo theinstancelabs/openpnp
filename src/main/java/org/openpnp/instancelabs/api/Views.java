@@ -20,6 +20,7 @@ import org.openpnp.instancelabs.dispense.HomeTracker;
 import org.openpnp.instancelabs.dispense.InterlockReport;
 import org.openpnp.instancelabs.dispense.MountResult;
 import org.openpnp.instancelabs.dispense.NeedleChange;
+import org.openpnp.instancelabs.dispense.PadCalibrationRecord;
 import org.openpnp.instancelabs.dispense.PadCleanReport;
 import org.openpnp.instancelabs.dispense.PadType;
 import org.openpnp.instancelabs.dispense.PadTypeStatus;
@@ -34,6 +35,7 @@ import org.openpnp.instancelabs.dispense.TipSetup;
 import org.openpnp.instancelabs.dispense.TipSetups;
 import org.openpnp.instancelabs.dispense.VacuumProber;
 import org.openpnp.instancelabs.padprofile.DoseModel;
+import org.openpnp.instancelabs.padprofile.Texts;
 import org.openpnp.instancelabs.padprofile.Tip;
 
 /** JSON shapes of engine objects (stable names for the web UI; engine enums as their db names). */
@@ -474,15 +476,29 @@ final class Views {
         return m;
     }
 
-    /**
-     * "Chip 0603": a pad type as Profile names it (W/padprofile.js typeLabel): the family's word when it is one word
-     * (its note in brackets left out) and not Custom, and the name; a name that holds " · " alone.
-     */
-    static String typeLabel(String family, String name, String typeKey) {
-        String fam = family == null ? "" : family.replaceAll("\\s*\\([^)]*\\)\\s*", " ").replaceAll("\\s+", " ").trim();
-        String n = name != null ? name : typeKey != null ? typeKey : "";
-        boolean word = !fam.isEmpty() && !fam.contains(" ") && !"custom".equalsIgnoreCase(fam) && !n.contains(" · ");
-        return (word ? fam + " " : "") + n;
+    /** A pad calibration record (§12.2, §22.6): its fields; the list adds its setup, label, photos and flags. */
+    static Map<String, Object> padCalibration(PadCalibrationRecord r) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", r.id);
+        m.put("createdAtMs", r.createdAtMs);
+        m.put("jobId", r.jobId);
+        m.put("typeKey", r.typeKey);
+        m.put("versionFrom", r.versionFrom);
+        m.put("versionTo", r.versionTo);
+        m.put("outcome", r.outcome);
+        m.put("steps", r.steps);
+        m.put("dotsPerPad", r.dotsPerPad);
+        m.put("massPerPadMg", r.massPerPadMg);
+        m.put("checks", r.checks);
+        m.put("evidence", r.evidence);
+        m.put("runs", r.runs);
+        m.put("simulated", r.simulated);
+        m.put("message", r.message);
+        m.put("operator", r.operator);
+        m.put("setupKey", r.setupKey);
+        m.put("method", r.method);
+        m.put("needleSinceMs", r.needleSinceMs);
+        return m;
     }
 
     // ------------------------------------------------------------------------------------------
@@ -631,7 +647,7 @@ final class Views {
                 provisional++;
             }
             if (t.status.atLeast(PadTypeStatus.CHARACTERIZED)) {
-                names.add(typeLabel(t.family, t.name, t.typeKey));
+                names.add(Texts.typeWords(t.family, t.name == null ? t.typeKey : t.name));
             }
         }
         return map("validated", validated, "characterized", characterized, "provisional", provisional, "names",

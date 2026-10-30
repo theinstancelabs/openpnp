@@ -287,7 +287,7 @@ final class TipSetupEndpoints {
             }
             consequences.add("Plans made before go stale.");
             DispenseConfig.NeedleLanding l = parked == null ? null : parked.needleLanding;
-            String head = headOffsetWarning(s.name, EngineFallback.quietly(svc::headOffsetNow, () -> null),
+            String head = headOffsetWarning(s.name, svc.headOffsetNow(),
                     l == null || l.headOffsetXMm == null || l.headOffsetYMm == null ? null
                             : new double[] {l.headOffsetXMm, l.headOffsetYMm});
             if (head != null) {
@@ -427,17 +427,16 @@ final class TipSetupEndpoints {
                 + " psi and read it", "fix", "attest-regulator", "done", null));
         l.add(Views.map("key", "prime", "label", "Prime until paste comes out", "href", "#setup/prime", "done", null));
         l.add(Views.map("key", "landing", "label", "Check where it lands", "fix", "landing-check", "done",
-                EngineFallback.quietly(svc::isNeedleXyChecked, () -> true)));
+                svc.isNeedleXyChecked()));
         l.add(Views.map("key", "touch-off", "label", neverOn ? "Touch off (recommended: this tip was never on)"
                 : "Touch off", "href", "#calibrate/touch-off", "done", null));
-        Tip tip = EngineFallback.quietly(() -> {
-            try {
-                return svc.mountedTip();
-            }
-            catch (SQLException e) {
-                return null;
-            }
-        }, () -> null);
+        Tip tip;
+        try {
+            tip = svc.mountedTip();
+        }
+        catch (SQLException e) {
+            tip = null; // the step list without the dots step: the database could not be read
+        }
         if (tip != null && !tip.benchModel && !tip.isMeasured()) {
             l.add(Views.map("key", "measure", "label", "Measure its dots", "fix", "measure-tip", "done", false));
         }

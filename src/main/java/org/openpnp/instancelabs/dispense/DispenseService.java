@@ -257,7 +257,6 @@ public final class DispenseService {
             if (!Tip.SEED_KEY.equals(cfg.tip.key)) {
                 cfg.tip.model = null; // only the seeded setup has the bench model (§22.11 item 10)
             }
-            db.setMountedSetup(cfg.tip.key);
         }
         this.photoStore = new PhotoStore(PhotoStore.folderFor(configDir), db);
         try {
@@ -503,7 +502,6 @@ public final class DispenseService {
             m.operator = "reconcile";
             db.insertTipMount(m);
         }
-        db.setMountedSetup(cfg.tip.key);
     }
 
     /** The settings file as it is on disk, or "" when there is none. */
@@ -627,13 +625,9 @@ public final class DispenseService {
     /** Saves and applies a configuration as it is (no checks, no stamps): the caller validated it. */
     private void writeConfig(DispenseConfig c) throws IOException {
         c.save(configDir);
-        boolean tipChanged = cfg == null || !cfg.tip.key.equals(c.tip.key);
         cfg = c;
         resolveNozzle();
         tipCache = null;
-        if (tipChanged) {
-            db.setMountedSetup(c.tip.key);
-        }
     }
 
     /**
@@ -683,21 +677,6 @@ public final class DispenseService {
         DispenseConfig c = cfg.copy();
         c.locations.put(name, new DispenseConfig.NamedLocation(x, y, z));
         updateConfig(c);
-    }
-
-    /**
-     * I4: a needle change invalidates the needle Z frame, the offset and the landing.
-     *
-     * @deprecated {@link #recordNeedleChange(String, String)}, which says what the change voided
-     */
-    @Deprecated
-    public synchronized void markNeedleChanged() throws IOException {
-        try {
-            recordNeedleChange(null, null);
-        }
-        catch (SQLException e) {
-            throw new IOException(e.getMessage(), e);
-        }
     }
 
     /**
@@ -1304,51 +1283,15 @@ public final class DispenseService {
     }
 
     /**
-     * Sets the needle Z offset (manual entry or touch-off result) and records it.
-     *
-     * @deprecated the values carry the needle token they were taken under: {@link #setNeedleZOffset(double, String,
-     *             String, Long)}
-     */
-    @Deprecated
-    public synchronized void setNeedleZOffset(double offsetMm, String method, String details)
-            throws IOException, SQLException {
-        setNeedleZOffset(offsetMm, method, details, cfg.needleChangedAtMs);
-    }
-
-    /**
-     * I4 needle Z frame: the same surface touched by N1 (OpenPnP frame, {@code surfaceZMm}) and by the
-     * needle tip ({@code needleContactZMm}, N2 Z). Sets the offset to their difference; a touch-off
-     * (or a manual entry within the drift limit) is still required before dispensing.
-     *
-     * @deprecated {@link #setNeedleAnchor(double, double, Double, Double, Double, Long)}
-     */
-    @Deprecated
-    public synchronized DispenseConfig.NeedleAnchor setNeedleAnchor(double surfaceZMm, double needleContactZMm,
-            Double xMm, Double yMm) throws IOException, SQLException {
-        return setNeedleAnchor(surfaceZMm, needleContactZMm, xMm, yMm, null, cfg.needleChangedAtMs).anchor;
-    }
-
-    /**
-     * As above; {@code rawSumMm} records the bench relation the needle contact came from (or null).
-     *
-     * @deprecated {@link #setNeedleAnchor(double, double, Double, Double, Double, Long)}
-     */
-    @Deprecated
-    public synchronized DispenseConfig.NeedleAnchor setNeedleAnchor(double surfaceZMm, double needleContactZMm,
-            Double xMm, Double yMm, Double rawSumMm) throws IOException, SQLException {
-        return setNeedleAnchor(surfaceZMm, needleContactZMm, xMm, yMm, rawSumMm, cfg.needleChangedAtMs).anchor;
-    }
-
-    /**
      * The frame of the mounted setup before its last needle change (§22.3: "is this the tip you think it is?"), kept
      * when a new frame replaces it; null when none was replaced since the start.
      */
     private volatile Object[] previousFrame;
 
     /**
-     * As {@link #setNeedleZOffset(double, String, String)} for the values taken under the needle token
-     * {@code needleChangedAtMs} (tip setups design §22.3): 409 {@code needle-changed} when the needle was changed after
-     * they were taken; answers the frame question and the I4 offset warning.
+     * Sets the needle Z offset (manual entry or touch-off result) and records it, for the values taken under the needle
+     * token {@code needleChangedAtMs} (tip setups design §22.3): 409 {@code needle-changed} when the needle was changed
+     * after they were taken; answers the frame question and the I4 offset warning.
      */
     public synchronized NeedleFrameResult setNeedleZOffset(double offsetMm, String method, String details,
             Long needleChangedAtMs) throws IOException, SQLException {
@@ -1373,9 +1316,12 @@ public final class DispenseService {
     }
 
     /**
-     * As {@link #setNeedleAnchor(double, double, Double, Double, Double)} for heights captured under the needle token
-     * {@code needleChangedAtMs} (§22.3): 409 {@code needle-changed} after a needle change; answers the frame question
-     * (the setup's previous frame) and the I4 offset warning.
+     * I4 needle Z frame: the same surface touched by N1 (OpenPnP frame, {@code surfaceZMm}) and by the needle tip
+     * ({@code needleContactZMm}, N2 Z); sets the offset to their difference, and a touch-off (or a manual entry within
+     * the drift limit) is still required before dispensing. {@code rawSumMm} records the bench relation the needle
+     * contact came from (or null). The heights were captured under the needle token {@code needleChangedAtMs} (§22.3):
+     * 409 {@code needle-changed} after a needle change; answers the frame question (the setup's previous frame) and the
+     * I4 offset warning.
      */
     public synchronized NeedleFrameResult setNeedleAnchor(double surfaceZMm, double needleContactZMm, Double xMm,
             Double yMm, Double rawSumMm, Long needleChangedAtMs) throws IOException, SQLException {
@@ -1645,28 +1591,12 @@ public final class DispenseService {
     }
 
     /**
-     * Appends a new version of a pad type (new type if the key is new) for the mounted setup, as given (pad and dose
-     * fields).
-     *
-     * @deprecated name the setup and the pad version shown: {@link #savePadType(PadType, String, Integer)}
-     */
-    @Deprecated
-    public synchronized PadType savePadType(PadType p) throws SQLException {
-        PadType cur = db.currentPadType(p.typeKey, cfg.tip.key);
-        return savePadType(p, cfg.tip.key, cur == null ? null : cur.padVersion, cur == null);
-    }
-
-    /**
      * Appends a pad type version for the mounted setup (tip setups design §22.2), under the lock: {@code forSetup}
      * must be the mounted setup (409 {@code tip-changed}). A pad edit sends the {@code padVersion} it showed (409
      * {@code pad-changed} when another was written meanwhile); a dose write ({@code padVersion} null) takes the pad
      * fields of the composed view now. Returns the stored row as the setup's composed view shows it.
      */
     public synchronized PadType savePadType(PadType v, String forSetup, Integer padVersion) throws SQLException {
-        return savePadType(v, forSetup, padVersion, false);
-    }
-
-    private PadType savePadType(PadType v, String forSetup, Integer padVersion, boolean create) throws SQLException {
         String s = cfg.tip.key;
         if (forSetup == null || !forSetup.equals(s)) {
             throw tipChanged();
@@ -1686,7 +1616,7 @@ public final class DispenseService {
             w.k = cur.k;
             w.packagePattern = cur.packagePattern;
         }
-        else if (cur != null && !create && !padVersion.equals(cur.padVersion)) {
+        else if (cur != null && !padVersion.equals(cur.padVersion)) {
             TipSetup other = null;
             for (PadType h : db.padTypeHistory(v.typeKey)) {
                 if (h.version == cur.padVersion) {
@@ -2911,6 +2841,20 @@ public final class DispenseService {
         Interlocks.Scope sc = blankScope(c, c.blankLocationName, false, false, null);
         sc.moreSurfaces.put(c.boardSurfaceName, new ArrayList<>());
         return sc;
+    }
+
+    /**
+     * The top camera's frame {width, height} (mm), or null without one: the landing check lays out the frames that
+     * cover its band with it (tip setups design §22.3).
+     */
+    public double[] topCameraFovMm() {
+        DotImager im = imager();
+        try {
+            return im == null || !im.isAvailable() ? null : im.fieldOfViewMm();
+        }
+        catch (RuntimeException e) {
+            return null;
+        }
     }
 
     /** A top camera (or a test imager) for the fiducials and the looks before N1 touches. */
@@ -4843,20 +4787,23 @@ public final class DispenseService {
      * {@code characterized} version needs a record whose every check passed; a calibration never
      * writes {@code validated} (that stays the user's decision after a test board).
      *
-     * <p>Tip setups (§22.3, §22.5): the record carries the setup and needle token the job started with; another setup
-     * mounted since (409 {@code tip-changed}) or a needle change since (409 {@code needle-changed}) saves nothing.
-     * Without the bench model, {@code characterized} needs fresh evidence of the dose (409 {@code status-evidence}).
-     * The record gets its automatic "calibrated for" label, the job's result photos of its dose and the setup's main
-     * picture.</p>
+     * <p>Tip setups (§22.3, §22.5): the record carries the setup and needle token the job started with; a version
+     * written for another setup mounted since (409 {@code tip-changed}) or after a needle change since (409
+     * {@code needle-changed}) saves nothing. A record that writes no version (a stopped or failed job) is history: it
+     * is kept with the setup and token it names. Without the bench model, {@code characterized} needs fresh evidence of
+     * the dose (409 {@code status-evidence}). The record gets its automatic "calibrated for" label, the job's result
+     * photos of its dose and the setup's main picture.</p>
      */
     public synchronized PadCalibrationRecord applyPadCalibration(PadCalibrationRecord rec, PadType version)
             throws SQLException {
         DispenseConfig c = cfg;
-        if (rec.setupKey != null && !rec.setupKey.equals(c.tip.key)) {
+        boolean other = rec.setupKey != null && !rec.setupKey.equals(c.tip.key);
+        if (version != null && other) {
             throw new EngineRefusal(409, "tip-changed", "The tip changed during the calibration (the " + c.tip.name
                     + " was mounted" + atWords(mountedAtMs(c)) + "): nothing was saved.");
         }
-        if (rec.needleSinceMs != null && !rec.needleSinceMs.equals(c.needleChangedAtMs)) {
+        if (version != null && rec.setupKey != null && !java.util.Objects.equals(rec.needleSinceMs,
+                c.needleChangedAtMs)) {
             throw new EngineRefusal(409, "needle-changed", "The needle was changed" + atWords(c.needleChangedAtMs)
                     + " during the calibration: nothing was saved.");
         }
@@ -4881,8 +4828,11 @@ public final class DispenseService {
         if (version != null && version.status == PadTypeStatus.CHARACTERIZED) {
             requireEvidence(c, version);
         }
-        rec.setupKey = c.tip.key;
-        rec.needleSinceMs = c.needleChangedAtMs;
+        if (rec.setupKey == null) {
+            // a record that names no setup is the mounted one's (the tests' and old callers' records)
+            rec.setupKey = c.tip.key;
+            rec.needleSinceMs = c.needleChangedAtMs;
+        }
         if (rec.method == null) {
             rec.method = PadCalibrationRecord.METHOD_AUTO;
         }
@@ -4893,10 +4843,10 @@ public final class DispenseService {
         }
         PadCalibrationRecord out = db.insertPadCalibration(rec);
         try {
-            PadType type = stored != null ? stored : db.currentPadType(rec.typeKey, c.tip.key);
+            PadType type = stored != null ? stored : db.currentPadType(rec.typeKey, rec.setupKey);
             labelAndLink(out, type, null, rec.operator);
             if (rec.steps != null) {
-                for (Photo ph : db.photos(c.tip.key, null, rec.jobId, Photo.KIND_RESULT, false, 50)) {
+                for (Photo ph : db.photos(rec.setupKey, null, rec.jobId, Photo.KIND_RESULT, false, 50)) {
                     if (rec.steps.equals(ph.doseSteps)) {
                         linkQuietly(ph.id, out.id, Photo.ROLE_RESULT, rec.operator);
                     }

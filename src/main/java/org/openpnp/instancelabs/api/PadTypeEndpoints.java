@@ -81,15 +81,15 @@ final class PadTypeEndpoints {
             byFamily.put(f, new ArrayList<>());
         }
         List<PadType> types = svc.getPadTypes();
-        List<String> others = new ArrayList<>();
+        List<String> more = new ArrayList<>();
         for (PadType t : types) {
             String f = t.family == null || t.family.trim().isEmpty() ? "Custom" : t.family;
-            if (!byFamily.containsKey(f) && !RETIRED.equals(f) && !others.contains(f)) {
-                others.add(f);
+            if (!byFamily.containsKey(f) && !RETIRED.equals(f) && !more.contains(f)) {
+                more.add(f);
             }
         }
-        others.sort(String.CASE_INSENSITIVE_ORDER);
-        for (String f : others) {
+        more.sort(String.CASE_INSENSITIVE_ORDER);
+        for (String f : more) {
             byFamily.put(f, new ArrayList<>());
         }
         byFamily.put(RETIRED, new ArrayList<>());
@@ -174,8 +174,7 @@ final class PadTypeEndpoints {
                     o.wrote.putIfAbsent(r.typeKey + "|" + setupOf(r.setupKey) + "|" + r.versionTo, r);
                 }
             }
-            List<TipSetup> setups = EngineFallback.orBefore(() -> db.currentTipSetups(false), ArrayList::new);
-            for (TipSetup s : setups) {
+            for (TipSetup s : db.currentTipSetups(false)) {
                 if (s.key.equals(mounted)) {
                     continue;
                 }
@@ -220,13 +219,12 @@ final class PadTypeEndpoints {
     static List<PadCalibrationRecord> calibrations(DispenseService svc, String typeKey, String setupKey, int limit)
             throws Exception {
         DispenseDb db = svc.getDb();
-        return EngineFallback.orBefore(() -> db.padCalibrations(typeKey, setupKey, limit),
-                () -> db.padCalibrations(typeKey, limit));
+        return db.padCalibrations(typeKey, setupKey, limit);
     }
 
     /** The setup a version or record belongs to (§22.1): its tip key, the seeded setup when it names none. */
     static String setupOf(String tipKey) {
-        return EngineFallback.quietly(() -> Tip.setupOf(tipKey), () -> tipKey == null ? Tip.SEED_KEY : tipKey);
+        return Tip.setupOf(tipKey);
     }
 
     /**
@@ -239,7 +237,7 @@ final class PadTypeEndpoints {
         DispenseConfig cfg = svc.getConfig();
         PadType t = require(svc, r.group(1));
         Map<String, String> names = new LinkedHashMap<>();
-        for (TipSetup s : EngineFallback.orBefore(() -> db.currentTipSetups(true), () -> new ArrayList<TipSetup>())) {
+        for (TipSetup s : db.currentTipSetups(true)) {
             names.put(s.key, s.name);
         }
         names.putIfAbsent(cfg.tip.key, cfg.tip.name);
@@ -365,8 +363,7 @@ final class PadTypeEndpoints {
         t.tipKey = forSetup;
         t.operator = Json.str(b, "operator", t.operator);
         Integer padVersion = Json.integer(b, "padVersion", was.padVersion);
-        PadType stored = EngineFallback.orBefore(() -> svc.savePadType(t, forSetup, padVersion),
-                () -> svc.savePadType(t));
+        PadType stored = svc.savePadType(t, forSetup, padVersion);
         return Views.map("padType", Views.padType(stored), "note",
                 "retired for every tip: kept in the history, never matched to a package, never dispensed");
     }
@@ -427,22 +424,16 @@ final class PadTypeEndpoints {
         Saved out = new Saved();
         boolean raised = t.status.atLeast(PadTypeStatus.CHARACTERIZED) && (was == null || !was.status.atLeast(t.status));
         if (!raised) {
-            out.type = EngineFallback.orBefore(() -> svc.savePadType(t, forSetup, padVersion),
-                    () -> svc.savePadType(t));
+            out.type = svc.savePadType(t, forSetup, padVersion);
             return out;
         }
         JsonObject c = b.has("calibration") && b.get("calibration").isJsonObject() ? b.getAsJsonObject("calibration")
                 : new JsonObject();
-        String label = Json.has(c, "label") ? PadCalibrationEndpoints.cleanLabel(Json.str(c, "label", null)) : null;
+        String label = Json.has(c, "label") ? DispenseService.cleanLabel(Json.str(c, "label", null)) : null;
         List<Long> photoIds = PhotoEndpoints.ids(c, "photoIds");
-        PadCalibrationRecord rec = EngineFallback.orBefore(() -> svc.savePadTypeByHand(t, forSetup, label, photoIds,
-                t.operator), () -> {
-                    svc.savePadType(t);
-                    return null;
-                });
+        PadCalibrationRecord rec = svc.savePadTypeByHand(t, forSetup, label, photoIds, t.operator);
         DispenseDb db = svc.getDb();
-        out.type = EngineFallback.orBefore(() -> db.currentPadType(t.typeKey, forSetup),
-                () -> db.currentPadType(t.typeKey));
+        out.type = db.currentPadType(t.typeKey, forSetup);
         if (rec != null) {
             Object[] l = PadCalibrationEndpoints.label(svc, rec);
             out.calibration = Views.map("id", rec.id, "label", l == null ? null : l[0], "labelAuto", l == null ? null
@@ -479,7 +470,7 @@ final class PadTypeEndpoints {
     /** Whether any version of the key exists, of any setup. */
     static boolean exists(DispenseService svc, String key) throws Exception {
         DispenseDb db = svc.getDb();
-        return EngineFallback.orBefore(() -> db.typeKeyExists(key), () -> db.currentPadType(key) != null);
+        return svc.getDb().typeKeyExists(key);
     }
 
     Object rule(ApiServer.Request r) throws Exception {
@@ -506,7 +497,7 @@ final class PadTypeEndpoints {
     static PadType require(DispenseService svc, String key) throws Exception {
         DispenseDb db = svc.getDb();
         String setup = svc.getConfig().tip.key;
-        PadType t = EngineFallback.orBefore(() -> db.currentPadType(key, setup), () -> db.currentPadType(key));
+        PadType t = db.currentPadType(key, setup);
         if (t == null) {
             throw ApiException.notFound("no pad type '" + key + "'");
         }

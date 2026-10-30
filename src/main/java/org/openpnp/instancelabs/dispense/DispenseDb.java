@@ -142,12 +142,6 @@ public class DispenseDb implements AutoCloseable {
     private final String url;
     /** The database file; null in memory. */
     private final File file;
-    /**
-     * The mounted tip setup (DispenseService sets it at start and at every mount): what the deprecated readers
-     * without a setup ({@link #currentPadTypes()}, {@link #currentPadType(String)}) compose for.
-     */
-    private volatile String mountedSetup = Tip.SEED_KEY;
-
     public static File fileFor(File configDir) {
         return new File(new File(configDir, DispenseConfig.SUBDIR), FILE_NAME);
     }
@@ -614,38 +608,6 @@ public class DispenseDb implements AutoCloseable {
             stored.rowId = generatedKey(ps);
         }
         return stored;
-    }
-
-    /**
-     * Every pad type as the mounted tip setup sees it ({@link #currentPadTypes(String)} of the setup DispenseService
-     * mounted).
-     *
-     * @deprecated name the setup: {@link #currentPadTypes(String)}
-     */
-    @Deprecated
-    public synchronized List<PadType> currentPadTypes() throws SQLException {
-        return currentPadTypes(mountedSetup);
-    }
-
-    /**
-     * One pad type as the mounted tip setup sees it, or null.
-     *
-     * @deprecated name the setup: {@link #currentPadType(String, String)}; a check that a key is taken:
-     *             {@link #typeKeyExists(String)}
-     */
-    @Deprecated
-    public synchronized PadType currentPadType(String typeKey) throws SQLException {
-        return currentPadType(typeKey, mountedSetup);
-    }
-
-    /** The setup the deprecated readers without a setup compose for (DispenseService: the mounted one). */
-    void setMountedSetup(String setupKey) {
-        mountedSetup = setupKey == null ? Tip.SEED_KEY : setupKey;
-    }
-
-    /** The setup {@link #setMountedSetup} named. */
-    public String mountedSetup() {
-        return mountedSetup;
     }
 
     /**
@@ -1716,16 +1678,6 @@ public class DispenseDb implements AutoCloseable {
             r.id = generatedKey(ps);
         }
         return r;
-    }
-
-    /**
-     * Pad calibrations, newest first, of one type (typeKey null: every type), every setup.
-     *
-     * @deprecated name the setup: {@link #padCalibrations(String, String, int)} (null: every setup)
-     */
-    @Deprecated
-    public synchronized List<PadCalibrationRecord> padCalibrations(String typeKey, int limit) throws SQLException {
-        return padCalibrations(typeKey, null, limit);
     }
 
     /**

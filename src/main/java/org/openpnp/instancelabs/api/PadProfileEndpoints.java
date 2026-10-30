@@ -68,8 +68,12 @@ final class PadProfileEndpoints {
         CheckInputs in;
         ProfileCheck.Result result;
 
+        /** The setups that have every pad type of these pads at the gate (§22.6), read with the check. */
+        List<Map<String, Object>> otherTips = new ArrayList<>();
+
         Map<String, Object> view() {
-            Map<String, Object> m = PadProfileViews.check(result, in.pastePartialPackages);
+            Map<String, Object> m = PadProfileViews.check(result, in.pastePartialPackages, in.types);
+            m.put("otherTips", otherTips);
             m.put("source", entry != null ? Views.map("planId", entry.plan.planId, "boardName", entry.plan.boardName,
                     "createdAtMs", entry.plan.createdAtMs) : Views.map("boardFile", boardFile, "boardName", boardName));
             return m;
@@ -85,6 +89,7 @@ final class PadProfileEndpoints {
             c.entry = dispense.requirePlan(planId);
             c.in = PadProfileViews.inputs(svc, c.entry.plan);
             c.result = PadProfileViews.check(c.entry, c.in);
+            c.otherTips = PadProfileViews.otherTips(svc, c.in);
             return c;
         }
         Board b = listedBoard(boardFile);
@@ -96,6 +101,7 @@ final class PadProfileEndpoints {
         c.boardName = b.getName();
         c.in = PadInstances.inputs(svc, pads, false);
         c.result = ProfileCheck.of(c.in);
+        c.otherTips = PadProfileViews.otherTips(svc, c.in);
         return c;
     }
 
@@ -182,7 +188,7 @@ final class PadProfileEndpoints {
                                 + "type, then calibrate it"));
             }
             else {
-                Change x = change(db, cfg, g, s, operator);
+                Change x = change(db, cfg, c.in.tip.key, g, s, operator);
                 if (x == null) {
                     skipped.add(Views.map("group", g.group, "why", s.name + " already has this plan: calibrate it"));
                 }
@@ -199,7 +205,9 @@ final class PadProfileEndpoints {
         }
         List<Map<String, Object>> applied = new ArrayList<>();
         for (Change x : changes) {
-            PadType stored = x.type == null ? null : svc.savePadType(x.type);
+            // the setup the check was made for (§22.2): a mount since gets tip-changed, nothing is written for it; a
+            // dose write keeps the pad as every setup sees it now (padVersion null)
+            PadType stored = x.type == null ? null : svc.savePadType(x.type, c.in.tip.key, null);
             if (x.mapping != null) {
                 db.mapPackage(x.mapping.packageId, x.mapping.padNames, x.typeKey);
                 db.event(null, "INFO", "PAD_TYPE", "package " + x.mapping.packageId + (x.mapping.padNames == null
@@ -235,7 +243,7 @@ final class PadProfileEndpoints {
     }
 
     /** The writes of one suggestion; null when a calibrate-existing type already carries its plan. */
-    private static Change change(DispenseDb db, DispenseConfig cfg, ProfileCheck.Group g, Suggestion s,
+    private static Change change(DispenseDb db, DispenseConfig cfg, String setup, ProfileCheck.Group g, Suggestion s,
             String operator) throws Exception {
         Change x = new Change();
         x.group = g;
@@ -244,7 +252,7 @@ final class PadProfileEndpoints {
         x.mapping = s.mapping;
         String when = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.ROOT).format(new Date());
         if (Suggestion.NEW.equals(s.kind)) {
-            if (db.currentPadType(s.typeKey) != null) {
+            if (db.typeKeyExists(s.typeKey)) {
                 throw new ApiException(409, STALE, "A pad type '" + s.typeKey + "' was added since the suggestion "
                         + "was shown: check the new one.");
             }
@@ -261,21 +269,22 @@ final class PadProfileEndpoints {
             t.k = s.amount.k;
             t.status = PadTypeStatus.PROVISIONAL;
             t.notes = s.sentence + " (suggested " + when + ")";
-            plan(t, s, cfg);
+            plan(t, s, setup);
             t.origin = PadType.ORIGIN_SUGGESTED;
             t.operator = operator;
             x.type = t;
         }
         else if (Suggestion.CALIBRATE_EXISTING.equals(s.kind)) {
-            PadType cur = db.currentPadType(s.typeKey);
+            // the type as the setup the check was made for sees it (§22.2): a stand-in has no plan of its own yet
+            PadType cur = db.currentPadType(s.typeKey, setup);
             if (cur == null || !Objects.equals(cur.version, s.typeVersion)) {
                 throw new ApiException(409, STALE, "Pad type '" + s.typeKey + "' changed since the suggestion was "
                         + "shown: check the new one.");
             }
             PadType t = cur.copy();
             boolean planChanged = !Objects.equals(cur.dotSteps, s.dots.steps)
-                    || !Objects.equals(cur.dotsPerPad, s.dots.perPad) || !cfg.tip.key.equals(cur.tipKey);
-            plan(t, s, cfg);
+                    || !Objects.equals(cur.dotsPerPad, s.dots.perPad) || cur.standIn;
+            plan(t, s, setup);
             if (planChanged || !cur.status.atLeast(PadTypeStatus.PROVISIONAL)) {
                 // a plan of its own is not calibrated yet: provisional, no recipe or weighed mass (decision 17)
                 t.status = PadTypeStatus.PROVISIONAL;
@@ -294,11 +303,11 @@ final class PadProfileEndpoints {
         return x;
     }
 
-    /** The suggestion's dot plan on a pad type: its dose, dots per pad, the tip and the opening it was made for. */
-    private static void plan(PadType t, Suggestion s, DispenseConfig cfg) {
+    /** The suggestion's dot plan on a pad type: its dose, dots per pad, the setup and the opening it was made for. */
+    private static void plan(PadType t, Suggestion s, String setup) {
         t.dotSteps = s.dots.steps;
         t.dotsPerPad = s.dots.perPad;
-        t.tipKey = cfg.tip.key;
+        t.tipKey = setup;
         t.calAreaMm2 = s.opening.areaMm2;
     }
 
@@ -387,7 +396,7 @@ final class PadProfileEndpoints {
         String joined = DispenseDb.joinPadNames(names); // checks the names (400)
         String key = Json.str(b, "typeKey", null);
         if (key != null) {
-            PadType t = db.currentPadType(key);
+            PadType t = db.currentPadType(key, svc.getConfig().tip.key); // the pad of any setup: retired for all
             if (t == null || PadTypeEndpoints.RETIRED.equals(t.family)) {
                 throw ApiException.badRequest("no pad type '" + key + "'" + (t == null ? "" : " (it is retired)"));
             }

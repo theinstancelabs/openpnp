@@ -507,9 +507,6 @@ public class ProfileCheckTest {
                 + "pad types that are at least validated on a board: calibrate it for this tip automatically or by "
                 + "hand.", Texts.belowGate("Chip 0603", TypeInfo.PROVISIONAL, TypeInfo.VALIDATED, Tip.SEED_NAME,
                         null));
-        // the four-argument form says the same for the seeded setup
-        assertEquals(Texts.belowGate("Chip 0603", TypeInfo.PROVISIONAL, TypeInfo.VALIDATED, Tip.SEED_NAME, null),
-                Texts.belowGate("Chip 0603", TypeInfo.PROVISIONAL, TypeInfo.VALIDATED));
     }
 
     @Test

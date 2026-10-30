@@ -1,5 +1,6 @@
 package org.openpnp.instancelabs.dispense;
 
+import org.openpnp.instancelabs.padprofile.Tip;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -177,7 +178,7 @@ public class DispenseDbMigrationTest {
             // the view was made again: it lists the new columns
             assertTrue(columns(db, "pad_types_current").containsAll(NEW_PAD_TYPE_COLUMNS));
             // old rows read with null new fields; nothing was seeded again
-            assertEquals(2, db.currentPadTypes().size());
+            assertEquals(2, db.currentPadTypes(Tip.SEED_KEY).size());
             PadType chip = stored(db, "chip-0603");
             assertEquals(2, chip.version);
             assertEquals(PadTypeStatus.VALIDATED, chip.status);
@@ -209,7 +210,7 @@ public class DispenseDbMigrationTest {
             v3.massPerPadMg = 1.056;
             v3.origin = PadType.ORIGIN_AUTO_CALIBRATED;
             db.insertPadTypeVersion(v3);
-            PadType back = db.currentPadType("chip-0603");
+            PadType back = db.currentPadType("chip-0603", Tip.SEED_KEY);
             assertEquals(3, back.version);
             assertEquals(800, (int) back.dotSteps);
             assertEquals(1, (int) back.dotsPerPad);
@@ -285,8 +286,8 @@ public class DispenseDbMigrationTest {
             assertTrue(columns(db, "pad_types_current").containsAll(NEW_PAD_TYPE_COLUMNS));
             assertTrue(columns(db, "package_pad_type").contains("pad_names"));
             assertTrue(columns(db, "runs").contains("skipped_pads"));
-            assertEquals(12, db.currentPadTypes().size());
-            for (PadType c : db.currentPadTypes()) {
+            assertEquals(12, db.currentPadTypes(Tip.SEED_KEY).size());
+            for (PadType c : db.currentPadTypes(Tip.SEED_KEY)) {
                 PadType t = stored(db, c.typeKey);
                 assertEquals("seed", t.origin, t.typeKey);
                 assertNull(t.dotSteps, t.typeKey);

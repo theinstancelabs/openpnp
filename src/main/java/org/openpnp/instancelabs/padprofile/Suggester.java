@@ -136,19 +136,9 @@ public final class Suggester {
     }
 
     /**
-     * Mass per dot of a dose as the suggestions count it: weighed, else another dose's weighed mass
-     * per step, else the model (for the plan view's predicted mass per pad, §12.5).
-     *
-     * @deprecated the bench model is the 22G bent taper's only: {@link #mgPerDot(Map, int, Tip)}
-     */
-    @Deprecated
-    public static double mgPerDot(Map<Integer, DoseEvidence> evidence, int steps) {
-        return view(evidence, steps).mgPerDot;
-    }
-
-    /**
-     * As {@link #mgPerDot(Map, int)} for the mounted tip setup (§22.2): its dot table where no fresh record weighed
-     * it, the bench model only for the bench setup; null when the tip does not know the dose (views write null).
+     * Mass per dot of a dose as the suggestions count it (the plan view's predicted mass per pad, §12.5): weighed, else
+     * another dose's weighed mass per step, else the mounted tip setup's dot table (§22.2), the bench model only for
+     * the bench setup; null when the tip does not know the dose (views write null).
      */
     public static Double mgPerDot(Map<Integer, DoseEvidence> evidence, int steps, Tip tip) {
         DoseView v = view(evidence, steps, tip);
@@ -156,16 +146,9 @@ public final class Suggester {
     }
 
     /**
-     * A dose's dot size as the suggestions show it: measured mean and d95, else the model's band (mm).
-     *
-     * @deprecated the bench model is the 22G bent taper's only: {@link #dotDiameterMm(Map, int, Tip)}
+     * A dose's dot size as the suggestions show it (mm): measured mean and d95, else the mounted tip setup's dot table
+     * or, for the bench setup, the model's band; null when the tip does not know the dose size (§22.2).
      */
-    @Deprecated
-    public static double[] dotDiameterMm(Map<Integer, DoseEvidence> evidence, int steps) {
-        return view(evidence, steps).dShown.clone();
-    }
-
-    /** As {@link #dotDiameterMm(Map, int)} for the mounted tip setup; null when the tip does not know the dose size. */
     public static double[] dotDiameterMm(Map<Integer, DoseEvidence> evidence, int steps, Tip tip) {
         double[] d = view(evidence, steps, tip).dShown;
         return d == null ? null : d.clone();

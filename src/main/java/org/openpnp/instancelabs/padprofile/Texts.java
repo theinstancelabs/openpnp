@@ -199,17 +199,6 @@ public final class Texts {
     }
 
     /**
-     * The below-gate text of a type for the seeded setup.
-     *
-     * @deprecated the text names the mounted setup and the others' statuses (§22.2):
-     *             {@link #belowGate(String, String, String, String, List)}
-     */
-    @Deprecated
-    public static String belowGate(String typeName, String status, String gate) {
-        return belowGate(typeName, status, gate, Tip.SEED_NAME, null);
-    }
-
-    /**
      * Tip setups (§22.2): the below-gate text of a type for the mounted setup, with the other setups' statuses:
      * "{type} is not calibrated for the {S} yet (status: {status}; {other status} for the {other setup}). Boards need
      * pad types that are at least {gate}: calibrate it for this tip automatically or by hand."

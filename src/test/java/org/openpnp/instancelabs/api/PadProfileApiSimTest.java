@@ -29,6 +29,7 @@ import java.util.TreeSet;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.openpnp.instancelabs.padprofile.Tip;
 import org.openpnp.instancelabs.board.EdtRunner;
 import org.openpnp.instancelabs.dispense.DispenseConfig;
 import org.openpnp.instancelabs.dispense.DispenseService;
@@ -943,11 +944,11 @@ public class PadProfileApiSimTest {
         assertTrue(row.get("lastCalibration").isJsonNull());
 
         // a hand edit of the pad or the dose drops the calibration it had (decision 17); notes keep it
-        org.openpnp.instancelabs.dispense.PadType cal = svc.getDb().currentPadType(key).copy();
+        org.openpnp.instancelabs.dispense.PadType cal = svc.getDb().currentPadType(key, Tip.SEED_KEY).copy();
         cal.doseFp = svc.getConfig().profile.doseFingerprint();
         cal.massPerPadMg = 2.0;
         cal.origin = org.openpnp.instancelabs.dispense.PadType.ORIGIN_AUTO_CALIBRATED;
-        svc.savePadType(cal);
+        svc.savePadType(cal, Tip.SEED_KEY, cal.padVersion);
         JsonObject notes = ok(call("PUT", "/api/pad-types/" + key, "{\"notes\":\"after reflow: fine\"}"))
                 .getAsJsonObject("padType");
         assertEquals("auto-calibrated", str(notes, "origin"));

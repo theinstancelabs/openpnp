@@ -147,16 +147,9 @@ public final class PadInstances {
 
     /**
      * The tip as the configuration names it, without its dot table: the bench model for the seeded setup
-     * ({@link TipSpec#model}), nothing measured otherwise.
-     *
-     * @deprecated the mounted setup with its dot table is {@link DispenseService#mountedTip()}
+     * ({@link TipSpec#model}), nothing measured otherwise. The mounted setup with its dot table is
+     * {@link DispenseService#mountedTip()}.
      */
-    @Deprecated
-    public static Tip tip(TipSpec t) {
-        return specTip(t);
-    }
-
-    /** {@link #tip(TipSpec)}: the configuration's tip without its dot table. */
     static Tip specTip(TipSpec t) {
         Tip x = new Tip(t.key, t.name, t.idMm, t.odMm, t.minDotSteps);
         x.setupVersion = t.setupVersion;
@@ -166,22 +159,10 @@ public final class PadInstances {
     }
 
     /**
-     * The check's inputs around these pads: the current pad types with their rules, the gate, the
-     * mounted tip, the profile's dose and recipe, the packages pasted partly. Dose evidence and
-     * anchors other than the validated types' are the caller's (none here).
-     *
-     * @deprecated the tip is {@code cfg.tip} without its dot table: {@link #inputs(List, Collection, Map,
-     *             DispenseConfig, Collection, boolean, Tip)} with {@link DispenseService#mountedTip}
-     */
-    @Deprecated
-    public static CheckInputs inputs(List<PadInstance> pads, Collection<PadType> types, Map<String, PadRule> rules,
-            DispenseConfig cfg, Collection<String> pastePartial, boolean planned) {
-        return inputs(pads, types, rules, cfg, pastePartial, planned, specTip(cfg.tip));
-    }
-
-    /**
-     * As {@link #inputs(List, Collection, Map, DispenseConfig, Collection, boolean)} with the tip given (tip setups
-     * design §22.2): the mounted setup with its dot table ({@link DispenseService#mountedTip}), not {@code cfg.tip}.
+     * The check's inputs around these pads: the current pad types with their rules, the gate, the mounted tip, the
+     * profile's dose and recipe, the packages pasted partly. Dose evidence and anchors other than the validated types'
+     * are the caller's (none here). The tip is the mounted setup with its dot table ({@link DispenseService#mountedTip},
+     * tip setups design §22.2), not {@code cfg.tip}.
      */
     public static CheckInputs inputs(List<PadInstance> pads, Collection<PadType> types, Map<String, PadRule> rules,
             DispenseConfig cfg, Collection<String> pastePartial, boolean planned, Tip tip) {
@@ -269,18 +250,6 @@ public final class PadInstances {
                 in.moreAnchors.add(a);
             }
         }
-    }
-
-    /**
-     * The fresh dose records of the current setup (§1.7) per dose, pooled as the pad calibration pools
-     * them ({@link DoseRecords#evidence}): the camera statistics recomputed on every fresh record's dots
-     * (a later pass does not erase an earlier failure) and a mass confirmed by any two fresh readings
-     * that agree (§7.5).
-     */
-    @SuppressWarnings("deprecation")
-    public static Map<Integer, DoseEvidence> evidence(List<DoseRecord> records, DispenseConfig cfg,
-            DoseRecord.Epochs epochs, long nowMs) {
-        return DoseRecords.evidence(records, cfg, epochs, nowMs);
     }
 
     /**
