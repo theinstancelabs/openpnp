@@ -1250,6 +1250,7 @@ public final class DispenseService {
                 throw refused(pitch);
             }
             double dotMm = NeedleTouchOff.expectedDotDiameterMm(req, c);
+            double steadyMm = NeedleTouchOff.steadyDotMm(req, c);
             Session s = new Session(c, r);
             SurfacePlane plane = planeOf(c, blankName);
             if (Double.isNaN(req.rotationDeg)) {
@@ -1271,7 +1272,7 @@ public final class DispenseService {
             }
             List<SpotDot> seen = s.imageSpots(specs, req.primeAtWaste, primeExtra, NeedleTouchOff.cutMm(dotMm),
                     req.pitchMm / 2);
-            res.analysis = NeedleTouchOff.analyze(NeedleTouchOff.gaps(req), seen, req.jumpRatio);
+            res.analysis = NeedleTouchOff.analyze(NeedleTouchOff.gaps(req), seen, req.jumpRatio, steadyMm);
             res.previousOffsetMm = c.needleZOffsetMm;
             java.util.Map<String, Object> det = new java.util.LinkedHashMap<>();
             det.put("analysis", res.analysis);

@@ -33,6 +33,15 @@ public final class NeedleTouchOff {
      * turn): the real strings came out 0.28-0.36 mm thick, the dots 0.9-1.2 mm across.
      */
     static final double CUT_SHARE = 0.45;
+    /**
+     * The reference dots must be at least this share of the diameter a steady dot of their dose makes on the blank
+     * ({@link #steadyDotMm}): a steady dot is a disc about as high as the gap (1.16 mm across for a half turn), while
+     * paste that does not reach the surface as it comes out drops off the tip as a droplet, a ball 0.81 mm across at
+     * most for a whole half-turn dose (0.28 mm³ at 3.76 mg/mm³) and much less as a rule: the real ladder's first dot
+     * was 0.37-0.43 mm, its steady dots 0.91-1.20 mm. Reference droplets make the first full dot after them look
+     * squashed.
+     */
+    public static final double MIN_REFERENCE_SHARE = 0.6;
     /** Start of the reason when paste at a dot's spot could not be measured. */
     public static final String STRUNG = "dots touch or are strung together";
 
@@ -104,6 +113,14 @@ public final class NeedleTouchOff {
         return DoseModel.dHiMm(Math.max(1, dotSteps(req, c)));
     }
 
+    /**
+     * The diameter a steady ladder dot has on the blank (mm): the dose model's lower edge for its turn, against which
+     * the reference dots are checked ({@link #MIN_REFERENCE_SHARE}).
+     */
+    public static double steadyDotMm(Request req, DispenseConfig c) {
+        return DoseModel.dLoMm(Math.max(1, dotSteps(req, c)));
+    }
+
     /** The smallest pitch for these dots (mm): the expected dot diameter + {@link #PITCH_MARGIN_MM}. */
     public static double minPitchMm(Request req, DispenseConfig c) {
         return expectedDotDiameterMm(req, c) + PITCH_MARGIN_MM;
@@ -156,9 +173,10 @@ public final class NeedleTouchOff {
     /**
      * The analysis of what the camera saw at each dot's spot ({@code seen} in the order of {@code gapsMm}, spot k
      * of a {@link SpotDot#joinedTo} being dot k): a dot gives its diameter, no paste "no dot", paste that is not one
-     * dot a note ("joined to the dot at gap 0.200 mm").
+     * dot a note ("joined to the dot at gap 0.200 mm"). {@code steadyDotMm}: as in
+     * {@link #analyze(double[], Double[], String[], double, double)}.
      */
-    public static Analysis analyze(double[] gapsMm, List<SpotDot> seen, double jumpRatio) {
+    public static Analysis analyze(double[] gapsMm, List<SpotDot> seen, double jumpRatio, double steadyDotMm) {
         Double[] d = new Double[gapsMm.length];
         String[] notes = new String[gapsMm.length];
         for (int i = 0; i < gapsMm.length; i++) {
@@ -177,7 +195,7 @@ public final class NeedleTouchOff {
                         + " mm";
             }
         }
-        return analyze(gapsMm, d, notes, jumpRatio);
+        return analyze(gapsMm, d, notes, jumpRatio, steadyDotMm);
     }
 
     /**
@@ -188,18 +206,27 @@ public final class NeedleTouchOff {
         return analyze(gapsMm, diametersMm, new String[gapsMm.length], jumpRatio);
     }
 
+    /** As {@link #analyze(double[], Double[], String[], double, double)} without a steady dot size to check against. */
+    public static Analysis analyze(double[] gapsMm, Double[] diametersMm, String[] unmeasured, double jumpRatio) {
+        return analyze(gapsMm, diametersMm, unmeasured, jumpRatio, Double.NaN);
+    }
+
     /**
-     * Far to near: the first two dots are the reference and must both form and agree within the jump ratio (dots
-     * laid too high miss or come out as droplets, then the next one carries the paste: the real ladder's first dot was
-     * a 0.37 mm droplet); then the first dot squashed by more than the jump ratio, or missing, is the contact. Paste
-     * that could not be measured at a dot's spot ({@code unmeasured}) before the contact is reached refuses the
-     * conclusion: it could be a squashed dot as well as a normal one.
+     * Far to near: the first two dots are the reference and must both form, agree within the jump ratio and be steady
+     * dots, at least {@link #MIN_REFERENCE_SHARE} of {@code steadyDotMm} (dots laid too high miss or come out as
+     * droplets, then the next one carries the paste: the real ladder's first dot was a 0.37 mm droplet, and two
+     * droplets would make the first full dot look squashed); then the first dot squashed by more than the jump ratio,
+     * or missing, is the contact. Paste that could not be measured at a dot's spot ({@code unmeasured}) before the
+     * contact is reached refuses the conclusion: it could be a squashed dot as well as a normal one.
      *
      * @param gapsMm commanded gaps in any order
      * @param diametersMm measured diameter per gap, null = no dot formed (or not measured)
      * @param unmeasured per gap: why the paste at its spot could not be measured, null = measured or no paste
+     * @param steadyDotMm the diameter a steady dot of the ladder's dose makes on the blank ({@link #steadyDotMm}),
+     *        NaN = not checked
      */
-    public static Analysis analyze(double[] gapsMm, Double[] diametersMm, String[] unmeasured, double jumpRatio) {
+    public static Analysis analyze(double[] gapsMm, Double[] diametersMm, String[] unmeasured, double jumpRatio,
+            double steadyDotMm) {
         Analysis a = new Analysis(gapsMm.clone(), diametersMm.clone(), unmeasured.clone());
         Integer[] idx = new Integer[gapsMm.length];
         for (int i = 0; i < idx.length; i++) {
@@ -241,6 +268,15 @@ public final class NeedleTouchOff {
                 return a;
             }
             refD = (d0 + d1) / 2;
+        }
+        if (refD < MIN_REFERENCE_SHARE * steadyDotMm) {
+            String first = idx.length > 1 ? String.format(Locale.ROOT, "two dots (%.3f mm at gap %.3f, %.3f mm at gap "
+                    + "%.3f) are", d0, gapsMm[idx[0]], diametersMm[idx[1]], gapsMm[idx[1]])
+                    : String.format(Locale.ROOT, "dot (%.3f mm at gap %.3f) is", d0, gapsMm[idx[0]]);
+            a.reason = String.format(Locale.ROOT, "the first %s under %.0f %% of the %.2f mm a steady dot of this dose "
+                    + "makes on the blank: droplets from a needle too high, so a larger dot after them is no contact; "
+                    + "run the ladder again from a lower start gap", first, 100 * MIN_REFERENCE_SHARE, steadyDotMm);
+            return a;
         }
         a.referenceDiameterMm = refD;
         for (int k = 2; k < idx.length; k++) {

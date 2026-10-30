@@ -180,7 +180,7 @@ public class TouchOffRealFrameTest {
             System.out.println(String.format(java.util.Locale.ROOT, "[touch-off real] gap %.2f: %s", GAPS[j],
                     ladder.get(j)));
         }
-        NeedleTouchOff.Analysis a = NeedleTouchOff.analyze(GAPS, ladder, 0.25);
+        NeedleTouchOff.Analysis a = NeedleTouchOff.analyze(GAPS, ladder, 0.25, DoseModel.dLoMm(DoseModel.HALF));
         assertFalse(a.found(), a.reason);
         assertNull(a.contactGapMm);
         assertEquals("dots touch or are strung together: the paste at gap 0.400 mm is joined to the dot at gap 0.350 mm; "
@@ -196,5 +196,78 @@ public class TouchOffRealFrameTest {
         assertNull(again.contactGapMm, again.reason);
         assertTrue(again.reason.startsWith("only the first dot formed before a missing one (0.373 mm at gap 0.450, "
                 + "none at gap 0.400)"), again.reason);
+    }
+
+    /**
+     * The real frame changed where a contact would show (F9 review): dot 7 taken away with the strings to its
+     * neighbours (a dot that stopped forming) reads "no paste", with only its strings left "not measured", and dot 8
+     * grown 1.4 x about its centre (a squash) is measured that large. Read from the real dots, the first gives the
+     * contact at the missing dot, the second at the squashed one.
+     */
+    @Test
+    public void theRealFrameStillShowsAMissingDotAndASquash() throws Exception {
+        BufferedImage after = load("touchoff2_openpnp_after.jpg");
+        BufferedImage before = withoutBand(after, OPENPNP_BAND);
+        List<double[]> spots = spots(after, OPENPNP_X, OPENPNP_Y, 9, OPENPNP_SPOT9);
+        DotInspector di = new DotInspector(new DotInspectorSettings());
+        double steady = DoseModel.dLoMm(DoseModel.HALF);
+
+        // dot 7 (crop pixel 657, 183) and the strings either side of it: the bare blank of the "before"
+        BufferedImage missing = copy(after);
+        for (int y = OPENPNP_BAND[2]; y < OPENPNP_BAND[3]; y++) {
+            for (int x = 560; x < 745; x++) {
+                if (x < 602 || x >= 712 || Math.hypot(x - 657, y - 183) <= 62) {
+                    missing.setRGB(x, y, before.getRGB(x, y));
+                }
+            }
+        }
+        List<SpotDot> seen = di.inspectSpots(before, missing, OPENPNP_X, OPENPNP_Y, spots, cut(), PITCH / 2);
+        assertEquals(SpotDot.State.NONE, seen.get(7).state, "dot 7 gone: " + seen.get(7));
+        assertDot(seen.get(6), spots.get(6), 0.85, 1.0, "dot 6 beside it");
+        assertDot(seen.get(8), spots.get(8), 0.95, 1.1, "dot 8 beside it");
+        double[] g = {GAPS[3], GAPS[6], GAPS[7], GAPS[8]};
+        NeedleTouchOff.Analysis stopped = NeedleTouchOff.analyze(g, Arrays.asList(seen.get(3), seen.get(6), seen.get(
+                7), seen.get(8)), 0.25, steady);
+        assertEquals((GAPS[6] + GAPS[7]) / 2, stopped.contactGapMm, 1e-9, stopped.reason);
+        assertTrue(stopped.reason.startsWith("dot stopped forming"), stopped.reason);
+
+        // the same, but a band of its strings left through the spot: paste, no dot (refused, never "no dot")
+        BufferedImage strung = copy(after);
+        for (int y = OPENPNP_BAND[2]; y < OPENPNP_BAND[3]; y++) {
+            for (int x = 595; x < 720; x++) {
+                if (Math.abs(y - 181) > 12 && Math.hypot(x - 657, y - 183) <= 62) {
+                    strung.setRGB(x, y, before.getRGB(x, y));
+                }
+            }
+        }
+        SpotDot s7 = di.inspectSpots(before, strung, OPENPNP_X, OPENPNP_Y, spots, cut(), PITCH / 2).get(7);
+        assertEquals(SpotDot.State.UNMEASURED, s7.state, s7.toString());
+        assertTrue(s7.note.startsWith("no dot, only strings or a smear"), s7.note);
+
+        // dot 8 (crop pixel 797, 182) grown 1.4 x: 1.02 mm -> about 1.45
+        BufferedImage squashed = copy(after);
+        double k = 1.4, r = 56;
+        for (int y = (int) (182 - r * k); y <= 182 + r * k; y++) {
+            for (int x = (int) (797 - r * k); x <= 797 + r * k; x++) {
+                if (Math.hypot(x - 797, y - 182) <= r * k) {
+                    squashed.setRGB(x, y, after.getRGB((int) Math.round(797 + (x - 797) / k), (int) Math.round(182
+                            + (y - 182) / k)));
+                }
+            }
+        }
+        seen = di.inspectSpots(before, squashed, OPENPNP_X, OPENPNP_Y, spots, cut(), PITCH / 2);
+        assertDot(seen.get(8), spots.get(8), 1.35, 1.6, "dot 8 squashed");
+        assertDot(seen.get(7), spots.get(7), 0.95, 1.15, "dot 7 beside it");
+        assertDot(seen.get(9), spots.get(9), 1.1, 1.3, "dot 9 beside it");
+        NeedleTouchOff.Analysis squash = NeedleTouchOff.analyze(new double[] {GAPS[6], GAPS[7], GAPS[8], GAPS[9]},
+                seen.subList(6, 10), 0.25, steady);
+        assertEquals((GAPS[7] + GAPS[8]) / 2, squash.contactGapMm, 1e-9, squash.reason);
+        assertTrue(squash.reason.startsWith("dot squashed"), squash.reason);
+    }
+
+    static BufferedImage copy(BufferedImage a) {
+        BufferedImage b = new BufferedImage(a.getWidth(), a.getHeight(), BufferedImage.TYPE_3BYTE_BGR);
+        b.getGraphics().drawImage(a, 0, 0, null);
+        return b;
     }
 }

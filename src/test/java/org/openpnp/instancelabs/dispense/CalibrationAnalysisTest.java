@@ -141,15 +141,57 @@ public class CalibrationAnalysisTest {
                 1e-12);
     }
 
+    /**
+     * F9 review: two droplets of the same size first (a start gap too high), then steady dots. Read against the
+     * droplets, the first steady dot is "squashed" and the contact would be applied 0.4 mm above the surface (the F9
+     * error again, one step higher); against the dose model's steady dot (60 % of 1.16 mm for a half turn) the
+     * droplets are no reference.
+     */
+    @Test
+    public void touchOffReferenceDotsMustBeSteadyDotsNotDroplets() {
+        DispenseConfig c = new DispenseConfig();
+        NeedleTouchOff.Request req = new NeedleTouchOff.Request();
+        double steady = NeedleTouchOff.steadyDotMm(req, c);
+        assertEquals(1.16, steady, 1e-9, "a half-turn dot on the blank");
+        double[] g = {0.50, 0.45, 0.40, 0.35, 0.30, 0.25};
+        Double[] d = {0.40, 0.42, 1.00, 1.02, 1.05, 1.00};
+        assertEquals(0.425, NeedleTouchOff.analyze(g, d, 0.25).contactGapMm, 1e-12, "the droplets as the reference");
+        NeedleTouchOff.Analysis a = NeedleTouchOff.analyze(g, d, new String[g.length], 0.25, steady);
+        assertFalse(a.found(), a.reason);
+        assertNull(a.referenceDiameterMm);
+        assertEquals("the first two dots (0.400 mm at gap 0.500, 0.420 mm at gap 0.450) are under 60 % of the 1.16 mm "
+                + "a steady dot of this dose makes on the blank: droplets from a needle too high, so a larger dot "
+                + "after them is no contact; run the ladder again from a lower start gap", a.reason);
+        // the spots' path checks it too
+        List<SpotDot> seen = new ArrayList<>();
+        for (Double x : d) {
+            seen.add(SpotDot.dot(new Dot(0, 0, x, Math.PI / 4 * x * x, 0.9)));
+        }
+        assertEquals(a.reason, NeedleTouchOff.analyze(g, seen, 0.25, steady).reason);
+        // steady dots like the real ladder's (0.91-1.20 mm), then a squash: the contact
+        NeedleTouchOff.Analysis ok = NeedleTouchOff.analyze(g, new Double[] {1.00, 0.97, 1.02, 1.40, 1.6, 1.7},
+                new String[g.length], 0.25, steady);
+        assertEquals(0.375, ok.contactGapMm, 1e-12, ok.reason);
+        // the bound: 60 % of the steady dot
+        assertTrue(NeedleTouchOff.analyze(g, new Double[] {0.70, 0.70, 0.70, 0.70, 0.70, 1.0}, new String[g.length],
+                0.25, steady).found());
+        assertFalse(NeedleTouchOff.analyze(g, new Double[] {0.69, 0.69, 0.69, 0.69, 0.69, 1.0}, new String[g.length],
+                0.25, steady).found());
+        // a quarter turn's steady dot is the dose model's lower edge for it
+        req.rotationDeg = 400 / c.bStepsPerDeg;
+        assertEquals(org.openpnp.instancelabs.padprofile.DoseModel.dLoMm(400), NeedleTouchOff.steadyDotMm(req, c),
+                1e-9);
+    }
+
     /** What the camera saw at each spot, as the analysis reads it: the joined dots named by their gaps. */
     @Test
     public void touchOffAnalysisOfTheSpots() {
         double[] g = {0.10, 0.075, 0.05, 0.025};
-        List<SpotDot> seen = Arrays.asList(SpotDot.dot(new Dot(0, 0, 0.62, 0.3, 0.9)), SpotDot.dot(new Dot(0, 0, 0.63,
-                0.31, 0.9)), SpotDot.unmeasured("joined to the paste at another spot", Arrays.asList(3)),
+        List<SpotDot> seen = Arrays.asList(SpotDot.dot(new Dot(0, 0, 1.02, 0.82, 0.9)), SpotDot.dot(new Dot(0, 0, 1.04,
+                0.85, 0.9)), SpotDot.unmeasured("joined to the paste at another spot", Arrays.asList(3)),
                 SpotDot.none());
-        NeedleTouchOff.Analysis a = NeedleTouchOff.analyze(g, seen, 0.25);
-        assertEquals(Arrays.asList(0.62, 0.63, null, null), Arrays.asList(a.diametersMm));
+        NeedleTouchOff.Analysis a = NeedleTouchOff.analyze(g, seen, 0.25, 1.16);
+        assertEquals(Arrays.asList(1.02, 1.04, null, null), Arrays.asList(a.diametersMm));
         assertEquals("joined to the dot at gap 0.025 mm", a.dotNotes[2]);
         assertEquals(Arrays.asList("dot", "dot", "unmeasured", "none"), Arrays.asList(a.dotStates));
         assertTrue(a.reason.startsWith("dots touch or are strung together: the paste at gap 0.050 mm is joined"),
