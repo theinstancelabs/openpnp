@@ -21,6 +21,7 @@ import org.openpnp.instancelabs.padprofile.Limits;
 import org.openpnp.instancelabs.padprofile.PadInstance;
 import org.openpnp.instancelabs.padprofile.ProfileCheck;
 import org.openpnp.instancelabs.padprofile.Texts;
+import org.openpnp.instancelabs.padprofile.Tip;
 import org.openpnp.model.Abstract2DLocatable.Side;
 import org.openpnp.model.Board;
 import org.openpnp.model.BoardLocation;
@@ -55,6 +56,15 @@ public class DispensePlanner {
     public DispensePlanner(DispenseConfig cfg, PadTypeResolver resolver) {
         this.cfg = cfg;
         this.resolver = resolver;
+    }
+
+    /**
+     * The mounted tip with its dot table (tip setups design §22.2, {@code svc.mountedTip()}): the same-pad pitch and
+     * the dot-gap flag from its dot sizes, and {@link PadFlag#DOSE_UNKNOWN} for a dose it does not know. The planner
+     * refuses to plan without one.
+     */
+    public DispensePlanner withTip(Tip tip) {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
     }
 
     /** Per pad-type layout rules (pad_rules): pads larger than largestSingleDotPadMm2 get a grid. */

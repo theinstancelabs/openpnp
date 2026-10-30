@@ -120,6 +120,8 @@ public final class LadderStats {
         public boolean driftFail;
         public Double landingMeanMm;
         public Double landingSdMm;
+        /** The mean landing per axis, found - commanded (mm; tip setups design §22.3); its length is landingMeanMm. */
+        public Double landingDxMm, landingDyMm;
         public Double dMeanMm;
         public Double dCv;
         public Double d95Mm;

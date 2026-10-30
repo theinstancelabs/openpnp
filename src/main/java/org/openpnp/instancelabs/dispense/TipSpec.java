@@ -27,6 +27,19 @@ public class TipSpec {
     public double odMm = 0.72;
     /** Smallest net turn per dot this tip takes (steps of 1600): a quarter turn for the 22G (§1.5). */
     public int minDotSteps = 400;
+    /**
+     * Tip setups (§22.1): this is the engine's view of the mounted setup. Its version (part of the plan
+     * fingerprint, so a corrected OD makes plans stale), {@link TipSetup#MODEL_BENCH} when §1's model
+     * describes the tip (else null), its dispenser, form (bent | straight | unknown), bend angle and
+     * the machine direction the bend points (+x | -x | +y | -y, null = not recorded). The defaults are
+     * the seeded setup's.
+     */
+    public int setupVersion = 1;
+    public String model = TipSetup.MODEL_BENCH;
+    public String dispenser = TipSetup.DEFAULT_DISPENSER;
+    public String form = TipSetup.FORM_BENT;
+    public Double bendDeg = 30.0;
+    public String bendToward = null;
 
     /** True when a pad type or record names a tip and it is not this one. */
     public boolean isOther(String tipKey) {

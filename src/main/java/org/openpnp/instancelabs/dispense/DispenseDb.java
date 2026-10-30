@@ -511,6 +511,26 @@ public class DispenseDb implements AutoCloseable {
         }
     }
 
+    /**
+     * Every pad type as tip setup {@code setupKey} sees it (tip setups design §22.2): composed per type key, the pad
+     * fields of its newest version of any setup ({@code padVersion}) and the dose fields of the setup's own newest
+     * version ({@code version}; rows with tip_key null are the seeded setup's), a stand-in where the setup has none;
+     * in creation order (MIN(row_id) per key). Replaces {@link #currentPadTypes()}.
+     */
+    public synchronized List<PadType> currentPadTypes(String setupKey) throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /** One pad type as setup {@code setupKey} sees it (composed, as {@link #currentPadTypes(String)}), or null. */
+    public synchronized PadType currentPadType(String typeKey, String setupKey) throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /** Whether any version of this pad type key exists, of any setup (the "is this key taken" checks). */
+    public synchronized boolean typeKeyExists(String typeKey) throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
     public synchronized List<PadType> padTypeHistory(String typeKey) throws SQLException {
         List<PadType> l = new ArrayList<>();
         try (PreparedStatement ps = conn.prepareStatement(
@@ -1425,6 +1445,131 @@ public class DispenseDb implements AutoCloseable {
             }
         }
         return l;
+    }
+
+    /**
+     * Pad calibrations, newest first, of one type (null: every type) and one tip setup (null: every setup), with their
+     * {@code setupKey} (records from before schema 3 resolved, §22.1: the tip key of their job's dose records, of the
+     * version they wrote, else the seeded setup), method and needle token.
+     */
+    public synchronized List<PadCalibrationRecord> padCalibrations(String typeKey, String setupKey, int limit)
+            throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /** One pad calibration record with its setup resolved (as {@link #padCalibrations(String, String, int)}), or null. */
+    public synchronized PadCalibrationRecord padCalibration(long id) throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Tip setups, mounts, photos, labels and flags (tip setups design §22.1, schema 3)
+    // ------------------------------------------------------------------------------------------
+
+    /** Appends a version of a tip setup (version = previous max + 1, created now). Returns the stored row. */
+    public synchronized TipSetup insertTipSetupVersion(TipSetup s) throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /** The current (highest) version of every tip setup in creation order; retired ones only when asked. */
+    public synchronized List<TipSetup> currentTipSetups(boolean withRetired) throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /** The current version of one tip setup, or null. */
+    public synchronized TipSetup currentTipSetup(String setupKey) throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /** Every version of one tip setup, oldest first. */
+    public synchronized List<TipSetup> tipSetupHistory(String setupKey) throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /** Whether a setup has a pad type version, a dose record or a mount: its identity fields are then fixed. */
+    public synchronized boolean tipSetupInUse(String setupKey) throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /** Appends a row of {@code tip_mounts} (created now). Returns it with its id. */
+    public synchronized TipSetups.Mount insertTipMount(TipSetups.Mount m) throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /** The newest rows of {@code tip_mounts}, newest first. */
+    public synchronized List<TipSetups.Mount> tipMounts(int limit) throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /** Appends a row of {@code photos} (created now; the file is already in place). Returns it with its id. */
+    public synchronized Photo insertPhoto(Photo p) throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /** One photo with its links and removal (from photo_links and photo_events), or null. */
+    public synchronized Photo photo(long id) throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /**
+     * Photos, newest first, filtered by setup, linked calibration record, job and kind (null: any), removed ones only
+     * when asked, with their links and removal.
+     */
+    public synchronized List<Photo> photos(String setupKey, Long calibrationId, String jobId, String kind,
+            boolean withRemoved, int limit) throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /**
+     * A setup's main picture (§22.1): the newest one chosen with "Use as the tip's picture" (a {@code main} event),
+     * else its newest live {@code setup} picture, else its newest live tip upload; null when it has none.
+     */
+    public synchronized Photo mainPhoto(String setupKey) throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /** Appends a row of {@code photo_links} (UNIQUE per photo and record). Returns it with its id. */
+    public synchronized Photo.Link insertPhotoLink(long photoId, long calibrationId, String role, String operator)
+            throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /** The links of a photo or of a calibration record (null: any), oldest first. */
+    public synchronized List<Photo.Link> photoLinks(Long photoId, Long calibrationId) throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /** Appends a row of {@code photo_events} (remove | restore | main). Returns it with its id. */
+    public synchronized Photo.Event insertPhotoEvent(long photoId, String action, String why, String operator)
+            throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /** The events of a photo, oldest first. */
+    public synchronized List<Photo.Event> photoEvents(long photoId) throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /** Appends a "calibrated for" label of a calibration record (§22.5). Returns it with its id. */
+    public synchronized PadCalibrationRecord.Label insertCalLabel(long calibrationId, String label, boolean auto,
+            String operator) throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /** The newest label row of a calibration record, or null (records from before schema 3 have none). */
+    public synchronized PadCalibrationRecord.Label calLabel(long calibrationId) throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /** Appends a {@code cal_flags} row (flag {@code wrong-tip}, UNIQUE per job and flag). Returns its id. */
+    public synchronized long insertCalFlag(String jobId, String setupKey, String flag, String why, String operator)
+            throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /** The job ids flagged {@code wrong-tip}: their dose records leave their setup's evidence and dot table. */
+    public synchronized Set<String> flaggedJobs() throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
     }
 
     /** Generic read-only query helper (column label -> value). */

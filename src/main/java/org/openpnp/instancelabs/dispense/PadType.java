@@ -25,6 +25,11 @@ public class PadType {
     public static final String ORIGIN_MANUAL = "manual";
     public static final String ORIGIN_SUGGESTED = "suggested";
     public static final String ORIGIN_AUTO_CALIBRATED = "auto-calibrated";
+    /**
+     * Copied from another tip setup's version as a starting point (tip setups design §22.2): provisional,
+     * nothing measured with this tip. Not in {@link #ORIGINS} until the engine writes it.
+     */
+    public static final String ORIGIN_COPIED = "copied";
     static final List<String> ORIGINS = Arrays.asList(ORIGIN_SEED, ORIGIN_MANUAL, ORIGIN_SUGGESTED,
             ORIGIN_AUTO_CALIBRATED);
 
@@ -93,6 +98,15 @@ public class PadType {
     public Double massPerPadMg;
     /** seed | manual | suggested | auto-calibrated; null on rows from before schema 2. */
     public String origin;
+    /**
+     * Tip setups (§22.2), on the rows of a setup's composed view ({@link TipSetups#typesFor}): the setup
+     * the row is for (= {@link #tipKey}), the version of the pad fields it shows (the type's newest
+     * version of any setup; {@link #version} is the setup's own), and whether it is a stand-in (no
+     * version of the setup: dose fields cleared, version 0). Null and false on rows read as stored.
+     */
+    public String setupKey;
+    public Integer padVersion;
+    public boolean standIn;
 
     public PadType() {
     }
@@ -137,6 +151,9 @@ public class PadType {
         p.calAreaMm2 = calAreaMm2;
         p.massPerPadMg = massPerPadMg;
         p.origin = origin;
+        p.setupKey = setupKey;
+        p.padVersion = padVersion;
+        p.standIn = standIn;
         return p;
     }
 

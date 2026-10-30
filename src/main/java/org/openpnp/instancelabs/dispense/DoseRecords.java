@@ -6,11 +6,13 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 
 import org.openpnp.instancelabs.padprofile.DoseEvidence;
 import org.openpnp.instancelabs.padprofile.LadderStats;
 import org.openpnp.instancelabs.padprofile.Limits;
+import org.openpnp.instancelabs.padprofile.Tip;
 
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
@@ -43,6 +45,26 @@ public final class DoseRecords {
         public Integer k;
         /** A thread to the next dot; a string. */
         public boolean t, s;
+    }
+
+    /**
+     * A tip setup's dot table (tip setups design §22.2): per dose, the newest passing optical record of the setup at
+     * the recipe ({@code dose_fp}), the loaded paste and the simulator flag, outside jobs flagged wrong-tip, any age;
+     * and the mass per step of its newest confirmed weighing at that recipe and paste, else its newest single one.
+     * It describes the tip the way the bench model describes the 22G; freshness still decides characterized.
+     */
+    public static final class DotTable {
+        public String setupKey;
+        public String doseFp;
+        public String pasteKey;
+        public boolean simulated;
+        /** Per dose (steps): the dot size measured and the record it came from. */
+        public final Map<Integer, Tip.Measured> doses = new TreeMap<>();
+        /** Weighed mass per motor step (mg) and when; null = never weighed at this recipe and paste. */
+        public Double mgPerStep;
+        public Long mgPerStepAtMs;
+        /** Confirmed by two readings that agree (false: weighed once). */
+        public boolean mgPerStepConfirmed;
     }
 
     /** The calibration's thresholds from the site settings. */
@@ -183,6 +205,24 @@ public final class DoseRecords {
         return n % 2 == 1 ? a.get(n / 2) : (a.get(n / 2 - 1) + a.get(n / 2)) / 2;
     }
 
+    /**
+     * The setup's dot table (§22.2, see {@link DotTable}) from its records: another setup's records never enter it,
+     * nor the records of a job in {@code flaggedJobs} (wrong tip).
+     */
+    public static DotTable dotTable(List<DoseRecord> records, String setupKey, String doseFp, String pasteKey,
+            boolean simulated, Set<String> flaggedJobs) {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /**
+     * As {@link #fresh(List, DispenseConfig, DoseRecord.Epochs, long)} without the records of the jobs flagged
+     * wrong-tip (tip setups design §22.3): they leave the setup's evidence.
+     */
+    public static List<DoseRecord> fresh(List<DoseRecord> records, DispenseConfig cfg, DoseRecord.Epochs epochs,
+            long nowMs, Set<String> flaggedJobs) {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
     /** The records fresh for the current setup (§1.7), oldest first. */
     public static List<DoseRecord> fresh(List<DoseRecord> records, DispenseConfig cfg, DoseRecord.Epochs epochs,
             long nowMs) {
@@ -216,6 +256,15 @@ public final class DoseRecords {
             }
         }
         return l;
+    }
+
+    /**
+     * As {@link #evidence(List, DispenseConfig, DoseRecord.Epochs, long)} without the records of the jobs flagged
+     * wrong-tip (tip setups design §22.3).
+     */
+    public static Map<Integer, DoseEvidence> evidence(List<DoseRecord> records, DispenseConfig cfg,
+            DoseRecord.Epochs epochs, long nowMs, Set<String> flaggedJobs) {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
     }
 
     /**

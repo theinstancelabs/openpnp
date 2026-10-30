@@ -37,6 +37,8 @@ public class DispenseConfig {
     public static final int SCHEMA_VERSION = 3;
     /** Largest I4 frame tolerance: below half the needle's 2.59 mm offset from N1 (bench, new mount). */
     public static final double MAX_FRAME_TOLERANCE_MM = 1.2;
+    /** Largest {@link #needleLanding} per axis (mm): where a tip lands, measured by a landing check (§22.1). */
+    public static final double MAX_LANDING_MM = 15;
     public int schemaVersion = SCHEMA_VERSION;
 
     // --- identity of the dispenser in the OpenPnP machine -----------------------------------
@@ -91,6 +93,12 @@ public class DispenseConfig {
      * here, not into machine.xml. Every dispensed target is moved by minus this.
      */
     public NeedleXyTrim needleXyTrim = new NeedleXyTrim();
+    /**
+     * Where the mounted needle lands relative to camera + N2 head offset (tip setups design §22.1,
+     * §22.3), each axis within {@link #MAX_LANDING_MM}; null = not known. Set only by a landing check
+     * or "Keep where it lands"; every dispensed target moves by minus (landing + trim).
+     */
+    public NeedleLanding needleLanding = null;
     /**
      * I4 Z frame: one surface touched by N1 and by the needle (review finding: nothing tied the
      * surface Z to the frame of the needle offset). Set only by POST /api/needle/anchor.
@@ -201,6 +209,12 @@ public class DispenseConfig {
     // --- pad calibration (profile calibration design §5.4) ---------------------------------------
     /** The needle: pad types and dose records name it; its OD sets the same-pad dot pitch. */
     public TipSpec tip = new TipSpec();
+    /**
+     * Engine-stamped (tip setups design §22.1): what every tip setup that is not mounted keeps, by
+     * setup key: its dispense profile, needle frame, offset, trim and landing. A setup gets its entry
+     * when it is added; a mount parks the outgoing setup here and brings the incoming one in.
+     */
+    public Map<String, ParkedTip> parkedTips = new LinkedHashMap<>();
     /** The paste in the syringe; "New paste loaded" stamps it. */
     public PasteSpec paste = new PasteSpec();
     /** Where on the blank the pad calibration lays its test dots (default: 40 x 20 mm at the blank place). */
@@ -217,6 +231,43 @@ public class DispenseConfig {
         public double dxMm, dyMm;
         public Long setAtMs;
         public String note;
+        /** N2's head offset in OpenPnP when the trim was set (§22.3: a change of it stales the trim); null = unknown. */
+        public Double headOffsetXMm, headOffsetYMm;
+    }
+
+    /**
+     * Where a needle lands, found - commanded, relative to camera + N2 head offset (tip setups design
+     * §22.1, §22.3): set by a landing check (its job and result photo) or kept, under the head offset
+     * it records.
+     */
+    public static class NeedleLanding {
+        public double dxMm, dyMm;
+        public Long setAtMs;
+        /** The landing check that measured it, and its result photo; null when kept from before the update. */
+        public String jobId;
+        public Long photoId;
+        /** N2's head offset in OpenPnP when it was set (mm). */
+        public Double headOffsetXMm, headOffsetYMm;
+        public String note;
+    }
+
+    /**
+     * What a tip setup that is not mounted keeps (tip setups design §22.1): its profile, needle frame,
+     * offset with its two times, trim and landing. A new setup's entry has no frame, the mounted offset
+     * as a placeholder (both times null), a zero trim noted "new tip" and no landing.
+     */
+    public static class ParkedTip {
+        public DispenseProfile profile;
+        public NeedleAnchor needleAnchor;
+        public double needleZOffsetMm;
+        public Long needleZOffsetSetAtMs;
+        public Long needleZOffsetHomeAtMs;
+        public NeedleXyTrim needleXyTrim;
+        public NeedleLanding needleLanding;
+        /** When it was parked (null for a setup never mounted). */
+        public Long parkedAtMs;
+        /** The setup key its profile was first copied from, or "default". */
+        public String profileFrom;
     }
 
     /**

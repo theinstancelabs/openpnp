@@ -115,6 +115,11 @@ public final class ProfileCheck {
         public double odMm;
         public int minDotSteps;
         public double[] minDotMm;
+        /** Tip setups (§22.6): the setup's version and dispenser, and where its dot sizes come from. */
+        public int setupVersion;
+        public String dispenser;
+        /** bench | measured | none. */
+        public String dots;
     }
 
     public static final class Aperture {

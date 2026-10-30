@@ -24,6 +24,7 @@ import org.openpnp.instancelabs.board.EdtRunner;
 import org.openpnp.instancelabs.padprofile.DoseModel;
 import org.openpnp.instancelabs.padprofile.LadderStats;
 import org.openpnp.instancelabs.padprofile.Limits;
+import org.openpnp.instancelabs.padprofile.Tip;
 import org.openpnp.instancelabs.sim.SimGuard;
 import org.openpnp.instancelabs.vision.BareSpotCheck;
 import org.openpnp.instancelabs.vision.Dot;
@@ -84,6 +85,32 @@ public final class DispenseService {
         public RunRefusedException(String message, Throwable cause) {
             super(message, cause);
         }
+    }
+
+    /** A configuration edit applied to the live configuration under the service's lock ({@link #updateConfigAtomically}). */
+    public interface ConfigEdit {
+        /**
+         * The new configuration, made from {@code live} (a copy of the live configuration: the edit's comparisons of
+         * protected settings run against it); throw to refuse.
+         */
+        DispenseConfig apply(DispenseConfig live) throws Exception;
+    }
+
+    /**
+     * What recording a needle Z frame or offset answers (tip setups design §22.3): the frame, the offset and two
+     * warnings; the values are saved either way (they measure what is on).
+     */
+    public static class NeedleFrameResult {
+        /** The needle Z frame now (null when only the offset was set). */
+        public DispenseConfig.NeedleAnchor anchor;
+        public double offsetMm;
+        /**
+         * "The {S}'s tip touches {d} mm higher than when it was on on {date}: is the {S} on the dispenser?" when the
+         * frame moved more than needleOffsetMaxDriftMm from the setup's previous one, else null.
+         */
+        public String question;
+        /** The I4 offset rule's warning (a frame too close to N1's to tell a height taken with the needle), or null. */
+        public String warning;
     }
 
     private final Configuration configuration;
@@ -365,6 +392,15 @@ public final class DispenseService {
     }
 
     /**
+     * Applies an edit to the live configuration under this service's lock (tip setups design §22.1): the edit gets a
+     * copy of the live configuration, and its result is validated and written as {@link #updateConfig} does, so
+     * nothing a mount, a needle change or a run's reservation wrote meanwhile is put back. Returns the new config.
+     */
+    public synchronized DispenseConfig updateConfigAtomically(ConfigEdit edit) throws Exception {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /**
      * I11: sets (angle != null) or confirms the screw start angle for the current controller
      * power-up (the B step count restarts at power-up).
      */
@@ -408,6 +444,89 @@ public final class DispenseService {
         db.event(null, "INFO", "I4", "needle changed; touch-off required");
     }
 
+    /**
+     * Records a needle change (tip setups design §22.3); never refuses. Stops a running engine task first, sets the
+     * needle token {@code needleChangedAtMs} = max(now, previous + 1), writes a skip row for every coupon still
+     * waiting for its readings, a {@code tip_mounts} row {@code needle} and a TIP event: frame, offset and landing
+     * are to do.
+     */
+    public synchronized NeedleChange recordNeedleChange(String why, String operator) throws IOException, SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /**
+     * Mounts another tip setup (tip setups design §22.3, the choice after {@link #recordNeedleChange}): refused (409
+     * {@link EngineRefusal} "refused") while a task runs, the pressure hold is on, or the setup is retired or
+     * incomplete; else parks the mounted setup, brings in the incoming one (live start angle kept), sets
+     * {@code cfg.tip} and writes the config, then a {@code tip_mounts} row {@code mount} and a TIP event.
+     */
+    public synchronized MountResult switchTip(String key, String why, String operator) throws IOException, SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /**
+     * Restores the previous mount exactly (setup, profile, frame, offset, trim, landing and the needle token) within
+     * 2 min of a mount of another setup when no task ran and nothing was measured since; a {@code tip_mounts} row
+     * {@code undo}. Otherwise 409 "Too late to undo: ...".
+     */
+    public synchronized MountResult undoMount(String operator) throws IOException, SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /** Until when the last mount of another setup can be undone (epoch ms), or null. */
+    public Long undoUntilMs() {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /**
+     * Sets the hand trim on top of the landing (±1 mm, §22.3) with N2's head offset now; 409 {@code needle-changed}
+     * when the token is not the needle's, refused while the engine is busy.
+     */
+    public synchronized DispenseConfig.NeedleXyTrim setXyTrim(double dx, double dy, String note,
+            Long needleChangedAtMs) throws IOException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /**
+     * Saves a landing check's landing as the mounted setup's (§22.3) with its job, photo and N2's head offset, and
+     * resets the trim. Not accepted and more than 1.0 mm from the setup's own landing: nothing is saved, the result's
+     * question is set and null is returned. 409 {@code needle-changed} for another needle's result.
+     */
+    public synchronized DispenseConfig.NeedleLanding setLanding(LandingResult r, boolean accepted,
+            Long needleChangedAtMs) throws IOException, SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /**
+     * Keeps where the mounted setup lands across a needle change (§22.3, straight setups only, a landing of its own
+     * under N2's head offset now): stamps it set now; otherwise 409 with {@link #keepLandingProblem()}.
+     */
+    public synchronized DispenseConfig.NeedleLanding keepLanding(Long needleChangedAtMs)
+            throws IOException, SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /**
+     * Why "Keep where it lands" is refused now (the §22.3 text: a bent tip, no landing of its own, N2's head offset
+     * changed), or null when it is allowed.
+     */
+    public String keepLandingProblem() {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /**
+     * Where the needle lands is checked (§22.3): the landing set since the needle change (or no change recorded)
+     * under N2's head offset now (within 0.001 mm), and a trim that is not zero set under it too.
+     */
+    public boolean isNeedleXyChecked() {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /** N2's head offset in OpenPnP now {x, y} (mm; {@code nozzle.getHeadOffsets()}, read only), or null. */
+    public double[] headOffsetNow() {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
     /** Sets the needle Z offset (manual entry or touch-off result) and records it. */
     public synchronized void setNeedleZOffset(double offsetMm, String method, String details)
             throws IOException, SQLException {
@@ -448,6 +567,26 @@ public final class DispenseService {
                 "needle frame: N1 contact %.3f, needle contact %.3f -> offset %.3f; touch-off required",
                 surfaceZMm, needleContactZMm, c.needleZOffsetMm));
         return c.needleAnchor;
+    }
+
+    /**
+     * As {@link #setNeedleZOffset(double, String, String)} for the values taken under the needle token
+     * {@code needleChangedAtMs} (tip setups design §22.3): 409 {@code needle-changed} when the needle was changed after
+     * they were taken; answers the frame question and the I4 offset warning.
+     */
+    public synchronized NeedleFrameResult setNeedleZOffset(double offsetMm, String method, String details,
+            Long needleChangedAtMs) throws IOException, SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /**
+     * As {@link #setNeedleAnchor(double, double, Double, Double, Double)} for heights captured under the needle token
+     * {@code needleChangedAtMs} (§22.3): 409 {@code needle-changed} after a needle change; answers the frame question
+     * (the setup's previous frame) and the I4 offset warning.
+     */
+    public synchronized NeedleFrameResult setNeedleAnchor(double surfaceZMm, double needleContactZMm, Double xMm,
+            Double yMm, Double rawSumMm, Long needleChangedAtMs) throws IOException, SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
     }
 
     /**
@@ -631,6 +770,11 @@ public final class DispenseService {
         dotImagerOverride = imager;
     }
 
+    /** Overrides the camera that photographs the tip from below (tests; null = {@link OpenPnpTipCamera}). */
+    public void setTipCamera(TipCamera camera) {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
     /**
      * Thread-safe: stops the active stream before its next line; pneumatics are switched off (I1).
      * Every task queued before it refuses at its start ({@link #stopEpoch}).
@@ -657,6 +801,52 @@ public final class DispenseService {
         PadType stored = db.insertPadTypeVersion(p);
         db.event(null, "INFO", "PAD_TYPE", "saved " + stored);
         return stored;
+    }
+
+    /**
+     * Appends a pad type version for the mounted setup (tip setups design §22.2), under the lock: {@code forSetup}
+     * must be the mounted setup (409 {@code tip-changed}). A pad edit sends the {@code padVersion} it showed (409
+     * {@code pad-changed} when another was written meanwhile); a dose write ({@code padVersion} null) takes the pad
+     * fields of the composed view now. Returns the stored row as the setup's composed view shows it.
+     */
+    public synchronized PadType savePadType(PadType v, String forSetup, Integer padVersion) throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /**
+     * The pad-type editor's save that raises the mounted setup's version to characterized or validated (§22.5): the
+     * version as {@link #savePadType(PadType, String, Integer)}, and a {@code pad_calibrations} record of method
+     * by-hand with its label (null = the automatic one), the given photos and the main picture linked.
+     */
+    public synchronized PadCalibrationRecord savePadTypeByHand(PadType v, String forSetup, String label,
+            List<Long> photoIds, String operator) throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /**
+     * The mounted tip setup as the check, the planner and the suggester see it (§22.2): {@code cfg.tip} with its dot
+     * table at the current recipe, paste and simulator flag, cached until one of those or the records change.
+     */
+    public Tip mountedTip() throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /**
+     * Writes a coupon's skip mass row (no readings, {@code why}): the weighing never came (tip setups design §22.3: a
+     * needle change, a wrong tip). Returns the row.
+     */
+    public synchronized DoseRecord skipCoupon(DoseRecord coupon, String why, String operator, String jobId)
+            throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /**
+     * "Made with another tip" (§22.3): flags the job wrong-tip (its dose records leave the setup's evidence and dot
+     * table), skips its waiting coupons, and for every record of the job whose version is still its setup's newest
+     * of that type writes a version restoring the previous own dose fields. Returns the versions written.
+     */
+    public synchronized List<PadType> markWrongTip(String jobId, String operator) throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
     }
 
     /** Appends a new version of a per-type dot layout rule. */
@@ -1036,6 +1226,16 @@ public final class DispenseService {
         });
     }
 
+    /**
+     * A picture of the mounted tip from below (tip setups design §22.4), an engine task of kind {@code tip-picture}:
+     * N2 to the bottom camera's X/Y at the balanced travel height (refused when that is outside N2's safe Z zone,
+     * unhomed, under the pressure hold, after a STOP, or for a setup that is not mounted), a lit capture, then the
+     * photo stored (kind tip) and linked to the request's records unless the needle was changed meanwhile.
+     */
+    public Future<TipPictureResult> takeTipPicture(TipPictureRequest req) throws Exception {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
     /** Top camera at every distinct dot of the plan; fills the report (machine thread). */
     private void cleanCheck(DispenseConfig c, DispensePlan plan, PadCleanReport rep,
             java.util.function.BooleanSupplier aborted) throws Exception {
@@ -1225,6 +1425,8 @@ public final class DispenseService {
         public Double newOffsetMm;
         public boolean applied;
         public RunResult run;
+        /** Tip setups (§22.3): the frame question when the offset moved from the setup's previous one, else null. */
+        public String frameQuestion;
     }
 
     /**
@@ -3227,6 +3429,38 @@ public final class DispenseService {
         db.event(null, PadCalibrationRecord.CHARACTERIZED.equals(rec.outcome) ? "INFO" : "WARN", "PCAL",
                 new Gson().toJson(stored));
         return stored;
+    }
+
+    /** The picture store (§22.4): files, removal, restore, the main picture and the start sweep. */
+    public PhotoStore getPhotoStore() {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /**
+     * Stores a picture (an upload, the tip picture task's frame) with its row and links (§22.4): a link to another
+     * setup's record (409 {@code setup-mismatch}) and the store's limits refuse as {@link EngineRefusal}. Uploads are
+     * checked for an idle engine by the API before (the tip picture task stores while it runs).
+     */
+    public Photo storePhoto(PhotoStore.Input in) throws IOException, SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /**
+     * Stores a dose-blocks step's result photos when the step ends (§22.4): kind result, source top-camera, the job,
+     * dose and coupon place, captioned "Top camera {HH:MM}: {n} {turn} test dots on the blank" (or "on {coupon}").
+     */
+    public List<Photo> storeResultPhotos(String jobId, DoseBlocksResult result) throws IOException, SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /**
+     * Links photos to calibration records with a role (result | tip | reference, §22.4): only a photo of the record's
+     * setup (409 {@code setup-mismatch}), a bottom-camera picture only to records of its needle (409
+     * {@code needle-changed}). Returns the links written.
+     */
+    public List<Photo.Link> linkPhotos(List<Long> photoIds, List<Long> calibrationIds, String role)
+            throws SQLException {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
     }
 
     /** Sets (true, now) or clears the engine's new-seat flag (§3.6); returns it. */

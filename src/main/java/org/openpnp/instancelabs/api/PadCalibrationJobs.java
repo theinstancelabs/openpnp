@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -110,6 +111,15 @@ final class PadCalibrationJobs {
             recent.remove(recent.keySet().iterator().next());
         }
         executor.submit(job::run);
+    }
+
+    /**
+     * Runs {@code body} on the jobs' monitor (as {@link #start}) while no pad calibration job is active (tip setups
+     * design §22.3): the switch of a mount, so no job starts between its checks and its write; a job that has not
+     * ended refuses it (409 "A pad calibration is stopping: mount again in a moment.").
+     */
+    synchronized <T> T whileNoJob(Callable<T> body) throws Exception {
+        throw new UnsupportedOperationException("§22 ts-api: not built yet");
     }
 
     /** Runs a step of a job on the jobs' thread (the decision after the readings). */

@@ -47,6 +47,11 @@ public class DispensePlan {
         public int startPhase;
         /** The tip the pad type was calibrated for ({@link PadType#tipKey}) when planned; null = none. */
         public String typeTipKey;
+        /**
+         * The version of the pad fields the type showed when planned ({@link PadType#padVersion}, tip setups design
+         * §22.2); the interlocks compare it as {@link #typeVersion}. Null on plans from before.
+         */
+        public Integer typePadVersion;
         public final EnumSet<PadFlag> flags = EnumSet.noneOf(PadFlag.class);
 
         public boolean isBlocked() {
@@ -134,6 +139,13 @@ public class DispensePlan {
     public Double boardZMm;
     /** Identity of the pad types and package mappings the pads were resolved with ({@link PadTypeResolver#fingerprint}). */
     public String padTypesFingerprint;
+    /**
+     * The tip setup the plan was made for, its name and version (tip setups design §22.2-22.3): a run refuses a plan
+     * of another setup or setup version (PLAN); null on plans from before.
+     */
+    public String setupKey;
+    public String setupName;
+    public Integer setupVersion;
     public final List<PlannedPad> pads = new ArrayList<>();
     public final List<PlannedDot> dots = new ArrayList<>();
     /** Dose blocks of {@link #dots}, in dispense order. */

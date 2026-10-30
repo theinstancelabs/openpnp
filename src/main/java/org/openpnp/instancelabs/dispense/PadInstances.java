@@ -171,6 +171,15 @@ public final class PadInstances {
     }
 
     /**
+     * As {@link #inputs(List, Collection, Map, DispenseConfig, Collection, boolean)} with the tip given (tip setups
+     * design §22.2): the mounted setup with its dot table ({@link DispenseService#mountedTip}), not {@code cfg.tip}.
+     */
+    public static CheckInputs inputs(List<PadInstance> pads, Collection<PadType> types, Map<String, PadRule> rules,
+            DispenseConfig cfg, Collection<String> pastePartial, boolean planned, Tip tip) {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /**
      * The check's inputs from the engine as it is now (§3.1): the current pad types and their rules, the
      * configuration, the packages pasted partly and the dose evidence of the fresh records.
      */

@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Locale;
 
 import org.openpnp.instancelabs.padprofile.Texts;
+import org.openpnp.instancelabs.padprofile.Tip;
 
 /**
  * Pre-flight interlocks (plan §5.5). Runtime interlocks are enforced elsewhere: I1 (outputs off on
@@ -68,6 +69,16 @@ public final class Interlocks {
         public ZCheck.Result zCheck;
         /** The controller is confirmed to be OpenPnP's simulator: surfaces probed there are usable. */
         public boolean simulatorConfirmed;
+        /**
+         * The mounted tip with its dot table ({@link DispenseService#mountedTip}, tip setups design §22.2): a planned
+         * dose it does not know is refused; null = unknown.
+         */
+        public Tip tip;
+        /**
+         * Where the needle lands has been checked for this needle under N2's head offset now (§22.3,
+         * {@link DispenseService#isNeedleXyChecked}); while false only the landing waivers of {@link Scope} dispense.
+         */
+        public boolean xyChecked;
     }
 
     /** What a run uses, for the I4 Z-frame checks. */
@@ -76,6 +87,14 @@ public final class Interlocks {
         public boolean needleMotion = true;
         /** The named I4 waiver: the needle touch-off run itself (it sets the touched-off state). */
         public boolean touchOffWaiver;
+        /** {@link #landingWaiver}: prime and the test dot at the waste, or the landing check itself (§22.3). */
+        public static final String LANDING_WASTE = "waste";
+        public static final String LANDING_CHECK = "landing-check";
+        /**
+         * The named waiver of the landing rule (tip setups design §22.3): {@link #LANDING_WASTE} or
+         * {@link #LANDING_CHECK}; null = none (refused while the landing is not checked).
+         */
+        public String landingWaiver;
         /** Places whose Z must agree with the needle frame (waste, blank). */
         public final List<String> referencePlaces = new java.util.ArrayList<>();
         /** Surface map this run takes its dot Z from (board or blank), or null. */

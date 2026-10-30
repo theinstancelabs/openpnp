@@ -161,6 +161,44 @@ public final class PadLadder {
         return l;
     }
 
+    /**
+     * The landing check in the area's next free band (tip setups design §22.3): the band (its full width, 2R + 8 mm
+     * high), the locator's spot at its centre, the camera frames that cover it, and, once the locator's coarse shift
+     * is known, the 8 purge dots (2.5 mm apart) and the row of 8 ({@code LandingFit.ROW_MM}) on two lines 3 and 6 mm
+     * from the locator on the side with room, every dot at least 1.5 mm (edge to edge) from the band's edges and the
+     * locator. Spots are where the dots should land; the job moves them by minus the coarse shift.
+     */
+    public static final class LandingLayout {
+        /** The band and its height (reserved as a ladder's). */
+        public double x0, x1, y0, y1;
+        public double reservedMm;
+        /** The search radius R the band was made for (mm). */
+        public double searchMm;
+        /** The locator's spot (the band's centre). */
+        public double[] locator;
+        /** Camera frame centres that cover the band (2 x 1 or 2 x 2 frames). */
+        public final List<double[]> frames = new ArrayList<>();
+        /** Purge and row spots; empty until the coarse shift is given. */
+        public final List<double[]> purge = new ArrayList<>();
+        public final List<double[]> row = new ArrayList<>();
+        /** Why it does not fit (the area's height left, an area too short for ±R), or null. */
+        public String problem;
+    }
+
+    /**
+     * The landing check's layout (see {@link LandingLayout}).
+     *
+     * @param area the calibration area in effect, with its used height
+     * @param searchMm the search radius R (2, 6 or 9 mm)
+     * @param dotMm the upper size of the profile's dot (mm)
+     * @param fovMm the camera frame {width, height} (mm), or null
+     * @param coarse the locator's coarse shift {dx, dy} (mm), or null for the locator's step
+     */
+    public static LandingLayout landingLayout(CalibrationArea area, double searchMm, double dotMm, double[] fovMm,
+            double[] coarse) {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
     // ------------------------------------------------------------------------------------------
     // Camera tiles
     // ------------------------------------------------------------------------------------------

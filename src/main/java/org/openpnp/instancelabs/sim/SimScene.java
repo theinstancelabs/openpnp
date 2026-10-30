@@ -13,7 +13,9 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.ConcurrentModificationException;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
@@ -161,6 +163,25 @@ public final class SimScene {
         public boolean reportCount = true;
         /** The physical screw angle at count 0 (steps); null = drawn per connection from the seed. */
         public Integer offsetSteps;
+        /**
+         * Per tip setup key (tip setups design §22.8, {@code "byTip"}): the paste and landing of that tip on the
+         * head; a tip without an entry uses the fields above.
+         */
+        public Map<String, TipPaste> byTip = new LinkedHashMap<>();
+    }
+
+    /**
+     * What one tip on the SIM head changes (§22.8, {@code paste.byTip}): {@code {mRevMg, footprint: {c, e},
+     * landingBiasMm: [dx, dy]}}. A 25G lays smaller dots than the 22G and lands elsewhere, so measuring and
+     * calibrating it give numbers of its own.
+     */
+    public static final class TipPaste {
+        /** Mass per screw revolution with this tip (mg); null = the paste's. */
+        public Double mRevMg;
+        /** Footprint A = c·m^e with this tip; null = the paste's. */
+        public Double footprintC, footprintE;
+        /** Where this tip lands off the commanded spot {dx, dy} (mm); null = the paste's landingBiasMm. */
+        public double[] landingBiasMm;
     }
 
     /** A weigh coupon: a piece of blank PCB on a named place (machine mm, its top an N1 contact Z). */
@@ -228,6 +249,11 @@ public final class SimScene {
     public int[] blankBgr = DEFAULT_BLANK_BGR.clone();
     /** Null: no paste model (the needle lays nothing, M114 has no Count). */
     public Paste paste;
+    /**
+     * The tip on the SIM head (tip setups design §22.8, {@code "physicalTip"}): a setup key; null = the mounted one.
+     * A test can mount the 22G while the 25G is "on the head".
+     */
+    public String physicalTip;
     public List<Coupon> coupons = new ArrayList<>();
     /** Null: no SIM balance (the readings are typed). */
     public Balance balance;

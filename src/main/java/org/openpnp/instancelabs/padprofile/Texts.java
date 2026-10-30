@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -200,6 +201,27 @@ public final class Texts {
     public static String belowGate(String typeName, String status, String gate) {
         return typeName + " is not calibrated yet (status: " + statusWord(status) + "). Boards need pad types that are "
                 + "at least " + statusWord(gate) + ": calibrate it automatically or by hand.";
+    }
+
+    /**
+     * Tip setups (§22.2): the below-gate text of a type for the mounted setup, with the other setups' statuses:
+     * "{type} is not calibrated for the {S} yet (status: {status}; {other status} for the {other setup}). Boards need
+     * pad types that are at least {gate}: calibrate it for this tip automatically or by hand."
+     */
+    public static String belowGate(String typeName, String status, String gate, String setupName,
+            List<TypeInfo.Other> others) {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+    }
+
+    /**
+     * The "calibrated for" label of a calibration record (§22.5): "{type} · {setup} · {dispenser} · {psi} psi ·
+     * {paste}{ lot {lot}}", the type as Profile names it (family word and name; a name holding "·" in brackets);
+     * over 160 characters the paste, then the type, is cut with "…". E.g. "Chip 0603 · 22G bent taper · Vieweg
+     * DV-5005 · 18 psi · Loctite GC50 SAC305 T5".
+     */
+    public static String calLabel(String family, String typeName, String setupName, String dispenser,
+            double pressurePsi, String pasteName, String pasteLot) {
+        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
     }
 
     /** A type calibrated with another tip blocks like a type below the gate (main-thread decision 5). */
