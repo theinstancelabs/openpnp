@@ -669,6 +669,8 @@ public class PadCalibrationSimTest {
         assertEquals("OK", str(run, "status"), run.toString());
         JsonArray blocks = runPlan.getAsJsonArray("blocks");
         assertEquals(2, blocks.size(), blocks.toString());
+        // rc1 review: the purge spots the run lays, as I9 counts them (the web UI's Purge row item reads this)
+        assertEquals(8 + 5, runPlan.get("purgeSpotsNeeded").getAsInt(), "8 to start and 5 for the quarter-turn block");
         assertEquals(800, blocks.get(0).getAsJsonObject().get("netSteps").getAsInt());
         assertEquals(400, blocks.get(1).getAsJsonObject().get("netSteps").getAsInt());
         checkPadsWhole(runPlan);

@@ -298,10 +298,13 @@ public class GcodeStreamBuilder {
             switches += DoseBlocks.switchSpots(blocks.get(k).netSteps, flush, rev);
         }
         if (blocks.size() > 1 && purge.size() < DoseBlocks.initialPurge(runs, cfg, flush) + switches) {
+            // the spots the row has free: the caller passes none at all when they are too few (rc1 review: "gives 0")
+            int need = DoseBlocks.initialPurge(runs, cfg, flush) + switches;
+            int free = !purge.isEmpty() ? purge.size() : cfg.purgeRow.isDefined() ? cfg.purgeRow.spotsLeft() : 0;
             throw new IllegalStateException(String.format(Locale.ROOT, "this program lays %d dot sizes: it needs %d "
-                    + "purge spots (%d to start and %d for the block switches), the purge row gives %d: wipe the purge "
-                    + "row and reset it", blocks.size(), DoseBlocks.initialPurge(runs, cfg, flush) + switches,
-                    DoseBlocks.initialPurge(runs, cfg, flush), switches, purge.size()));
+                    + "purge spots (%d to start and %d for the block switches), the purge row has %d free: %s",
+                    blocks.size(), need, DoseBlocks.initialPurge(runs, cfg, flush), switches, free,
+                    cfg.purgeRow.spots < need ? "give the row more spots" : "wipe the purge row and reset it"));
         }
         boolean partial = DoseBlocks.anyPartial(runs, cfg);
         if (partial && bCountAtStart == null && (!purge.isEmpty() || blocks.size() > 1)) {

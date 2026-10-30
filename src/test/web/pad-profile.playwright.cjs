@@ -450,6 +450,26 @@ async function weighCoupon(page, place) {
       await page.click('#btn-run-test');   // back to the full board
     } else check('(9) Test run with fewer dots: the plan has a two-dot pad to cut inside', false, 'no two dots of one pad in a row');
 
+    // ---- (9a) the purge row a plan of two dot sizes needs (rc1 review): the engine's I9 counts 8 to start and 5 for each
+    // further dot size; the Purge row item, the strip cell and the confirm count the same (not the profile's 8)
+    const pu = await page.evaluate(() => {
+      const r = IL.ready(); const it = r.items.find((x) => x.key === 'purge'); const row = IL.S.status.dispense.purgeRow;
+      const i9 = ((IL.S.plan.interlocks || {}).violations || []).find((v) => v.code === 'I9');
+      // the review's row: 10 spots, all free, for a plan that needs 13
+      const st = JSON.parse(JSON.stringify(IL.S.status));
+      Object.assign(st.dispense.purgeRow, { spots: 10, usedSpots: 0, spotsLeft: 10 });
+      const ten = IL.readiness(st, IL.S.plan, IL.readyCtx()).items.find((x) => x.key === 'purge');
+      return { need: IL.S.plan.purgeSpotsNeeded, perBoard: row.perBoard, left: row.spotsLeft, state: it.state, detail: it.detail, i9: i9 ? i9.message : null,
+        cell: document.getElementById('chip-purge').textContent, ten: { state: ten.state, detail: ten.detail } };
+    });
+    const extra = pu.need - pu.perBoard;
+    check('(9a) two dot sizes: the plan counts its purge spots (' + pu.need + ' = ' + pu.perBoard + ' + ' + extra + '), and the Purge row item counts them as the engine\'s I9',
+      extra > 0 && extra % 5 === 0 && (pu.left < pu.need ? pu.state === 'need' && pu.detail === 'Only ' + pu.left + ' unused purge spots left, ' + pu.need + ' (' + pu.perBoard
+        + ' to start, ' + extra + ' for its other dot sizes) needed. Wipe the row, then reset it.' && !!pu.i9 : pu.state === 'ok' && !pu.i9), pu);
+    check('(9a) a 10-spot row is too short for this plan (' + pu.need + '), not "10/10 ready"', pu.need <= 10 || (pu.ten.state === 'block'
+      && pu.ten.detail.startsWith('The row has 10 spots; this plan purges ' + pu.need + ' (' + pu.perBoard + ' to start, ' + extra + ' for its other dot sizes).')), pu.ten);
+    await shoot(page, 'fix-purge-two-sizes-checks', () => toTop(page, '#chk-needs', null));
+
     // ---- (9b) Refuse flagged pads (rc1 review): "Dispense the rest" opens the switch in Setup › Settings; off, the engine
     // skips the pads it cannot dispense (WSON-8 with the 22G tip, Test_Strip with no profile yet) and runs the rest: Pad
     // types is a note that counts ready, and the run confirm names the pads skipped

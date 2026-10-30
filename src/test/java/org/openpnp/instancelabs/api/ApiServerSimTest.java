@@ -592,6 +592,7 @@ public class ApiServerSimTest {
         assertTrue(sum.get("estimatedSeconds").getAsDouble() > 0, sum.toString());
         assertTrue(sum.get("estimatedDph").getAsDouble() > 0, sum.toString());
         assertEquals(8, sum.get("purgeDots").getAsInt());
+        assertEquals(8, plan.get("purgeSpotsNeeded").getAsInt(), "one dot size: the profile's purge dots (I9)");
         assertFalse(sum.has("estimatedDphUpperBound"), sum.toString());
         // the plan carries the profile it was made with; no calibration / q any more
         assertFalse(plan.has("calibration"), plan.toString());

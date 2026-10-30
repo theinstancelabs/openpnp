@@ -1052,8 +1052,8 @@
       tile(['', dphAbbr()], null, [el('span', { class: 'nowrap', text: 'estimate ' + dph(sm.estimatedWorkDph) }), ' · ', el('span', { class: 'nowrap', text: dph(sm.estimatedDph) })], { aside: 'bench ' + IL.fmtInt(BENCH_DPH),
         extra: pair(dph(rr.dphMotion), 'dots only', dph(rr.dphOverall), 'overall') }),
       tile('Purge row', row.defined ? [el('span', { class: 'n', text: String(row.spotsLeft) }), el('span', { class: 'u', text: 'of ' + row.spots })] : el('span', { class: 'n', text: '—' }),
-        row.defined ? (row.spotsLeft < row.perBoard ? 'wipe and reset before the next board' : 'spots free · next board uses ' + row.perBoard) : 'not set',
-        { cls: row.defined && row.spotsLeft < row.perBoard ? 'tile--need' : '' }),
+        row.defined ? (row.spotsLeft < IL.purgeNeed(row, p) ? 'wipe and reset before the next board' : 'spots free · next board uses ' + IL.purgeNeed(row, p)) : 'not set',
+        { cls: row.defined && row.spotsLeft < IL.purgeNeed(row, p) ? 'tile--need' : '' }),
     ]);
   }
 
@@ -2652,12 +2652,13 @@
     let msg = null;
     if (row.defined) {
       const nextNo = boardNumber(p.planId) + 1;
-      msg = row.spotsLeft < row.perBoard
-        ? [el('b', { text: 'After this board: ' }), 'the purge row has ' + IL.plural(row.spotsLeft, 'spot') + ' left. Wipe it and reset it before board ' + nextNo + '.']
-        : [el('b', { text: 'After this board: ' }), 'the purge row has ' + row.spotsLeft + ' of ' + row.spots + ' spots free, enough for ' + IL.plural(Math.floor(row.spotsLeft / Math.max(1, row.perBoard)), 'board') + '.'];
+      const need = IL.purgeNeed(row, p);
+      msg = row.spotsLeft < need
+        ? [el('b', { text: 'After this board: ' }), 'the purge row has ' + IL.plural(row.spotsLeft, 'spot') + ' left, ' + need + ' needed. Wipe it and reset it before board ' + nextNo + '.']
+        : [el('b', { text: 'After this board: ' }), 'the purge row has ' + row.spotsLeft + ' of ' + row.spots + ' spots free, enough for ' + IL.plural(Math.floor(row.spotsLeft / Math.max(1, need)), 'board') + '.'];
     }
     IL.keyed(after, msg ? el('span', {}, msg).textContent : '', () => msg);
-    IL.setClass(after, 'notebox' + (row.defined && row.spotsLeft < row.perBoard ? ' notebox--need' : ''));
+    IL.setClass(after, 'notebox' + (row.defined && row.spotsLeft < IL.purgeNeed(row, p) ? ' notebox--need' : ''));
     IL.show(after, !!msg);
   }
 
@@ -2729,7 +2730,7 @@
           mini(['', dphAbbr(), ' dots only'], dph(rr.dphMotion), '', 'estimate ' + dph(sm.estimatedWorkDph) + ' · bench ' + IL.fmtInt(BENCH_DPH)),
           mini(['', dphAbbr(), ' overall'], dph(rr.dphOverall), '', 'estimate ' + dph(sm.estimatedDph)),
           mini('Total time', isNum(rr.totalSeconds) ? IL.fmtClock(rr.totalSeconds) : '—', '', isNum(rr.motionSeconds) ? 'dots ' + IL.fmtClock(rr.motionSeconds) : null),
-          mini('Purge spots left', row.defined ? String(row.spotsLeft) : '—', row.defined ? 'of ' + row.spots : '', row.defined ? (row.spotsLeft < row.perBoard ? 'wipe and reset before the next board' : 'next board uses ' + row.perBoard) : 'not set')),
+          mini('Purge spots left', row.defined ? String(row.spotsLeft) : '—', row.defined ? 'of ' + row.spots : '', row.defined ? (row.spotsLeft < IL.purgeNeed(row, p) ? 'wipe and reset before the next board' : 'next board uses ' + IL.purgeNeed(row, p)) : 'not set')),
         p && p.profile ? el('div', {}, IL.sectionK('Profile'), el('a', { class: 'result-recipe', href: '#profile', title: 'Dispense profile this plan was made with', text: IL.profileText(p.profile) })) : null,
       ];
     });
@@ -2897,10 +2898,12 @@
     cards.push([sf.state, sf.state === 'ok' ? 'Board surface tied' : 'Board surface: ' + sf.value, sf.state === 'ok' ? IL.plural((surf && surf.points || []).length, 'point') + ' · plan ' + shortId(p) : sf.detail]);
     cards.push([an.state, an.state === 'off' ? 'Whole turns per dot' : 'Start angle ' + IL.fmtDeg(prof.startAngleDeg, 1), an.state === 'ok' ? 'confirmed ' + IL.fmtTime(prof.startAngleSetAtMs - S.skewMs) : an.detail]);
     if (row.defined) {
-      const a = row.usedSpots + 1, b = row.usedSpots + row.perBoard;
-      const after = row.spotsLeft - row.perBoard;
-      cards.push([row.spotsLeft >= row.perBoard ? 'ok' : 'need', 'Purge spots ' + a + ' to ' + b,
-        after >= 0 ? IL.plural(after, 'spot') + ' left after' + (after < row.perBoard ? ': wipe before board ' + (boardNumber(p.planId) + 1) : '') : 'only ' + row.spotsLeft + ' left: wipe and reset first']);
+      // the spots this plan lays (I9: 8 to start, 5 for each further dot size)
+      const need = IL.purgeNeed(row, p);
+      const a = row.usedSpots + 1, b = row.usedSpots + need;
+      const after = row.spotsLeft - need;
+      cards.push([row.spotsLeft >= need ? 'ok' : 'need', 'Purge spots ' + a + ' to ' + b,
+        after >= 0 ? IL.plural(after, 'spot') + ' left after' + (after < need ? ': wipe before board ' + (boardNumber(p.planId) + 1) : '') : 'only ' + row.spotsLeft + ' left, ' + need + ' needed: wipe and reset first']);
     } else cards.push(['block', 'Purge row not set', 'Setup › Purge row']);
     // Refuse flagged pads off: the pads that cannot be dispensed are skipped, by package (PROFILE_CALIBRATION_DESIGN §21)
     const skipped = (p.pads || []).filter((x) => x.blocked);

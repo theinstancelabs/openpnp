@@ -902,6 +902,21 @@
     return isNum(h.sinceMs) ? 'not homed since ' + IL.fmtTime(h.sinceMs - S.skewMs) : 'not homed';
   };
 
+  /**
+   * The purge-row spots a board run of the plan lays (I9, as the engine counts them: plan.purgeSpotsNeeded, the profile's
+   * purge dots and the phase and flush dots of each further dot size), else the profile's purge dots (row.perBoard).
+   * plan defaults to the plan shown.
+   */
+  IL.purgeNeed = function (row, plan) {
+    const p = plan === undefined ? S.plan : plan;
+    return p && isNum(p.purgeSpotsNeeded) && p.purgeSpotsNeeded > 0 ? p.purgeSpotsNeeded : (row && isNum(row.perBoard) ? row.perBoard : 0);
+  };
+  /** "13 (8 to start, 5 for its other dot sizes)", or "8": the need with its parts when the plan has several dot sizes. */
+  IL.purgeNeedText = function (row, need) {
+    const base = row && isNum(row.perBoard) ? row.perBoard : need;
+    return need > base ? need + ' (' + base + ' to start, ' + (need - base) + ' for its other dot sizes)' : String(need);
+  };
+
   // ================================================================================== readiness (§9)
   IL.READY_ORDER = ['machine', 'angle', 'needle', 'regulator', 'padtypes', 'surface', 'plan', 'purge', 'clean'];
   const READY_OK = new Set(['ok', 'you', 'off', 'info']);   // info: a note that counts ready ("homes first")
@@ -1218,25 +1233,27 @@
       }
     }
 
-    // 8 Purge row (I9)
+    // 8 Purge row (I9): the plan's need, as the engine counts it (two dot sizes: 8 + 5)
     const pr = d.purgeRow || {};
+    const pNeed = IL.purgeNeed(pr, plan);
     if (!pr.defined) {
       add({ key: 'purge', code: 'I9', title: 'Purge row', state: 'block', value: 'not set', short: 'purge row',
         detail: 'The purge row is not set.', fixes: [{ href: '#setup/purge', label: 'Set the purge row' }] });
     } else if (pr.surfaceProbed === false) {
       add({ key: 'purge', code: 'I9', title: 'Purge row', state: 'block', value: 'no surface', short: 'purge surface',
         detail: "The purge row's surface '" + pr.surfaceName + "' is not probed.", fixes: [{ href: '#setup/surfaces', label: 'Probe the blank' }] });
-    } else if (pr.spots < pr.perBoard) {
+    } else if (pr.spots < pNeed) {
       add({ key: 'purge', code: 'I9', title: 'Purge row', state: 'block', value: 'too short', short: 'purge row too short',
-        detail: 'The row has ' + IL.plural(pr.spots, 'spot') + '; a board purges ' + pr.perBoard + '. A reset cannot fix this: give the row more spots, or purge fewer dots in the profile.',
+        detail: 'The row has ' + IL.plural(pr.spots, 'spot') + '; ' + (plan ? 'this plan purges ' : 'a board purges ') + IL.purgeNeedText(pr, pNeed)
+          + '. A reset cannot fix this: give the row more spots, or purge fewer dots in the profile.',
         fixes: [{ href: '#setup/purge', label: 'Purge row: more spots' }, { href: '#profile', label: 'Profile: purge dots' }] });
-    } else if (pr.spotsLeft < pr.perBoard) {
+    } else if (pr.spotsLeft < pNeed) {
       add({ key: 'purge', code: 'I9', title: 'Purge row', state: 'need', value: pr.spotsLeft + '/' + pr.spots, short: 'wipe row',
-        detail: 'Only ' + pr.spotsLeft + ' unused purge spots left, ' + pr.perBoard + ' needed. Wipe the row, then reset it.',
+        detail: 'Only ' + pr.spotsLeft + ' unused purge spots left, ' + IL.purgeNeedText(pr, pNeed) + ' needed. Wipe the row, then reset it.',
         fixes: [{ fix: 'purge-reset', label: 'Wiped: reset row', icon: 'i-wipe' }] });
     } else {
       add({ key: 'purge', code: 'I9', title: 'Purge row', state: 'ok', value: pr.spotsLeft + '/' + pr.spots, short: 'purge row',
-        detail: pr.spotsLeft + ' of ' + pr.spots + ' spots free; a board uses ' + pr.perBoard + '.' });
+        detail: pr.spotsLeft + ' of ' + pr.spots + ' spots free; ' + (plan ? 'this plan uses ' : 'a board uses ') + IL.purgeNeedText(pr, pNeed) + '.' });
     }
 
     // 9 Pads clean (I10)
@@ -1632,11 +1649,12 @@
           detail: 'Register board and Run home first (≈ ' + IL.fmtSecs(homeS) + '); or home now.', fixes: [{ fix: 'home', label: 'Home now' }] }
         : { key: 'home', title: 'Home', detail: 'M410 can lose steps: home before any move', wait: !m.enabled, done: !!m.enabled && !!m.homed,
           fixes: m.enabled && !m.homed ? [{ fix: 'home', label: 'Home', primary: true }] : [] });
-    const short = !!row.defined && row.spotsLeft < row.perBoard;
-    const tooShort = !!row.defined && row.spots < row.perBoard;
+    const need = IL.purgeNeed(row);
+    const short = !!row.defined && row.spotsLeft < need;
+    const tooShort = !!row.defined && row.spots < need;
     if (short || (rec && rec.purgeShort)) {
-      steps.push({ key: 'purge', title: short ? 'Purge row: ' + row.spotsLeft + ' left, ' + row.perBoard + ' needed' : 'Purge row reset',
-        detail: tooShort ? 'the row has ' + IL.plural(row.spots, 'spot') + ', a board purges ' + row.perBoard + ': give it more spots (Setup) or purge fewer dots (Profile)'
+      steps.push({ key: 'purge', title: short ? 'Purge row: ' + row.spotsLeft + ' left, ' + need + ' needed' : 'Purge row reset',
+        detail: tooShort ? 'the row has ' + IL.plural(row.spots, 'spot') + ', a board purges ' + IL.purgeNeedText(row, need) + ': give it more spots (Setup) or purge fewer dots (Profile)'
           : short ? 'can be done now: wipe the row on the blank, then reset it (I9)' : row.spotsLeft + ' of ' + row.spots + ' spots free',
         done: !short, fixes: tooShort ? IL.fixesForCode('I9', s) : short ? [{ fix: 'purge-reset', label: 'Wiped: reset row', icon: 'i-wipe' }] : [] });
     }
@@ -1788,7 +1806,7 @@
     if (S.recovery) {
       if (!m.enabled) S.recovery.seenDown = true;
       const row = d.purgeRow || {};
-      if (row.defined && row.spotsLeft < row.perBoard) S.recovery.purgeShort = true;
+      if (row.defined && row.spotsLeft < IL.purgeNeed(row)) S.recovery.purgeShort = true;
     }
     // vent_failed: band + Pressure view, until the hold reads off
     if (pr.state === 'vent_failed') {
@@ -2072,10 +2090,11 @@
       else if (S.recovery && !(s.machine && s.machine.enabled)) setCell(ac, 'need', 'Confirm', 'After STOP: asked after Connect: was the controller switched off? (I11)');
       else setCell(ac, 'ok', IL.fmtDeg(prof.startAngleDeg, 1), 'Screw start angle ' + IL.fmtDeg(prof.startAngleDeg, 1) + ', confirmed ' + IL.fmtTime(prof.startAngleSetAtMs - S.skewMs) + ' for this controller power-up (I11)');
       const row = d.purgeRow || {};
+      const need = IL.purgeNeed(row);
       if (!row.defined) setCell(uc, 'block', 'Not set', 'The purge row is not set (Setup, I9)');
-      else if (row.spots < row.perBoard) setCell(uc, 'block', [row.spotsLeft + ' of ' + row.spots, ' · too short'], 'The row has ' + row.spots + ' spots; a board purges ' + row.perBoard + ': give it more spots (Setup) or purge fewer dots (Profile) (I9)');
-      else if (row.spotsLeft < row.perBoard) setCell(uc, 'need', [row.spotsLeft + ' of ' + row.spots, ' · wipe'], row.spotsLeft + ' spots left, ' + row.perBoard + ' needed per board: wipe the row and reset it (I9)');
-      else setCell(uc, 'ok', row.spotsLeft + ' of ' + row.spots, row.spotsLeft + ' spots free, ' + row.perBoard + ' per board (I9)');
+      else if (row.spots < need) setCell(uc, 'block', [row.spotsLeft + ' of ' + row.spots, ' · too short'], 'The row has ' + row.spots + ' spots; a board purges ' + IL.purgeNeedText(row, need) + ': give it more spots (Setup) or purge fewer dots (Profile) (I9)');
+      else if (row.spotsLeft < need) setCell(uc, 'need', [row.spotsLeft + ' of ' + row.spots, ' · wipe'], row.spotsLeft + ' spots left, ' + IL.purgeNeedText(row, need) + ' needed per board: wipe the row and reset it (I9)');
+      else setCell(uc, 'ok', row.spotsLeft + ' of ' + row.spots, row.spotsLeft + ' spots free, ' + IL.purgeNeedText(row, need) + ' per board (I9)');
     }
     const v = IL.verdict();
     const ve = $('pill-engine');
@@ -2661,7 +2680,7 @@
     switch (code) {
       case 'MACHINE': return m.enabled ? [{ fix: 'home', label: 'Home' }] : [{ fix: 'connect', label: 'Connect' }];
       case 'I11': return [{ fix: 'I11-confirm', label: 'Controller stayed on: confirm' }, { href: '#calibrate/angle', label: 'Measure again' }];
-      case 'I9': return row.defined && row.spots < row.perBoard
+      case 'I9': return row.defined && row.spots < IL.purgeNeed(row)
         ? [{ href: '#setup/purge', label: 'Purge row: more spots' }, { href: '#profile', label: 'Profile: purge dots' }]
         : [{ fix: 'purge-reset', label: 'Wiped: reset row', icon: 'i-wipe' }];
       case 'I10': return [{ fix: 'clean-check', label: 'Wiped: check again' }];
@@ -3105,15 +3124,16 @@
           IL.fixButton({ href: '#setup/purge', label: 'Setup › Purge row' })), el('div', { class: 'reason', id: 'pv-purge-reason', hidden: true }));
       }
       const row = (s.dispense && s.dispense.purgeRow) || {};
-      IL.keyed($('pv-purge-strip'), JSON.stringify([row.spots, row.usedSpots, row.perBoard, row.defined]), () => {
+      const need = IL.purgeNeed(row);
+      IL.keyed($('pv-purge-strip'), JSON.stringify([row.spots, row.usedSpots, need, row.defined]), () => {
         if (!row.defined) return el('div', { class: 'notebox notebox--block', text: 'The purge row is not set: set it in Setup (origin, pitch and spots on the blank).' });
         const cells = [];
-        for (let i = 0; i < row.spots; i++) cells.push(el('i', { class: i < row.usedSpots ? 'used' : i < row.usedSpots + row.perBoard ? 'next' : null }));
+        for (let i = 0; i < row.spots; i++) cells.push(el('i', { class: i < row.usedSpots ? 'used' : i < row.usedSpots + need ? 'next' : null }));
         return [el('div', { class: 'ready-head' }, el('div', { class: 'ready-head__t' }, el('div', { class: 'eyebrow', text: 'Spots free' }),
-          el('div', { class: 'ready-head__q', text: row.spots < row.perBoard ? 'Too short for one board (' + row.perBoard + ' per board)' : row.spotsLeft < row.perBoard ? 'Wipe the row and reset it' : 'Enough for ' + IL.plural(row.boardsLeft, 'board') })),
+          el('div', { class: 'ready-head__q', text: row.spots < need ? 'Too short for one board (' + need + ' per board)' : row.spotsLeft < need ? 'Wipe the row and reset it' : 'Enough for ' + IL.plural(Math.floor(row.spotsLeft / Math.max(1, need)), 'board') })),
         el('div', { class: 'ready-head__n' }, String(row.spotsLeft), el('small', { text: ' of ' + row.spots }))),
         el('div', { class: 'purge purge--lg', role: 'img', 'aria-label': 'Purge row: ' + row.spotsLeft + ' of ' + row.spots + ' spots free', style: 'margin-top:10px' }, cells),
-        el('div', { class: 'ready-sub' }, el('span', { text: row.usedSpots + ' used · ' + row.spotsLeft + ' free' }), el('span', { text: 'next board uses ' + row.perBoard }))];
+        el('div', { class: 'ready-sub' }, el('span', { text: row.usedSpots + ' used · ' + row.spotsLeft + ' free' }), el('span', { text: 'next board uses ' + need }))];
       });
       const next = row.defined ? { x: row.x0Mm + row.usedSpots * row.pitchXMm, y: row.y0Mm + row.usedSpots * row.pitchYMm } : null;
       IL.kv($('pv-purge-kv'), [
@@ -3123,7 +3143,7 @@
         ['Last wiped', row.resetAtMs ? IL.fmtDateTime(row.resetAtMs - S.skewMs) : 'never'],
       ]);
       const btn = p.foot.querySelector('[data-fix="purge-reset"]');
-      IL.gate(btn, !row.defined ? 'The purge row is not set' : IL.lockReason(s) || (row.spots < row.perBoard ? 'A reset cannot help: the row has fewer spots than one board purges' : null), $('pv-purge-reason'));
+      IL.gate(btn, !row.defined ? 'The purge row is not set' : IL.lockReason(s) || (row.spots < IL.purgeNeed(row) ? 'A reset cannot help: the row has fewer spots than one board purges' : null), $('pv-purge-reason'));
     },
   };
 

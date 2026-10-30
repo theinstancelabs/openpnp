@@ -677,13 +677,23 @@ final class DispenseEndpoints {
         estimate(svc, e);
         e.registrationTargets = registration.targets(svc, e);
         ctx.plans.put(e);
-        return Views.plan(e, runPreflight(svc, plan, nz(e.estimatedPressurisedSeconds)), svc.getConfig().newSeatAtMs);
+        return planView(svc, e);
     }
 
     Object getPlan(ApiServer.Request r) throws Exception {
         DispenseService svc = ctx.availableSvc();
-        PlanStore.Entry e = requirePlan(r.group(1));
-        return Views.plan(e, runPreflight(svc, e.plan, nz(e.estimatedPressurisedSeconds)), svc.getConfig().newSeatAtMs);
+        return planView(svc, requirePlan(r.group(1)));
+    }
+
+    /**
+     * A plan as the API shows it: the interlocks Run faces now, and the purge-row spots a run of it lays
+     * ({@code purgeSpotsNeeded}, I9: the profile's purge dots, and the phase and flush dots of each further dot size).
+     */
+    private Map<String, Object> planView(DispenseService svc, PlanStore.Entry e) throws Exception {
+        Map<String, Object> m = Views.plan(e, runPreflight(svc, e.plan, nz(e.estimatedPressurisedSeconds)),
+                svc.getConfig().newSeatAtMs);
+        m.put("purgeSpotsNeeded", DoseBlocks.purgeSpotsNeeded(e.plan, svc.getConfig()));
+        return m;
     }
 
     /**

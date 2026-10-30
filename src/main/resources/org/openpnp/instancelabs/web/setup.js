@@ -386,12 +386,12 @@
         break;
       }
       case 'purge':
-        if (pr.defined && pr.spots < pr.perBoard) {
-          q = 'The purge row has ' + IL.plural(pr.spots, 'spot') + '; a board purges ' + pr.perBoard;
+        if (pr.defined && pr.spots < IL.purgeNeed(pr)) {
+          q = 'The purge row has ' + IL.plural(pr.spots, 'spot') + '; a board purges ' + IL.purgeNeedText(pr, IL.purgeNeed(pr));
           dd = 'A reset cannot fix this: give the row more spots (Purge row card), or purge fewer dots per board (Profile).';
           acts = [IL.fixButton({ fix: 'su-go-purge', label: 'Purge row: more spots', primary: true }), IL.fixButton({ href: '#profile', label: 'Profile: purge dots' })];
         } else if (x.state === 'need') {
-          q = 'Purge row: ' + pr.spotsLeft + ' of ' + pr.spots + ' spots left, ' + pr.perBoard + ' needed';
+          q = 'Purge row: ' + pr.spotsLeft + ' of ' + pr.spots + ' spots left, ' + IL.purgeNeedText(pr, IL.purgeNeed(pr)) + ' needed';
           dd = 'Wipe the strip on the blank (pressure off, needle away), then reset the row.';
           acts = [lg({ fix: 'purge-reset', label: 'Wiped: reset row', icon: 'i-wipe' }), el('span', { class: 'su-band-strip' }, purgeStrip(pr, false))];
         } else {
@@ -445,9 +445,10 @@
   // ---------------------------------------------------------------------------------- purge strip
   function purgeStrip(pr, lg) {
     const cells = [];
-    for (let i = 0; i < (pr.spots || 0); i++) cells.push(el('i', { class: i < pr.usedSpots ? 'used' : i < pr.usedSpots + pr.perBoard ? 'next' : null }));
+    const need = IL.purgeNeed(pr);   // the plan shown's (two dot sizes: 8 + 5), else the profile's
+    for (let i = 0; i < (pr.spots || 0); i++) cells.push(el('i', { class: i < pr.usedSpots ? 'used' : i < pr.usedSpots + need ? 'next' : null }));
     return el('div', { class: 'purge' + (lg ? ' purge--lg' : '') + (pr.spots > 30 ? ' su-purge-wrap' : ''), role: 'img',
-      'aria-label': 'Purge row: ' + pr.usedSpots + ' used, ' + pr.spotsLeft + ' free, the next board uses ' + pr.perBoard }, cells);
+      'aria-label': 'Purge row: ' + pr.usedSpots + ' used, ' + pr.spotsLeft + ' free, the next board uses ' + need }, cells);
   }
 
   // ================================================================================== 1 Needle Z frame
@@ -1268,14 +1269,15 @@
     const c = C.purge;
     const d = disp(s), pr = d.purgeRow || {};
     const step = m.steps.find((x) => x.key === 'purge');
-    IL.setText(c.per, isNum(pr.perBoard) ? pr.perBoard + '\u00a0per\u00a0board' : '— per board');
-    cardState(c, step.state, !pr.defined ? 'Not set' : pr.surfaceProbed === false ? 'Surface not probed' : pr.spots < pr.perBoard ? 'Too short: ' + pr.spots + ' spots, ' + pr.perBoard + ' per board'
+    const need = IL.purgeNeed(pr);
+    IL.setText(c.per, isNum(pr.perBoard) ? need + '\u00a0per\u00a0board' : '— per board');
+    cardState(c, step.state, !pr.defined ? 'Not set' : pr.surfaceProbed === false ? 'Surface not probed' : pr.spots < need ? 'Too short: ' + pr.spots + ' spots, ' + need + ' per board'
       : pr.spotsLeft + ' of ' + pr.spots + ' left', step.detail);
-    IL.keyed(c.strip, JSON.stringify([pr.defined, pr.spots, pr.usedSpots, pr.perBoard]), () => (pr.defined && pr.spots ? purgeStrip(pr, true)
+    IL.keyed(c.strip, JSON.stringify([pr.defined, pr.spots, pr.usedSpots, need]), () => (pr.defined && pr.spots ? purgeStrip(pr, true)
       : el('div', { class: 'notebox notebox--block', text: 'Not set: board runs are refused (I9). Enter the first spot, pitch and number of spots on the blank, then save.' })));
     const next = pr.defined ? { x: pr.x0Mm + pr.usedSpots * pr.pitchXMm, y: pr.y0Mm + pr.usedSpots * pr.pitchYMm } : null;
     IL.kv(c.kv, [
-      ['Spots', pr.defined ? pr.usedSpots + ' used · ' + pr.spotsLeft + ' free · ' + IL.plural(pr.boardsLeft || 0, 'board') + ' left' : '—'],
+      ['Spots', pr.defined ? pr.usedSpots + ' used · ' + pr.spotsLeft + ' free · ' + IL.plural(Math.floor(pr.spotsLeft / Math.max(1, need)), 'board') + ' left' : '—'],
       ['Next spot', next && pr.spotsLeft > 0 ? 'X ' + fmt(next.x, 2) + ' · Y ' + fmt(next.y, 2) + ' mm' : pr.defined ? 'none: wipe and reset' : '—'],
       ['Last wiped', pr.resetAtMs ? tm(pr.resetAtMs) + ' · ' + IL.fmtAgo(pr.resetAtMs, IL.serverNow()) : 'never'],
       ['Surface', (pr.surfaceName || '—') + (pr.surfaceProbed ? ' · probed' : pr.surfaceName ? ' · NOT probed: probe the blank' : '')],
