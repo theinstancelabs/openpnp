@@ -726,6 +726,35 @@ public class DispenseServiceSimTest {
     }
 
     /**
+     * rc1 review (machine safety): OpenPnP drops every task queued behind one of its own that throws (here a machine
+     * task that fails after 0.5 s, as its Home meeting a limit would). The engine task dropped so never ran its
+     * finish(): busy stayed set for good, STOP included, and every engine endpoint refused. STOP now ends it as ERROR
+     * (nothing was sent), and the engine takes the next task.
+     */
+    @Test
+    public void aTaskOpenPnpDroppedEndsAtTheNextStop() throws Exception {
+        Future<Object> failing = sim.machine.submit(() -> {
+            Thread.sleep(500);
+            throw new Exception("test: a task of OpenPnP's own fails");
+        });
+        sim.server.mark();
+        Future<RunResult> dropped = svc.runShots("waste", 360, 1, true);
+        assertThrows(ExecutionException.class, () -> failing.get(10, TimeUnit.SECONDS));
+        Thread.sleep(DispenseService.DROPPED_AFTER_MS + 300);
+        assertFalse(dropped.isDone(), "OpenPnP removed it from its queue without running it");
+        assertTrue(svc.isBusy());
+        svc.abort("STOP pressed in the web UI");
+        assertFalse(svc.isBusy(), "STOP ended the dropped task");
+        RunResult r = svc.getLastRun();
+        assertEquals(RunResult.Status.ERROR, r.status, r.toString());
+        assertTrue(r.message.startsWith("OpenPnP dropped this task before it started"), r.message);
+        assertTrue(dropped.isCancelled(), "a caller waiting for it learns at once");
+        assertNothingStreamed(sim.server.sinceMark());
+        RunResult next = svc.runShots("waste", 360, 1, true).get(60, TimeUnit.SECONDS);
+        assertEquals(RunResult.Status.OK, next.status, next.toString());
+    }
+
+    /**
      * rc1 review (machine safety), I1: an Error on the machine thread during a stream (on the machine an
      * OutOfMemoryError; here a listener's StackOverflowError) still ends with the stop sequence, so the pump and the
      * valve go off. Only an Exception ran the shutdown before: they stayed on, with no I7 on-time limit after it.

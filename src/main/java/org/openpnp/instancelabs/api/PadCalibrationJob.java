@@ -1081,6 +1081,7 @@ final class PadCalibrationJob {
      */
     private <T> T engine(Submit<T> submit, java.util.function.Function<T, RunResult> run,
             java.util.function.Predicate<T> ok, java.util.function.Function<T, String> message) throws Exception {
+        waitMachineIdle();
         Future<T> f;
         synchronized (lock) {
             if (!stopRequested && engine.stopEpoch() != startEpoch) {
@@ -1100,9 +1101,14 @@ final class PadCalibrationJob {
         }
         catch (TimeoutException e) {
             // a step the job gives up on must not lay its dots later (still queued) or go on alone: stopped as by STOP
+            // (which also ends it when OpenPnP dropped it: DispenseService.releaseDroppedTask)
             engine.abort("the pad calibration gave up waiting for its " + stepWords() + " step");
             throw new IllegalStateException("the " + stepWords() + " step did not end within " + stepWaitMs / 60000
                     + " min: the engine was stopped", e);
+        }
+        catch (java.util.concurrent.CancellationException e) {
+            throw new IllegalStateException("OpenPnP dropped the " + stepWords() + " step before it started (a task of "
+                    + "its own ahead of it failed): nothing was sent", e);
         }
         RunResult r = run.apply(res);
         if (r != null) {
@@ -1115,6 +1121,25 @@ final class PadCalibrationJob {
             throw new IllegalStateException(message.apply(res));
         }
         return res;
+    }
+
+    /** At most this long a step waits for OpenPnP's machine thread to be idle (its own Home or jog). */
+    static final long MACHINE_IDLE_WAIT_MS = 10_000;
+
+    /**
+     * Before each engine step (rc1 review: only the start checked): OpenPnP homing or jogging by itself. A step queued
+     * behind one of its tasks that fails would be dropped, so the step waits for the machine thread to be idle, and
+     * the job stops when it stays busy.
+     */
+    private void waitMachineIdle() throws Exception {
+        long until = System.currentTimeMillis() + MACHINE_IDLE_WAIT_MS;
+        while (ctx.machine().isBusy()) {
+            if (System.currentTimeMillis() > until) {
+                throw new IllegalStateException("OpenPnP is busy (homing or moving): the " + stepWords() + " step was "
+                        + "not started; do not use OpenPnP's own Home or jog while a calibration runs");
+            }
+            Thread.sleep(200);
+        }
     }
 
     private SurfaceProbeRequest couponProbe(DispenseConfig c, CouponPlan k) {

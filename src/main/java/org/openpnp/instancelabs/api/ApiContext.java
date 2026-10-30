@@ -102,7 +102,8 @@ final class ApiContext {
         if (job != null) {
             throw ApiException.refused(job);
         }
-        if (s.isBusy()) {
+        // a task OpenPnP dropped (one of its own ahead of it failed) never ends by itself: it ends here (rc1 review)
+        if (s.isBusy() && !s.releaseDroppedTask()) {
             throw ApiException.refused("a dispense task is already running; wait for it or press STOP");
         }
         if (BoardImporter.reading()) {

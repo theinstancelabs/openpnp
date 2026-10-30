@@ -445,9 +445,10 @@ surprise on the machine.
   slightly mis-scaled on the real camera.
 - **Tasks dropped behind a failing OpenPnP task** (fixed in the final round for the web home and every engine
   endpoint). A machine task that throws makes OpenPnP drop every task queued behind it. Every engine endpoint now
-  refuses while OpenPnP is busy, and the web home returns its failure instead of throwing it. A task of OpenPnP's own
-  (its Home or jog buttons) that fails can still drop an engine task queued in the moment between the check and the
-  queue: do not press OpenPnP's own buttons while an engine task is starting.
+  refuses while OpenPnP is busy (the web home too), and the web home returns its failure instead of throwing it. A
+  task of OpenPnP's own (its Home or jog buttons) that fails can still drop an engine task queued in the moment between
+  the check and the queue: do not press OpenPnP's own buttons while an engine task is starting. Such a task no longer
+  keeps the engine busy for good: it ends at the next STOP or engine request (ERROR, nothing sent).
 - **Pressure hold race** (fixed in the final round). Every engine task now looks at the hold again on the machine
   thread, prime, the test dot, shots, the dot ladder, the touch-off and the clean check included.
 - **After a failed Z check** (fixed in the final round) the remedy works under the same home, in this order: record
@@ -458,9 +459,8 @@ surprise on the machine.
 - **A STOP or failure during an engine home** (fixed in the final round) no longer leaves a stale start time behind.
   A web STOP during the web home still answers `homing failed: machine disabled: User requested stop.` (OpenPnP's
   disable listener writes its own reason), not "STOP pressed in the web UI".
-- **The pad calibration checks OpenPnP-busy only at its start**, not before each later engine step: do not use
-  OpenPnP's own Home or jog buttons while a calibration runs (its steps would refuse, or one could be dropped as
-  above).
+- **The pad calibration** waits for OpenPnP to be idle before each engine step (at most 10 s, then it stops with
+  `OpenPnP is busy …`): still do not use OpenPnP's own Home or jog buttons while a calibration runs.
 - **Fixed in the final fix round (E2):** the fiducial search frames tile the radius around the expected position (the
   first frame of a re-seated board's later fiducials may then hold the mark off-centre: one more centring look); the
   fit against the previous registration is compared in the machine frame (re-seat a board about 10° turned once to

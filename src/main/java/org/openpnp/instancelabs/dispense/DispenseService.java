@@ -93,6 +93,11 @@ public final class DispenseService {
     private volatile String unavailableReason;
     private final AtomicBoolean bZeroed = new AtomicBoolean(false);
     private final AtomicBoolean busy = new AtomicBoolean(false);
+    /**
+     * The engine task queued last: its run, its Future, when it was queued, and whether its body began (taken by the
+     * machine thread, or ended by {@link #releaseDroppedTask}: whichever comes first).
+     */
+    private volatile Queued queued;
     private volatile DispenseExecutor activeExecutor;
     private volatile RunResult activeRun;
     private volatile RunResult lastRun;
@@ -652,7 +657,8 @@ public final class DispenseService {
 
     /**
      * Thread-safe: stops the active stream before its next line; pneumatics are switched off (I1).
-     * Every task queued before it refuses at its start ({@link #stopEpoch}).
+     * Every task queued before it refuses at its start ({@link #stopEpoch}). A task OpenPnP dropped
+     * ends here ({@link #releaseDroppedTask}).
      */
     public void abort(String reason) {
         stopEpoch.incrementAndGet();
@@ -661,6 +667,46 @@ public final class DispenseService {
         if (e != null) {
             e.requestAbort(reason);
         }
+        releaseDroppedTask();
+    }
+
+    /** An engine task as queued on OpenPnP's machine thread. */
+    private static final class Queued {
+        final RunResult run;
+        final long atMs = System.currentTimeMillis();
+        final AtomicBoolean began = new AtomicBoolean(false);
+        volatile Future<?> future;
+
+        Queued(RunResult run) {
+            this.run = run;
+        }
+    }
+
+    /** How long a queued task may wait for an idle machine thread before it counts as dropped. */
+    static final long DROPPED_AFTER_MS = 1000;
+
+    /**
+     * Ends an engine task OpenPnP dropped, and returns whether it did (rc1 review). OpenPnP removes every task queued
+     * behind one of its own that throws (its Home or jog meeting a limit), without running or cancelling it, so the
+     * task's finish() never ran and every engine endpoint then answered "a dispense task is already running … press
+     * STOP" until OpenPnP restarted, STOP included. A task still not begun while the machine thread has been idle past
+     * {@link #DROPPED_AFTER_MS} will never run: it ends ERROR here, and if it ran after all it would end at once.
+     * Called by STOP, and by the API before it refuses a request as busy.
+     */
+    public boolean releaseDroppedTask() {
+        Queued q = queued;
+        Machine m = configuration.getMachine();
+        if (q == null || !busy.get() || q.future == null || q.future.isDone() || m == null || m.isBusy()
+                || System.currentTimeMillis() - q.atMs < DROPPED_AFTER_MS || !q.began.compareAndSet(false, true)) {
+            return false;
+        }
+        q.run.status = RunResult.Status.ERROR;
+        q.run.message = "OpenPnP dropped this task before it started (a task of its own ahead of it failed): nothing "
+                + "was sent; start it again";
+        Logger.warn("dispense {}: dropped by OpenPnP before it started", q.run.kind);
+        finish(q.run);
+        q.future.cancel(false); // a caller waiting for it (the pad calibration) learns at once
+        return true;
     }
 
     // ------------------------------------------------------------------------------------------
@@ -3447,8 +3493,13 @@ public final class DispenseService {
             throw new IllegalStateException("a dispense task is already running");
         }
         long epoch = stopEpoch.get();
+        Queued q = new Queued(r);
+        queued = q;
         try {
-            return configuration.getMachine().submit(() -> {
+            Future<RunResult> f = configuration.getMachine().submit(() -> {
+                if (!q.began.compareAndSet(false, true)) {
+                    return r; // ended as dropped meanwhile (releaseDroppedTask)
+                }
                 try {
                     refuseIfStoppedSince(epoch);
                     refuseUnlessStarted();
@@ -3464,6 +3515,8 @@ public final class DispenseService {
                     finish(r);
                 }
             }, null, true);
+            q.future = f;
+            return f;
         }
         catch (Exception e) {
             busy.set(false);
@@ -3489,8 +3542,13 @@ public final class DispenseService {
             throw new IllegalStateException("a dispense task is already running");
         }
         long epoch = stopEpoch.get();
+        Queued q = new Queued(r);
+        queued = q;
         try {
-            return configuration.getMachine().submit(() -> {
+            Future<T> f = configuration.getMachine().submit(() -> {
+                if (!q.began.compareAndSet(false, true)) {
+                    return result; // ended as dropped meanwhile (releaseDroppedTask)
+                }
                 try {
                     refuseIfStoppedSince(epoch);
                     refuseUnlessStarted();
@@ -3514,6 +3572,8 @@ public final class DispenseService {
                 }
                 return result;
             }, null, true);
+            q.future = f;
+            return f;
         }
         catch (Exception e) {
             busy.set(false);
