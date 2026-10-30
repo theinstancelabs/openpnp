@@ -360,9 +360,9 @@
       case 'machine': {
         const low = x.state === 'need' && IL.n1Low(s);
         q = x.state === 'block' ? 'Not connected to the controller' : x.state === 'live' ? 'Homing…'
-          : low ? 'N1 stopped low (Z ' + IL.fmt((((s || {}).machine || {}).home || {}).n1Z, 2) + ' mm)' : 'Not homed: positions are unknown';
+          : low ? IL.lowToolShort(s) : 'Not homed: positions are unknown';
         dd = x.state === 'block' ? 'Connect reconnects OpenPnP to the controller; nothing moves.'
-          : low ? 'Look at the board under it. Home raises N1 first, then homes; Register board, Probe the blank and Run wait until then.'
+          : low ? 'Look at the board under it. Home ' + IL.lowTool(s).lift + ' first, then homes; Register board, Probe the blank and Run wait until then.'
             : 'After a STOP or a reconnect the machine must home before any move.';
         acts = x.fixes.map((f) => IL.fixButton(f));
         break;

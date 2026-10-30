@@ -699,10 +699,31 @@
     const m = ((status || S.status) || {}).machine || {};
     return !!(m.enabled && !m.homed && m.home && m.home.policy && m.home.n1Low);
   };
+  /**
+   * Which tool a STOP left low (status.machine.home.lowTool): N1 under its safe zone, or N1 above it, which on the shared
+   * Z axis puts the needle low (a STOP during board dots). {needle, name, z (the low tool's Z), pad (the pad of the plan
+   * shown under the needle, within 1 mm, or null), lift ('lifts it' | 'raises N1')}.
+   */
+  IL.lowTool = function (status) {
+    const s = status || S.status || {};
+    const hm = ((s.machine || {}).home) || {};
+    const needle = hm.lowTool === 'needle';
+    const n2 = needle ? IL.positions(s).n2 : null;
+    let pad = null, best = 1.0;
+    for (const d of (n2 && S.plan && S.plan.dots) || []) {
+      const dd = Math.hypot(d.x - n2.x, d.y - n2.y);
+      if (dd <= best) { best = dd; pad = d.padId; }
+    }
+    return { needle, name: needle ? 'The needle (N2)' : 'N1', z: needle ? (n2 ? n2.z : null) : hm.n1Z, pad, lift: needle ? 'lifts it' : 'raises N1' };
+  };
+  /** "The needle (N2) stopped low (Z 2.94 mm) at R3.1" or "N1 stopped low (Z 3.20 mm)": who, never a high Z called low. */
+  IL.lowToolShort = function (status) {
+    const t = IL.lowTool(status);
+    return t.name + ' stopped low (Z ' + IL.fmt(t.z, 2) + ' mm)' + (t.pad ? ' at ' + t.pad : '');
+  };
   /** What the Machine item says then; also why a task that homes by itself waits. */
   IL.n1LowText = function (status) {
-    const hm = (((status || S.status) || {}).machine || {}).home || {};
-    return 'N1 stopped low (Z ' + IL.fmt(hm.n1Z, 2) + ' mm): look at the board under it. Home raises N1 first, then homes.';
+    return IL.lowToolShort(status) + ': look at the board under it. Home ' + IL.lowTool(status).lift + ' first, then homes.';
   };
   /**
    * Why a control is locked now, or null. need: {connected, homed, idle (default true), pressureOff (default true),
@@ -1017,7 +1038,8 @@
     } else if (!m.homed && m.busy) {
       add({ key: 'machine', code: 'MACHINE', title: 'Machine', state: 'live', value: 'homing', short: 'homing', detail: 'Homing…' });
     } else if (IL.n1Low(s)) {
-      add({ key: 'machine', code: 'MACHINE', title: 'Machine', state: 'need', value: 'N1 low', short: 'N1 low', detail: IL.n1LowText(s),
+      const low = IL.lowTool(s).needle ? 'needle low' : 'N1 low';
+      add({ key: 'machine', code: 'MACHINE', title: 'Machine', state: 'need', value: low, short: low, detail: IL.n1LowText(s),
         fixes: [{ fix: 'home', label: 'Home now' }] });
     } else if (!m.homed && hm && hm.policy) {
       const why = IL.homeWhy(hm);
@@ -1642,7 +1664,7 @@
     const homeS = isNum(hm.estimateS) ? hm.estimateS : 25;
     steps.push(m.enabled && !m.homed && hm.policy && hm.n1Low
       ? { key: 'home', title: 'Home', wait: false, done: false,
-        detail: 'N1 stopped low (Z ' + IL.fmt(hm.n1Z, 2) + ' mm): look at the board under it; Home raises N1 first, then homes.',
+        detail: IL.lowToolShort(s) + ': look at the board under it; Home ' + IL.lowTool(s).lift + ' first, then homes.',
         fixes: [{ fix: 'home', label: 'Home now', primary: true }] }
       : autoHome
         ? { key: 'home', title: 'Home first', state: 'info', done: true,
@@ -2049,7 +2071,7 @@
         } else {
           const hm = m.home || {};
           const auto = hm.policy && !hm.n1Low ? ' Register board and Run home first (≈ ' + IL.fmtSecs(isNum(hm.estimateS) ? hm.estimateS : 25) + ').'
-            : hm.n1Low ? ' N1 stopped low (Z ' + IL.fmt(hm.n1Z, 2) + ' mm): Home raises it first, then homes.' : ' Home before any move.';
+            : hm.n1Low ? ' ' + IL.lowToolShort(s) + ': Home ' + IL.lowTool(s).lift + ' first, then homes.' : ' Home before any move.';
           setCell(mc, 'need', undefined, 'Connected, not homed: positions are unknown.' + auto);
           IL.setText(homed, 'Not homed');
           showHome = !IL.taskRunning(s) && (!s.pressure || s.pressure.state === 'off');

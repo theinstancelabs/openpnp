@@ -271,6 +271,8 @@ final class MachineEndpoints {
             double[] n1 = svc.probeNozzleZ();
             home.put("n1Z", n1 == null ? null : n1[0]);
             home.put("n1Low", n1 != null && n1[1] > 0);
+            // which tool is low: N1 under its safe zone, or N1 above it, which on the shared Z puts the needle low
+            home.put("lowTool", n1 == null || n1[1] <= 0 ? null : n1[2] > 0 ? "needle" : "N1");
             s.put("home", home);
             DispenseService.ZCheckPlan zc = svc.zCheckPlan(null, false);
             // a board run's check after the home it does first (every height predates it): what Run announces

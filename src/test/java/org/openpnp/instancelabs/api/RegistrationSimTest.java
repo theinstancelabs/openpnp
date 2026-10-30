@@ -611,6 +611,8 @@ public class RegistrationSimTest {
         assertEquals(surfaceAt, boardSurfaceAt());
         assertEquals(p1, reg.get("newPlanId").getAsString(), "same seat, same surface: the plan stays");
         assertTrue(n1Low(), "N1 stopped low: " + ok(get("/api/status")).getAsJsonObject("machine").get("home"));
+        assertEquals("N1", ok(get("/api/status")).getAsJsonObject("machine").getAsJsonObject("home").get("lowTool")
+                .getAsString(), "N1 under its safe zone: N1 is the tool to look under");
         sim.server.delayBeforeOkMs.clear();
         restart();
 
@@ -640,6 +642,33 @@ public class RegistrationSimTest {
         assertTrue(g28 < touch && touch < firstDot, "home, then the Z-check touch, then the dots: " + l);
         assertEquals(1, count(l.subList(0, firstDot), ControllerCommands.LEFT_VALVE_ON), "one touch");
         assertFalse(n1Low());
+    }
+
+    /**
+     * rc1 review (ui-ux): a STOP during a board's dots leaves the needle low, not N1. On the shared Z axis N1 then sits
+     * above its safe zone (N1 near 60, the needle near 3 over the pad), and the status says which tool is low, so the
+     * recovery names the needle and never calls a high N1 "low".
+     */
+    @Test
+    public void aStopDuringTheDotsLeavesTheNeedleLowNotN1() throws Exception {
+        JsonObject first = register(plan().get("planId").getAsString(), "{\"wait\":true}");
+        assertEquals("OK", first.get("status").getAsString(), first.toString());
+        String p1 = first.get("newPlanId").getAsString();
+        sim.server.delayBeforeOkMs.put("G1 B", 400L); // each dot's screw turn: slow enough to STOP between dots
+        started(post("/api/run", "{\"planId\":\"" + p1 + "\"}"));
+        waitStatus(x -> {
+            JsonObject run = x.get("run").isJsonNull() ? null : x.getAsJsonObject("run");
+            return run != null && run.has("dotsDone") && !run.get("dotsDone").isJsonNull()
+                    && run.get("dotsDone").getAsInt() >= 1;
+        });
+        ok(post("/api/stop", null));
+        JsonObject stopped = waitStatus(RegistrationSimTest::finished);
+        assertEquals("ABORTED", stopped.getAsJsonObject("run").get("status").getAsString(), stopped.toString());
+        sim.server.delayBeforeOkMs.clear();
+        JsonObject home = ok(get("/api/status")).getAsJsonObject("machine").getAsJsonObject("home");
+        assertTrue(home.get("n1Low").getAsBoolean(), "a tool is outside the safe zone: " + home);
+        assertEquals("needle", home.get("lowTool").getAsString(), home.toString());
+        assertTrue(home.get("n1Z").getAsDouble() > 36.5, "N1 above its safe zone, not low: " + home);
     }
 
     /**

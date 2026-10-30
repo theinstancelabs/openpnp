@@ -1353,8 +1353,10 @@ public final class DispenseService {
     }
 
     /**
-     * N1's raw Z as OpenPnP knows it, and whether it lies outside z1's safe zone (a STOP during a probe
-     * left it low: the next home raises it first): {z, low}, or null without N1.
+     * N1's raw Z as OpenPnP knows it, whether it lies outside z1's safe zone (a STOP during a probe or a
+     * board's dots left a tool low: the next home moves Z to the safe height first), and whether above it:
+     * {z, outside, above}, or null without N1. On the shared Z axis N1 above its zone puts the needle low
+     * (a STOP during board dots: N1 at 60.06, the needle at 2.94 over the pad).
      */
     public double[] probeNozzleZ() {
         Nozzle n = getProbeNozzle();
@@ -1365,7 +1367,9 @@ public final class DispenseService {
         try {
             OpenPnpRawMapper n1 = OpenPnpRawMapper.forProbeNozzle((ReferenceMachine) m, n, cfg.bAxisName);
             double z = n1.currentPlanned()[2];
-            return new double[] {z, outsideSafeZone(n1.zSafeZoneRaw(), z) ? 1 : 0};
+            double[] zone = n1.zSafeZoneRaw();
+            boolean above = zone != null && !Double.isNaN(zone[1]) && z > zone[1] + 1e-6;
+            return new double[] {z, outsideSafeZone(zone, z) ? 1 : 0, above ? 1 : 0};
         }
         catch (Exception e) {
             return null;

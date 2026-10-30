@@ -996,6 +996,20 @@ async function runFirstDots(page, n) {
       const lowText = /^N1 stopped low \(Z [−-]?\d+\.\d\d mm\): look at the board under it\./;
       check('N1 low: Register board and Probe the blank are locked like Run, the reason names N1\'s Z, the blank\'s with "Home now"',
         !lowReg.canRun && lowReg.disabled && lowText.test(lowReg.why) && lowBlank.disabled && lowText.test(lowBlank.why) && lowBlank.home, { lowReg, lowBlank });
+      // a STOP during the board's dots (rc1 review): N1 then sits above its safe zone and the needle is low over a pad. The
+      // engine says which tool (status.machine.home.lowTool); the texts name the needle, its Z and the pad, never N1's high Z
+      const needleLow = await page.evaluate(() => {
+        const s = JSON.parse(JSON.stringify(IL.S.status));
+        const d = IL.S.plan.dots[3];
+        s.machine.home = Object.assign({}, s.machine.home, { n1Low: true, lowTool: 'needle', n1Z: 60.06 });
+        const n2 = s.machine.positions.find((t) => t.kind === 'nozzle' && t.name === s.dispense.nozzle);
+        Object.assign(n2, { x: d.x + 0.05, y: d.y - 0.05, z: 2.94 });
+        const it = IL.readiness(s, IL.S.plan, IL.readyCtx()).items.find((x) => x.key === 'machine');
+        return { text: IL.n1LowText(s), pad: d.padId, value: it.value, detail: it.detail };
+      });
+      check('needle low after a STOP in the dots: "The needle (N2) stopped low (Z 2.94 mm) at <pad>: … Home lifts it first", not N1 at 60.06',
+        needleLow.text === 'The needle (N2) stopped low (Z 2.94 mm) at ' + needleLow.pad + ': look at the board under it. Home lifts it first, then homes.'
+        && needleLow.value === 'needle low' && needleLow.detail === needleLow.text, needleLow);
       await page.evaluate(() => { if (IL.panel.isPushed()) IL.panel.close(); IL.go('#run/probe'); });
       g1 = gcodeNext();
       await press2(page, '#btn-home');

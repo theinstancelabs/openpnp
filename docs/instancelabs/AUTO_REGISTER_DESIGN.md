@@ -1450,7 +1450,9 @@ Returns the preview of §7.1 again, computed now, because the home plan changes 
 - **`machine.home`**: `{needed, whyCode, why, sinceMs, policy, homedAtMs, estimateS, n1Z, n1Low}`, from
   `svc.homePlan()`.
   - It is filled in `MachineEndpoints.machineStatus` (A/MachineEndpoints.java:217-273) when the service exists.
-  - `n1Low` = N1's Z lies outside z1's safe zone (a STOP during a probe).
+  - `n1Low` = N1's Z lies outside z1's safe zone (a STOP during a probe). *As built (rc1 review):* also above it, a
+    STOP during board dots, where the shared Z axis puts the needle low; `lowTool` (`N1` | `needle`) says which, and
+    the UI names that tool (`The needle (N2) stopped low (Z 2.94 mm) at R3.1`), never a high N1 as low.
 - **`machine.zCheck`**: `{needed, stale:[{what, atMs}], homeAtMs, reference:{name, x, y, z} | null, last: ZCheck.Result | null, estimateS}`.
 - **`dispense.homeBeforeRun`**, **`dispense.newSeatAtMs`**.
 - **`run.detail`**: the latest `onDetail` map, while that run is current. `RunTracker.Progress` gets
