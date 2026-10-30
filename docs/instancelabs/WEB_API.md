@@ -472,7 +472,8 @@ Jargon is explained in tooltips (`title`/`abbr`).
   Board runs there use the bench geometry (N1 contact 5.5, K 65.59 → needle 2.91, offset −2.59), a purge row on the
   blank, a confirmed start angle and the clean-pad check off, or a fake `DotImager` (`DispenseService.setDotImager`)
   for the I10 tests. The whole suite on `il/rc1` 69fd1a527: 1103 tests, 817 of them in `org.openpnp.instancelabs`
-  (dispense 332, api 96, sim 87, kicad 79, padprofile 70, vision 64, board 62, serial 27).
+  (dispense 332, api 96, sim 87, kicad 79, padprofile 70, vision 64, board 62, serial 27); with fix round 2
+  (`il/fr2-wire`): 1122, 836 of them there (dispense 343, api 98, vision 70).
 - `src/test/web/run-webui-sim-test.sh`: Playwright (headless Chromium) against this jar running in OpenPnP **sim**
   through openpnp-uinav (config copy, simulated controller and cameras, Xvfb, device stubs). Needs the jar
   (`mvn -q -T1 -DskipTests package`), openpnp-uinav built, and Playwright in `$PLAYWRIGHT_DIR`
@@ -480,7 +481,9 @@ Jargon is explained in tooltips (`title`/`abbr`).
   It drives the element ids of `UI_DESIGN.md` §16 (two-press buttons, the in-page run confirm, Recovery after STOP);
   on `il/ar-webui` also Register board, the blank probe, home at run and Check Z, and on `il/rc1` the final round's
   locks, the refused clean-pad check, the dose rule, the Z-moved remedy in the SIM and the probe-window refusal (205
-  checks in all), and on `il/bi-web-flow` `board-import.playwright.cjs` runs after it in the same session (57 checks:
+  checks in all), on `il/fr2-wire` fix round 2's needle touch-off (the pitch and the engine's 400 at the field, a run
+  that records nothing, dots not measured) and probe only for a board without fiducials (224), and on
+  `il/bi-web-flow` `board-import.playwright.cjs` runs after it in the same session (57 checks:
   upload, the off-board warning, save, replace, attach, Camera is on FID1, the drawing under the plan, the inspector,
   the preview, the Records map, 1280 and 1024 px, dark theme).
   `boardview.playwright.cjs` (`run-boardview-test.sh`, 67 checks) checks the drawing on the session's import of
