@@ -500,7 +500,9 @@ async function weighCoupon(page, place) {
     check('(9b) tip groups only: Blocked · the 22G tip, "Dispense the rest" links #setup/settings/refuse-flagged', tipOnly.state === 'block' && tipOnly.short === 'the 22G tip'
       && tipOnly.fixes[0][0] === '#setup/settings/refuse-flagged', tipOnly);
     await page.evaluate(() => IL.go('#setup/settings/refuse-flagged'));
-    await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'set-refuseflagged', null, { timeout: 15000 }).catch(() => null);
+    // focused, then scrolled into view (smoothly: the card's flash scrolls to its top first)
+    await page.waitForFunction(() => { const e = document.activeElement; if (!e || e.id !== 'set-refuseflagged') return false;
+      const r = e.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; }, null, { timeout: 15000 }).catch(() => null);
     const sw = await page.evaluate(() => { const e = document.getElementById('set-refuseflagged'); const r = e && e.getBoundingClientRect();
       return { focused: document.activeElement === e, checked: !!e && e.checked, inView: !!r && r.top >= 0 && r.bottom <= innerHeight,
         label: (document.querySelector('label[for="set-refuseflagged"] .tick__t') || {}).textContent }; });
