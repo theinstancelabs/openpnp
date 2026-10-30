@@ -15,6 +15,7 @@ import org.openpnp.instancelabs.dispense.BoardRegistration;
 import org.openpnp.instancelabs.dispense.Calibration;
 import org.openpnp.instancelabs.dispense.ControllerCommands;
 import org.openpnp.instancelabs.dispense.DispenseConfig;
+import org.openpnp.instancelabs.dispense.DispenseDb;
 import org.openpnp.instancelabs.dispense.DispensePlan;
 import org.openpnp.instancelabs.dispense.DispenseService;
 import org.openpnp.instancelabs.dispense.DoseBlocks;
@@ -24,9 +25,12 @@ import org.openpnp.instancelabs.dispense.GcodeStreamBuilder;
 import org.openpnp.instancelabs.dispense.HomeTracker;
 import org.openpnp.instancelabs.dispense.InterlockReport;
 import org.openpnp.instancelabs.dispense.Interlocks;
+import org.openpnp.instancelabs.dispense.NeedleChange;
 import org.openpnp.instancelabs.dispense.OpenPnpRawMapper;
 import org.openpnp.instancelabs.dispense.PadCleanReport;
+import org.openpnp.instancelabs.dispense.Photo;
 import org.openpnp.instancelabs.dispense.RunResult;
+import org.openpnp.instancelabs.dispense.TipSetup;
 import org.openpnp.instancelabs.sim.SimGuard;
 import org.openpnp.machine.reference.ReferenceMachine;
 import org.openpnp.model.Board;
@@ -49,26 +53,30 @@ import com.google.gson.JsonObject;
 final class DispenseEndpoints {
     /** Named location the test dot is dispensed at: waste + the configured test-dot offset. */
     static final String TEST_DOT_LOCATION = "waste-test-dot";
-    /** Settings that only the needle endpoints may change (they record a needle_touchoff row). */
+    /**
+     * Settings that only their own endpoints may change: the needle's (they record a needle_touchoff row), and since
+     * the tip setups (§22.1) the mounted tip, what the other tips keep, and where the needle lands with its trim.
+     */
     static final java.util.Set<String> PROTECTED_SETTINGS = new java.util.HashSet<>(java.util.Arrays.asList(
             "needleZOffsetMm", "needleZOffsetSetAtMs", "needleZOffsetHomeAtMs", "needleChangedAtMs", "needleAnchor",
-            "surfaces", "schemaVersion", "boardRegistrations", "newSeatAtMs"));
+            "surfaces", "schemaVersion", "boardRegistrations", "newSeatAtMs", "tip", "parkedTips", "needleLanding",
+            "needleXyTrim"));
     /** Protected settings that Register board and POST /api/board/new-seat stamp (not the needle's). */
     static final java.util.Set<String> REGISTRATION_SETTINGS = new java.util.HashSet<>(java.util.Arrays.asList(
             "boardRegistrations", "newSeatAtMs"));
     /** Nested settings PUT /api/config merges one level deep (a partial object keeps the other fields). */
     static final java.util.Set<String> NESTED_SETTINGS = new java.util.HashSet<>(java.util.Arrays.asList(
-            "profile", "purgeRow", "cleanPadCheck", "needleXyTrim", "fiducialCheck", "vacuumProbe", "tip", "paste",
-            "calibrationArea", "padCalibration"));
+            "profile", "purgeRow", "cleanPadCheck", "fiducialCheck", "vacuumProbe", "paste", "calibrationArea",
+            "padCalibration"));
     /**
      * Nested fields only the engine or their own endpoints change: the start angle's set time (I11:
-     * POST /api/screw/start-angle, or a changed angle), the times of the trim and the purge reset,
+     * POST /api/screw/start-angle, or a changed angle), the time of the purge reset,
      * and the used purge spots (runs reserve them, POST /api/purge-row/reset frees them: a stale
      * full-settings save must not put paste-covered spots back in use); likewise the used calibration
      * area and its wipe (POST /api/calibration-area/reset), and when the paste was loaded (POST /api/paste).
      */
     static final java.util.Set<String> PROTECTED_NESTED = new java.util.HashSet<>(java.util.Arrays.asList(
-            "profile.startAngleSetAtMs", "needleXyTrim.setAtMs", "purgeRow.resetAtMs", "purgeRow.usedSpots",
+            "profile.startAngleSetAtMs", "purgeRow.resetAtMs", "purgeRow.usedSpots",
             "calibrationArea.usedMm", "calibrationArea.resetAtMs", "paste.loadedAtMs"));
 
     /** How long OpenPnP's thread may take to start a read of its board list (BOARD_IMPORT_DESIGN.md §3.6). */
@@ -93,9 +101,11 @@ final class DispenseEndpoints {
         s.route("POST", "/api/test-dot", this::testDot);
         s.route("GET", "/api/locations", r -> ctx.svc().getConfig().locations);
         s.route("PUT", "/api/locations/([A-Za-z0-9_-]{1,40})", this::setLocation);
-        s.route("POST", "/api/needle/changed", r -> needleChanged());
+        s.route("POST", "/api/needle/changed", this::needleChanged);
         s.route("POST", "/api/needle/offset", this::needleOffset);
         s.route("POST", "/api/needle/anchor", this::needleAnchor);
+        s.route("POST", "/api/needle/xy-trim", this::xyTrim);
+        s.route("POST", "/api/needle/landing", this::landing);
         s.route("GET", "/api/surfaces", r -> surfaces());
         s.route("PUT", "/api/surfaces/([A-Za-z0-9_-]{1,40})", this::putSurface);
         s.route("DELETE", "/api/surfaces/([A-Za-z0-9_-]{1,40})", this::deleteSurface);
@@ -149,11 +159,14 @@ final class DispenseEndpoints {
         d.put("busy", svc.isBusy());
         d.put("nozzle", cfg.nozzle);
         d.put("bZeroed", svc.isBZeroed());
-        d.put("needle", Views.map("touchedOff", cfg.isNeedleTouchedOff(), "zOffsetMm", cfg.needleZOffsetMm,
-                "setAtMs", cfg.needleZOffsetSetAtMs, "changedAtMs", cfg.needleChangedAtMs, "gapMm",
+        Map<String, Object> needle = Views.map("touchedOff", cfg.isNeedleTouchedOff(), "zOffsetMm",
+                cfg.needleZOffsetMm, "setAtMs", cfg.needleZOffsetSetAtMs, "changedAtMs", cfg.needleChangedAtMs, "gapMm",
                 cfg.gapMm(), "anchored", cfg.isNeedleAnchored(), "anchor", cfg.needleAnchor,
                 "anchorOffsetMm", cfg.needleAnchor == null ? null : cfg.needleAnchor.offsetMm(), "xyTrim",
-                cfg.needleXyTrim));
+                cfg.needleXyTrim);
+        needle.putAll(landingStatus(svc, cfg));
+        d.put("needle", needle);
+        d.put("tip", tipStatus(svc, cfg));
         d.put("profile", Views.profile(cfg, svc.getControllerConnectedAtMs()));
         d.put("purgeRow", Views.purgeRow(cfg));
         d.put("cleanPadCheck", cfg.cleanPadCheck);
@@ -355,11 +368,53 @@ final class DispenseEndpoints {
         return svc.getConfig().locations;
     }
 
-    Object needleChanged() throws Exception {
+    /**
+     * "I changed the needle" (tip setups design §22.3): a fact the engine records and never refuses. The needle Z frame,
+     * the offset and where it lands are to do again; a pad calibration waiting for its readings ends.
+     */
+    Object needleChanged(ApiServer.Request r) throws Exception {
+        JsonObject b = r.json();
         DispenseService svc = ctx.svc();
-        svc.markNeedleChanged();
-        return Views.map("needleChanged", true, "note", "dispensing is blocked (I4) until the needle Z frame is "
-                + "recorded again (N1 and needle contact) and the needle is touched off");
+        NeedleChange nc = recordNeedleChange(svc, Json.str(b, "why", null), Json.str(b, "operator", null));
+        return Views.map("needleChanged", true, "needleChange", Views.needleChange(nc), "text", nc.text, "next",
+                TipSetupEndpoints.next(svc, svc.getConfig(), false));
+    }
+
+    /**
+     * §22.3 (a), the first half of every mount: a running pad calibration stops with the needle's words, the engine
+     * records the change (a running task is stopped first, waiting coupons get their skip rows), and a calibration
+     * waiting for the readings of its coupons ends.
+     */
+    NeedleChange recordNeedleChange(DispenseService svc, String why, String operator) throws Exception {
+        ctx.padCalJobs.needleChanging(System.currentTimeMillis());
+        NeedleChange nc = EngineFallback.orBefore(() -> svc.recordNeedleChange(why, operator), () -> {
+            svc.markNeedleChanged();
+            DispenseConfig c = svc.getConfig();
+            NeedleChange x = new NeedleChange();
+            x.atMs = c.needleChangedAtMs;
+            x.setupKey = c.tip.key;
+            x.setupName = c.tip.name;
+            x.why = why;
+            x.operator = operator;
+            x.text = "The needle change is recorded: dispensing is blocked (I4) until the needle Z frame is recorded "
+                    + "again (N1 and needle contact) and the needle is touched off.";
+            return x;
+        });
+        ctx.padCalJobs.needleChanged(nc);
+        return nc;
+    }
+
+    /**
+     * The needle token a value was taken under (§22.3, status {@code dispense.needle.changedAtMs}): required, null when
+     * no needle change is recorded. The engine refuses it (409 needle-changed) when the needle was changed since.
+     */
+    static Long token(JsonObject b) throws ApiException {
+        if (!b.has("needleChangedAtMs")) {
+            throw ApiException.badRequest("'needleChangedAtMs' is required: the needle change these values were taken "
+                    + "after (status dispense.needle.changedAtMs; null when none is recorded)");
+        }
+        Double t = Json.num(b, "needleChangedAtMs", null);
+        return t == null ? null : t.longValue();
     }
 
     Object needleOffset(ApiServer.Request r) throws Exception {
@@ -369,8 +424,17 @@ final class DispenseEndpoints {
         if (Math.abs(off) > 20) {
             throw ApiException.badRequest("needle Z offset must be within +/- 20 mm");
         }
-        svc.setNeedleZOffset(off, "manual", Json.str(b, "note", "entered in the web UI"));
-        return Views.map("zOffsetMm", off, "touchedOff", svc.getConfig().isNeedleTouchedOff());
+        Long token = token(b);
+        String note = Json.str(b, "note", "entered in the web UI");
+        DispenseService.NeedleFrameResult f = EngineFallback.orBefore(() -> svc.setNeedleZOffset(off, "manual", note,
+                token), () -> {
+                    svc.setNeedleZOffset(off, "manual", note);
+                    DispenseService.NeedleFrameResult x = new DispenseService.NeedleFrameResult();
+                    x.offsetMm = off;
+                    return x;
+                });
+        return Views.map("zOffsetMm", off, "touchedOff", svc.getConfig().isNeedleTouchedOff(), "question", f.question,
+                "warning", f.warning);
     }
 
     /**
@@ -391,11 +455,141 @@ final class DispenseEndpoints {
         if (!Double.isFinite(sz) || !Double.isFinite(nz) || Math.abs(nz - sz) > 20) {
             throw ApiException.badRequest("the needle contact Z must be within 20 mm of the N1 contact Z");
         }
-        DispenseConfig.NeedleAnchor a = svc.setNeedleAnchor(sz, nz, Json.num(b, "x", null), Json.num(b, "y", null),
-                rawSum);
+        Long token = token(b);
+        Double x = Json.num(b, "x", null);
+        Double y = Json.num(b, "y", null);
+        DispenseService.NeedleFrameResult f = EngineFallback.orBefore(() -> svc.setNeedleAnchor(sz, nz, x, y, rawSum,
+                token), () -> {
+                    DispenseService.NeedleFrameResult o = new DispenseService.NeedleFrameResult();
+                    o.anchor = svc.setNeedleAnchor(sz, nz, x, y, rawSum);
+                    o.offsetMm = o.anchor.offsetMm();
+                    return o;
+                });
+        DispenseConfig.NeedleAnchor a = f.anchor;
         return Views.map("anchor", a, "offsetMm", a.offsetMm(), "touchedOff", svc.getConfig().isNeedleTouchedOff(),
                 "note", "needle Z offset set to " + String.format(java.util.Locale.ROOT, "%.3f", a.offsetMm())
-                        + " mm; run a needle touch-off (or confirm the offset) before dispensing");
+                        + " mm; run a needle touch-off (or confirm the offset) before dispensing", "question",
+                f.question, "warning", f.warning);
+    }
+
+    /**
+     * POST /api/needle/xy-trim {dxMm, dyMm, note?, needleChangedAtMs}: the hand fine-tune on top of where the needle
+     * lands (§22.3), at most 1 mm per axis, recorded with N2's head offset now.
+     */
+    Object xyTrim(ApiServer.Request r) throws Exception {
+        JsonObject b = r.json();
+        DispenseService svc = ctx.svc();
+        double dx = Json.reqNum(b, "dxMm");
+        double dy = Json.reqNum(b, "dyMm");
+        if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+            throw ApiException.badRequest("The trim is at most ±1 mm on each axis: a needle that lands farther off "
+                    + "needs its landing checked (Setup › Dispenser & tip › Check where it lands).");
+        }
+        Long token = token(b);
+        if (svc.isBusy()) {
+            throw ApiException.refused("the trim cannot change while a dispense task runs");
+        }
+        String note = Json.str(b, "note", null);
+        DispenseConfig.NeedleXyTrim t = EngineFallback.orBefore(() -> svc.setXyTrim(dx, dy, note, token), () -> {
+            DispenseConfig c = svc.getConfig();
+            c.needleXyTrim.dxMm = dx;
+            c.needleXyTrim.dyMm = dy;
+            c.needleXyTrim.note = note;
+            svc.updateConfig(c);
+            return svc.getConfig().needleXyTrim;
+        });
+        return Views.map("needleXyTrim", t);
+    }
+
+    /**
+     * POST /api/needle/landing (§22.3): {keep: true, needleChangedAtMs} keeps where a straight tip lands across a
+     * needle change; {jobId, accept: true, needleChangedAtMs} saves the landing a landing check asked about.
+     */
+    Object landing(ApiServer.Request r) throws Exception {
+        JsonObject b = r.json();
+        DispenseService svc = ctx.svc();
+        boolean keep = Json.bool(b, "keep", false);
+        boolean accept = Json.bool(b, "accept", false);
+        if (keep == accept) {
+            throw ApiException.badRequest("give {keep: true} (keep where it lands) or {jobId, accept: true} (save what "
+                    + "the landing check found)");
+        }
+        Long token = token(b);
+        if (svc.isBusy()) {
+            throw ApiException.refused("where the needle lands cannot change while a dispense task runs");
+        }
+        DispenseConfig.NeedleLanding l;
+        if (keep) {
+            l = svc.keepLanding(token);
+        }
+        else {
+            String jobId = Json.str(b, "jobId", null);
+            PadCalibrationJob j = jobId == null ? null : ctx.padCalJobs.get(jobId);
+            if (j == null) {
+                throw ApiException.notFound("no landing check " + jobId + " in this session: check where it lands "
+                        + "again");
+            }
+            if (j.landing == null) {
+                throw ApiException.refused("The landing check " + jobId + " found no landing to save: check where it "
+                        + "lands again.");
+            }
+            l = svc.setLanding(j.landing, true, token);
+            j.landingAccepted(l);
+        }
+        return Views.map("needleLanding", l, "xyChecked", svc.isNeedleXyChecked());
+    }
+
+    /**
+     * Where the needle lands (§22.3) for status.dispense.needle: checked since the change, the landing with whether
+     * "Keep where it lands" is allowed (and why not), N2's head offset now and whether it changed since the landing
+     * or the trim was set.
+     */
+    static Map<String, Object> landingStatus(DispenseService svc, DispenseConfig cfg) {
+        boolean checked = EngineFallback.quietly(svc::isNeedleXyChecked, () -> true);
+        double[] now = EngineFallback.quietly(svc::headOffsetNow, () -> null);
+        String keepWhy = EngineFallback.quietly(svc::keepLandingProblem, () -> null);
+        DispenseConfig.NeedleLanding l = cfg.needleLanding;
+        DispenseConfig.NeedleXyTrim t = cfg.needleXyTrim;
+        Map<String, Object> landing = Views.map("known", l != null, "dxMm", l == null ? null : l.dxMm, "dyMm",
+                l == null ? null : l.dyMm, "setAtMs", l == null ? null : l.setAtMs, "jobId", l == null ? null : l.jobId,
+                "photoId", l == null ? null : l.photoId, "headOffsetXMm", l == null ? null : l.headOffsetXMm,
+                "headOffsetYMm", l == null ? null : l.headOffsetYMm, "note", l == null ? null : l.note, "keepable",
+                keepWhy == null && l != null, "keepWhy", keepWhy);
+        boolean trimSet = t != null && (t.dxMm != 0 || t.dyMm != 0);
+        boolean changed = l != null && moved(now, l.headOffsetXMm, l.headOffsetYMm)
+                || trimSet && moved(now, t.headOffsetXMm, t.headOffsetYMm);
+        return Views.map("xyChecked", checked, "landing", landing, "headOffsetNow", now, "headOffsetChanged", changed);
+    }
+
+    /** N2's head offset now differs from the one a value was set under (more than 0.001 mm). */
+    static boolean moved(double[] now, Double x, Double y) {
+        return now != null && x != null && y != null && (Math.abs(now[0] - x) > 0.001 || Math.abs(now[1] - y) > 0.001);
+    }
+
+    /**
+     * status.dispense.tip (§22.6): the mounted tip setup as the strip and Setup show it. A part that cannot be read
+     * leaves its field null and the reason in {@code error}: the status never fails for it.
+     */
+    static Map<String, Object> tipStatus(DispenseService svc, DispenseConfig cfg) {
+        Map<String, Object> m = Views.map("key", cfg.tip.key, "name", cfg.tip.name, "setupVersion",
+                cfg.tip.setupVersion, "dispenser", cfg.tip.dispenser, "form", cfg.tip.form, "bendToward",
+                cfg.tip.bendToward, "summary", null, "complete", null, "mountedAtMs", null, "dots", null, "thumbUrl",
+                null, "undoUntilMs", null);
+        try {
+            DispenseDb db = svc.getDb();
+            TipSetup s = db.currentTipSetup(cfg.tip.key);
+            m.put("summary", s == null ? null : s.summary());
+            m.put("complete", s != null && s.isComplete());
+            m.put("mountedAtMs", TipSetupEndpoints.mountedAtMs(db, cfg.tip.key));
+            m.put("dots", Views.dotsSource(svc.mountedTip()));
+            Photo main = db.mainPhoto(cfg.tip.key);
+            m.put("thumbUrl", main == null ? null : Views.photoUrl(main.id, true));
+            m.put("undoUntilMs", svc.undoUntilMs());
+        }
+        catch (Exception e) {
+            m.put("error", MachineEndpoints.rootMessage(e));
+        }
+        return m;
     }
 
     Object surfaces() throws ApiException {
@@ -472,14 +666,39 @@ final class DispenseEndpoints {
         return surfaces();
     }
 
-    /** Partial update: only the fields given replace the current settings. */
+    /**
+     * Partial update: only the fields given replace the current settings. Applied to the live configuration under the
+     * engine's lock (tip setups design §22.1), so nothing a mount, a needle change or a run's reservation wrote
+     * meanwhile is put back; a patch with {@code profile} names the tip setup it was edited for ({@code forTip}).
+     */
     Object putConfig(ApiServer.Request r) throws Exception {
         JsonObject patch = r.json();
         DispenseService svc = ctx.svc();
         if (svc.isBusy()) {
             throw ApiException.refused("settings cannot change while a dispense task runs");
         }
-        JsonObject cur = Json.GSON.toJsonTree(svc.getConfig()).getAsJsonObject();
+        String forTip = Json.str(patch, "forTip", null);
+        patch.remove("forTip");
+        if (patch.has("profile") && forTip == null) {
+            throw ApiException.badRequest("'forTip' is required with 'profile': the tip setup the recipe was edited "
+                    + "for (status dispense.tip.key)");
+        }
+        boolean simulated = SimGuard.isSimulated(ctx.machine());
+        DispenseService.ConfigEdit edit = live -> merged(svc, live, patch, forTip, simulated);
+        EngineFallback.orBefore(() -> svc.updateConfigAtomically(edit), () -> {
+            svc.updateConfig(edit.apply(svc.getConfig())); // validates; IllegalArgumentException -> 400
+            return null;
+        });
+        return svc.getConfig();
+    }
+
+    /** The patch merged into the live configuration; its protected settings compared with the live values. */
+    private static DispenseConfig merged(DispenseService svc, DispenseConfig live, JsonObject patch, String forTip,
+            boolean simulated) throws Exception {
+        if (forTip != null && !forTip.equals(live.tip.key)) {
+            throw TipSetupEndpoints.tipChanged(svc, live);
+        }
+        JsonObject cur = Json.GSON.toJsonTree(live).getAsJsonObject();
         for (Map.Entry<String, JsonElement> e : patch.entrySet()) {
             if (!cur.has(e.getKey()) && !PROTECTED_SETTINGS.contains(e.getKey())) {
                 throw ApiException.badRequest("unknown setting '" + e.getKey() + "'");
@@ -508,11 +727,7 @@ final class DispenseEndpoints {
             if (PROTECTED_SETTINGS.contains(e.getKey())) {
                 JsonElement was = cur.has(e.getKey()) ? cur.get(e.getKey()) : com.google.gson.JsonNull.INSTANCE;
                 if (!was.equals(e.getValue())) {
-                    throw ApiException.badRequest(REGISTRATION_SETTINGS.contains(e.getKey())
-                            ? "'" + e.getKey() + "' is stamped by the engine: Register board and the new-seat answer "
-                                    + "set it"
-                            : "'" + e.getKey() + "' is the needle touch-off state (I4): change it with the Needle card "
-                                    + "or a touch-off, which also record it");
+                    throw ApiException.badRequest(protectedText(e.getKey()));
                 }
                 continue; // unchanged round-trip from the full settings editor
             }
@@ -522,16 +737,35 @@ final class DispenseEndpoints {
         if (next.locations == null) {
             next.locations = new LinkedHashMap<>();
         }
-        if (next.padCalibration != null && !SimGuard.isSimulated(ctx.machine())) {
+        if (next.padCalibration != null && !simulated) {
             // the shortened statistics of the SIM tests are refused on the machine (PROFILE_CALIBRATION_DESIGN.md §5.4)
             List<String> floors = next.padCalibration.realMachineProblems();
-            floors.removeAll(svc.getConfig().padCalibration.realMachineProblems());
+            floors.removeAll(live.padCalibration.realMachineProblems());
             if (!floors.isEmpty()) {
                 throw ApiException.badRequest(String.join("; ", floors));
             }
         }
-        svc.updateConfig(next); // validates; IllegalArgumentException -> 400 with the problems
-        return svc.getConfig();
+        return next;
+    }
+
+    /** Why a protected setting cannot change with PUT /api/config, and where it is changed. */
+    static String protectedText(String key) {
+        if (REGISTRATION_SETTINGS.contains(key)) {
+            return "'" + key + "' is stamped by the engine: Register board and the new-seat answer set it";
+        }
+        if ("tip".equals(key)) {
+            return "The tip is the mounted tip setup: change it in Setup › Dispenser & tip.";
+        }
+        if ("parkedTips".equals(key)) {
+            return "The tips that are not mounted keep their recipe and needle values here: mounting a tip sets them "
+                    + "(Setup › Dispenser & tip).";
+        }
+        if ("needleLanding".equals(key) || "needleXyTrim".equals(key)) {
+            return "Where the needle lands is set by Check where it lands and the trim panel (POST /api/needle/landing, "
+                    + "/api/needle/xy-trim).";
+        }
+        return "'" + key + "' is the needle touch-off state (I4): change it with the Needle card or a touch-off, which "
+                + "also record it";
     }
 
     // ------------------------------------------------------------------------------------------
