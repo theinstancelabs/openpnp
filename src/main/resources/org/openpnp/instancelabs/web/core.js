@@ -1290,9 +1290,10 @@
     // NEXT: the first not-ready item in the fixed order; items that only wait for a plan never come first
     const next = notReady.find((x) => x.state !== 'wait') || notReady[0] || null;
     let verdict;
-    if (blocked.length) verdict = { state: 'block', text: 'Blocked · ' + blocked[0].short, title: blocked.map((x) => x.title + ': ' + x.detail).join('\n') };
+    // the strip drops the part after " · " when it would run under STOP (cells--t2); the title keeps it
+    if (blocked.length) verdict = { state: 'block', text: 'Blocked · ' + blocked[0].short, value: ['Blocked', ' · ' + blocked[0].short, 2], title: blocked.map((x) => x.title + ': ' + x.detail).join('\n') };
     else if (!plan && !c.planForgotten) verdict = { state: 'need', text: 'No plan yet', title: 'Choose a board and plan it (Run).' };
-    else if (notReady.length) verdict = { state: 'need', text: count + ' of 9 · ' + next.short, title: notReady.map((x) => x.title + ': ' + x.detail).join('\n') };
+    else if (notReady.length) verdict = { state: 'need', text: count + ' of 9 · ' + next.short, value: [count + ' of 9', ' · ' + next.short, 2], title: notReady.map((x) => x.title + ': ' + x.detail).join('\n') };
     else if (items[0].homeFirst) {
       // the strip drops the long part when it would run under STOP (cells--t1)
       verdict = { state: 'ok', text: 'Ready to run · homes first (≈ ' + IL.fmtSecs(homeS) + ')', value: ['Ready to run', ' · homes first (≈\u00a0' + IL.fmtSecs(homeS) + ')', 1],
@@ -1904,10 +1905,12 @@
       return last.getBoundingClientRect().right > limit + 0.5;
     };
     cells.classList.remove('cells--t1', 'cells--t2');
-    if (!over()) return;
-    cells.classList.add('cells--t1');
-    if (!over()) return;
-    cells.classList.replace('cells--t1', 'cells--t2');
+    cells.classList.add('cells--fit');   // the verdict at its full width while measuring (it shrinks only after t2)
+    if (over()) {
+      cells.classList.add('cells--t1');
+      if (over()) cells.classList.replace('cells--t1', 'cells--t2');
+    }
+    cells.classList.remove('cells--fit');
   }
   window.addEventListener('resize', () => { fitSig = ''; IL.render(); });
   function pressureView(s) {

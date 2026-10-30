@@ -219,10 +219,13 @@
       }
       if (fix.length > 1) fixes.push({ href: '#profile/needs', label: 'All ' + fix.length + ' in Profile › Needs a profile' });
       if (fix.some((g) => g.reason === 'below-gate')) fixes.push({ href: '#setup/settings/min-status', label: 'Lowest pad-type status' });
-      const tipN = tip.reduce((a, g) => a + g.pads, 0);
+      const tipN = tip.reduce((a, g) => a + g.pads, 0), fixN = fix.reduce((a, g) => a + g.pads, 0);
+      const names = (gs) => Array.from(new Set(gs.map(pkgOf))).join(', ');
+      // the fixes below name the packages that need a profile (up to 3, then all of them): the sentence counts them
       return Object.assign(it, { state: 'block', value: (pads.length - blockedN) + '/' + pads.length, short: 'needs a profile',
         chip: IL.plural(blockedN, 'pad') + ' cannot be dispensed',
-        detail: IL.plural(blockedN, 'pad') + ' cannot be dispensed: ' + list(fix) + (tipN ? '; ' + tipN + ' not with the ' + tipName + ': ' + list(tip) : '') + '.', fixes });
+        detail: IL.plural(blockedN, 'pad') + ' cannot be dispensed: ' + fixN + ' ' + (fixN === 1 ? 'needs' : 'need') + ' a profile'
+          + (fix.length > 3 ? ' (' + names(fix) + ')' : '') + (tipN ? ', ' + tipN + ' not with the ' + tipName + ' (' + names(tip) + ')' : '') + '.', fixes });
     }
     if (tip.length) {
       const n = tip.reduce((a, g) => a + g.pads, 0);
@@ -309,7 +312,8 @@
     }
     return P.est[key];
   }
-  const estText = (e) => (e && e.s && isNum(e.s.estimatedSeconds) ? ' · ≈ ' + IL.fmtClock(e.s.estimatedSeconds) : '');
+  /** " · ≈ 3:14", or nothing while the summary is refused (it then estimates nothing: never "≈ 0:00"). */
+  const estText = (e) => (e && e.s && isNum(e.s.estimatedSeconds) && e.s.estimatedSeconds > 0 ? ' · ≈ ' + IL.fmtClock(e.s.estimatedSeconds) : '');
   /** A calibration request for groups of the current source: {planId | boardFile, groups, suggestionIds}. */
   function calRequest(c, groups) {
     const ids = {};
@@ -397,6 +401,9 @@
     IL.show(sec, any || !!(c && c.kind === 'board'));
     if (!c) return;
     IL.setText($('pt-needs-count'), sp.fix.length ? String(sp.fix.length) : '');
+    // while pads need a profile, its actions lead: Profile's own "New pad type" steps back to a plain button
+    const nb = $('btn-padtype-new');
+    if (nb) nb.classList.toggle('btn--primary', !sp.fix.length);
     IL.setText($('pt-needs-src'), c.label);
     const st = $('pt-needs-state');
     const kind = sp.fix.length ? 'need' : sp.tip.length ? 'block' : 'ok';
@@ -437,6 +444,11 @@
     for (const b of sec.querySelectorAll('button[data-action=use]')) IL.gate(b, why);
     for (const b of sec.querySelectorAll('button[data-action=manual], button[data-action=auto]')) IL.gate(b, calWhy);
     IL.gate(autoAll, calWhy, nu > 1 ? null : $('needs-why'));
+    // one clear next action: the side panel's while it shows the calibration or a suggestion with its own buttons
+    const shown = IL.panel.isPushed() ? null : findGroup(c, P.sel);
+    const lead = !IL.panel.isPushed('pad-cal') && !(shown && (FIX.has(shown.reason) || shown.reason === 'outside') && (usable(shown) || calibrates(shown)));
+    autoAll.classList.toggle('btn--primary', lead);
+    if (sp.fix.length === 1) for (const b of sec.querySelectorAll('#pt-needs-table button[data-action=use], #pt-needs-table button[data-action=auto]')) b.classList.toggle('btn--primary', lead);
   }
 
   // ================================================================================== the suggestion card (Profile side panel)
@@ -496,7 +508,7 @@
       const ripple = pr.padRipplePct && (pr.padRipplePct[0] || pr.padRipplePct[1]) ? IL.fmt(pr.padRipplePct[0], 0) + '–' + IL.fmt(pr.padRipplePct[1], 0) + ' %' : '0 % (whole turns per pad)';
       IL.kv($('pt-sugg-kv'), [
         ['Opening', pair2(op.wMm, op.hMm) + ' mm' + (op.roundness ? ' · ' + IL.fmt(op.roundness, 0) + ' % round' : '') + ' · ' + IL.fmt(op.areaMm2, 3) + ' mm²'],
-        ['Amount', IL.fmt(am.targetMg, 2) + ' mg per pad' + (am.k && am.k !== 1 ? ' (k ' + IL.fmt(am.k, 2) + ')' : '') + (am.capped ? ', capped at a 0.25 mm print' : '') + ': ' + (am.rule || '')],
+        ['Target amount', IL.fmt(am.targetMg, 2) + ' mg per pad' + (am.k && am.k !== 1 ? ' (k ' + IL.fmt(am.k, 2) + ')' : '') + (am.capped ? ', capped at a 0.25 mm print' : '') + (am.rule ? ' (' + am.rule + ')' : '')],
         ['Dots per pad and turn', d.perPad + ' ' + turnAdj(d.steps) + ' ' + (d.perPad === 1 ? 'dot' : 'dots') + ' per pad (' + IL.fmt(d.netDeg, 2) + '° each)'],
         ['Dot size', dRange(d.diameterMm) + (d.dSource === 'measured' ? ' (measured)' : ' (model)')],
         ['Per pad', mg(pr.mgPerPad) + (isNum(pr.errorPct) ? ', ' + (pr.errorPct === 0 ? 'the target' : Math.abs(pr.errorPct) + ' % ' + (pr.errorPct < 0 ? 'less' : 'more') + ' than the target') : '') + (d.mgSource && d.mgSource !== 'model' ? ' (weighed)' : '')],
@@ -804,8 +816,9 @@
   const jobLock = (s) => { const j = job(s); return !!j && LOCKING.has(j.state); };
   const jobActive = (s) => { const j = job(s); return !!j && ACTIVE.has(j.state); };
   function jobLockText(s) { return jobLock(s) ? 'Locked while the pad calibration runs' : null; }
-  const STEP_WORD = { blank: 'blank', coupons: 'coupons', ladder: 'ladder', weigh: 'weigh dots', readings: 'readings', decide: 'deciding', plan: 'plan again' };
-  /** The strip's live label of the job's engine step: ['Pad calibration · ladder 14/48', ' · ≈ 2:50 left']. */
+  // the panel's step names, short (STEP_TITLE)
+  const STEP_WORD = { blank: 'blank', coupons: 'coupons', ladder: 'test dots', weigh: 'weigh dots', readings: 'readings', decide: 'deciding', plan: 'plan again' };
+  /** The strip's live label of the job's engine step: ['Pad calibration · test dots 14/48', ' · ≈ 2:50 left']. */
   function taskParts(run) {
     const j = job(S.status);
     const st = j && j.steps ? j.steps.find((x) => x.state === 'now') : null;
@@ -818,10 +831,12 @@
   function verdict(s) {
     const j = job(s);
     if (!j) return null;
-    if (j.state === 'awaiting-reading') return { state: 'need', text: 'Waiting for you · weigh', title: 'The pad calibration waits for the coupon readings (since ' + IL.fmtTime(IL.toClient(j.awaiting && j.awaiting.sinceMs)) + '): open it' };
+    // the part after the first " · " goes when the strip is too narrow (core.js setCell, level 2)
+    if (j.state === 'awaiting-reading') return { state: 'need', text: 'Waiting for you · weigh', value: ['Waiting for you', ' · weigh', 2], title: 'The pad calibration waits for the coupon readings (since ' + IL.fmtTime(IL.toClient(j.awaiting && j.awaiting.sinceMs)) + '): open it' };
     if (LOCKING.has(j.state)) {
       const st = (j.steps || []).find((x) => x.state === 'now');
-      return { state: 'live', text: 'Pad calibration · ' + (st ? STEP_WORD[st.key] || st.key : j.state), title: 'Pad calibration running: other machine actions wait' };
+      const word = st ? STEP_WORD[st.key] || st.key : j.state;
+      return { state: 'live', text: 'Pad calibration · ' + word, value: ['Pad calibration', ' · ' + word, 2], title: 'Pad calibration running: other machine actions wait' };
     }
     return null;
   }
@@ -924,9 +939,11 @@
       const rows = [];
       if (pv.home && pv.home.needed) rows.push(['Home', 'not homed: ' + (pv.home.why || ''), pv.home.estimateS]);
       if (pv.zCheck && pv.zCheck.needed) rows.push(['Z check', 'one N1 touch', pv.zCheck.estimateS]);
-      for (const x of pv.steps) rows.push([STEP_TITLE[x.key] || x.key, x.state === 'skipped' ? x.text || 'skipped' : stepDetail(pv, x.key), x.state === 'skipped' ? null : x.estimatedSeconds]);
-      return rows.map(([t, d, sec]) => el('tr', {}, el('td', {}, el('div', { class: 'pcal__st', text: t }), d ? el('div', { class: 'pcal__sd', text: d }) : null),
-        el('td', { class: 'r nowrap', text: isNum(sec) && sec > 0 ? '≈ ' + IL.fmtClock(sec) : sec === 0 ? 'you' : '—' })));
+      for (const x of pv.steps) rows.push([STEP_TITLE[x.key] || x.key, x.state === 'skipped' ? x.text || 'skipped' : stepDetail(pv, x.key), x.state === 'skipped' ? null : x.estimatedSeconds, x.key]);
+      // the time column: the machine's estimate, "you" for the readings, nothing for a step that takes no time
+      const when = (sec, k) => (k === 'readings' && sec !== null ? 'you' : isNum(sec) && sec > 0 ? '≈ ' + IL.fmtClock(sec) : sec === 0 ? '' : '—');
+      return rows.map(([t, d, sec, k]) => el('tr', {}, el('td', {}, el('div', { class: 'pcal__st', text: t }), d ? el('div', { class: 'pcal__sd', text: d }) : null),
+        el('td', { class: 'r nowrap', text: when(sec, k) })));
     });
     IL.keyed($('pcal-groups-list'), JSON.stringify(pv ? [pv.groups, pv.saves, pv.demotes, pv.skipped] : null), () => {
       if (!pv) return null;
@@ -944,7 +961,7 @@
     IL.show(fx, !!ref);
     IL.keyed(fx, ref || '', () => (ref ? [el('div', { class: 'notebox notebox--need' }, IL.glyph('need', 'xs'), el('span', { text: ref })), IL.fixRow(fixesFor(ref, s), 'btn-row')] : null));
     const start = $('btn-pcal-start');
-    if (!IL.isArmed(start)) IL.setText($('pcal-start-l'), 'Calibrate' + (pv ? ' · ≈ ' + IL.fmtClock(pv.estimatedSeconds) : ''));
+    if (!IL.isArmed(start)) IL.setText($('pcal-start-l'), 'Calibrate' + estText(e));
     const why = IL.lockReason(s, { connected: true, engine: true }) || jobLockText(s) || (jobActive(s) ? 'A pad calibration is waiting for its readings: finish or cancel it first' : null)
       || (!pv ? 'Reading the summary…' : ref ? 'Fix the item above first.' : null);
     IL.gate(start, why, $('pcal-why'));
@@ -1008,7 +1025,7 @@
           el('div', { id: 'pcal-ask-ref' }),
           el('div', { class: 'ri__act' }, skip))),
       el('div', { class: 'ri', id: 'pcal-result', role: 'status', hidden: true, 'data-refusals': '' }),
-      el('div', { id: 'pcal-result-more', hidden: true },
+      el('div', { class: 'pcal__more', id: 'pcal-result-more', hidden: true },
         el('ul', { class: 'pcal__res', id: 'pcal-groups' }),
         IL.sectionK('Camera crops (before · after)'),
         el('div', { class: 'pcal__crops', id: 'pcal-crops' }),
@@ -1074,7 +1091,8 @@
       let v = '';
       if (x.state === 'now' && run) {
         d = String(run.phase || '').replace(/^pad calibration:\s*/, '') || d;
-        if (run.dotsPlanned) v = 'dot ' + Math.min(run.dotsPlanned, (run.dotsDone || 0) + 1) + ' of ' + run.dotsPlanned;
+        // dots laid, as the strip counts them (the camera looks before the first one)
+        if (run.dotsPlanned) v = Math.min(run.dotsPlanned, run.dotsDone || 0) + ' of ' + IL.plural(run.dotsPlanned, 'dot');
       }
       if (x.key === 'readings' && x.state === 'now') { d = 'waiting for you since ' + IL.fmtTime(IL.toClient(j.awaiting && j.awaiting.sinceMs)); }
       return { k: x.key, st, t: STEP_TITLE[x.key] || x.key, d, v };
@@ -1288,6 +1306,29 @@
     typeLabels(() => {
       for (const n of table.querySelectorAll('[data-type-key]')) IL.setText(n, P.labels.get(n.dataset.typeKey) || n.textContent);
     });
+    needsWarning(table.closest('#dlg-board-import'), pv);
+  }
+  /**
+   * The NEEDS_PROFILE warning as one line per reason ("Not calibrated yet: LED_0805_2012Metric") instead of one
+   * sentence naming every package with its reason in brackets; the server's sentence stays the item's title.
+   */
+  function needsWarning(dlg, pv) {
+    const li = dlg && dlg.querySelector('li[data-code="NEEDS_PROFILE"]');
+    if (!li || li.dataset.pp === '1') return;
+    // the reasons a profile fixes first, those of the tip last
+    const rank = (r) => (FIX.has(r) ? 0 : r === 'outside' ? 1 : TIPS.has(r) ? 3 : 2);
+    const by = new Map();
+    for (const p of (pv.packages || []).filter((x) => x.profileShort).sort((a, b) => rank(a.profileReason) - rank(b.profileReason))) {
+      if (!by.has(p.profileShort)) by.set(p.profileShort, []);
+      by.get(p.profileShort).push(base(p.id));
+    }
+    if (!by.size) return;
+    const n = Array.from(by.values()).reduce((a, l) => a + l.length, 0);
+    li.dataset.pp = '1';
+    IL.setAttr(li, 'title', li.textContent);
+    li.replaceChildren(el('div', { text: IL.plural(n, 'package needs', 'packages need') + ' a profile:' }),
+      el('ul', { class: 'pp-needs-w' }, Array.from(by, ([short, ids]) => el('li', {}, el('b', { text: IL.cap(short) + ': ' }), breakable(ids.join(', '))))),
+      el('div', { text: 'After saving, choose a suggestion for each in Profile › Needs a profile.' }));
   }
   /** A package's profile cell: its badge, then the suggestion (a fixable reason) or its pad types (ready). */
   function profileCell(p) {
