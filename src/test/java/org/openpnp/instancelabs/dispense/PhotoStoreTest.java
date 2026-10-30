@@ -296,11 +296,15 @@ public class PhotoStoreTest {
             s.store(upload(encode(picture(100, 100, BufferedImage.TYPE_INT_RGB), "jpg")));
             big.kind = Photo.KIND_SETUP;
             big.file = "2026-10/bbbbbbbbbbbbbbbbbbbb.jpg";
-            db.insertPhoto(big);
+            Photo setup = db.insertPhoto(big);
             EngineRefusal e = assertThrows(EngineRefusal.class, () -> s.store(upload(encode(picture(101, 100,
                     BufferedImage.TYPE_INT_RGB), "jpg"))));
             assertEquals("disk", e.code);
             assertEquals("The pictures take 2.0 GB already: remove old ones first.", e.getMessage());
+            // removing old ones makes room at once (the file stays for its undo until the start sweep)
+            s.remove(setup.id, "too large", "tester");
+            Photo more = s.store(upload(encode(picture(102, 100, BufferedImage.TYPE_INT_RGB), "jpg")));
+            assertEquals(Photo.KIND_SETUP, more.kind);
         }
     }
 

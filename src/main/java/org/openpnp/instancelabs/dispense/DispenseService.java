@@ -1118,6 +1118,12 @@ public final class DispenseService {
         if (r.setupKey != null && !r.setupKey.equals(cfg.tip.key)) {
             throw tipChanged();
         }
+        if (r.n < org.openpnp.instancelabs.padprofile.LandingFit.MIN_MATCHES) {
+            // a landing is measured by a row that fitted (§22.3): no locator dot or too few dots is nothing to save
+            throw new EngineRefusal(409, "refused", "The landing check found no landing to save (" + r.n + " of "
+                    + org.openpnp.instancelabs.padprofile.LandingFit.ROW_MM.length + " dots near their spots): check "
+                    + "where it lands again.");
+        }
         if (!(Math.abs(r.dxMm) <= DispenseConfig.MAX_LANDING_MM && Math.abs(r.dyMm) <= DispenseConfig.MAX_LANDING_MM)) {
             throw new IllegalArgumentException("A landing must be within ±" + (int) DispenseConfig.MAX_LANDING_MM
                     + " mm on each axis.");
@@ -1633,8 +1639,8 @@ public final class DispenseService {
                 }
             }
             throw new EngineRefusal(409, "pad-changed", (cur.name == null ? v.typeKey : cur.name) + " was changed "
-                    + "meanwhile (version " + cur.padVersion + ", with the " + (other == null ? "another tip"
-                            : other.name) + "): reload.").with("padVersion", cur.padVersion);
+                    + "meanwhile (version " + cur.padVersion + ", with " + (other == null ? "another tip"
+                            : "the " + other.name) + "): reload.").with("padVersion", cur.padVersion);
         }
         boolean raised = w.status != null && w.status.atLeast(PadTypeStatus.CHARACTERIZED)
                 && (cur == null || cur.standIn || !cur.status.atLeast(PadTypeStatus.CHARACTERIZED));
@@ -1657,11 +1663,25 @@ public final class DispenseService {
      */
     public synchronized PadCalibrationRecord savePadTypeByHand(PadType v, String forSetup, String label,
             List<Long> photoIds, String operator) throws SQLException {
+        PadType before = db.currentPadType(v.typeKey, cfg.tip.key);
+        return savePadTypeByHand(v, forSetup, before == null ? null : before.padVersion, label, photoIds, operator);
+    }
+
+    /**
+     * As {@link #savePadTypeByHand(PadType, String, String, List, String)} for the editor that names the pad it showed
+     * (§22.2): {@code padVersion} for a pad edited with the raise (409 {@code pad-changed} when another was written
+     * meanwhile), null when only the status and the dose were edited (the pad as every setup sees it now).
+     */
+    public synchronized PadCalibrationRecord savePadTypeByHand(PadType v, String forSetup, Integer padVersion,
+            String label, List<Long> photoIds, String operator) throws SQLException {
         if (v.status != PadTypeStatus.CHARACTERIZED && v.status != PadTypeStatus.VALIDATED) {
             throw new IllegalArgumentException("a by-hand calibration raises the status to characterized or validated");
         }
+        // the label and the pictures are checked before anything is written: a refusal leaves no version or record
+        String text = label == null ? null : cleanLabel(label);
+        List<Photo> pictures = picturesFor(photoIds);
         PadType before = db.currentPadType(v.typeKey, cfg.tip.key);
-        PadType stored = savePadType(v, forSetup, before == null ? null : before.padVersion);
+        PadType stored = savePadType(v, forSetup, padVersion);
         DispenseConfig c = cfg;
         long now = System.currentTimeMillis();
         PadCalibrationRecord rec = new PadCalibrationRecord();
@@ -1697,7 +1717,7 @@ public final class DispenseService {
         rec.evidence = evidence;
         rec.message = "raised by hand to " + stored.status.dbName + " for the " + c.tip.name;
         PadCalibrationRecord out = db.insertPadCalibration(rec);
-        labelAndLink(out, stored, label, operator);
+        labelAndLink(out, stored, text, operator);
         // the result photos of the jobs its evidence came from, the photos given, the main picture
         java.util.Set<String> jobs = new java.util.LinkedHashSet<>();
         for (Long id : evidence) {
@@ -1711,11 +1731,46 @@ public final class DispenseService {
                 linkQuietly(ph.id, out.id, Photo.ROLE_RESULT, operator);
             }
         }
-        if (photoIds != null) {
-            linkPhotos(photoIds, java.util.Collections.singletonList(out.id), Photo.ROLE_TIP);
+        for (Photo p : pictures) {
+            // a result photo (the guide ladder's) is the record's result, any other picture one of the tip (§22.4)
+            linkPhotos(java.util.Collections.singletonList(p.id), java.util.Collections.singletonList(out.id),
+                    Photo.KIND_RESULT.equals(p.kind) ? Photo.ROLE_RESULT : Photo.ROLE_TIP);
         }
         db.event(null, "INFO", "PCAL", "by hand: " + new Gson().toJson(out));
         return out;
+    }
+
+    /**
+     * The pictures a by-hand record will show, checked as their links will be (§22.4): each exists, is of the mounted
+     * setup (409 {@code setup-mismatch}), a picture from below of the needle on now (409 {@code needle-changed}), and
+     * at most {@link PhotoStore#MAX_TIP_PER_RECORD} of the tip (409 {@code too-many}).
+     */
+    private List<Photo> picturesFor(List<Long> photoIds) throws SQLException {
+        List<Photo> l = new ArrayList<>();
+        int tips = 0;
+        for (Long id : photoIds == null ? new ArrayList<Long>() : new ArrayList<>(new java.util.LinkedHashSet<>(
+                photoIds))) {
+            Photo p = db.photo(id);
+            if (p == null) {
+                throw new EngineRefusal(404, "not-found", "There is no picture " + id + ".");
+            }
+            if (!cfg.tip.key.equals(p.setupKey)) {
+                throw new EngineRefusal(409, "setup-mismatch", "This picture is of the " + nameOf(p.setupKey)
+                        + "; this calibration is made with the " + cfg.tip.name + ".");
+            }
+            if (Photo.SOURCE_BOTTOM_CAMERA.equals(p.source) && !java.util.Objects.equals(p.needleSinceMs,
+                    cfg.needleChangedAtMs)) {
+                throw new EngineRefusal(409, "needle-changed", "Picture " + id + " was taken with another needle than "
+                        + "the one on the dispenser now: a needle change came between them.");
+            }
+            tips += Photo.KIND_TIP.equals(p.kind) ? 1 : 0;
+            l.add(p);
+        }
+        if (tips > PhotoStore.MAX_TIP_PER_RECORD) {
+            throw new EngineRefusal(409, "too-many", "A calibration shows at most " + PhotoStore.MAX_TIP_PER_RECORD
+                    + " pictures of the tip: choose fewer.");
+        }
+        return l;
     }
 
     /**

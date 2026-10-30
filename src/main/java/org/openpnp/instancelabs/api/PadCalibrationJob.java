@@ -3101,8 +3101,11 @@ final class PadCalibrationJob {
         if (l == null) {
             return Views.map("saved", false, "searchMm", searchMm, "text", landingText);
         }
-        return Views.map("jobId", l.jobId, "setupKey", l.setupKey, "needleSinceMs", l.needleSinceMs, "dxMm", r3(l.dxMm),
-                "dyMm", r3(l.dyMm), "sdMm", r3(l.sdMm), "n", l.n, "found", l.found, "searchMm", l.searchMm, "expected",
+        // without a locator dot nothing was measured: no landing numbers (a 0, 0 would read as a landing)
+        boolean measured = l.coarse != null;
+        return Views.map("jobId", l.jobId, "setupKey", l.setupKey, "needleSinceMs", l.needleSinceMs, "dxMm", measured
+                ? r3(l.dxMm) : null, "dyMm", measured ? r3(l.dyMm) : null, "sdMm", r3(l.sdMm), "n", l.n, "found",
+                l.found, "searchMm", l.searchMm, "expected",
                 l.expected, "coarse", l.coarse, "residual", l.residual, "pairs", l.pairs, "photoId", l.photoId,
                 "headOffset", l.headOffset, "saved", l.saved, "question", l.question, "text", landingText);
     }

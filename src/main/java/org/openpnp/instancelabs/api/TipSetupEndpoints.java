@@ -22,6 +22,8 @@ import org.openpnp.instancelabs.dispense.MountResult;
 import org.openpnp.instancelabs.dispense.NeedleChange;
 import org.openpnp.instancelabs.dispense.PadType;
 import org.openpnp.instancelabs.dispense.PadTypeStatus;
+import org.openpnp.instancelabs.dispense.Photo;
+import org.openpnp.instancelabs.dispense.PhotoStore;
 import org.openpnp.instancelabs.dispense.TipPictureRequest;
 import org.openpnp.instancelabs.dispense.TipPictureResult;
 import org.openpnp.instancelabs.dispense.TipSetup;
@@ -197,12 +199,17 @@ final class TipSetupEndpoints {
         fields(next, b);
         boolean correction = Json.bool(b, "correction", false);
         List<String> changes = changes(was, next);
+        boolean mounted = was.key.equals(svc.getConfig().tip.key);
         if (changes.isEmpty()) {
+            if (mounted && svc.getConfig().tip.setupVersion != was.version) {
+                // a save whose refresh a task refused (below): saving again brings the details to the engine
+                ctx.requireEngineIdle(svc);
+                refreshMounted(svc, was);
+            }
             return setupView(svc, was);
         }
         TipSetups.checkEdit(was, next, db.tipSetupInUse(was.key), correction);
         requireFreeName(db.currentTipSetups(false), next.name, was.key);
-        boolean mounted = was.key.equals(svc.getConfig().tip.key);
         if (mounted) {
             ctx.requireEngineIdle(svc);
         }
@@ -210,20 +217,28 @@ final class TipSetupEndpoints {
         next.operator = Json.str(b, "operator", null);
         TipSetup stored = db.insertTipSetupVersion(next);
         if (mounted) {
-            svc.updateConfigAtomically(live -> {
-                if (stored.key.equals(live.tip.key)) {
-                    if (svc.isBusy()) {
-                        throw ApiException.refused("a dispense task started: the " + stored.name + "'s details are "
-                                + "saved and reach the engine at its next mount (or save them again)");
-                    }
-                    live.tip = stored.toSpec(); // the new setup version makes plans stale (the resolver's fingerprint)
-                }
-                return live;
-            });
+            refreshMounted(svc, stored);
         }
         db.event(null, "INFO", "TIP", (correction ? "corrected the " : "edited the ") + was.name + ": "
                 + String.join(", ", changes));
         return setupView(svc, stored);
+    }
+
+    /**
+     * The engine's view of the mounted setup ({@code cfg.tip}) refreshed from a version of it: the new setup version
+     * makes plans stale (the resolver's fingerprint). Refused while a dispense task runs; the version stays saved.
+     */
+    private static void refreshMounted(DispenseService svc, TipSetup stored) throws Exception {
+        svc.updateConfigAtomically(live -> {
+            if (stored.key.equals(live.tip.key)) {
+                if (svc.isBusy()) {
+                    throw ApiException.refused("A dispense task started: the " + stored.name + "'s details are saved; "
+                            + "save them again when it has ended, so the engine uses them.");
+                }
+                live.tip = stored.toSpec();
+            }
+            return live;
+        });
     }
 
     /** POST /api/tip-setups/{key}/retire and /unretire: a retired setup cannot be mounted; the mounted one stays. */
@@ -465,6 +480,12 @@ final class TipSetupEndpoints {
         q.setupKey = s.key;
         q.needleSinceMs = cfg.needleChangedAtMs;
         q.calibrationIds.addAll(PhotoEndpoints.ids(b, "calibrationIds"));
+        for (Long id : q.calibrationIds) {
+            // the records it will show checked before the head moves (§22.4: another setup's, or a record of the
+            // needle before a change, would leave the picture unstored after the move)
+            PhotoStore.checkLink(svc.getDb(), s.key, Photo.SOURCE_BOTTOM_CAMERA, q.needleSinceMs, id);
+            PhotoStore.checkTipCount(svc.getDb(), id, 1);
+        }
         q.stopEpoch = svc.stopEpoch();
         q.operator = Json.str(b, "operator", null);
         ctx.tracker.expect("tip picture");

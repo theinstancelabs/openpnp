@@ -917,6 +917,27 @@ public class PadCalibrationSimTest {
         assertTrue(landing(ok(get("/api/pad-calibrations/" + str(asked, "id")))).get("saved").getAsBoolean());
     }
 
+    @Test
+    public void aLandingCheckThatFoundNothingCannotBeSaved() throws Exception {
+        // a new 22G that lands 8 mm off: beyond the ±6 mm a bent tip without its bend recorded is searched
+        start(sc -> byTip(sc, Tip22.KEY, 2.30, 0.875, 8.0, 0));
+        ok(call("POST", "/api/needle/changed", "{\"why\":\"a new 22G\"}"));
+        frame();
+        regulatorAtMs = System.currentTimeMillis();
+        JsonObject job = landingCheck();
+        assertEquals("not-found", str(result(job), "outcome"), result(job).toString());
+        assertTrue(str(result(job), "sentence").startsWith("No dot found within ±6 mm of where the 22G bent taper should "
+                + "land"), str(result(job), "sentence"));
+        assertFalse(landing(job).get("saved").getAsBoolean());
+        // "Save it" is the answer to the question of a fit, not a way around the check
+        Res accept = call("POST", "/api/needle/landing", "{\"jobId\":\"" + str(job, "id") + "\",\"accept\":true,"
+                + "\"needleChangedAtMs\":" + token() + "}");
+        assertEquals(409, accept.status, accept.toString());
+        assertTrue(str(accept.json(), "reason").contains("check where it lands"), accept.toString());
+        JsonObject needle = ok(get("/api/status")).getAsJsonObject("dispense").getAsJsonObject("needle");
+        assertFalse(needle.get("xyChecked").getAsBoolean(), needle.toString());
+    }
+
     /** A small JPEG (a picture of the tip from a phone, as the browser sends it). */
     static byte[] jpeg() throws Exception {
         java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(320, 240,

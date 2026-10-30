@@ -431,7 +431,8 @@ final class PadTypeEndpoints {
                 : new JsonObject();
         String label = Json.has(c, "label") ? DispenseService.cleanLabel(Json.str(c, "label", null)) : null;
         List<Long> photoIds = PhotoEndpoints.ids(c, "photoIds");
-        PadCalibrationRecord rec = svc.savePadTypeByHand(t, forSetup, label, photoIds, t.operator);
+        // the pad the editor showed (409 pad-changed under the engine's lock), or null: the pad as it is now
+        PadCalibrationRecord rec = svc.savePadTypeByHand(t, forSetup, padVersion, label, photoIds, t.operator);
         DispenseDb db = svc.getDb();
         out.type = db.currentPadType(t.typeKey, forSetup);
         if (rec != null) {

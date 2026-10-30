@@ -215,7 +215,7 @@ public final class PhotoStore {
      * {@code needle-changed}). A record without a needle token (no change recorded before it, or made before schema
      * 3) is of the needle before any change made after it.
      */
-    static PadCalibrationRecord checkLink(DispenseDb db, String setupKey, String source, Long needleSinceMs,
+    public static PadCalibrationRecord checkLink(DispenseDb db, String setupKey, String source, Long needleSinceMs,
             long calibrationId) throws SQLException {
         PadCalibrationRecord r = db.padCalibration(calibrationId);
         if (r == null) {
@@ -269,7 +269,7 @@ public final class PhotoStore {
      * At most {@link #MAX_TIP_PER_RECORD} pictures of the tip per calibration record (§22.4), whether stored with the
      * record or linked to it later: 409 {@code too-many} when {@code adding} more would pass it.
      */
-    static void checkTipCount(DispenseDb db, long calibrationId, int adding) throws SQLException {
+    public static void checkTipCount(DispenseDb db, long calibrationId, int adding) throws SQLException {
         int n = 0;
         for (Photo p : db.photos(null, calibrationId, null, Photo.KIND_TIP, false, 1000)) {
             n += p.links.contains(calibrationId) ? 1 : 0;
@@ -280,10 +280,16 @@ public final class PhotoStore {
         }
     }
 
-    /** The bytes of the removable pictures' files (tip and setup, live or kept for their undo), each file once. */
+    /**
+     * The bytes of the live removable pictures' files (tip and setup), each file once. A removed picture leaves the
+     * count at once, so "remove old ones first" makes room; its file leaves the disk at the start sweep after its 7
+     * days of undo (rows of removed pictures never count, or the cap could never be got below).
+     */
     long removableBytes() throws SQLException {
         Map<String, Long> files = new HashMap<>();
-        for (Map<String, Object> m : db.query("SELECT file, bytes FROM photos WHERE kind IN ('tip', 'setup')")) {
+        for (Map<String, Object> m : db.query("SELECT p.file, p.bytes FROM photos p WHERE p.kind IN ('tip', 'setup')"
+                + " AND COALESCE((SELECT e.action FROM photo_events e WHERE e.photo_id = p.id AND e.action IN"
+                + " ('remove', 'restore') ORDER BY e.id DESC LIMIT 1), 'restore') = 'restore'")) {
             files.put((String) m.get("file"), ((Number) m.get("bytes")).longValue());
         }
         long n = 0;
@@ -321,10 +327,15 @@ public final class PhotoStore {
             try {
                 r.setInput(iis, true, true);
                 int w = r.getWidth(0), h = r.getHeight(0);
-                if (w < MIN_SIDE_PX || h < MIN_SIDE_PX || w > MAX_SIDE_PX || h > MAX_SIDE_PX
-                        || (long) w * h > MAX_PIXELS) {
+                if (w < MIN_SIDE_PX || h < MIN_SIDE_PX || w > MAX_SIDE_PX || h > MAX_SIDE_PX) {
                     throw new EngineRefusal(400, "size", String.format(Locale.ROOT, "The picture is %d × %d px: at "
                             + "least %d and at most 12,000 px a side.", w, h, MIN_SIDE_PX));
+                }
+                if ((long) w * h > MAX_PIXELS) {
+                    // its sides are within the limits: say the limit it breaks
+                    throw new EngineRefusal(400, "size", String.format(Locale.ROOT, "The picture is %d × %d px (%.0f "
+                            + "Mpx): at most %d Mpx. Send a smaller one (phones can share a reduced size).", w, h,
+                            w * (double) h / 1e6, MAX_PIXELS / 1_000_000));
                 }
                 ImageReadParam param = r.getDefaultReadParam();
                 int n = Math.max(1, Math.max(w, h) / LONG_SIDE_PX);

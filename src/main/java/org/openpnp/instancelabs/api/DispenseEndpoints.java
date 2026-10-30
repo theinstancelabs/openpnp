@@ -25,6 +25,7 @@ import org.openpnp.instancelabs.dispense.GcodeStreamBuilder;
 import org.openpnp.instancelabs.dispense.HomeTracker;
 import org.openpnp.instancelabs.dispense.InterlockReport;
 import org.openpnp.instancelabs.dispense.Interlocks;
+import org.openpnp.instancelabs.dispense.LandingResult;
 import org.openpnp.instancelabs.dispense.NeedleChange;
 import org.openpnp.instancelabs.dispense.OpenPnpRawMapper;
 import org.openpnp.instancelabs.dispense.PadCleanReport;
@@ -494,11 +495,19 @@ final class DispenseEndpoints {
                 throw ApiException.notFound("no landing check " + jobId + " in this session: check where it lands "
                         + "again");
             }
-            if (j.landing == null) {
-                throw ApiException.refused("The landing check " + jobId + " found no landing to save: check where it "
+            LandingResult found = j.landing;
+            DispenseConfig.NeedleLanding now = svc.getConfig().needleLanding;
+            if (found != null && found.saved && now != null && jobId.equals(now.jobId)) {
+                // pressed twice: the landing is this check's already (saving it again would reset a trim set since)
+                return Views.map("needleLanding", now, "xyChecked", svc.isNeedleXyChecked());
+            }
+            if (found == null || found.saved || found.question == null) {
+                // "Save it" answers the question of a check whose dots fitted (§22.3); a check that found no locator
+                // dot or no fit, or one a later check replaced, has nothing to save
+                throw ApiException.refused("The landing check " + jobId + " has no landing to save: check where it "
                         + "lands again.");
             }
-            l = svc.setLanding(j.landing, true, token);
+            l = svc.setLanding(found, true, token);
             j.landingAccepted(l);
         }
         return Views.map("needleLanding", l, "xyChecked", svc.isNeedleXyChecked());
