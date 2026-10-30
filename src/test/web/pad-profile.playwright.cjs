@@ -448,6 +448,8 @@ async function weighCoupon(page, place) {
         : /^A test run lays whole pads: the first pad, \S+, has \d+ dots, so ask for at least \d+$/.test(t9.err), t9);
       await page.click('#btn-run-test');   // back to the full board
     } else check('(9) Test run with fewer dots: the plan has a two-dot pad to cut inside', false, 'no two dots of one pad in a row');
+    await page.evaluate(() => IL.go('#profile/needs'));   // (10) starts from the Needs list
+    await sleep(1500);
 
     // ---- (10) by hand on Test_Strip ---------------------------------------------------------------------------------------------
     await api(page, 'POST', '/api/purge-row/reset', {});   // the operator wiped the purge row after the job
