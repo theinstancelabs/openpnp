@@ -1973,8 +1973,9 @@
       v: home.needed && stage === 'home' ? '≈ ' + IL.fmtSecs(home.estimateS) : '' });
     const fids = d.fiducials || [];
     const nf = fids.filter((f) => f.state === 'found').length;
-    // before the run reports its fiducials (while it homes) the plan's own targets count them (as Probe's points)
-    const nFid = fids.length || ((p && p.registrationTargets && p.registrationTargets.fiducials) || []).length;
+    // before the run reports its fiducials (while it homes) the plan's own count them: the same top-side fiducials
+    // Register board looks for (its preview lists none when it could not be made, e.g. while the simulator was off)
+    const nFid = fids.length || ((p && p.board && p.board.fiducials) || []).length;
     const ph = String(live.phase || '');
     const fidNow = /^fiducials: (.+)$/.exec(ph);
     rows.push({ k: 'fiducials', st: stOf(1), t: 'Fiducials · ' + nf + ' of ' + (nFid || '…') + ' found',
