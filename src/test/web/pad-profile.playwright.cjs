@@ -27,8 +27,8 @@
  * STOP at its readings prompt: "Stopped … the coupons still need weighing …" and "Type the readings" (the first coupon
  * weighed, the last skipped with two presses); (13) no
  * JavaScript errors, no native dialogs. Screenshots (PP_SHOTS=0 skips): the nano upload preview, Run › Checks with the
- * Pad types card, the Needs list, the suggestion, the pad-cal view before start, the job running, the readings prompt and
- * the result at 1440 and 1280 px, light and dark.
+ * Pad types card, the Needs list, the suggestion, the pad-cal view before start, the job running, the readings prompt,
+ * the result and the coupons to weigh with Skip at 1440 and 1280 px, light and dark.
  *
  * Env: IL_BASE or IL_API_URL (the UI), PLAYWRIGHT_DIR, OUT_DIR (pad-profile-results.json), SHOTS_DIR (default OUT_DIR),
  * PP_SHOT_SIZES (default 1440x900,1280x800; e.g. add 1024x768), SIM_SCENE (the session's scene file: its config dir is
@@ -525,6 +525,7 @@ async function weighCoupon(page, place) {
       // the list is drawn again once the weighed coupons leave it: press Skip on the list that stays
       const weighed = places.slice(0, -1).map(([i]) => i);
       await page.waitForFunction((ids) => ids.every((i) => !document.querySelector('#pcal-pending button[data-record="' + i + '"]')), weighed, { timeout: 15000 }).catch(() => {});
+      await shoot(page, 'pending-skip', null, true);
       const skipped = page.waitForResponse((x) => x.url().endsWith('/api/coupons/' + id + '/reading'), { timeout: 20000 }).catch(() => null);
       await press2(page, sel);
       const rs = await skipped;
