@@ -1023,8 +1023,8 @@ final class PadCalibrationJob {
         catch (Halt h) {
             halted();
         }
-        catch (Exception e) {
-            fail(e);
+        catch (Throwable e) {
+            fail(e); // an Error too: a job left running would refuse every other dispense task for good
         }
     }
 
@@ -1308,7 +1308,7 @@ final class PadCalibrationJob {
             catch (Halt h) {
                 halted();
             }
-            catch (Exception e) {
+            catch (Throwable e) {
                 fail(e);
             }
         });
@@ -1717,9 +1717,21 @@ final class PadCalibrationJob {
         end(cancelRequested ? CANCELLED : STOPPED, stopReason);
     }
 
-    private void fail(Exception e) {
-        String why = e instanceof ApiException ? e.getMessage() : MachineEndpoints.rootMessage(e);
-        Logger.warn("pad calibration {} failed: {}", id, why);
+    /**
+     * Ends the job FAILED, which releases its lock. An Error (a bug, out of memory) fails it as an exception does,
+     * logged with its stack, and named in plain words.
+     */
+    private void fail(Throwable e) {
+        String why = e instanceof ApiException ? e.getMessage()
+                : e instanceof Exception ? MachineEndpoints.rootMessage(e)
+                : "an internal error stopped the calibration (" + e.getClass().getSimpleName()
+                        + (e.getMessage() == null ? "" : ": " + e.getMessage()) + "); see the OpenPnP log";
+        if (e instanceof Exception) {
+            Logger.warn("pad calibration {} failed: {}", id, why);
+        }
+        else {
+            Logger.error(e, "pad calibration {} failed", id);
+        }
         failure = why;
         end(FAILED, why);
     }

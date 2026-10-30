@@ -779,7 +779,22 @@ public class RegistrationSimTest {
                 needleZ.toString());
         ok(post("/api/plan", planBody(null).replace("\"z\":" + NZ, "\"z\":" + (NZ - 1.0)))); // 1 mm under: fine
         assertEquals(2.0, DispenseService.MAX_BOARD_Z_FROM_ANCHOR_MM);
-        ok(post("/api/plan", planBody(null).replace("\"z\":" + NZ, "\"z\":" + (NZ - 2.0)))); // the bound itself
+        String low = ok(post("/api/plan", planBody(null).replace("\"z\":" + NZ, "\"z\":" + (NZ - 2.0))))
+                .get("planId").getAsString(); // the bound itself
+        // review 1: but the probe's floor (1.5 mm under the needle frame) lies above that board top: Register board
+        // refuses before anything moves and its preview says why, instead of three pushes to the floor
+        String unreachable = "PROBE: the board top Z 3.500 lies 2.000 mm under the needle-frame surface 5.500, and the "
+                + "probe goes at most 1.5 mm under the higher of the two (down to Z 4.000): it cannot reach that height. "
+                + "Set the board top Z to roughly the N1 contact height, or record the needle frame again; if both are "
+                + "right, probe by hand";
+        JsonObject frame = ok(get("/api/plan/" + low + "/registration-targets")).getAsJsonObject("frame");
+        assertFalse(frame.get("ok").getAsBoolean(), frame.toString());
+        assertEquals(unreachable, frame.get("message").getAsString());
+        sim.server.mark();
+        Res lowReg = post("/api/plan/" + low + "/register", "{}");
+        assertEquals(409, lowReg.status, lowReg.toString());
+        assertEquals(unreachable, lowReg.json().get("reason").getAsString());
+        assertTrue(sim.server.sinceMark().isEmpty(), "nothing sent: " + sim.server.sinceMark());
         Res high = post("/api/plan", planBody(null).replace("\"z\":" + NZ, "\"z\":" + (NZ + 2.01)));
         assertEquals(409, high.status, high.toString());
         assertTrue(high.body.contains("2.01 mm from the needle-frame surface"), high.toString());

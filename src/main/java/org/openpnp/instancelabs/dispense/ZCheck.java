@@ -105,8 +105,9 @@ public final class ZCheck {
     /**
      * Stored N1 contacts measured before {@code lastHomeAtMs} (all of them when null), in this order:
      * the points of the board surface when it is tied to the plan's registration (its spots were
-     * chosen bare), the points of the blank surface, the needle anchor's X/Y when they are set. A
-     * surface probed after the home is in the new frame already and is no reference.
+     * chosen bare), the points of the blank surface and those a probe after a home replaced
+     * ({@link #kept}), the needle anchor's X/Y when they are set. A surface probed after the home is
+     * in the new frame already and is no reference.
      */
     public static List<Reference> references(DispenseConfig cfg, String planBoardRegistration, Long lastHomeAtMs) {
         List<Reference> l = new ArrayList<>();
@@ -115,7 +116,9 @@ public final class ZCheck {
             addPoints(l, cfg.boardSurfaceName, board, lastHomeAtMs);
         }
         if (!Objects.equals(cfg.blankLocationName, cfg.boardSurfaceName)) {
-            addPoints(l, cfg.blankLocationName, cfg.surface(cfg.blankLocationName), lastHomeAtMs);
+            DispenseConfig.SurfaceMap blank = cfg.surface(cfg.blankLocationName);
+            addPoints(l, cfg.blankLocationName, blank, lastHomeAtMs);
+            addPoints(l, cfg.blankLocationName, blank == null ? null : blank.replaced, lastHomeAtMs);
         }
         DispenseConfig.NeedleAnchor a = cfg.needleAnchor;
         if (a != null && a.xMm != null && a.yMm != null && before(a.setAtMs, lastHomeAtMs)) {
@@ -148,6 +151,27 @@ public final class ZCheck {
             r.homeAtMs = m.homeAtMs;
             l.add(r);
         }
+    }
+
+    /**
+     * What the blank keeps when it is probed again ({@link DispenseConfig.SurfaceMap#replaced}): the points it
+     * replaces when they were measured before the last home in a known Z frame, so a later check of the older data
+     * of that frame (the needle frame, the touch-off) still has a point to touch (review 1: an automatic blank probe
+     * after a home took the only one); else what those points kept themselves. Null when nothing.
+     */
+    static DispenseConfig.SurfaceMap kept(DispenseConfig.SurfaceMap old, Long lastHomeAtMs) {
+        if (old == null) {
+            return null;
+        }
+        if (lastHomeAtMs != null && old.setAtMs != null && old.setAtMs < lastHomeAtMs && old.homeAtMs != null
+                && old.points != null) {
+            DispenseConfig.SurfaceMap k = new DispenseConfig.SurfaceMap();
+            k.points = new ArrayList<>(old.points);
+            k.setAtMs = old.setAtMs;
+            k.homeAtMs = old.homeAtMs;
+            return k;
+        }
+        return old.replaced;
     }
 
     /** Measured before the home (a datum without a time counts as before). */
@@ -317,9 +341,10 @@ public final class ZCheck {
     }
 
     /**
-     * The Z data of a scope measured before the home: the needle frame, the touch-off, and every
-     * surface the scope uses ({@code surfaceName} and {@code moreSurfaces}). Places carry no time;
-     * the same check covers them. Empty without a home.
+     * The Z data of a scope measured before the home: the needle frame, the touch-off (unless a newer
+     * needle frame replaced it, {@link #touchOffReplaced}), and every surface the scope uses
+     * ({@code surfaceName} and {@code moreSurfaces}). Places carry no time; the same check covers them.
+     * Empty without a home.
      */
     public static List<Stale> stale(DispenseConfig cfg, Interlocks.Scope sc, Long lastHomeAtMs) {
         List<String> names = new ArrayList<>();
@@ -344,7 +369,8 @@ public final class ZCheck {
         if (cfg.needleAnchor != null && cfg.needleAnchor.setAtMs < lastHomeAtMs) {
             l.add(new Stale(NEEDLE_FRAME_DATUM, cfg.needleAnchor.setAtMs, cfg.needleAnchor.homeAtMs));
         }
-        if (cfg.needleZOffsetSetAtMs != null && cfg.needleZOffsetSetAtMs < lastHomeAtMs) {
+        if (cfg.needleZOffsetSetAtMs != null && cfg.needleZOffsetSetAtMs < lastHomeAtMs
+                && !touchOffReplaced(cfg)) {
             l.add(new Stale(TOUCH_OFF_DATUM, cfg.needleZOffsetSetAtMs, cfg.needleZOffsetHomeAtMs));
         }
         for (String n : surfaces) {
@@ -354,6 +380,18 @@ public final class ZCheck {
             }
         }
         return l;
+    }
+
+    /**
+     * True when a needle frame recorded after the touch-off set the needle Z offset again (to the
+     * frame's own offset, {@link DispenseService#setNeedleAnchor}): the touch-off is no longer a Z
+     * datum of anything, and the frame is checked as itself. So recording the needle frame after a
+     * home that moved Z replaces the touch-off it covers, and the touch-off can then run (review 1);
+     * it is required again by I4 until it has.
+     */
+    static boolean touchOffReplaced(DispenseConfig cfg) {
+        return cfg.needleAnchor != null && cfg.needleZOffsetSetAtMs != null
+                && cfg.needleZOffsetSetAtMs < cfg.needleAnchor.setAtMs;
     }
 
     /** I4 note when the task checks Z itself (the code "I4" included). */
@@ -375,8 +413,8 @@ public final class ZCheck {
     public static String movedMessage(Result r) {
         return String.format(Locale.ROOT, "Z moved %.2f mm at the home of %s: N1 touched %s at X %.2f, Y %.2f at Z "
                 + "%.3f, where it touched %.3f%s. The needle frame, the touch-off and the surfaces are off by this "
-                + "(the needle by about twice). Record the needle frame again (Setup › Needle Z frame), touch "
-                + "off, probe the blank and register the board again.", r.deltaMm,
+                + "(the needle by about twice). Record the needle frame again (Setup › Needle Z frame), probe "
+                + "the blank, touch off and register the board again.", r.deltaMm,
                 r.homeAtMs == null ? "?" : clock(r.homeAtMs), describe(r.refName), r.x, r.y, r.z, r.refZ,
                 r.refAtMs == null ? "" : " at " + clock(r.refAtMs));
     }

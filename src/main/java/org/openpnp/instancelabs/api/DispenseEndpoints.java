@@ -312,10 +312,11 @@ final class DispenseEndpoints {
                 Views.map("kind", "test dot", "rotationDeg", rot, "location", spot));
     }
 
-    /** Engine idle, no manual hold, interlocks (as the engine applies them to shots/calibration). */
+    /** Engine idle, no manual hold, OpenPnP idle, interlocks (as the engine applies them to shots/calibration). */
     void startChecks(DispenseService svc, Interlocks.Scope scope, String what) throws ApiException {
         ctx.requireEngineIdle(svc);
         ctx.requireNoPressureHold();
+        ctx.requireMachineIdle();
         ApiContext.refuseUnlessOk(ctx.preflight(svc, scope), what);
     }
 
@@ -947,6 +948,7 @@ final class DispenseEndpoints {
         DispenseService svc = ctx.availableSvc();
         ctx.requireEngineIdle(svc);
         ctx.requireNoPressureHold();
+        ctx.requireMachineIdle();
         PlanStore.Entry e = requirePlan(r.group(1));
         ctx.tracker.expect("clean-pad check");
         Future<PadCleanReport> f = svc.checkCleanPads(e.plan);

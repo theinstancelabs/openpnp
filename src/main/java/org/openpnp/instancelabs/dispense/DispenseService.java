@@ -484,6 +484,9 @@ public final class DispenseService {
         m.note = note;
         m.boardFingerprint = boardFingerprint;
         m.simulated = simulated;
+        if (name.equals(c.blankLocationName)) {
+            m.replaced = ZCheck.kept(c.surface(name), homeTracker.getLastHomeAtMs());
+        }
         c.surfaces.put(name, m);
         updateConfig(c);
         db.event(null, "INFO", "SURFACE", String.format(java.util.Locale.ROOT,
@@ -939,7 +942,6 @@ public final class DispenseService {
                 r.message = "the dispense profile changed since this plan was made: plan the board again";
                 return r;
             }
-            refuseWhilePressureHeld();
             Session s = new Session(c, r);
             r.profile = c.profile.copy();
             db.event(r.runId, "INFO", "PROFILE", new com.google.gson.Gson().toJson(r.profile));
@@ -1545,6 +1547,7 @@ public final class DispenseService {
         }
         finally {
             m.removeListener(cut);
+            homeTracker.homeEnded();
         }
         if (aborted.getAsBoolean() || !m.isEnabled()) {
             m.setHomed(false);
@@ -1810,7 +1813,6 @@ public final class DispenseService {
         }
 
         Session start(DispenseConfig c) throws Exception {
-            refuseWhilePressureHeld();
             s = new Session(c, r);
             if (cameraTourAbort) {
                 s.exec.requestAbort("STOP before the start");
@@ -2364,11 +2366,8 @@ public final class DispenseService {
         Probe p = new Probe(s, t::aborted, pt -> t.point("probe", targets.size(), pt));
         String what = "the '" + req.surfaceName + "' place Z";
         // a surface off the needle frame (a weigh coupon) is checked as a board is: against its own Z only
-        res.window = VacuumProber.preflight(c, !req.frameCheck, what, req.nominalZ, p.travelZ, p.settings,
-                p.n1.getNozzle());
-        if (req.windowMm != null) {
-            narrow(res.window, req.nominalZ, req.windowMm, p.settings);
-        }
+        res.window = VacuumProber.preflight(c, !req.frameCheck, what, req.nominalZ, req.windowMm, p.travelZ,
+                p.settings, p.n1.getNozzle());
         List<VacuumProber.Point> pts = p.run("'" + req.surfaceName + "' probe", targets, res.window);
         res.points = pts;
         String why = VacuumProber.refusal(pts);
@@ -2436,7 +2435,6 @@ public final class DispenseService {
         RunResult r = newRun("z-check", null, "z check", 0, 0);
         return submit(r, () -> {
             DispenseConfig c = cfg;
-            refuseWhilePressureHeld();
             Session s = new Session(c, r);
             r.interlocks = Interlocks.checkBasic(interlockInputs(c, null, 0, null, false, false));
             if (!r.interlocks.ok()) {
@@ -2457,20 +2455,6 @@ public final class DispenseService {
     /** Incremented by every STOP ({@link #abort}); a task queued at another value refuses at its start (§7.8). */
     public long stopEpoch() {
         return stopEpoch.get();
-    }
-
-    /** A probe window of +-{@code mm} around the nominal Z (a weigh coupon: its own place Z, §7.2 step 2). */
-    private static void narrow(VacuumProber.Window w, double nominalZ, double mm, VacuumProber.Settings s)
-            throws RunRefusedException {
-        w.nominalZ = nominalZ;
-        w.refZ = nominalZ;
-        w.startZ = nominalZ + mm;
-        w.approachZ = w.startZ + s.approachAboveStartMm;
-        w.floorZ = nominalZ - mm;
-        if (w.floorZ < s.absoluteFloorZ - 1e-9) {
-            throw refused(String.format(Locale.ROOT, "PROBE: the place Z %.3f puts the probe floor at %.3f, below the "
-                    + "lowest N1 Z the probe may use (%.3f)", nominalZ, w.floorZ, s.absoluteFloorZ));
-        }
     }
 
     /**
@@ -3410,6 +3394,7 @@ public final class DispenseService {
                 try {
                     refuseIfStoppedSince(epoch);
                     refuseUnlessStarted();
+                    refuseWhilePressureHeld();
                     return body.call();
                 }
                 catch (Exception e) {
@@ -3451,6 +3436,7 @@ public final class DispenseService {
                 try {
                     refuseIfStoppedSince(epoch);
                     refuseUnlessStarted();
+                    refuseWhilePressureHeld();
                     body.run();
                 }
                 catch (Exception e) {
@@ -3512,7 +3498,11 @@ public final class DispenseService {
         }
     }
 
-    /** On the machine thread, where the pressure hold's start is serialised with the engine's tasks. */
+    /**
+     * On the machine thread, where the pressure hold's start is serialised with the engine's tasks: every
+     * task refuses at its start while the hold is on (prime, the test dot and the clean-pad check as well as
+     * runs, the probes and the calibrations), not only at the API's check before it was queued.
+     */
     private void refuseWhilePressureHeld() throws RunRefusedException {
         if (pressureHoldActive.getAsBoolean()) {
             throw refused("the pressure hold is on: Pressure off first");

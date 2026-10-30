@@ -128,7 +128,7 @@ injectable `LongSupplier clock`:
 |---|---|
 | `connectedAtMs` | `machineEnabled`. Moves the existing `controllerConnectedAtMs` here; `getControllerConnectedAtMs()` delegates, so I11 is unchanged (D/Interlocks.java:334). |
 | `disabledAtMs` | `machineDisabled` |
-| `homeStartedAtMs` | `homeStarted()`, called right before every engine or API home (§2.3). It is cleared at the next `machineHomed(true)`. |
+| `homeStartedAtMs` | `homeStarted()`, called right before every engine or API home (§2.3). It is cleared at the next `machineHomed(true)`, and by `homeEnded()` when that home ends without one (a STOP or a failure; review 1). |
 | `lastHomeAtMs` | every `machineHomed(m, true)`, from any caller: engine, API, OpenPnP's own Home button (ReferenceMachine.java:542). `null` = no home seen since the service started. |
 | `homeUnconfirmed` | at `machineHomed(true)`: true iff `!m.isEnabled()`, or `homeStartedAtMs != null && disabledAtMs > homeStartedAtMs`. Otherwise false, so a later clean home clears it. A home from OpenPnP's window has no known start and counts as confirmed when the machine is enabled. |
 | `lastHomeMs` | `machineHomed(true) − homeStartedAtMs`, for a confirmed home with a known start |
@@ -271,6 +271,14 @@ frame now; a home between two older data may have moved Z (the bench's frame vs 
   before anything moves;
 - a passing touch moves the data it vouched for to its home (`ZCheck.restamp`, saved), so after the next home one touch
   is enough again. The same-seat stamp follows the same rules.
+- a needle frame recorded after the touch-off sets the offset again, so that touch-off is no Z datum any more
+  (`ZCheck.touchOffReplaced`; I4 asks for a new touch-off). After "Z moved" the remedy works under the same home: the
+  needle frame, the blank, the touch-off, then the board, each measured again; a datum not measured again keeps the
+  refusal.
+- the blank probed again after a home (by hand, or the pad calibration's blank step) keeps the points it replaced
+  (`SurfaceMap.replaced`, `ZCheck.kept`) when they were measured before that home in a known frame: they stay a
+  reference of their frame, listed after the blank's own points, so a check of the needle frame and the touch-off
+  still has a point to touch. One frame is kept; a later probe under the same home carries it on.
 
 ### 2.5 Where homing happens
 
@@ -314,14 +322,21 @@ These keep their `MACHINE: machine is not homed` refusal: nothing else homes sil
   - Fix: `ApiContext.requireMachineIdle()` refuses 409 `OpenPnP is busy (homing or moving): wait for it to finish`
     when `m.isBusy()`.
   - It is called by `POST /api/run`, `/api/plan/{id}/register`, `/api/surfaces/{name}/probe` and
-    `/api/machine/z-check`.
+    `/api/machine/z-check`, and (review 1) by every other engine endpoint: `/api/prime`, `/api/test-dot`,
+    `/api/plan/{id}/clean-check`, `/api/calibrations/shots-run`, `/api/calibrations/dot-ladder` and
+    `/api/calibrations/touch-off`.
+  - `POST /api/machine/home` returns its failure from its machine task instead of throwing it (and is queued with
+    ignoreEnabled, checking "started" itself), so a STOP or a failure during the web home cannot drop an engine
+    task queued behind it.
 - **Pressure hold against a starting task.**
   - Today `/api/run` checks the hold and `/api/pressure/start` checks "engine idle", each on its own API thread
     (A/DispenseEndpoints.java:243-250, 694-697). Both then queue on the machine thread, and `PressureHold.doStart`
     never checks the engine (A/PressureHold.java:165-181).
   - Fix, on the machine thread where the two are serialised:
     - `registerBoard`, `probeSurface`, `runPlan` and the Z check refuse at task start when the hold is active (a
-      `BooleanSupplier` from `ApiContext`);
+      `BooleanSupplier` from `ApiContext`). As built (review 1) every engine task does, in `submit` /
+      `submitResult`: prime, the test dot and scale shots (`runShots`), the dot ladder, the touch-off, the clean-pad
+      check and the dose blocks too;
     - `PressureHold.doStart` refuses when `svc.isBusy()`. The busy flag is set before the engine task is queued
       (D/DispenseService.java:1098, 1133).
   - So nothing homes or probes with the barrel pressurised: paste would ooze over the board (PT/lessons.md:4).
@@ -765,6 +780,12 @@ public final class VacuumProber {
 **Refusals before anything moves:**
 
 - `floorZ < 2.0` (an absolute N1 floor; it catches a board Z typed as 0).
+- `floorZ` at or above the nominal (review 1): planning accepts a board top up to 2.0 mm under the needle-frame
+  surface, but the floor sits 1.5 mm under the higher of the two, so the probe could not reach such a board. Refused
+  as `PROBE: the board top Z 3.500 lies 2.000 mm under the needle-frame surface 5.500, and the probe goes at most 1.5
+  mm under the higher of the two (down to Z 4.000): it cannot reach that height. Set the board top Z to roughly the N1
+  contact height, or record the needle frame again; if both are right, probe by hand` (Register's preview shows it in
+  `frame.message`). A weigh coupon's window is its own (±`couponWindowMm` around its place Z) and is not refused so.
 - A needle anchor exists and `|nominal − anchor.surfaceZMm| > zFrameToleranceMm`. I4 would refuse such a surface anyway
   (D/Interlocks.java:212-216). The text names where and when the anchor was taken (§6.2; §14 question 1).
 - A **board** probe without an anchor. I4 refuses an unanchored surface ("the needle Z frame is not set",
@@ -1301,7 +1322,7 @@ The prefixes `REG:` and `PROBE:` are added to the client's code regex `^(I\d+|MA
 | N1 config | 409 | `PROBE: nozzle 'N1' is not in the machine` / `PROBE: N1's Z is transformed in OpenPnP; the probe needs N1 Z = raw Z` |
 | homing failed | REFUSED | `MACHINE: homing failed: <reason>. Nothing else was done; home from the strip and try again.` |
 | Z not checked | I4 violation | `I4: the needle frame (13:02), the touch-off (13:05) and the 'board' surface (13:40) were measured before the home at 14:19, and Z has not been checked since: Check Z (one N1 touch, ≈ 20 s); Run does it by itself` |
-| Z moved | REFUSED / I4 violation | `I4: Z moved -0.70 mm at the home of 14:19: N1 touched the blank at X 322.00, Y 225.50 at Z 4.920, where it touched 5.620 at 13:40. The needle frame, the touch-off and the surfaces are off by this (the needle by about twice). Record the needle frame again (Setup › Needle Z frame), touch off, probe the blank and register the board again.` |
+| Z moved | REFUSED / I4 violation | `I4: Z moved -0.70 mm at the home of 14:19: N1 touched the blank at X 322.00, Y 225.50 at Z 4.920, where it touched 5.620 at 13:40. The needle frame, the touch-off and the surfaces are off by this (the needle by about twice). Record the needle frame again (Setup › Needle Z frame), probe the blank, touch off and register the board again.` |
 | no Z reference | 409 / REFUSED | `I4: Z must be checked after the home at 14:19, but no point measured before it is left to touch (no blank or board surface, no needle-frame X/Y): record the needle frame again` |
 | STOP | ABORTED | the executor's abort reason, e.g. `STOP pressed in the web UI`; the result card says what was kept (§8.1) |
 | vacuum on too long | ERROR | `N1 vacuum on for 60 s at one point: stopped (N1 lifted, pump and valve off)` |
