@@ -622,7 +622,10 @@ each row links to its card. Start angle comes before Purge row so the strip verd
 Banner `#cal-history-note`: `Records only: boards use the dispense profile.` Cards, each listing its
 prerequisites as readiness rows with fix-it links and showing progress and result in place:
 **Touch-off** (`#to-start` 0.125, `#to-step` 0.025, `#to-steps` 6, `#to-rot` empty = one profile dot,
-`#to-place` blank, `#to-apply` ticked by default when it is the I4 step, `#btn-to-run` two-press; result table
+`#to-place` blank, `#to-apply` ticked by default when it is the I4 step (on the real machine untick it until
+`il/fixround2` is merged: the analysis misreads strung or merged dots (session 4, F9) and the card sends no pitch, so
+the dots lie 1.5 mm apart where 1.6 is needed (F14); judge the contact from the after-photos, `REAL_MACHINE_TODO.md`
+item 7), `#btn-to-run` two-press; result table
 gap → diameter, contact, `offset −2.590 → −2.600 mm, Δ −0.010`, explicit `Use for the needle offset`, history of
 the last 20 touch-offs), **Start angle** (guided dot-pair procedure; `#pf-angle`, `#btn-pf-angle-set`),
 **Scale shots** (`#shots-place` with a link to Places when empty, `#shots-rot`, `#shots-count`,

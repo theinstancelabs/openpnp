@@ -11,12 +11,20 @@ paste and balance). The simulator cannot show the items below. Each one says why
 
 ## Next session, in this order
 
-1. **Hold the blank down** (clamp or tape at its edges, clear of the purge row): it follows N1 up (F3, F7).
+Session 4 (below) already re-measured Z in OpenPnP's frame (blank probe, needle frame K 65.60, Z checks after homes)
+and laid the first paste through the engine. Use a jar built from `il/rc1` (or a dist made from it, item 3).
+
+1. **Touch-off, judged from the photos** (item 7, F9, F14), on the blank, in this order: the blank place, the blank
+   probe, the needle frame, then the touch-off. Until `il/fixround2` is merged its analysis misreads strung or merged
+   dots: run it with Apply off (`apply: false`; untick Apply in Calibrate › Touch-off), dots 1.6 mm apart or more
+   (`pitchMm` ≥ 1.6, an API field only) and a start gap of 0.2 mm or less, and read the contact from the after-photos.
+   Session 4's photos showed round dots at commanded gaps 0.00–0.20 and strings from 0.25: when the photos agree,
+   keep the frame's offset (`Confirm frame offset`, −2.60 mm at K 65.60). Never record K again from a touch-off result.
 2. **STOP during homing** (item 14), before anyone relies on the automatic home.
-3. **Re-measure Z in OpenPnP's frame** before any paste: record the needle frame by touch on the held-down blank, run
-   the touch-off (item 7), probe the blank (item 8). The typed anchor (5.5, K 64.50) is the bench's frame and is
-   about 0.8 mm off (below).
-4. **Vent before lift** (item 22, F7): check the proposal on the held-down blank and on board 3.
+3. **A board without fiducials** (F10): until `il/fixround2` is merged, probe another surface name and save its points
+   as the board's with the plan (`PUT /api/surfaces/board {points, planId}`), then a short run.
+4. **Vent before lift** (item 22, F7): in session 4 the blank did not follow N1 (F3 was F6), so this is a proposal to
+   measure on board 3, not a blocker.
 5. Then the first-session items still open (1, 2, 4, 5, 9–13), the registration items 15–32, and the board-import and
    profile items 33–54.
 
@@ -35,6 +43,13 @@ Session 3 (2026-10-29 03:00–04:30): jars 2df93ed3d (F1, F2, F4) and bdc9d2d31 
 `s4_register_after_home.json`, `s4_register_r12_1.json`, `s4_register_r12_2.json`, `s4_register_z535_auto.json`,
 `s4_zcheck1.json`, `blank_325_2475.jpg`, `blank_305_250.jpg`, `openpnp_log/`).
 
+Session 4 (2026-10-29 15:28–18:05): jar a4bb6d20d (`~/instancelabs/realjar-sw7`), config copies
+`~/instancelabs/realcfg-sw-20261029c` → `…f` (each session started from the previous one's config). Data:
+`~/instancelabs/runs/sw_session4/` (`s1_home.json`, `s4_blank_probe1.json`, `s5_anchor.json`, `s6_touchoff1.json`,
+`s7_*.json`, `s8_*.json`, `s9_*.json`, `ladder2_*.jpg`, `result_*.jpg`, `log_sw-real6..8/`). The first paste through
+the engine on the real machine. Session config changes (on the copy only): chip-0603 raised to `characterized` from the
+bench's evidence, the clean-pad check off (F12), the purge rows on the blank, the needle offset −2.60 mm.
+
 Everything went through the web API; the live `~/.openpnp2` was not touched. No blank probe, touch-off or paste was
 done in session 3, on purpose.
 
@@ -51,6 +66,18 @@ done in session 3, on purpose.
 | N1 open air | Baselines −1.63 M to −1.67 M counts (window −1.90 M to −1.20 M); seal threshold 15 % of the baseline ≈ 244–251 k counts. | the probe points (`baseline`, `drop`) |
 | Release | At 14 of the 15 board-3 contacts (the three full probes of session 3) the last open coarse step still held a partial seal after 1.5 s; each let go one coarse step (0.25 mm) higher, as designed. Point 3 of `s3_register_probe2.json` let go at once. | the points' notes in `s3_register_probe2.json`, `s4_register_after_home.json`, `s4_register_r12_1.json` |
 
+### What the machine showed (session 4)
+
+| What | Measured | Data |
+|---|---|---|
+| Blank probe | 4 of 4 contacts, Z 6.150–6.200, residual 0.006 mm; later 5 of 5, Z 6.200–6.300, residual 0.011 mm. The blank did not follow N1: F3 was F6 (fixed in bdc9d2d31). | `s4_blank_probe1.json`, `s7_blank_probe2.json` |
+| Needle frame in OpenPnP's frame | Side camera, needle tip level with N1's: K 65.6–65.7 (read by hand, F13). Recorded on the blank at (300, 250), surface 6.18: K 65.60, needle contact 3.58, offset −2.60 mm. That is the bench's K 64.50 plus twice a ~0.55 mm frame shift. | `s5_anchor.json`, `k1/` |
+| Touch-off ladder | Dots 1.0 mm apart (gaps 0.30 → −0.05): the dots ran together and the analysis saw none ("no dot at the largest gap"). Dots 1.6 mm apart (gaps 0.45 → 0.00): the photos show round dots at 0.00–0.20 and strings from 0.25, but the analysis measured only the 0.45 dot and reported a contact at 0.425 mm (F9: applied, it would have raised the needle about 0.4 mm). Neither was applied; the offset −2.60 stands. | `s6_touchoff1.json`, `s7_touchoff2.json`, `s6_after_touchoff.png`, `s7_after_touchoff2.png`, `ladder2_*.jpg` |
+| Z check after a home | First try refused: the only data from before the home was session 3's 'board' surface, with no point of its own home left (F11; deleted by hand). Then 6.225 vs 6.200 (the blank), 6.200 vs 6.200 (in run 1), 6.325 vs 6.300 (run 2): all pass (limit 0.03). Run 1's check skipped a point with touch-off paste on it, run 2's two with run 1's paste; each used the next stored point. | `s7_zcheck.json`, `s7_zcheck2.json`, `s8_run1*.json`, `s9_run2.json` |
+| Run 1 | 6 × 0603 on the blank: refused first by the clean-pad check (bare mask has no copper: every pad 0.00, F12); with the check off: 8 purge dots + 12 of 12, 18.6 s, 4,737 dots per hour of dot motion. | `s8_run1.json`, `s8_run1b.json` |
+| Run 2 after Stop and Start | Homed first (22 s, "stopped or reconnected since the last home"), checked Z first (one touch), 8 purge dots + 6 of 6, 58.9 s. | `s9_run2.json` |
+| The dots | All 18 formed, round, about 1 mm across; each has a short tail on the same side. | `result_runs_small.jpg`, `result_291.5_255.jpg`, `result_291_244.5.jpg` |
+
 **The bench's Z frame is not OpenPnP's.** Board 3 sealed at about 5.3 in OpenPnP's frame where the bench measured
 4.50–4.55: about +0.8 mm (the bench saw 0.7 mm on 10-28). Since OpenPnP's homes repeat to 0.025 mm, the offset is the
 bench's homing against OpenPnP's, not home to home. So:
@@ -59,10 +86,13 @@ bench's homing against OpenPnP's, not home to home. So:
   OpenPnP's frame. Type board tops measured in OpenPnP's frame (session 3 planned board 3 at 5.35).
 - The needle anchor typed in session 2 (`surfaceZ` 5.5, `needleContactRawSum` K 64.50, both bench values) is not valid
   in OpenPnP's frame. On the see-saw N1 and the needle share one motor, so a shift of its zero moves the needle relation
-  K by about twice the shift: if the whole 0.8 mm is such a shift, K in OpenPnP's frame is about 66.1 (a prediction).
-- A real touch-off in OpenPnP's frame is needed before any paste (item 7). The Z check would catch the stale anchor
-  when it touches the anchor's X/Y (it compares with 5.5), but in session 3 it could not: the loose blank followed N1
-  (F3, F7). Do not rely on it.
+  K by about twice the shift. **Measured in session 4: K 65.60 in OpenPnP's frame** (side camera, needle tip level with
+  N1's: 65.6–65.7; recorded at (300, 250) on the blank, surface 6.18: needle contact 3.58, offset −2.60 mm,
+  `s5_anchor.json`). That is twice a ~0.55 mm shift, not 0.8 mm: the earlier prediction of about 66.1 was wrong, and
+  on the crash side (K 66.1 would put every dot about 0.5 mm lower than commanded). A K that errs low is the safe side:
+  the engine then puts the needle above the work (session 4 started from 65.40).
+- The engine now refuses K (`needleContactRawSum`) after a needle change and while the Z check of this home failed:
+  then the frame is recorded with both tips touching (K moves with the needle and with the Z zero).
 
 ### Findings and what each became
 
@@ -70,12 +100,18 @@ bench's homing against OpenPnP's, not home to home. So:
 |---|---|---|---|
 | F1 | The camera look refused 4 of 12 bare spots: glossy blank in the dark zone between the ring light's reflections (89–97 % "foreign") and board 3's scratched mask (54–60 %). It still refused every paste dot, the hole ring and the edge. | Fixed (fix-real1, 2df93ed3d): the spot is compared with a smooth colour field fitted to the ring, the threshold rises with the surface's texture, only solid patches count, and wide patches (0.4 mm across) 22 or more from the field count whatever the texture. All 20 real frames are test fixtures: bare 0–1.3 %, paste, holes and edges 25–87 %. | Session 3: board 3's corner spots read 0.0 %. Still to check: alternates near board 3's corner silkscreen and holes read 17–33 % in the first session-3 run (were they bare?), the blank's purge dots, and paste on a mask as rough as board 3's at (37, 37), where the threshold for small patches is 57 and only the wide patches see paste (a 0.7 mm dot 40 out of the mask reads 12 %, anything within 22 of the mask is not seen, an edge across the spot only 6 %). Each PROBE record's look holds `rawShare`, `threshold` and `wideShare`: send any wrong call with its frame. |
 | F2 | Without dots the board probe chose corners 2 mm in from the outline; target (2, 2) and both 2 mm alternates sat on ftp's corner mounting hole. | Fixed (2df93ed3d): without dots the corners sit 8 mm in; without board art a mounting hole is assumed in each corner; alternates step 5 mm and spread in direction (2 mm only where 5 mm is not free); `vacuumProbe.alternates` 4 by default. | Session 3: 5 of 5 first spots made contact. A saved `dispense-config.json` keeps its own `alternates` (session 2's had 2): set 4. With KiCad art the drills are kept out (the integration slice wires the art in). |
-| F3 | The loose, bowed blank: N1 sealed slowly from Z 6.5 to 5.5 and did not let go at 6.0 (the blank springs back with N1). The probe refused, correctly. The blank had also slid ~3 mm since the bench's purge records. | Physical: the blank must be held down. No software change. | Session 3: the Z check at the typed anchor on the blank (325, 247.5) refused "N1 did not let go of the surface within 1.5 s": the blank follows N1. It stayed in place afterwards (`blank_325_2475.jpg`). Hold it down, then probe it (item 29). |
+| F3 | The loose, bowed blank: N1 sealed slowly from Z 6.5 to 5.5 and did not let go at 6.0 (the blank springs back with N1). The probe refused, correctly. The blank had also slid ~3 mm since the bench's purge records. | It was F6 (the progressive seal, fixed in bdc9d2d31), not a blank that follows N1. | Session 3: the Z check at the typed anchor on the blank (325, 247.5) refused "N1 did not let go of the surface within 1.5 s". Session 4 (taped blank, the F6 fix): 4 of 4, then 5 of 5 contacts, and the blank did not follow N1. Keep it taped where convenient. |
 | F4 | FID1 was accepted 9.24 mm from its expected position with `searchRadiusMm` 8: the radius was measured from the prediction (FID2 and FID3 came first). | Fixed (2df93ed3d): the radius bounds the distance from the expected position (the board's last registration, else its nominal seat). | A board seated farther than the radius from its nominal stops with "FID1 not found within 8.0 mm of X …" (`s4_register_z535_auto.json`: board 3 is 9.2 mm off its nominal). Correct the board X/Y (Use camera X/Y on the board origin), or widen `fiducialCheck.searchRadiusMm` (session 3 used 12: FID1 in 3 iterations, 2 frames). |
 | F5 | The needle anchor was typed (5.5, K 64.50), not measured (`POST /api/needle/anchor` at 00:13:19): only so the probe had a needle-frame surface to check its contacts against. | Unchanged; the frame offset above makes it wrong in OpenPnP's frame. | Touch off in OpenPnP's frame before any paste (item 7). |
 | F6 | N1 seals build up over Z and time: open at 5.40, 1.78 M at 5.375, sealed at 5.325 / 5.30 on the fine pass, while the quick coarse reads at 5.25 stayed just above the threshold (1.872 vs 1.886 M). The guard "a fine contact must lie below the last open coarse step" rejected the true contact twice: no contact. | Fixed (bdc9d2d31): the guard is gone; a replay test uses the real readings. Likely also session 2's blank. | Session 3 afterwards: 5 of 5 contacts. Item 21 compares the fine contact with a slow manual descent. |
 | F7 | Every point ends with a lift to travel Z, then the vent (valve off, pump off). On a surface that follows N1 (the loose blank) the lift carries it up while N1 still holds it. | Not changed. Proposal: vent, wait for the seal to let go, then lift. | Item 22. |
 | F8 | Planning again with only the board Z changed (as the I4 refusal asks) dropped the stored registration (Z was part of the seat), so the next Register started from the nominal X/Y, and with F4 board 3 (9.2 mm off) failed NOT_FOUND. | Fixed (c2ad33aaf): the board Z is not part of the seat (X/Y, rotation, side and OpenPnP's transform are). The probe window and I4 use the plan's own board Z. | Plan board 3 again at a new Z: Register board must say "same seat". |
+| F9 | Session 4: the touch-off analysis missed real dots that strung or touched and concluded from the one it measured: a contact at +0.425 mm (applied, it would have raised the needle about 0.4 mm and every board dot would have missed). | Fixed on `il/fixround2` (3f449f647: dots found at their known spots, unmeasurable paste refused, two steady dots before a contact), **not merged into `il/rc1`**: at `il/rc1` the analysis is session 4's, and Calibrate › Touch-off ticks Apply by default while the needle is not touched off. | Item 1 of the next session: Apply off, dots ≥ 1.6 mm apart, start gap ≤ 0.2 mm, judge from the photos. |
+| F10 | Session 4: a board with no fiducials cannot get a 'board' surface: the surface probe refuses 'board' and Register board needs 2 fiducials. Worked around by probing another name ('runarea'), then `PUT /api/surfaces/board {points, planId}`. | Fixed on `il/fixround2` (probe-only registration of a board without fiducials), not merged into `il/rc1`. | Item 3 of the next session. |
+| F11 | Session 4: a Z-check dead end: the only data from before the home was a stale 'board' surface with no point of its own home left. | Fixed (final fix round, E1 item 2): the refusal says what to measure again, and the needle frame recorded after the home replaces the touch-off it covers. | Plan with an old surface, home, Check Z: it must name what to measure again, not stop. |
+| F12 | Session 4: the clean-pad check (I10) refuses every pad on bare mask (no copper reads 0.00). | By design: switch it off for blank tests (`PUT /api/config {"cleanPadCheck": {"enabled": false}}`). | — |
+| F13 | Session 4: the side camera was moved to a wide view (~4.9 px/mm): the bench's tip finder (`kside.py`, preflight's `k_fit`) latched onto the background. K was read by hand. | A bench tool, not the product. | Re-aim the side camera, or teach the finder the wide view. |
+| F14 | Session 4: touch-off dots 1.0 mm apart run together (half-turn dots ~1.07 mm wide, plus strings). | Fixed on `il/fixround2` (spacing ≥ dot + 0.4 mm, default 1.6 mm), not merged into `il/rc1`: the API default is still 1.5 mm and the web UI sends none. | Send `pitchMm` 1.6 (item 1 of the next session). |
 
 Also seen in session 3: a re-register with the typed board top 4.50 (the bench's) was refused, correctly: "I4: N1
 touched at Z 5.525 at point 4, 1.025 mm above the board top Z 4.500 (tolerance 1.00)".
@@ -117,6 +153,11 @@ The fork ran in real mode on a **copy** of the config (`~/instancelabs/realcfg-s
 
 3. **Start the fork in real mode.**
    - Why: the simulator replaces the serial port and the cameras.
+   - First rebuild the dist from a clean `il/rc1` tree: `tools/instancelabs/make_dist.sh` (it refuses uncommitted
+     changes and writes `dist/openpnp-il/BUILD-INFO`), and check that `BUILD-INFO` names `il/rc1` and the release
+     commit. The folder there now holds `il/integration` 16ce9cc (built 2026-10-27), older than the bench recipe and
+     everything above: no dispense profile, phase lock, purge row or start angle, no Register board, Z check, KiCad
+     upload or pad calibration (item 2's `schemaVersion 3` check fails on it too).
    - How: run `dist/openpnp-il/openpnp-il.sh` with no other OpenPnP running. Check that:
      - the log has no errors;
      - the serial port is found by its USB serial number;
@@ -158,18 +199,21 @@ The fork ran in real mode on a **copy** of the config (`~/instancelabs/realcfg-s
 
 7. **Record the needle frame and touch off, in OpenPnP's frame.**
    - Why: the needle contact comes from the bench relation "needle contact raw Z = K − N1 contact Z" (K 65.59 on
-     10-27, 64.50 on the evening of 10-28). Both K were measured in the bench's Z frame, which is about 0.8 mm off
-     OpenPnP's (sessions 2 and 3, above); on the see-saw that moves K by about twice as much. The anchor typed in
-     session 2 (5.5, K 64.50) is therefore not valid here.
-   - How (with the blank held down):
-     1. Touch the blank with N1 in OpenPnP and note its Z (c). Or let the engine do it:
-        `POST /api/surfaces/blank/probe {wait: true}` and take the plane's Z at the anchor X/Y.
-     2. Send `POST /api/needle/anchor {"surfaceZ": c, "needleContactRawSum": K}` with K 64.50 + 2 × the measured frame
-        offset (about 66.1 if the whole 0.8 mm is a shift of the Z motor's zero), or touch the needle and send
-        `needleContactZ`.
-     3. Run the touch-off on the blank (`POST /api/calibrations/touch-off`, one profile dot per step). The contact it
-        finds should be within about 0.05 mm of the anchor; apply it only if it found one. If it is far off, the
-        anchor's K was wrong: record the anchor with the K the touch-off implies and touch off again.
+     10-27, 64.50 on the evening of 10-28, both in the bench's Z frame). Session 4 measured K in OpenPnP's frame with
+     the side camera: **65.60** (offset −2.60 mm; above). Use that K; a K that errs low is the safe side (the needle
+     then dispenses above the work). The engine refuses K after a needle change and while the Z check of this home
+     failed: then touch the same spot with both tips (`needleContactZ`).
+   - How, in this order (session 4's: the touch-off takes its dots' Z from the blank surface):
+     1. Set the blank place on the live config (`PUT /api/locations/blank {x, y, z}`, N1 touching): with no blank place
+        the probe refuses (`PROBE: set the 'blank' place first`).
+     2. Probe the blank: `POST /api/surfaces/blank/probe {wait: true}`, and take the plane's Z at the anchor X/Y (c).
+     3. Send `POST /api/needle/anchor {"surfaceZ": c, "needleContactRawSum": 65.60, "x": …, "y": …}`.
+     4. Run the touch-off on the blank (`POST /api/calibrations/touch-off`). Until `il/fixround2` is merged (F9, F14):
+        `{"apply": false, "pitchMm": 1.6}` (the default start gap is 0.125 mm; keep it at 0.2 or less; or untick
+        Apply in Calibrate › Touch-off, which sends no pitch: 1.5 mm), and judge
+        the contact from the after-photos, not from the analysis. When the photos show round dots down to gap 0.00
+        and strings only above about 0.2 mm (session 4), keep the frame's offset (`POST /api/needle/offset` with
+        −2.60, or `Confirm frame offset` on the Needle Z frame card). Never record K again from a touch-off result.
    - Every Z datum now carries the home it was measured under (review 1): after the next home one Z check touch is
      enough again.
 
@@ -179,10 +223,10 @@ The fork ran in real mode on a **copy** of the config (`~/instancelabs/realcfg-s
    - How, for the board: Register board (Run › Register, or `POST /api/plan/{id}/register {wait: true}`) finds the
      fiducials, probes five N1 points (board 3: (8, 8), (67, 8), (67, 67), (8, 67), (37.5, 37.5)) and plans again.
      Done on board 3 in session 3 (5 of 5, residual 0.015 mm). By hand stays possible (`PUT /api/surfaces/board` with
-     the `planId`, then plan again).
+     the `planId`, then plan again). A board without fiducials: F10 (next session, item 3).
    - How, for the blank: `POST /api/surfaces/blank/probe {wait: true}` (item 29), or at least 3 N1 points by hand
-     around the purge row (largest residual ≤ 0.04 mm) with `PUT /api/surfaces/blank`. Not done since 10-28: the blank
-     must be held down first (F3).
+     around the purge row (largest residual ≤ 0.04 mm) with `PUT /api/surfaces/blank`. Done in session 4: 4 of 4, then
+     5 of 5 contacts, residual 0.006 and 0.011 mm; the blank did not follow N1.
 
 9. **Set up the purge row.**
    - Why: each board uses 8 fresh spots. The bench row (y 237.5, x 292–327, pitch 2.5) is already used up to x 327
@@ -225,10 +269,17 @@ The fork ran in real mode on a **copy** of the config (`~/instancelabs/realcfg-s
       - it crosses from the purge row at travel Z (raw 31.5, not the bench's 49.5): +0.7 s per board;
       - OpenPnP's backlash approach adds a second, short XY move per dot: +1.5 s per board.
     - How:
-      1. Set the regulator to 18 psi.
-      2. Make sure the pads and the purge spots are clean, and leave the clean-pad check on.
-      3. Run the board.
-      4. Compare the dot area and CV (after-images), and the run's `dphMotion`, with the numbers above.
+      1. Set the blank place, probe the blank and record the needle frame (item 7), and the purge row (item 9).
+      2. Raise chip-0603 to the gate: every seeded pad type is `not-started`, and `minPadTypeStatus` is
+         `characterized`, so the plan blocks every pad until then. Session 4 raised it from the bench's evidence
+         (`PUT /api/pad-types/chip-0603 {"status": "characterized", "note": …}`); or calibrate it (Profile › Needs a
+         profile › Calibrate automatically, item 53).
+      3. Set the regulator to 18 psi.
+      4. Make sure the pads and the purge spots are clean, and leave the clean-pad check on (it reads copper pads; on
+         bare mask it refuses every pad, F12).
+      5. Run the board.
+      6. Compare the dot area and CV (after-images), and the run's `dphMotion`, with the numbers above. Session 4's runs
+         on the blank (12 and 6 dots) are no board: 4,737 dots per hour of dot motion over 12 dots.
 
 ## Automatic registration (`AUTO_REGISTER_DESIGN.md` §11)
 
@@ -248,7 +299,8 @@ has since run on the machine (sessions 2 and 3, no STOP during it); 16 is measur
     - How: nothing to do; if the 25 s matters, compare `status.machine.home.estimateS` before and after a home.
 16. **Z repeatability across homes.**
     - Measured: 0.025 mm on 5 points across one OpenPnP home (one fine step). The Z check's tolerance is 0.03 mm, so one
-      fine step passes and two do not. The 0.7–0.8 mm was the bench's homing against OpenPnP's.
+      fine step passes and two do not. The 0.7–0.8 mm was the bench's homing against OpenPnP's. Session 4: three Z
+      checks after homes, +0.025, 0.000 and +0.025 mm, all passed.
     - How: over a day, note every Z check's delta (`run.zCheck` of each board run, `POST /api/machine/z-check`). If
       checks fail after normal homes, every run after a STOP will ask for the needle frame again.
 17. **Fiducials through OpenPnP's capture path.**
@@ -301,8 +353,10 @@ has since run on the machine (sessions 2 and 3, no STOP during it); 16 is measur
 29. **The blank around the purge row** (F3).
     - Why: it is loose, bowed (5.75 at Y 254 down to 5.50 at Y 270 on 10-28) and slid ~3 mm since the bench's purge
       records.
-    - How: hold it down, then `POST /api/surfaces/blank/probe {wait: true}` (targets 2 mm either side of the purge row),
-      or with explicit targets at X 322–328, Y 245.5. Are the spots bare, and is the plane within 0.04 mm there?
+    - Done in session 4 (taped): 4 of 4 contacts (Z 6.15–6.20, residual 0.006 mm), later 5 of 5 (Z 6.20–6.30, residual
+      0.011 mm); the blank did not follow N1 (F3 was F6). The plane was within 0.04 mm there.
+    - Still to check on another day: `POST /api/surfaces/blank/probe {wait: true}` (targets 2 mm either side of the
+      purge row): are the spots bare, and does the blank stay flat within 0.04 mm as the purge row moves along it?
 30. **STOP during a probe on the real link.** Check the vent order and that no Z step follows `M410` (log). N1 stays
     where `M410` stopped it, vented (`status.machine.home.n1Low`); the next home raises it Z-only to the travel Z
     (31.5) before G28.
