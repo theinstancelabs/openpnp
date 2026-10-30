@@ -919,6 +919,9 @@
     return 'surface-bad';
   }
   IL.i4Kind = i4Kind;
+  /** A touch-off, or the needle frame's own offset (I4 asks for one after the frame was recorded again). */
+  const touchOffFixes = (nd) => [{ href: '#calibrate/touch-off', label: 'Run a touch-off' }].concat(isNum(nd.anchorOffsetMm)
+    ? [{ fix: 'needle-confirm', label: 'Confirm frame offset ' + IL.fmt(nd.anchorOffsetMm, 3) + ' mm' }] : []);
   /**
    * After a failed Z check ("Z moved", AUTO_REGISTER_DESIGN.md §2.4) the remedy works under the same home, in this
    * order: record the needle frame again, probe the blank (the touch-off's dots take their Z from it), touch off (a
@@ -937,10 +940,7 @@
     const surf = (n) => stale.has("the '" + n + "' surface");
     if (stale.has('the needle frame')) return { step: 'frame', fixes: [{ href: '#setup/needle', label: 'Open Needle Z frame' }] };
     if (surf(d.blankLocationName || 'blank')) return { step: 'blank', fixes: [{ view: 'probe-blank', label: 'Probe the blank…' }] };
-    if (stale.has('the touch-off') || !nd.touchedOff) {
-      return { step: 'touch-off', fixes: [{ href: '#calibrate/touch-off', label: 'Run a touch-off' }].concat(isNum(nd.anchorOffsetMm)
-        ? [{ fix: 'needle-confirm', label: 'Confirm frame offset ' + IL.fmt(nd.anchorOffsetMm, 3) + ' mm' }] : []) };
-    }
+    if (stale.has('the touch-off') || !nd.touchedOff) return { step: 'touch-off', fixes: touchOffFixes(nd) };
     if (surf(d.boardSurfaceName || 'board')) return { step: 'register', fixes: [{ fix: 'register', label: 'Register board' }, { fix: 'probe-by-hand', label: 'Do it by hand' }] };
     return { step: 'done', fixes: [] };
   };
@@ -2668,11 +2668,7 @@
           return /no point measured before/i.test(msg) ? [{ href: '#setup/needle', label: 'Open Needle Z frame' }] : [{ fix: 'check-z', label: 'Check Z' }];
         }
         // the needle frame recorded again replaced the touch-off: touch off, or take the frame's own offset
-        if (k === 'needle' && /run a touch-off/i.test(msg)) {
-          const nd = d.needle || {};
-          return [{ href: '#calibrate/touch-off', label: 'Run a touch-off' }].concat(isNum(nd.anchorOffsetMm)
-            ? [{ fix: 'needle-confirm', label: 'Confirm frame offset ' + IL.fmt(nd.anchorOffsetMm, 3) + ' mm' }] : []);
-        }
+        if (k === 'needle' && /run a touch-off/i.test(msg)) return touchOffFixes(d.needle || {});
         if (k === 'other-surface') return [{ href: '#setup/surfaces', label: 'Open Probed surfaces' }];
         if (k === 'seat' || k === 'surface-bad' || k === 'plan') return [{ fix: 'register', label: 'Register board' }, { fix: 'probe-by-hand', label: 'Do it by hand' }];
         return [{ href: '#setup/needle', label: 'Open Needle Z frame' }];
