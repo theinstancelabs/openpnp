@@ -368,6 +368,51 @@ public class PhotoStoreTest {
     }
 
     @Test
+    public void linksMadeLaterFollowTheRulesOfTheStore() throws Exception {
+        // POST /api/photos/{id}/links reaches DispenseService.linkPhotos: the same setup, the same needle and at most
+        // six tip pictures per record as an upload with the record
+        try (TipFixture f = new TipFixture()) {
+            DispenseService svc = f.svc;
+            f.add25();
+            PadCalibrationRecord rec = new PadCalibrationRecord();
+            rec.jobId = "job-22g";
+            rec.typeKey = "chip-0603";
+            rec.outcome = PadCalibrationRecord.PROVISIONAL;
+            rec.setupKey = Tip.SEED_KEY;
+            rec.needleSinceMs = svc.getConfig().needleChangedAtMs;
+            rec = svc.getDb().insertPadCalibration(rec);
+            java.util.List<Long> ids = new java.util.ArrayList<>();
+            for (int i = 0; i <= PhotoStore.MAX_TIP_PER_RECORD; i++) {
+                PhotoStore.Input in = upload(encode(picture(100 + i, 100, BufferedImage.TYPE_INT_RGB), "jpg"));
+                in.kind = Photo.KIND_TIP;
+                ids.add(svc.storePhoto(in).id);
+            }
+            assertEquals(PhotoStore.MAX_TIP_PER_RECORD, svc.linkPhotos(ids.subList(0, PhotoStore.MAX_TIP_PER_RECORD),
+                    Arrays.asList(rec.id), Photo.ROLE_TIP).size());
+            long recId = rec.id;
+            EngineRefusal many = assertThrows(EngineRefusal.class, () -> svc.linkPhotos(ids.subList(
+                    PhotoStore.MAX_TIP_PER_RECORD, ids.size()), Arrays.asList(recId), Photo.ROLE_TIP));
+            assertEquals("too-many", many.code);
+            // a picture of another setup
+            PhotoStore.Input other = upload(encode(picture(90, 100, BufferedImage.TYPE_INT_RGB), "jpg"));
+            other.setupKey = "25g-straight";
+            long otherId = svc.storePhoto(other).id;
+            assertEquals("setup-mismatch", assertThrows(EngineRefusal.class, () -> svc.linkPhotos(Arrays.asList(
+                    otherId), Arrays.asList(recId), Photo.ROLE_TIP)).code);
+            // a bottom-camera picture of the needle after a change
+            NeedleChange nc = svc.recordNeedleChange(null, null);
+            PhotoStore.Input below = upload(encode(picture(91, 100, BufferedImage.TYPE_INT_RGB), "jpg"));
+            below.kind = Photo.KIND_TIP;
+            below.source = Photo.SOURCE_BOTTOM_CAMERA;
+            below.needleSinceMs = nc.atMs;
+            long belowId = svc.storePhoto(below).id;
+            assertEquals("needle-changed", assertThrows(EngineRefusal.class, () -> svc.linkPhotos(Arrays.asList(
+                    belowId), Arrays.asList(recId), Photo.ROLE_TIP)).code);
+            assertEquals(PhotoStore.MAX_TIP_PER_RECORD, svc.getDb().photoLinks(null, recId).size(), "nothing more");
+        }
+    }
+
+    @Test
     public void aRecordWithoutANeedleTokenTakesOnlyPicturesOfItsNeedle() throws Exception {
         // a record made before any needle change was recorded (or before schema 3) has no token: a bottom-camera
         // picture taken after a later change is of another needle (review of §22.4)

@@ -243,14 +243,7 @@ public final class PhotoStore {
     private void limits(TipSetup setup, String kind, List<Long> calibrations) throws SQLException {
         if (Photo.KIND_TIP.equals(kind)) {
             for (Long id : calibrations) {
-                int n = 0;
-                for (Photo p : db.photos(null, id, null, Photo.KIND_TIP, false, 1000)) {
-                    n += p.links.contains(id) ? 1 : 0;
-                }
-                if (n >= MAX_TIP_PER_RECORD) {
-                    throw new EngineRefusal(409, "too-many", "Calibration " + id + " has " + MAX_TIP_PER_RECORD
-                            + " pictures of the tip already: remove one first.");
-                }
+                checkTipCount(db, id, 1);
             }
         }
         if (calibrations.isEmpty()) {
@@ -269,6 +262,21 @@ public final class PhotoStore {
         if (used >= DISK_CAP_BYTES) {
             throw new EngineRefusal(409, "disk", String.format(Locale.ROOT, "The pictures take %.1f GB already: remove "
                     + "old ones first.", used / (1024.0 * 1024 * 1024)));
+        }
+    }
+
+    /**
+     * At most {@link #MAX_TIP_PER_RECORD} pictures of the tip per calibration record (§22.4), whether stored with the
+     * record or linked to it later: 409 {@code too-many} when {@code adding} more would pass it.
+     */
+    static void checkTipCount(DispenseDb db, long calibrationId, int adding) throws SQLException {
+        int n = 0;
+        for (Photo p : db.photos(null, calibrationId, null, Photo.KIND_TIP, false, 1000)) {
+            n += p.links.contains(calibrationId) ? 1 : 0;
+        }
+        if (adding > 0 && n + adding > MAX_TIP_PER_RECORD) {
+            throw new EngineRefusal(409, "too-many", "Calibration " + calibrationId + " has " + MAX_TIP_PER_RECORD
+                    + " pictures of the tip already: remove one first.");
         }
     }
 

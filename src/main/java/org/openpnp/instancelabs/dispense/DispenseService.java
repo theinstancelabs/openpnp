@@ -5043,6 +5043,14 @@ public final class DispenseService {
             }
             photos.add(p);
         }
+        for (Long cal : calibrationIds) {
+            // the cap of tip pictures per record holds for links as for uploads (§22.4)
+            int adding = 0;
+            for (Photo p : photos) {
+                adding += Photo.KIND_TIP.equals(p.kind) && !p.links.contains(cal) ? 1 : 0;
+            }
+            PhotoStore.checkTipCount(db, cal, adding);
+        }
         List<Photo.Link> links = new ArrayList<>();
         for (Photo p : photos) {
             for (Long cal : calibrationIds) {
