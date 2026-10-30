@@ -1669,6 +1669,13 @@ public final class DispenseService {
                     + "meanwhile (version " + cur.padVersion + ", with the " + (other == null ? "another tip"
                             : other.name) + "): reload.").with("padVersion", cur.padVersion);
         }
+        boolean raised = w.status != null && w.status.atLeast(PadTypeStatus.CHARACTERIZED)
+                && (cur == null || cur.standIn || !cur.status.atLeast(PadTypeStatus.CHARACTERIZED));
+        if (raised) {
+            // §22.2: without the bench model nothing the mounted setup did not measure goes above provisional (a
+            // stand-in or a copy raised by hand included); the bench setup is refused as before by the editor's rule
+            requireEvidence(cfg, w);
+        }
         w.tipKey = s; // every new version names its setup (§22.1)
         PadType stored = db.insertPadTypeVersion(w);
         db.event(null, "INFO", "PAD_TYPE", "saved " + stored + " for the " + cfg.tip.name);

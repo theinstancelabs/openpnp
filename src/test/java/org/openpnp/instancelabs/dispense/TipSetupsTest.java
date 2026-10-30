@@ -318,6 +318,56 @@ public class TipSetupsTest {
     }
 
     @Test
+    public void aRaiseByHandNeedsTheMountedSetupsOwnEvidenceAndWritesARecord() throws Exception {
+        // §22.2: a stand-in (or anything the mounted setup never measured) goes no higher than provisional without the
+        // setup's own fresh camera check and confirmed weighing of the dose; the bench setup keeps today's rule
+        try (TipFixture f = new TipFixture()) {
+            DispenseService svc = f.svc;
+            f.add25();
+            f.mount("25g-straight");
+            PadType standIn = svc.getDb().currentPadType("chip-0603", "25g-straight");
+            assertTrue(standIn.standIn);
+            for (PadTypeStatus s : new PadTypeStatus[] {PadTypeStatus.CHARACTERIZED, PadTypeStatus.VALIDATED}) {
+                PadType v = standIn.copy();
+                v.status = s;
+                v.dotSteps = 800;
+                v.dotsPerPad = 1;
+                EngineRefusal e = assertThrows(EngineRefusal.class, () -> svc.savePadType(v, "25g-straight",
+                        standIn.padVersion));
+                assertEquals("status-evidence", e.code, s.dbName);
+                assertTrue(e.getMessage().startsWith("0603 uses half-turn dots, which have no fresh camera check on "
+                        + "the blank and no confirmed weighing at this recipe"), e.getMessage());
+                assertEquals("status-evidence", assertThrows(EngineRefusal.class, () -> svc.savePadTypeByHand(v,
+                        "25g-straight", null, null, "tester")).code);
+            }
+            PadType provisional = standIn.copy();
+            provisional.status = PadTypeStatus.PROVISIONAL;
+            provisional.dotSteps = 800;
+            provisional.dotsPerPad = 1;
+            assertEquals(PadTypeStatus.PROVISIONAL, svc.savePadType(provisional, "25g-straight", standIn.padVersion)
+                    .status, "provisional needs no evidence");
+            assertEquals(0, svc.getDb().padCalibrations("chip-0603", "25g-straight", 10).size());
+            // the 22G (the bench model): raised by hand with a record, its automatic label and method by-hand
+            f.mount(Tip.SEED_KEY);
+            PadType chip = svc.getDb().currentPadType("chip-0603", Tip.SEED_KEY);
+            PadType v = chip.copy();
+            v.status = PadTypeStatus.CHARACTERIZED;
+            v.dotSteps = 800;
+            v.dotsPerPad = 1;
+            PadCalibrationRecord rec = svc.savePadTypeByHand(v, Tip.SEED_KEY, null, null, "tester");
+            assertEquals(PadCalibrationRecord.METHOD_BY_HAND, rec.method);
+            assertEquals(PadCalibrationRecord.CHARACTERIZED, rec.outcome);
+            assertEquals(Tip.SEED_KEY, rec.setupKey);
+            assertTrue(rec.jobId.startsWith("hand-"), rec.jobId);
+            PadCalibrationRecord.Label label = svc.getDb().calLabel(rec.id);
+            assertTrue(label.auto);
+            assertTrue(label.label.startsWith("Chip 0603 · " + Tip.SEED_NAME + " · Vieweg DV-5005 · 18 psi · "),
+                    label.label);
+            assertEquals(PadTypeStatus.CHARACTERIZED, svc.getDb().currentPadType("chip-0603", Tip.SEED_KEY).status);
+        }
+    }
+
+    @Test
     public void aCopyIsAProvisionalStartThroughTheDoseRules() throws Exception {
         try (DispenseDb db = DispenseDb.inMemory()) {
             TipSetup t25 = db.insertTipSetupVersion(straight25());
