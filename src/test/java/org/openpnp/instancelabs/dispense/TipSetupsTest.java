@@ -437,6 +437,11 @@ public class TipSetupsTest {
         }
     }
 
+    /** The settings file's {@code tip} object. */
+    static JsonObject tipOf(String json) {
+        return new JsonParser().parse(json).getAsJsonObject().getAsJsonObject("tip");
+    }
+
     static String withTip(String json, Consumer<JsonObject> edit) {
         JsonObject o = new JsonParser().parse(json).getAsJsonObject();
         edit.accept(o);
@@ -460,12 +465,18 @@ public class TipSetupsTest {
     @Test
     public void aRealSchemaThreeFileIsReconciledWithoutANewVersion() throws Exception {
         String json = fixture();
+        assertEquals(Tip.OLD_SEED_NAME, tipOf(json).get("name").getAsString(), "TipSpec's old default");
         try (SimMachine sim = new SimMachine(false)) {
             DispenseService svc = start(sim, json);
             try {
                 DispenseConfig c = svc.getConfig();
                 assertEquals(1, svc.getDb().tipSetupHistory(Tip.SEED_KEY).size(), "the ID, OD and smallest dot agree");
                 assertEquals(Tip.SEED_NAME, c.tip.name);
+                // the old name is the seed's: no new version, no event, and the file names the seed as it is now
+                assertEquals(Tip.SEED_NAME, svc.getDb().currentTipSetup(Tip.SEED_KEY).name);
+                assertTrue(svc.getDb().query("SELECT * FROM events WHERE code = 'TIP'").isEmpty());
+                assertEquals(Tip.SEED_NAME, tipOf(new String(Files.readAllBytes(DispenseConfig.fileFor(sim.configDir)
+                        .toPath()), StandardCharsets.UTF_8)).get("name").getAsString());
                 assertEquals(1, c.tip.setupVersion);
                 assertEquals(TipSetup.MODEL_BENCH, c.tip.model);
                 assertEquals(TipSetup.FORM_BENT, c.tip.form);

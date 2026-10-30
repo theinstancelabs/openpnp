@@ -265,7 +265,7 @@ async function weighCoupon(page, place) {
     check('nano preview: a profile badge on every package row and one NEEDS_PROFILE warning', nano.badges === nano.rows && nano.rows > 0 && nano.needs.length === 1, nano);
     const nanoLines = await page.evaluate(() => Array.from(document.querySelectorAll('li[data-code="NEEDS_PROFILE"] .pp-needs-w > li')).map((l) => l.textContent));
     check('nano preview: the warning names the packages one line per reason, the tip\'s last', nanoLines.length === 3 && /^(Not calibrated yet|No pad type): /.test(nanoLines[0])
-      && /^Cannot be dispensed with the 22G tip: /.test(nanoLines[2]), nanoLines);
+      && /^Cannot be dispensed with the 22G bent taper: /.test(nanoLines[2]), nanoLines);
     // the profile split: the one NEEDS_PROFILE warning above the packages and their Profile column
     await shoot(page, 'nano-preview', () => page.evaluate(() => { const t = document.querySelector('#dlg-board-import .bi-wg--1') || document.getElementById('board-import-packages'); if (t) t.scrollIntoView({ block: 'start' }); }));
     await page.click('#btn-board-import-cancel').catch(() => page.keyboard.press('Escape'));
@@ -321,7 +321,7 @@ async function weighCoupon(page, place) {
       tipOpen: document.getElementById('pt-needs-tip').open, tipText: document.getElementById('pt-needs-tip-s').textContent,
       nav: document.querySelector('#tab-btn-profile .nav__s').textContent, src: document.getElementById('pt-needs-src').textContent }));
     check('(3) three fixable rows with data-reason (J, T, Q)', list.rows.length === 3 && list.rows.every((r) => r[0] === 'no-type'), list.rows);
-    check('(3) the tip details (collapsed) hold the 2 WSON groups', list.tip.length === 2 && !list.tipOpen && /22G tip/.test(list.tipText), list);
+    check('(3) the tip details (collapsed) hold the 2 WSON groups', list.tip.length === 2 && !list.tipOpen && /22G bent taper/.test(list.tipText), list);
     check('(3) nav sub "Needs 3 profiles"', list.nav === 'Needs 3 profiles', list.nav);
     check('(3) the source is the plan now', /^From the plan of /.test(list.src), list.src);
     await shoot(page, 'needs-list', () => toTop(page, '#pt-needs', '#pt-section'));

@@ -92,7 +92,7 @@ public class DispenseDbTest {
         db.insertPhoto(ph);
         db.insertPhotoLink(ph.id, pc.id, Photo.ROLE_REFERENCE, null);
         db.insertPhotoEvent(ph.id, Photo.ACTION_MAIN, null, null);
-        db.insertCalLabel(pc.id, "Chip 0603 · 22G tip", true, null);
+        db.insertCalLabel(pc.id, "Chip 0603 · 22G bent taper", true, null);
         db.insertCalFlag("pc-1", "ad22tta-b", "wrong-tip", null, null);
     }
 

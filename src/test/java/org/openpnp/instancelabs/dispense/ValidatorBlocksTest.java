@@ -100,8 +100,8 @@ public class ValidatorBlocksTest {
                 + "steps\\)"), v.toString());
         // a quarter turn below the tip's smallest dose
         c.tip.minDotSteps = 800;
-        assertTrue(has(GcodeStreamValidator.validate(valid(c), c, "B"), "dot 5 turns 400 steps: less than the 22G tip "
-                + "takes (800 steps at least)"));
+        assertTrue(has(GcodeStreamValidator.validate(valid(c), c, "B"), "dot 5 turns 400 steps: less than the 22G bent "
+                + "taper takes (800 steps at least)"));
     }
 
     @Test

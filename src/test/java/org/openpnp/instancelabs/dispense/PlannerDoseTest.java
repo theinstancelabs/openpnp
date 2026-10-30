@@ -265,9 +265,10 @@ public class PlannerDoseTest {
         // a tip whose smallest dose is a half turn
         c.tip.minDotSteps = 800;
         r = Interlocks.check(in);
-        assertTrue(r.toString().contains("PLAN: " + Texts.interlockDose("sot-q", 1, 400, "22G tip", 800)), r.toString());
-        assertTrue(r.toString().contains("pad type sot-q v1 has quarter-turn dots; the 22G tip takes quarter, half or "
-                + "one-turn dots (a half turn at least): edit it and plan again"), r.toString());
+        assertTrue(r.toString().contains("PLAN: " + Texts.interlockDose("sot-q", 1, 400, "22G bent taper", 800)),
+                r.toString());
+        assertTrue(r.toString().contains("pad type sot-q v1 has quarter-turn dots; the 22G bent taper takes quarter, "
+                + "half or one-turn dots (a half turn at least): edit it and plan again"), r.toString());
         // one quarter turn per pad
         c.tip.minDotSteps = 400;
         PadType one = type("sot-q1", "SOT one quarter", 1.475, 0.6, 400, 1);
@@ -298,10 +299,10 @@ public class PlannerDoseTest {
             assertEquals("ad25g", x.typeTipKey);
             assertEquals(0, x.dotCount);
         }
-        assertTrue(p.warnings.contains(Texts.belowGateTip("0603", "ad25g", "22G tip") + " 2 pads of chip-0603 get no "
-                + "paste (STATUS_BELOW_MIN)."), p.warnings.toString());
-        assertTrue(p.warnings.get(0).startsWith("0603 was calibrated with another tip (ad25g); the mounted tip is the 22G "
-                + "tip."), p.warnings.toString());
+        assertTrue(p.warnings.contains(Texts.belowGateTip("0603", "ad25g", "22G bent taper") + " 2 pads of chip-0603 "
+                + "get no paste (STATUS_BELOW_MIN)."), p.warnings.toString());
+        assertTrue(p.warnings.get(0).startsWith("0603 was calibrated with another tip (ad25g); the mounted tip is the "
+                + "22G bent taper."), p.warnings.toString());
         // the plan is not stale for it: the pads would not pass now either (no plan-again loop)
         in.plan = p;
         c.refuseFlaggedPads = false;
@@ -316,7 +317,7 @@ public class PlannerDoseTest {
         in.plan = q;
         c.tip.key = "ad22tta-b";
         assertTrue(Interlocks.check(in).toString().contains("PLAN: the tip changed after planning: 2 pad(s) of this "
-                + "plan have pad types calibrated with another tip than the 22G tip; plan again"),
+                + "plan have pad types calibrated with another tip than the 22G bent taper; plan again"),
                 Interlocks.check(in).toString());
     }
 
@@ -384,11 +385,11 @@ public class PlannerDoseTest {
         }
         assertTrue(padOf(p, "R1.1").flags.isEmpty());
         assertTrue(p.warnings.contains("1 pad of 1 part gets no paste (J1): another pad of the part cannot be dispensed "
-                + "with the 22G tip, and a part soldered by hand gets no paste on its other pads either "
+                + "with the 22G bent taper, and a part soldered by hand gets no paste on its other pads either "
                 + "(PART_NOT_DISPENSABLE). Profile can paste the dispensable pads of a package anyway."),
                 p.warnings.toString());
-        assertTrue(p.warnings.contains("2 pads of 1 part get no paste (J1): the 22G tip cannot dispense them, also "
-                + "where the other pads of the part are pasted (PART_NOT_DISPENSABLE)."), p.warnings.toString());
+        assertTrue(p.warnings.contains("2 pads of 1 part get no paste (J1): the 22G bent taper cannot dispense them, "
+                + "also where the other pads of the part are pasted (PART_NOT_DISPENSABLE)."), p.warnings.toString());
         assertEquals(2, p.dots.size());
         // paste the dispensable pads of MIXED anyway: the tab gets its dot, the pins still none
         PadTypeResolver partial = new PadTypeResolver(types, null).withPastePartial(Collections.singleton("MIXED"));

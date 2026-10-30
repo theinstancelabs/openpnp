@@ -18,8 +18,11 @@ public class TipSpec {
 
     /** Identity recorded on pad types and dose records. */
     public String key = "ad22tta-b";
-    /** Words for the texts ("Not dispensable with the 22G tip"). */
-    public String name = "22G tip";
+    /**
+     * Words for the texts ("Not dispensable with the 22G bent taper"). Files saved before tip setups say "22G tip"
+     * ({@link Tip#OLD_SEED_NAME}): the start's reconcile writes the setup's name over it (§22.1).
+     */
+    public String name = Tip.SEED_NAME;
     /** Inner diameter (mm): ADL AD22TTA-B, 22G plastic tapered. */
     public double idMm = 0.41;
     /**
@@ -57,7 +60,7 @@ public class TipSpec {
             p.add("tip.key must be lower-case letters, digits and '-' (max 48)");
         }
         if (name == null || name.trim().isEmpty()) {
-            p.add("tip.name is required (it is in the texts: \"with the 22G tip\")");
+            p.add("tip.name is required (it is in the texts: \"with the 22G bent taper\")");
         }
         if (!(idMm > 0 && odMm > idMm && odMm <= 3)) {
             p.add("tip.idMm and tip.odMm must be > 0, the OD larger than the ID and at most 3 mm");

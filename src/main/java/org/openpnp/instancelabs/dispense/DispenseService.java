@@ -414,11 +414,12 @@ public final class DispenseService {
     /**
      * The start-up reconcile of the mounted tip setup (tip setups design §22.1), in this order: (1) a {@code cfg.tip}
      * key that names no setup gets a setup made from {@code cfg.tip} (form and taper unknown); (2) {@code cfg.tip}
-     * is compared with its setup's newest version on the ID, the OD and the smallest dot only (every saved config
-     * names the 22G "22G tip"): when they differ a version with the config's values is appended; (3) {@code cfg.tip}
-     * is refreshed from the setup; (4) an empty {@code tip_mounts} gets a {@code seed} row, one whose newest row
-     * names another setup a {@code reconcile} row; (5) at that first start, a landing kept from before the update
-     * when the needle change was finished. The config is the truth: it is written first, then the rows.
+     * is compared with its setup's newest version on the ID, the OD and the smallest dot only (every config saved
+     * before tip setups names the 22G "22G tip", {@link Tip#OLD_SEED_NAME}): when they differ a version with the
+     * config's values is appended; a seed row still so named gets {@link Tip#SEED_NAME}; (3) {@code cfg.tip} is
+     * refreshed from the setup, its name included; (4) an empty {@code tip_mounts} gets a {@code seed} row, one whose
+     * newest row names another setup a {@code reconcile} row; (5) at that first start, a landing kept from before the
+     * update when the needle change was finished. The config is the truth: it is written first, then the rows.
      */
     private void reconcileTip() throws SQLException, IOException {
         DispenseConfig c = cfg.copy();
