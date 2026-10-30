@@ -314,7 +314,7 @@
     return r;
   }
   function pictureOk(r) {
-    const p = r && r.photo;
+    const p = r && (r.photo || (r.result && r.result.photo));
     return p ? 'Picture taken: ' + (p.caption || 'the tip from below') + '.' : 'Picture taken.';
   }
   /** POST /api/tip-setups/{mounted}/picture {calibrationIds, wait}: the photo, or the engine's refusal. */
@@ -322,10 +322,12 @@
     const key = tipOf(S.status).key;
     if (!key) throw new Error('No tip is mounted.');
     const r = await IL.api('POST', '/api/tip-setups/' + encodeURIComponent(key) + '/picture', { calibrationIds: calibrationIds || [], wait: true }, { timeoutMs: 90000 });
-    if (r && r.ok === false) throw new Error(r.message || 'No picture was stored.');
+    // with wait: {kind, setupKey, result: {ok, message, run, photo}, finished}
+    const res = r && r.result ? r.result : r;
+    if (res && res.ok === false) throw new Error(res.message || 'No picture was stored.');
     await load();
-    IL.emit('photos', r && r.photo);
-    return r;
+    IL.emit('photos', res && res.photo);
+    return res;
   }
   /** A picture of the mounted setup (Setup card): kind setup. */
   function sendSetupPhoto(file, btn) {
@@ -923,12 +925,19 @@
       try { await send(D.file, { kind: 'setup', setup: key, caption: 'Picture of the ' + name }); }
       catch (e) { photoErr = IL.errorText(e); }
     }
-    D.h.close('saved');
     await load();
-    if (photoErr) IL.toast('The tip was added without its picture: ' + photoErr, 'need');
-    if (!D.x && D.opts.fromChange && !(mount && r.mount && !r.mount.refused)) openChange({ select: key });
-    if (mount && r.mount && !r.mount.refused) { IL.go('#setup/tip'); IL.planRefreshSoon(); }
+    const mounted = mount && r.mount && !r.mount.refused;
+    if (!photoErr) D.h.close('saved');
+    if (!D.x && D.opts.fromChange && !mounted) openChange({ select: key });
+    if (mounted) { IL.go('#setup/tip'); IL.planRefreshSoon(); }
     if (mount && r.mount && r.mount.refused) IL.toast('Added, not mounted: ' + r.mount.reason, 'need');
+    if (photoErr) {
+      // the tip is added (and mounted when asked); the dialog stays to say its picture is not (add it from the card)
+      const err = $('ta-error');
+      if (err) err.replaceChildren(el('div', { class: 'notebox notebox--need', role: 'alert' }, (D.x ? 'Saved the ' + name : 'The tip was added') + ' without its picture: ' + photoErr));
+      for (const id of ['ta-save', 'ta-save-mount']) IL.show($(id), false);
+      IL.setText($('ta-cancel'), 'Close');
+    }
     return r;
   }
   /** Add and mount: the same bookkeeping as Mount, without closing a panel that is not open. */

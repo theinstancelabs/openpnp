@@ -183,7 +183,7 @@
     const t = d ? d.families.flatMap((f) => f.types).find((x) => x.typeKey === key) : null;
     if (!t) return key;
     const fam = String(t.family || '').replace(/\s*\([^)]*\)\s*/g, ' ').trim();
-    return (/^\S+$/.test(fam) && !/^custom$/i.test(fam) ? fam + ' ' : '') + t.name;
+    return (/^\S+$/.test(fam) && !/^custom$/i.test(fam) && !String(t.name || '').includes(' · ') ? fam + ' ' : '') + t.name;
   }
   const OUTCOME_KIND = { characterized: 'ok', validated: 'ok', measured: 'ok', partly: 'need', provisional: 'need', failed: 'block', stopped: 'block', cancelled: 'off' };
   function outcomeBadge(x) {

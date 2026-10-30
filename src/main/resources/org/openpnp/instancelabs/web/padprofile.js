@@ -811,7 +811,8 @@
       b.addEventListener('click', () => {
         const c = current();
         const g = (c && c.check && c.check.groups || []).find((x) => x.typeKey === t.typeKey && calibrates(x));
-        openCal(g ? calRequest(c, [g]) : { typeKeys: [t.typeKey] });
+        // a type no group of the check names: calibrated on the blank of the source shown (the engine needs a plan or a board file)
+        openCal(g ? calRequest(c, [g]) : Object.assign(c ? srcBody(c) : {}, { typeKeys: [t.typeKey] }));
       });
       return b;
     });
@@ -1486,8 +1487,24 @@
   /** Read the shown job again: a job from Records is fetched again, the status' own comes with the next poll. */
   function refreshJob() {
     if (routeJob()) C.other = null;
+    if (C.recs) C.recs.stale = true;
     IL.pollNow();
     IL.render();
+  }
+  /**
+   * The records a job wrote as they are now (GET /api/pad-calibrations: their label, labelAuto and pictures): the
+   * job's result is the moment it ended, so a label edited or a picture added since comes from here.
+   */
+  function jobRecords(j) {
+    const ids = recIds(j && j.result);
+    if (!ids.length) return null;
+    const c = C.recs;
+    if (!c || c.jobId !== j.id || (c.stale && !c.loading)) {
+      const x = C.recs = { jobId: j.id, list: c && c.jobId === j.id ? c.list : null, loading: true, stale: false };
+      IL.api('GET', '/api/pad-calibrations?limit=100').then((l) => { x.list = (Array.isArray(l) ? l : []).filter((r) => ids.includes(r.id)); }, () => { x.list = x.list || []; })
+        .then(() => { x.loading = false; IL.render(); });
+    }
+    return C.recs.list;
   }
   /** Check where it lands and Measure its dots: #pcal-landing (saved, the question, not found) and table#pcal-tipdots. */
   function renderMeasured(j, res, s) {
@@ -1562,7 +1579,9 @@
     if (!show) return;
     const seen = new Set();
     const pics = [];
-    for (const g of res.groups || []) for (const p of g.photos || []) if (p.kind !== 'result' && !seen.has(p.id)) { seen.add(p.id); pics.push(p); }
+    const live = jobRecords(j);
+    const sources = live ? live.map((r) => r.photos || []) : (res.groups || []).map((g) => g.photos || []);
+    for (const list of sources) for (const p of list) if (p.kind !== 'result' && !p.removedAtMs && !seen.has(p.id)) { seen.add(p.id); pics.push(p); }
     const mounted = IL.tips && IL.tips.mountedSetup();
     const ref = !pics.length && mounted && mounted.key === j.forTip && mounted.mainPhoto ? mounted.mainPhoto : null;
     IL.keyed($('pcal-tip-pics'), JSON.stringify([pics.map((p) => p.id), ref && ref.id]), () => {
@@ -1655,15 +1674,17 @@
     C.labels = C.labels || {};
     const st = C.labels[id] = C.labels[id] || { editing: false };
     const raised = g.outcome === 'characterized' || g.outcome === 'validated';
-    const label = g.calibrationLabel || '';
-    IL.keyed(box, JSON.stringify([label, g.calibrationLabelAuto, st.editing, g.outcome]), () => {
+    const rec = (jobRecords(j) || []).find((r) => r.id === id);
+    const label = (rec ? rec.label : g.calibrationLabel) || '';
+    const auto = rec ? rec.labelAuto : g.calibrationLabelAuto;
+    IL.keyed(box, JSON.stringify([label, auto, st.editing, g.outcome]), () => {
       if (!st.editing) {
         const edit = el('button', { type: 'button', class: 'link', 'data-action': 'label-edit', 'data-focus-key': 'label-edit:' + id }, 'Edit');
         edit.addEventListener('click', () => { st.editing = true; st.orig = label; st.value = label; IL.render(); requestAnimationFrame(() => { const t = $('pcal-label-' + id); if (t) t.focus(); }); });
         const out = [el('div', { class: 'pcal-label__v' }, el('span', { class: 'pcal-label__k', text: raised ? 'Calibrated for' : 'Calibration for' }),
           IL.pcr && IL.pcr.badge ? IL.pcr.badge(g.outcome === 'partly' ? 'provisional' : g.outcome) : null),
         el('div', { class: 'pcal-label__t', id: 'pcal-label-t-' + id, text: label || '—' }),
-        el('div', { class: 'pcal-label__a' }, edit, g.calibrationLabelAuto === false ? autoBtn(id, j) : null)];
+        el('div', { class: 'pcal-label__a' }, edit, auto === false ? autoBtn(id, j) : null)];
         return out;
       }
       const ta = el('textarea', { class: 'input pcal-label__in', id: 'pcal-label-' + id, rows: '2', maxlength: '160', 'aria-label': 'Calibrated for (1 to 160 characters)' });
@@ -1688,7 +1709,7 @@
       requestAnimationFrame(dirtyNow);
       return [el('div', { class: 'pcal-label__v' }, el('label', { class: 'pcal-label__k', for: 'pcal-label-' + id, text: raised ? 'Calibrated for' : 'Calibration for' })),
         el('div', { class: 'pcal-label__e', 'data-enter-submits': 'btn-pcal-label-save-' + id }, ta, bar,
-          el('div', { class: 'pcal-label__a' }, g.calibrationLabelAuto === false ? autoBtn(id, j) : null))];
+          el('div', { class: 'pcal-label__a' }, auto === false ? autoBtn(id, j) : null))];
     });
   }
   function autoBtn(id, j) {
@@ -1712,7 +1733,8 @@
         el('img', { src: p.thumbUrl, alt: p.caption || 'Result photo', width: '160', height: '120' }));
       b.addEventListener('click', () => IL.photos.view(p, { list, from: b }));
       return el('figure', { class: 'pcal-photo' }, b, el('figcaption', { text: p.caption || (isNum(p.doseSteps) ? turnAdj(p.doseSteps) + ' dots' : 'Result photo') }));
-    }) : el('p', { class: 'muted', id: 'pcal-photos-none', text: 'No result photo: the top camera gave no frame.' })));
+    }) : el('p', { class: 'muted', id: 'pcal-photos-none', text: (res.crops || []).length || (res.groups || []).some((g) => isNum(g.dMeanMm) && g.dots)
+      ? 'No result photo: the top camera gave no frame.' : 'No result photo: this calibration laid no dots of its own (it used the dots measured before).' })));
   }
 
   /** A decision check in words when the engine gave none (§7.6: key, predicted, measured, limit). */
