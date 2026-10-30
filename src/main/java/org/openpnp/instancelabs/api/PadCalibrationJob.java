@@ -3244,7 +3244,11 @@ final class PadCalibrationJob {
         return l;
     }
 
-    /** A group's "calibrated for" label and the pictures linked to its record (§22.5, §22.7). */
+    /**
+     * A group's "calibrated for" label and the pictures linked to its record (§22.5, §22.7). §22.6 calls the label
+     * {@code label}, but a group's {@code label} is its own name (§7.10, the result card's heading): the record's label
+     * is {@code calibrationLabel}, beside {@code calibrationId}.
+     */
     private void addRecord(Map<String, Object> m, PadCalibrationRecord rec) {
         Object[] label = null;
         List<Map<String, Object>> pics = new ArrayList<>();
@@ -3257,8 +3261,8 @@ final class PadCalibrationJob {
                 Logger.warn(e, "pad calibration {}: the label or the photos of record {} were not read", id, rec.id);
             }
         }
-        m.put("label", label == null ? null : label[0]);
-        m.put("labelAuto", label == null ? null : label[1]);
+        m.put("calibrationLabel", label == null ? null : label[0]);
+        m.put("calibrationLabelAuto", label == null ? null : label[1]);
         m.put("photos", pics);
     }
 

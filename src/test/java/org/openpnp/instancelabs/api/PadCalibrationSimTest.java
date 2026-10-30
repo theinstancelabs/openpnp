@@ -1032,8 +1032,10 @@ public class PadCalibrationSimTest {
         assertEquals("done", str(cal, "state"), cal.toString());
         JsonObject gr = groupResult(cal, str(r0603, "group"));
         assertEquals("characterized", str(gr, "outcome"), gr.toString());
-        assertEquals("Chip 0603 · 25G straight · Vieweg DV-5005 · 18 psi · Loctite GC50 SAC305 T5", str(gr, "label"));
-        assertTrue(gr.get("labelAuto").getAsBoolean());
+        assertEquals("Chip 0603 · 25G straight · Vieweg DV-5005 · 18 psi · Loctite GC50 SAC305 T5", str(gr,
+                "calibrationLabel"));
+        assertTrue(gr.get("calibrationLabelAuto").getAsBoolean());
+        assertEquals(str(r0603, "label"), str(gr, "label"), "the group keeps its own name (the result card's heading)");
         boolean result = false;
         boolean reference = false;
         for (JsonElement e : gr.getAsJsonArray("photos")) {
