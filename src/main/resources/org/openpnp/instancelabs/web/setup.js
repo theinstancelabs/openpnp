@@ -1632,8 +1632,12 @@
     else if (fm || farName) cardState(c, 'block', "Check '" + (fm ? fm[1] : farName) + "' Z", fm ? null : placeZText(farName, locs[farName].z));
     else if (missing.length) cardState(c, 'need', IL.cap(missing.join(' and ')) + ' missing');
     else cardState(c, 'ok', Object.keys(locs).filter((n) => n !== 'waste-test-dot').length + ' places set');
-    IL.setText(c.note, isNum(nd.anchorOffsetMm) ? 'A Z taken with the needle is off by about ' + fmt(Math.abs(nd.anchorOffsetMm), 2) + ' mm: take Z with N1.'
-      : 'Take Z with N1 touching the surface (OpenPnP frame).');
+    // the reason of a locked "Retake Z" in words on the card, not only in its tooltip
+    IL.setText(c.note, movedLeft.length ? 'Z moved ' + IL.fmt(zc.last.deltaMm, 2) + ' mm at the home of ' + IL.fmtTime(zc.homeAtMs - S.skewMs)
+      + ': take each red Z again with N1 touching (From head ▾ › N1 Z), then save.'
+      : isNum(nd.anchorOffsetMm) ? 'A Z taken with the needle is off by about ' + fmt(Math.abs(nd.anchorOffsetMm), 2) + ' mm: take Z with N1.'
+        : 'Take Z with N1 touching the surface (OpenPnP frame).');
+    c.note.classList.toggle('su-note--need', movedLeft.length > 0);
     IL.gate(c.bAdd, IL.S.online === false ? IL.lockReason(s) : null);
     renderBedmap(s);
   }
