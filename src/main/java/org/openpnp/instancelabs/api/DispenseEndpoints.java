@@ -156,7 +156,7 @@ final class DispenseEndpoints {
                 "setAtMs", cfg.needleZOffsetSetAtMs, "changedAtMs", cfg.needleChangedAtMs, "gapMm",
                 cfg.gapMm(), "anchored", cfg.isNeedleAnchored(), "anchor", cfg.needleAnchor,
                 "anchorOffsetMm", cfg.needleAnchor == null ? null : cfg.needleAnchor.offsetMm(), "xyTrim",
-                cfg.needleXyTrim));
+                cfg.needleXyTrim, "kRefusal", svc.needleFrameFromKRefusal()));
         d.put("profile", Views.profile(cfg, svc.getControllerConnectedAtMs()));
         d.put("purgeRow", Views.purgeRow(cfg));
         d.put("cleanPadCheck", cfg.cleanPadCheck);
@@ -380,7 +380,8 @@ final class DispenseEndpoints {
      * I4 needle Z frame: the same surface touched by N1 (its Z in OpenPnP's frame) and by the needle
      * tip (N2 Z). Body: {"surfaceZ": n1ContactZ, "needleContactZ": n2ContactZ, "x"?, "y"?}, or instead
      * of needleContactZ the bench relation {"needleContactRawSum": K}: needle contact raw Z = K - N1
-     * contact Z (side camera, 2026-10-27: K = 65.59, i.e. N2 contact = N1 contact - 2.59).
+     * contact Z (side camera, 2026-10-27: K = 65.59, i.e. N2 contact = N1 contact - 2.59). K is refused
+     * after a failed Z check of this home and after a needle change ({@link DispenseService#needleFrameFromKRefusal}).
      */
     Object needleAnchor(ApiServer.Request r) throws Exception {
         JsonObject b = r.json();
@@ -389,6 +390,10 @@ final class DispenseEndpoints {
         Double rawSum = Json.num(b, "needleContactRawSum", null);
         if (rawSum != null && b.has("needleContactZ")) {
             throw ApiException.badRequest("give either needleContactZ or needleContactRawSum, not both");
+        }
+        String noK = rawSum == null ? null : svc.needleFrameFromKRefusal();
+        if (noK != null) {
+            throw ApiException.refused(noK);
         }
         double nz = rawSum == null ? Json.reqNum(b, "needleContactZ") : svc.needleContactZFromRawSum(sz, rawSum);
         if (!Double.isFinite(sz) || !Double.isFinite(nz) || Math.abs(nz - sz) > 20) {

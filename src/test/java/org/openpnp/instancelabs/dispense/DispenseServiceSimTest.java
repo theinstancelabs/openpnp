@@ -452,8 +452,8 @@ public class DispenseServiceSimTest {
         RunResult r = svc.runPlan(plan()).get(60, TimeUnit.SECONDS);
         assertEquals(RunResult.Status.REFUSED, r.status, r.toString());
         assertTrue(r.message.startsWith("I4: Z moved 0.7"), r.message); // the board: 6.375 for 5.600
-        assertTrue(r.message.endsWith("Record the needle frame again (Setup \u203a Needle Z frame), probe the blank, "
-                + "touch off and register the board again."), r.message);
+        assertTrue(r.message.endsWith("Record the needle frame again with both tips (Setup \u203a Needle Z frame), "
+                + "probe the blank, touch off and register the board again."), r.message);
 
         // 1. the needle frame again: N1 and the needle on the blank, both 0.80 mm higher now
         svc.setNeedleAnchor(5.5 + 0.80, 2.91 + 0.80, null, null);

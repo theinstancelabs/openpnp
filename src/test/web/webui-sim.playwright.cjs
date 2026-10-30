@@ -1281,13 +1281,26 @@ async function runFirstDots(page, n) {
         await page.screenshot({ path: path.join(OUT, 'z-moved-1-frame.png') });
         check('Z moved 1: the blocker names the move, the remedy in its order, and offers "Open Needle Z frame"', st.step === 'frame' && !st.canRun && !!st.card
           && st.card[0] && st.card[0][0] === 'go:#setup/needle' && /^Z moved 0\.\d\d mm/.test(st.text || '')
-          && /Record the needle frame again \(Setup › Needle Z frame\), probe the blank, touch off and register the board again\./.test(st.text || ''), st);
-        // the operator records the frame again from K: N1 touches the blank 0.8 mm higher, K is unchanged
+          && /Record the needle frame again with both tips \(Setup › Needle Z frame\), probe the blank, touch off and register the board again\./.test(st.text || ''), st);
+        // the frame from K would give the old offset whatever N1 touches (K moves by twice a zero shift): the card
+        // switches to Both tips, says why, and From K is locked (the engine refuses K until the next home)
         await page.click('#chk-needs .ri[data-key="I4-z"] button[data-fix="go:#setup/needle"]');
-        await page.waitForSelector('#btn-anchor-k', { state: 'visible', timeout: 15000 });
+        await page.waitForSelector('#btn-anchor', { state: 'visible', timeout: 15000 });
+        await page.waitForFunction(() => !document.getElementById('anchor-k-why').hidden, null, { timeout: 10000 }).catch(() => {});
+        await page.screenshot({ path: path.join(OUT, 'z-moved-1-needle-both-tips.png') });
+        const kw = await page.evaluate(() => {
+          const seg = Array.from(document.querySelectorAll('#card-needle .seg button'));
+          return { why: document.getElementById('anchor-k-why').hidden ? null : document.getElementById('anchor-k-why').textContent,
+            kLocked: seg[0].disabled, both: seg[1].getAttribute('aria-pressed'), kBtn: !document.getElementById('btn-anchor-k').hidden };
+        });
+        check('Z moved 1: Needle Z frame switches to Both tips and locks From K, saying why (K moves by twice the shift)',
+          kw.kLocked && kw.both === 'true' && !kw.kBtn && /^K was measured under another home: Z moved 0\.\d\d mm at the home of \d\d:\d\d, and K moves by about twice that\. Record the needle frame with both tips touching the same spot\.$/.test(kw.why || ''), kw);
+        const kr = await page.request.post(BASE + 'api/needle/anchor', { data: { surfaceZ: 10.8, needleContactRawSum: 65.59 } });
+        check('Z moved 1: the engine refuses the frame from K (409) while the check of this home failed', kr.status() === 409, [kr.status(), (await kr.text()).slice(0, 200)]);
+        // the operator touches the blank with both tips: 0.8 mm higher each (the SIM's needle sits 2.59 mm under N1)
         await page.fill('#anchor-n1', '10.8');
-        await page.fill('#anchor-k', '65.59');
-        await page.click('#btn-anchor-k');
+        await page.fill('#anchor-n2', '8.21');
+        await page.click('#btn-anchor');
         await waitStatus(page, (x) => x.dispense.needle.anchor && Math.abs(x.dispense.needle.anchor.surfaceZMm - 10.8) < 1e-6, 10000);
         await page.evaluate(() => IL.go('#run/checks'));
         st = await zStep('blank');
@@ -1306,10 +1319,15 @@ async function runFirstDots(page, n) {
         await page.evaluate(() => { if (IL.panel.isPushed()) IL.panel.close(); IL.go('#run/checks'); });
         st = await zStep('touch-off');
         await page.screenshot({ path: path.join(OUT, 'z-moved-3-touch-off.png') });
-        check('Z moved 3: after the blank, "Run a touch-off" or the frame\'s own offset', st.step === 'touch-off' && !!st.card
-          && st.card.some(([f]) => f === 'go:#calibrate/touch-off') && st.card.some(([f, t]) => f === 'needle-confirm' && /^Confirm frame offset [−-]?\d+\.\d{3} mm$/.test(t)), st);
-        await page.click('#chk-needs .ri[data-key="I4-z"] button[data-fix="needle-confirm"]');
+        check('Z moved 3: after the blank, "Run a touch-off" only (not the frame\'s own offset: Z moved at this home)', st.step === 'touch-off' && !!st.card
+          && JSON.stringify(st.card) === JSON.stringify([['go:#calibrate/touch-off', 'Run a touch-off']]), st);
+        // the SIM scene has no paste for the touch-off's dots: the operator confirms the measured both-tips frame on the
+        // Needle Z frame card instead (still allowed, no longer offered by the remedy)
+        await page.evaluate(() => IL.go('#setup/needle'));
+        await page.waitForSelector('#btn-needle-offset', { state: 'visible', timeout: 15000 });
+        await page.click('#btn-needle-offset');
         await waitStatus(page, (x) => x.dispense.needle.touchedOff, 10000);
+        await page.evaluate(() => IL.go('#run/checks'));
         st = await zStep('register');
         await page.screenshot({ path: path.join(OUT, 'z-moved-4-register.png') });
         check('Z moved 4: after the touch-off, "Register board"', st.step === 'register' && !!st.card && st.card[0] && st.card[0][0] === 'register', st);

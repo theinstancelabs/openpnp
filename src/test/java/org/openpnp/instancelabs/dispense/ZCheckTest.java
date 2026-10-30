@@ -155,7 +155,8 @@ public class ZCheckTest {
         assertEquals("Z moved -0.70 mm at the home of " + ZCheck.clock(HOME_AT) + ": N1 touched the blank at X 322.00, "
                 + "Y 225.50 at Z 4.920, where it touched 5.620 at " + ZCheck.clock(BLANK_AT) + ". The needle frame, the "
                 + "touch-off and the surfaces are off by this (the needle by about twice). Record the needle frame "
-                + "again (Setup \u203a Needle Z frame), probe the blank, touch off and register the board again.",
+                + "again with both tips (Setup \u203a Needle Z frame), probe the blank, touch off and register the "
+                + "board again.",
                 i4.get(0));
         // the failed check stands even when the task would check Z itself
         assertEquals(i4, ZFrameTest.i4(check(c, HOME_AT, moved, true)));

@@ -409,10 +409,12 @@
       case 'needle':
         if (x.state === 'need') {
           q = 'Needle offset not confirmed since the last needle change or frame';
-          dd = 'The needle Z frame gives ' + IL.fmt(d.needle && d.needle.anchorOffsetMm, 3) + ' mm. Confirm it, or run a touch-off for a measured offset.';
+          dd = 'The needle Z frame gives ' + IL.fmt(d.needle && d.needle.anchorOffsetMm, 3) + ' mm. '
+            + (IL.zMoved(s) ? 'Z moved at this home: run a touch-off for a measured offset.' : 'Confirm it, or run a touch-off for a measured offset.');
         } else {
           q = x.detail.replace(/\.$/, '');
-          dd = 'Touch the same spot with N1 and the needle, or record the frame from K, in the Needle Z frame card.';
+          dd = d.needle && d.needle.kRefusal ? 'Touch the same spot with N1 and the needle tip in the Needle Z frame card: ' + d.needle.kRefusal.replace(/: record .*$/, '') + '.'
+            : 'Touch the same spot with N1 and the needle, or record the frame from K, in the Needle Z frame card.';
         }
         acts = x.fixes.map((f) => IL.fixButton(f.href === '#setup/needle' ? { fix: 'su-go-needle', label: f.label } : f));
         break;
@@ -455,6 +457,7 @@
     c.mFrame = mini('Frame offset');
     c.mNeedle = mini('Needle offset');
     c.anchorState = el('p', { class: 'su-note', id: 'anchor-state' });
+    c.kWhy = el('p', { class: 'reason', id: 'anchor-k-why', hidden: true });
     c.segK = el('button', { type: 'button', 'aria-pressed': 'true', text: 'From K', title: 'Needle contact from the bench relation: raw Z = K − N1 contact Z' });
     c.segBoth = el('button', { type: 'button', 'aria-pressed': 'false', text: 'Both tips touch', title: 'Touch the same spot with the N1 nozzle and the needle tip' });
     c.segK.addEventListener('click', () => setMethod('k', true));
@@ -478,7 +481,7 @@
     c.body.setAttribute('data-enter-submits', 'btn-anchor-k');
     c.body.append(
       el('div', { class: 'minis' }, c.mFrame.node, c.mNeedle.node), c.anchorState,
-      el('div', { class: 'seg seg--block', role: 'group', 'aria-label': 'How to record the frame' }, c.segK, c.segBoth),
+      el('div', { class: 'seg seg--block', role: 'group', 'aria-label': 'How to record the frame' }, c.segK, c.segBoth), c.kWhy,
       field('N1 contact Z, tip touching the blank', 'mm', el('div', { class: 'row' }, F.n1.el, c.capN1), { for: 'anchor-n1' }),
       c.rowK, c.rowN2, c.other);
     c.bK = btn('Record from K', { id: 'btn-anchor-k' });
@@ -551,7 +554,14 @@
   function renderNeedle(s, m) {
     const c = C.needle;
     const d = disp(s), nd = d.needle || {}, a = nd.anchor;
-    if (!W.methodChosen && W.method === undefined) setMethod(a && !isNum(a.rawSumMm) ? 'both' : 'k');
+    // K holds for the home and the needle it was measured with: after a failed Z check of this home or a needle change
+    // the engine refuses it (nd.kRefusal), and only both tips touching measure the frame
+    const noK = d.running && nd.kRefusal ? nd.kRefusal : null;
+    if (noK && W.method !== 'both') setMethod('both');
+    else if (!W.methodChosen && W.method === undefined) setMethod(a && !isNum(a.rawSumMm) ? 'both' : 'k');
+    IL.gate(c.segK, noK);
+    IL.setText(c.kWhy, noK ? sentence(noK) : '');
+    IL.show(c.kWhy, !!noK);
     const step = m.steps.find((x) => x.key === 'needle');
     const drift = isNum(nd.zOffsetMm) && isNum(nd.anchorOffsetMm) ? nd.zOffsetMm - nd.anchorOffsetMm : null;
     let kind = 'ok', text;
@@ -591,7 +601,7 @@
     // buttons
     const lock = IL.lockReason(s, { pressureOff: false, engine: true });
     const manual = dirty(F.off);
-    IL.gate(c.bK, lock);
+    IL.gate(c.bK, lock || noK);
     IL.gate(c.bBoth, lock);
     // after "I changed the needle" only recording the frame again helps (§9.1 #3): Confirm waits for it, Record leads
     const changed = !!a && !nd.anchored;
@@ -600,7 +610,8 @@
     IL.setText(c.offWhy, !lock && offOwn ? offOwn : '');
     IL.show(c.offWhy, !lock && !!offOwn);
     setLabel(c.bOff, manual && isNum(opt(F.off)) ? 'Save ' + fmt(opt(F.off), 3) + ' mm' : a ? 'Confirm ' + fmt(nd.anchorOffsetMm, 3) + ' mm' : 'Confirm offset');
-    c.bOff.classList.toggle('btn--primary', !lock && !!a && !changed && (!nd.touchedOff || manual));
+    // after a failed Z check of this home the touch-off measures the needle (IL.zMoved): Confirm is no lead then
+    c.bOff.classList.toggle('btn--primary', !lock && !!a && !changed && (!nd.touchedOff || manual) && !IL.zMoved(s));
     for (const b of [c.bK, c.bBoth]) b.classList.toggle('btn--primary', !lock && (!a || changed));
     // a typed offset outside ±1.00 mm of the frame: say so before it is saved
     const dOff = offsetDrift();

@@ -861,6 +861,21 @@ public class RegistrationSimTest {
         Res after = post("/api/prime", "{}");
         assertEquals(409, after.status);
         assertTrue(after.body.contains("Z moved -0.70 mm"), after.toString());
+        // review (machine safety): K is a sum of raw Z heights, so a frame "from K" would give the old offset (63 - K)
+        // whatever N1 touches now. While the check of this home failed it is refused; both tips measure the frame
+        JsonObject needle = ok(get("/api/status")).getAsJsonObject("dispense").getAsJsonObject("needle");
+        assertTrue(needle.get("kRefusal").getAsString().startsWith("K was measured under another home: Z moved -0.70 mm "
+                + "at the home of "), needle.toString());
+        Res fromK = post("/api/needle/anchor", "{\"surfaceZ\":" + (BLANK_Z - 0.70) + ",\"needleContactRawSum\":65.59}");
+        assertEquals(409, fromK.status, fromK.toString());
+        assertTrue(fromK.json().get("reason").getAsString().endsWith("Record the needle frame with both tips touching the "
+                + "same spot"), fromK.toString());
+        double offset = ok(get("/api/status")).getAsJsonObject("dispense").getAsJsonObject("needle").get("zOffsetMm")
+                .getAsDouble();
+        JsonObject both = ok(post("/api/needle/anchor", "{\"surfaceZ\":" + (BLANK_Z - 0.70) + ",\"needleContactZ\":"
+                + (BLANK_Z - 0.70 - 2.30) + "}"));
+        assertEquals(-2.30, both.get("offsetMm").getAsDouble(), 1e-9, "measured, not carried over from "
+                + offset);
     }
 
     /**

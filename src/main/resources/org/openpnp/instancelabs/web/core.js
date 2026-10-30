@@ -919,15 +919,19 @@
     return 'surface-bad';
   }
   IL.i4Kind = i4Kind;
-  /** A touch-off, or the needle frame's own offset (I4 asks for one after the frame was recorded again). */
-  const touchOffFixes = (nd) => [{ href: '#calibrate/touch-off', label: 'Run a touch-off' }].concat(isNum(nd.anchorOffsetMm)
+  /**
+   * A touch-off, or the needle frame's own offset (I4 asks for one after the frame was recorded again). After a failed Z
+   * check of this home (moved) only the touch-off: it measures the needle where the frame only carries it over.
+   */
+  const touchOffFixes = (nd, moved) => [{ href: '#calibrate/touch-off', label: 'Run a touch-off' }].concat(isNum(nd.anchorOffsetMm) && !moved
     ? [{ fix: 'needle-confirm', label: 'Confirm frame offset ' + IL.fmt(nd.anchorOffsetMm, 3) + ' mm' }] : []);
   /**
    * After a failed Z check ("Z moved", AUTO_REGISTER_DESIGN.md §2.4) the remedy works under the same home, in this
-   * order: record the needle frame again, probe the blank (the touch-off's dots take their Z from it), touch off (a
-   * frame recorded after the home replaces the touch-off, which I4 then asks for again), register the board. What was
-   * measured again since the home drops out of status.machine.zCheck.stale. Returns {step: frame | blank | touch-off |
-   * register | done, fixes} while the last Z check of this home failed, else null.
+   * order: record the needle frame again with both tips (the engine refuses K then), probe the blank (the touch-off's
+   * dots take their Z from it), touch off (a frame recorded after the home replaces the touch-off, which I4 then asks
+   * for again; not the frame's own offset), register the board. What was measured again since the home drops out of
+   * status.machine.zCheck.stale. Returns {step: frame | blank | touch-off | register | done, fixes} while the last Z
+   * check of this home failed, else null.
    */
   IL.zMoved = function (status) {
     const s = status || S.status || {};
@@ -940,7 +944,7 @@
     const surf = (n) => stale.has("the '" + n + "' surface");
     if (stale.has('the needle frame')) return { step: 'frame', fixes: [{ href: '#setup/needle', label: 'Open Needle Z frame' }] };
     if (surf(d.blankLocationName || 'blank')) return { step: 'blank', fixes: [{ view: 'probe-blank', label: 'Probe the blank…' }] };
-    if (stale.has('the touch-off') || !nd.touchedOff) return { step: 'touch-off', fixes: touchOffFixes(nd) };
+    if (stale.has('the touch-off') || !nd.touchedOff) return { step: 'touch-off', fixes: touchOffFixes(nd, true) };
     if (surf(d.boardSurfaceName || 'board')) return { step: 'register', fixes: [{ fix: 'register', label: 'Register board' }, { fix: 'probe-by-hand', label: 'Do it by hand' }] };
     return { step: 'done', fixes: [] };
   };
@@ -1055,7 +1059,7 @@
     } else if (!nd.touchedOff) {
       add({ key: 'needle', code: 'I4', title: 'Needle', state: 'need', value: 'confirm', short: 'needle offset',
         detail: 'Needle offset not confirmed since the last needle change or frame.',
-        fixes: [{ fix: 'needle-confirm', label: 'Confirm frame offset ' + IL.fmt(nd.anchorOffsetMm, 3) + ' mm' },
+        fixes: IL.zMoved(s) ? touchOffFixes(nd, true) : [{ fix: 'needle-confirm', label: 'Confirm frame offset ' + IL.fmt(nd.anchorOffsetMm, 3) + ' mm' },
           { href: '#calibrate/touch-off', label: 'Run a touch-off' }] });
     } else if (Math.abs(drift) > L.needleDriftMm) {
       add({ key: 'needle', code: 'I4', title: 'Needle', state: 'block', value: 'drift', short: 'needle offset',
@@ -2668,7 +2672,7 @@
           return /no point measured before/i.test(msg) ? [{ href: '#setup/needle', label: 'Open Needle Z frame' }] : [{ fix: 'check-z', label: 'Check Z' }];
         }
         // the needle frame recorded again replaced the touch-off: touch off, or take the frame's own offset
-        if (k === 'needle' && /run a touch-off/i.test(msg)) return touchOffFixes(d.needle || {});
+        if (k === 'needle' && /run a touch-off/i.test(msg)) return touchOffFixes(d.needle || {}, !!IL.zMoved(s));
         if (k === 'other-surface') return [{ href: '#setup/surfaces', label: 'Open Probed surfaces' }];
         if (k === 'seat' || k === 'surface-bad' || k === 'plan') return [{ fix: 'register', label: 'Register board' }, { fix: 'probe-by-hand', label: 'Do it by hand' }];
         return [{ href: '#setup/needle', label: 'Open Needle Z frame' }];

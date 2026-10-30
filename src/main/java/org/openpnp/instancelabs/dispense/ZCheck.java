@@ -413,8 +413,8 @@ public final class ZCheck {
     public static String movedMessage(Result r) {
         return String.format(Locale.ROOT, "Z moved %.2f mm at the home of %s: N1 touched %s at X %.2f, Y %.2f at Z "
                 + "%.3f, where it touched %.3f%s. The needle frame, the touch-off and the surfaces are off by this "
-                + "(the needle by about twice). Record the needle frame again (Setup › Needle Z frame), probe "
-                + "the blank, touch off and register the board again.", r.deltaMm,
+                + "(the needle by about twice). Record the needle frame again with both tips (Setup › Needle Z "
+                + "frame), probe the blank, touch off and register the board again.", r.deltaMm,
                 r.homeAtMs == null ? "?" : clock(r.homeAtMs), describe(r.refName), r.x, r.y, r.z, r.refZ,
                 r.refAtMs == null ? "" : " at " + clock(r.refAtMs));
     }

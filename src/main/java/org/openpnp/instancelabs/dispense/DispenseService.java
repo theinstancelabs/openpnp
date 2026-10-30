@@ -451,6 +451,28 @@ public final class DispenseService {
         return (rawSumMm - n1ContactZ - r0) * 10 / (r1 - r0);
     }
 
+    /**
+     * Why the needle frame cannot be recorded from K now, or null. K is a sum of raw Z heights (N1's contact and
+     * the needle's), so it holds for the home and the needle it was measured with only: a home that moved the Z
+     * zero moves K by about twice the shift, and a frame "from K" then gives the old offset (63 - K) whatever N1
+     * just touched (review: the needle 2 x 0.8 mm into the board after the Z-moved remedy). So while the Z check of
+     * this home failed, and after a needle change, the frame is measured with both tips touching the same spot.
+     */
+    public String needleFrameFromKRefusal() {
+        DispenseConfig c = cfg;
+        ZCheck.Result z = homeTracker.getZCheck();
+        if (ZCheck.failed(z, homeTracker.getLastHomeAtMs())) {
+            return String.format(Locale.ROOT, "K was measured under another home: Z moved %.2f mm at the home of %s, "
+                    + "and K moves by about twice that. Record the needle frame with both tips touching the same spot",
+                    z.deltaMm, ZCheck.clock(z.homeAtMs));
+        }
+        if (c.needleAnchor != null && !c.isNeedleAnchored()) {
+            return "K was measured with the needle before the change at " + ZCheck.clock(c.needleChangedAtMs)
+                    + ": record the needle frame with both tips touching the same spot";
+        }
+        return null;
+    }
+
     /** Stores a probed surface (validated: at least 3 points spanning an area). */
     public synchronized SurfacePlane setSurface(String name, List<DispenseConfig.SurfacePoint> points, String note)
             throws IOException {
