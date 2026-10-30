@@ -553,7 +553,11 @@ async function weighCoupon(page, place) {
     const j10 = await waitJob(page, (j) => j.manual === 'ladder' && ['done', 'failed', 'stopped'].includes(j.state), 300000, 'the by-hand ladder');
     await page.waitForSelector('#pcal-ladder tbody tr[data-steps="400"]', { timeout: 20000 }).catch(() => null);
     const lad = await page.evaluate(() => Array.from(document.querySelectorAll('#pcal-ladder tbody tr[data-steps]')).map((tr) => tr.textContent));
-    check('(10) the ladder ran (' + j10.state + ') and table#pcal-ladder shows the quarter turn with its checks', lad.length > 0, lad);
+    // rc1 review: the job itself ended done, and the quarter turn's row has dots and a verdict (a refused or stopped
+    // ladder lists its planned dose too, with no dots and "not yet")
+    const q10 = (j10.ladder || []).find((x) => x.steps === 400) || {};
+    check('(10) the ladder ran (' + j10.state + ') and table#pcal-ladder shows the quarter turn with its checks', j10.state === 'done' && q10.dots > 0
+      && (q10.pass === true || q10.pass === false) && lad.some((t) => /^quarter/i.test(t) && !/not yet/.test(t)), { state: j10.state, q10, lad });
     await closePanels(page);
     await page.evaluate(() => IL.go('#calibrate/weigh'));
     await page.waitForFunction(() => Number(document.getElementById('wd-count').value) > 0, null, { timeout: 20000 }).catch(() => null);
