@@ -670,7 +670,8 @@ async function runFirstDots(page, n) {
       const pf = await page.evaluate(() => ({ ph: document.getElementById('to-pitch').placeholder, unit: document.querySelector('#to-pitch-wrap .unit').textContent,
         hint: document.querySelector('#to-pitch-wrap .field__h').textContent }));
       check('touch-off: a Pitch field (mm, placeholder 1.6, "at least the dot + 0.4 mm")', pf.ph === '1.6' && pf.unit === 'mm' && pf.hint === 'at least the dot + 0.4 mm', pf);
-      await waitText(page, 'to-plan', /· 1\.6 mm apart$/, 10000).catch(() => {});
+      // the place chosen shows at the next render (the old line already ended "1.6 mm apart")
+      await waitText(page, 'to-plan', /on “blank” at gaps .* · 1\.6 mm apart$/, 10000).catch(() => {});
       check('touch-off plan line: "· 1.6 mm apart" (the engine\'s pitch for a half-turn dot)', /^6 dots on “blank” at gaps 0\.125, .* · one profile dot each · 1\.6 mm apart$/.test(await textOf(page, 'to-plan')),
         await textOf(page, 'to-plan'));
       // 1.0 mm leaves no room between half-turn dots: the engine's 400 is the field's error, and nothing moves
