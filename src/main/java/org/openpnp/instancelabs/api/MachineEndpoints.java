@@ -204,12 +204,23 @@ final class MachineEndpoints {
                 Logger.info("web home not started: the pressure hold came on before it");
                 return held;
             }
-            if (safe) {
-                return svc.homeSafely();
+            // A failed or stopped home is returned too (and the task never meets OpenPnP's "not started"
+            // throw): an engine task queued behind it would be dropped, and its busy flag stay set for good.
+            try {
+                if (!m.isEnabled()) {
+                    throw new Exception("the machine is not started: press Start first");
+                }
+                if (safe) {
+                    return svc.homeSafely();
+                }
+                m.home();
+                return null;
             }
-            m.home();
-            return null;
-        });
+            catch (Exception e) {
+                Logger.warn(e, "web home failed");
+                return e;
+            }
+        }, null, true);
         if (!wait) {
             return ApiServer.Response.json(202, Views.map("started", true, "homing", true));
         }
@@ -223,6 +234,9 @@ final class MachineEndpoints {
         if (rep == held) {
             throw ApiException.refused("the pressure hold came on before the home started: switch the pressure off "
                     + "first, then home");
+        }
+        if (rep instanceof Exception) {
+            throw ApiException.refused("homing failed: " + rootMessage((Exception) rep));
         }
         return Views.map("homed", m.isHomed(), "n1RaisedFromZ", rep instanceof HomeReport
                 ? ((HomeReport) rep).n1RaisedFromZ : null);

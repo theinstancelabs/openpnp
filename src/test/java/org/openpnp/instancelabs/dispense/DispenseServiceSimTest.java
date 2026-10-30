@@ -4,17 +4,23 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.openpnp.instancelabs.vision.Dot;
+import org.openpnp.machine.reference.driver.GcodeDriver;
 import org.openpnp.model.Configuration;
 import org.openpnp.model.LengthUnit;
 import org.openpnp.model.Location;
@@ -325,6 +331,41 @@ public class DispenseServiceSimTest {
     }
 
     /**
+     * Review 1 (machine safety): a STOP during the engine's home (here the web home's) makes OpenPnP's home
+     * throw, and it never reports homed. The home's start is not left behind: the next clean home from
+     * OpenPnP's own Home button is confirmed, so it is not taken for one a stop came during, and nothing
+     * homes again because of it.
+     */
+    @Test
+    public void aStoppedHomeLeavesNoStartForTheNextCleanHome() throws Exception {
+        sim.server.delayBeforeOkMs.put("G28", 2500L);
+        Field infinity = GcodeDriver.class.getDeclaredField("infinityTimeoutMilliseconds");
+        infinity.setAccessible(true);
+        infinity.setInt(sim.driver, 4000); // a G28 whose answer was cut off ends here (60 s otherwise)
+        sim.server.mark();
+        Future<Object> home = sim.machine.submit(() -> svc.homeSafely()); // as POST /api/machine/home
+        long t0 = System.currentTimeMillis();
+        while (sim.server.sinceMark().stream().noneMatch(l -> l.startsWith("G28"))) {
+            assertTrue(System.currentTimeMillis() - t0 < 10000, "the home sends G28");
+            Thread.sleep(10);
+        }
+        svc.abort("STOP pressed in the web UI");
+        sim.machine.setEnabled(false); // the STOP's disable, past the busy machine thread
+        ExecutionException e = assertThrows(ExecutionException.class, () -> home.get(30, TimeUnit.SECONDS));
+        assertTrue(e.getCause() instanceof DispenseExecutor.AbortedException, String.valueOf(e.getCause()));
+        assertFalse(sim.machine.isHomed());
+        assertNull(svc.getHomeTracker().getHomeStartedAtMs(), "the stopped home's start is forgotten");
+        // Start, then OpenPnP's own Home button: a clean home
+        sim.server.delayBeforeOkMs.clear();
+        infinity.setInt(sim.driver, 60000);
+        sim.enableAndHome();
+        HomeTracker.Plan p = svc.homePlan();
+        assertFalse(p.needed, p.whyCode + ": " + p.why);
+        assertEquals("homed", p.whyCode);
+        assertFalse(svc.getHomeTracker().isHomeUnconfirmed());
+    }
+
+    /**
      * I11: the B step count restarts at a controller power-up, so a start angle set before the last
      * connect is refused until it is confirmed (or measured again).
      */
@@ -393,6 +434,89 @@ public class DispenseServiceSimTest {
         assertTrue(svc.zCheckPlan(plan, false).needed);
         InterlockReport i = svc.checkInterlocks(plan, 1);
         assertTrue(i.toString().contains("Z moved 0.8"), i.toString());
+    }
+
+    /**
+     * Review 1 (machine safety), I4: the way out of "Z moved" without another home. The run's Z check finds
+     * the move; the refusal's remedy then works for this home: the needle frame recorded again replaces
+     * the touch-off it set the offset over, the blank probed again lets the touch-off run (not before:
+     * the blank's stale Z would put the needle 0.8 mm off), and the board registered again lets the run go.
+     */
+    @Test
+    public void afterZMovedTheRemedyRecoversWithoutAnotherHome() throws Exception {
+        homeAgain(); // Z moved 0.80 mm at this home: every surface seals 0.80 mm higher than stored
+        FlatVacuum.install(sim, FlatVacuum.scene(5.45 + 0.80, new double[] {90, 70, 120, 95}, 5.6 + 0.80));
+        DispenseConfig fast = svc.getConfig();
+        FlatVacuum.fastTimings(fast);
+        svc.updateConfig(fast);
+        RunResult r = svc.runPlan(plan()).get(60, TimeUnit.SECONDS);
+        assertEquals(RunResult.Status.REFUSED, r.status, r.toString());
+        assertTrue(r.message.startsWith("I4: Z moved 0.7"), r.message); // the board: 6.375 for 5.600
+        assertTrue(r.message.endsWith("Record the needle frame again (Setup \u203a Needle Z frame), probe the blank, "
+                + "touch off and register the board again."), r.message);
+
+        // 1. the needle frame again: N1 and the needle on the blank, both 0.80 mm higher now
+        svc.setNeedleAnchor(5.5 + 0.80, 2.91 + 0.80, null, null);
+        svc.setDotImager(squashImager());
+        sim.server.mark();
+        RunResult early = svc.runNeedleTouchOff(new NeedleTouchOff.Request(), true).get(60, TimeUnit.SECONDS).run;
+        assertEquals(RunResult.Status.REFUSED, early.status, early.toString());
+        assertTrue(early.message.contains("Z moved 0.7"), "the blank still needs its touch: " + early.message);
+        assertNothingStreamed(sim.server.sinceMark());
+        // 2. the blank probed again after the home
+        svc.setSurface("blank", pts(new double[][] {{85, 35, 6.25}, {130, 35, 6.25}, {85, 50, 6.25},
+            {130, 50, 6.25}}), "probed again after Z moved");
+        // 3. the touch-off runs under its waiver
+        svc.setDotImager(squashImager());
+        DispenseService.TouchOffResult t = svc.runNeedleTouchOff(new NeedleTouchOff.Request(), true)
+                .get(60, TimeUnit.SECONDS);
+        assertEquals(RunResult.Status.OK, t.run.status, t.run.toString() + " " + t.run.interlocks);
+        assertTrue(t.applied && svc.getConfig().isNeedleTouchedOff());
+        // the board not registered again yet: still refused, the move named
+        svc.setDotImager(imager);
+        r = svc.runPlan(plan()).get(60, TimeUnit.SECONDS);
+        assertEquals(RunResult.Status.REFUSED, r.status, r.toString());
+        assertTrue(r.message.contains("Z moved 0.7"), r.message);
+        // 4. the board registered (probed) again: the run passes I4 and runs, with nothing left to check
+        svc.setSurface("board", pts(new double[][] {{95, 75, 6.4}, {115, 75, 6.4}, {95, 90, 6.4}, {115, 90, 6.4}}),
+                "registered again after Z moved", TOY_BOARD);
+        sim.server.mark();
+        r = svc.runPlan(plan()).get(60, TimeUnit.SECONDS);
+        assertEquals(RunResult.Status.OK, r.status, r.toString() + " " + r.interlocks);
+        assertEquals(null, r.zCheck, "every Z datum was measured after the home");
+        assertEquals(1, count(sim.server.sinceMark(), "M106 P2 S255"), "one pressure session");
+    }
+
+    /**
+     * Review 1 (machine safety), I4: an automatic probe of the blank after a home (the pad calibration's blank step,
+     * or Probe the blank) replaced the blank's points, which were the only Z-check reference of the older data (the
+     * needle frame has no X/Y here; the board counts only for its plan): Check Z, and so prime, the test dot and the
+     * calibrations, then had no point left and asked for the needle frame again. The replaced points stay a
+     * reference of their Z frame.
+     */
+    @Test
+    public void theBlankProbedAgainAfterAHomeKeepsItsOldPointsAsTheZReference() throws Exception {
+        homeAgain(); // the Z data predate this home; Z did not move
+        FlatVacuum.install(sim, FlatVacuum.scene(5.45, new double[] {90, 70, 120, 95}, 5.6));
+        DispenseConfig fast = svc.getConfig();
+        FlatVacuum.fastTimings(fast);
+        svc.updateConfig(fast);
+        SurfaceProbeRequest req = new SurfaceProbeRequest();
+        req.surfaceName = "blank";
+        req.nominalZ = 5.45;
+        req.targets = Arrays.asList(new double[] {86, 36}, new double[] {129, 36}, new double[] {86, 49},
+            new double[] {129, 49});
+        SurfaceProbeResult probed = svc.probeSurface(req).get(60, TimeUnit.SECONDS);
+        assertTrue(probed.ok, probed.message);
+        assertTrue(svc.getConfig().surface("blank").setAtMs > svc.getHomeTracker().getLastHomeAtMs());
+        DispenseService.ZCheckPlan zp = svc.zCheckPlan(null, false);
+        assertTrue(zp.needed && zp.reference != null, "a point is left to touch: " + zp.reference);
+        assertEquals(85.0, zp.reference.x, 1e-9, "the blank's point from before the home");
+        RunResult z = svc.checkZ().get(60, TimeUnit.SECONDS);
+        assertEquals(RunResult.Status.OK, z.status, z.toString());
+        assertTrue(z.zCheck.pass && z.zCheck.x == 85.0 && z.zCheck.y == 35.0, String.valueOf(z.zCheck));
+        RunResult prime = svc.runShots("waste", 90, 1, true).get(60, TimeUnit.SECONDS);
+        assertEquals(RunResult.Status.OK, prime.status, prime.toString() + " " + prime.interlocks);
     }
 
     /** A plan made on another recipe is stale: anything that changes a dot changes its fingerprint. */
@@ -577,6 +701,46 @@ public class DispenseServiceSimTest {
         RunResult shots = svc.runShots("waste", 360, 3, true).get(60, TimeUnit.SECONDS);
         assertEquals(RunResult.Status.OK, shots.status, shots.toString());
         assertEquals(3, shots.dotsDone);
+    }
+
+    /**
+     * Review 1 (machine safety), the pressure hold: a hold that went on after a task's API checks meets the
+     * task on the machine thread, where every engine task looks at it again. Prime and the test dot (shots at
+     * the waste pad), scale shots, the dot ladder, the touch-off and the clean-pad check refuse there, as runs
+     * and the probes do: nothing is sent, the camera does not move, and the engine is not left busy.
+     */
+    @Test
+    public void everyTaskRefusesOnTheMachineThreadWhileThePressureIsHeld() throws Exception {
+        boolean[] held = {true}; // the hold went on after the API's checks, before the task's start
+        svc.setPressureHoldCheck(() -> held[0]);
+        svc.setLocation("cup", 150, 40, 5.0);
+        DispensePlan plan = plan();
+        DotLadderCalibration.Request lr = new DotLadderCalibration.Request();
+        lr.rotationsDeg = new double[] {30};
+        lr.repeats = 1;
+        sim.server.mark();
+        List<RunResult> runs = new ArrayList<>();
+        runs.add(svc.runShots("waste", 90, 1, true).get(60, TimeUnit.SECONDS));
+        runs.add(svc.runShots("cup", 360, 3, false).get(60, TimeUnit.SECONDS));
+        runs.add(svc.runDotLadder(lr).get(60, TimeUnit.SECONDS).run);
+        runs.add(svc.runNeedleTouchOff(new NeedleTouchOff.Request(), true).get(60, TimeUnit.SECONDS).run);
+        PadCleanReport rep = svc.checkCleanPads(plan).get(60, TimeUnit.SECONDS);
+        runs.add(svc.getLastRun());
+        for (RunResult r : runs) {
+            assertEquals(RunResult.Status.REFUSED, r.status, r.toString());
+            assertEquals("the pressure hold is on: Pressure off first", r.message);
+        }
+        assertTrue(rep.pads.isEmpty() && !rep.ok, "no pad looked at");
+        assertEquals(0, imager.captures, "the camera never moved");
+        for (String l : sim.server.sinceMark()) {
+            assertFalse(l.startsWith("M106") || l.startsWith("G0") || l.startsWith("G1"), "nothing pressurised or moved: "
+                    + l);
+        }
+        assertFalse(svc.isBusy());
+        // the hold off: they run
+        held[0] = false;
+        assertEquals(RunResult.Status.OK, svc.runShots("waste", 90, 1, true).get(60, TimeUnit.SECONDS).status);
+        assertTrue(svc.checkCleanPads(plan).get(60, TimeUnit.SECONDS).ok);
     }
 
     static double primeRawZ(List<String> sent) {

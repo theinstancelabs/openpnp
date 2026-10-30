@@ -94,6 +94,33 @@ public class HomeTrackerTest {
         assertEquals(18.0, p.estimateS, 1e-9, "measured");
     }
 
+    /**
+     * Review 1 (machine safety): a home a STOP ended threw in OpenPnP and never reported homed. Its start is
+     * forgotten ({@link HomeTracker#homeEnded}), so the next clean home from OpenPnP's own Home button is
+     * confirmed, not "a stop came during the last home".
+     */
+    @Test
+    public void aStoppedHomeLeavesNoStartForTheNextOne() {
+        HomeTracker t = tracker(false);
+        Machine m = machine();
+        t.machineEnabled(m);
+        now += 10;
+        t.homeStarted();
+        now += 1000;
+        t.machineDisabled(m, "STOP pressed"); // OpenPnP's home throws: no machineHomed(true)
+        t.homeEnded();
+        assertNull(t.getHomeStartedAtMs());
+        now += 5000;
+        t.machineEnabled(m);
+        now += 100;
+        t.machineHomed(m, true); // OpenPnP's Home button: no homeStarted
+        HomeTracker.Plan p = t.plan(true, true, W);
+        assertFalse(p.needed, p.whyCode);
+        assertEquals("homed", p.whyCode);
+        assertFalse(t.isHomeUnconfirmed());
+        assertNull(t.getLastHomeMs(), "no known start: no duration");
+    }
+
     @Test
     public void aHomeWhileDisabledIsUnconfirmed() {
         HomeTracker t = tracker(false);

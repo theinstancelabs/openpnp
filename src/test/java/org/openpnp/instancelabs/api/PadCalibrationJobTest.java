@@ -73,6 +73,8 @@ public class PadCalibrationJobTest {
         final List<String> calls = new CopyOnWriteArrayList<>();
         /** The step (by its call number, 1 = first) that waits until {@link #release}, or 0. */
         volatile int holdAt;
+        /** The step whose submit throws an Error on the job's thread (a bug, out of memory), or 0. */
+        volatile int errorAt;
         final CountDownLatch held = new CountDownLatch(1);
         final CountDownLatch release = new CountDownLatch(1);
         volatile long epoch;
@@ -83,6 +85,9 @@ public class PadCalibrationJobTest {
         private <T> Future<T> step(String what, java.util.function.Function<RunResult, T> result) {
             calls.add(what);
             int n = calls.size();
+            if (n == errorAt) {
+                throw new AssertionError("a bug in the step");
+            }
             return CompletableFuture.supplyAsync(() -> {
                 if (n == holdAt) {
                     held.countDown();
@@ -548,6 +553,29 @@ public class PadCalibrationJobTest {
                 "result"), "refusal"), j.toString());
         assertEquals("the pad calibration gave up waiting for its coupons step", engine.aborted);
         assertEquals(List.of("probe coupon1"), engine.calls, "no step after it");
+    }
+
+    /**
+     * Review 1 (machine safety): an Error on the job's thread (a bug, out of memory) fails the job as an exception
+     * does. Before, it left the job "running" for good: every other dispense task was refused, and a STOP could not
+     * end it.
+     */
+    @Test
+    public void anErrorFailsTheJobAndReleasesItsLock() throws Exception {
+        plan();
+        engine.errorAt = 1;
+        ok(call("POST", "/api/pad-calibrations", body(group, attest())));
+        JsonObject j = awaitState("failed");
+        assertEquals("an internal error stopped the calibration (AssertionError: a bug in the step); see the OpenPnP "
+                + "log", str(j.getAsJsonObject("result"), "refusal"), j.toString());
+        assertEquals(List.of("probe coupon1"), engine.calls, "no step after it");
+        // the lock is released: the other dispense tasks may start, and so may the next job (on the suggestion now:
+        // the failed job's record changed it)
+        ok(call("PUT", "/api/calibration-area", "{}"));
+        engine.errorAt = 0;
+        plan();
+        ok(call("POST", "/api/pad-calibrations", body(group, attest())));
+        awaitState("awaiting-reading");
     }
 
     @Test

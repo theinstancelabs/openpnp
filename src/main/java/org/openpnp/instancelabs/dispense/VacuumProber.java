@@ -152,7 +152,8 @@ public final class VacuumProber {
          * The window around a nominal surface Z: start = nominal + startAbove, approach = start + 1,
          * floor = max(nominal, anchor) - floorBelow (never deeper than either reference: a board Z typed
          * low must not let N1 push 2.5 mm into a hole), travel = the raw Z the dispense stream travels
-         * at (the dispenser mapper's raw travel Z), sent as N1 Z.
+         * at (the dispenser mapper's raw travel Z), sent as N1 Z. Refused when the anchor puts that floor
+         * at or above the nominal: the probe could not reach the surface.
          *
          * @param anchorZ the needle-frame surface (N1 contact Z), or null without one
          */
@@ -176,13 +177,36 @@ public final class VacuumProber {
                         + "lowest N1 Z the probe may use (%.3f): set %s to roughly the N1 contact height", what,
                         nominalZ, w.floorZ, s.absoluteFloorZ, what));
             }
-            // A board is not checked against the anchor (one frame reference per surface), so a board Z typed
-            // far under it (0) reaches here with a floor taken from the anchor: nothing to descend through.
-            if (w.startZ < w.floorZ - 1e-9) {
+            // A board is not checked against the anchor (one frame reference per surface), so a board Z under it
+            // reaches here with a floor taken from the anchor. Planning accepts a board top up to 2.0 mm under the
+            // anchor, and the floor sits 1.5 mm under it: a floor at or above the board top cannot reach the board
+            // (review 1; a board Z typed as 0 is refused here too).
+            if (w.floorZ > nominalZ - 1e-9) {
                 throw refused(String.format(Locale.ROOT, "PROBE: %s %.3f lies %.3f mm under the needle-frame surface "
-                        + "%.3f: the probe would start at Z %.3f, under its floor %.3f (%.1f mm under the higher of "
-                        + "the two). Set %s to roughly the N1 contact height, or record the needle frame again", what,
-                        nominalZ, w.refZ - nominalZ, w.refZ, w.startZ, w.floorZ, s.floorBelowMm, what));
+                        + "%.3f, and the probe goes at most %.1f mm under the higher of the two (down to Z %.3f): it "
+                        + "cannot reach that height. Set %s to roughly the N1 contact height, or record the needle "
+                        + "frame again; if both are right, probe by hand", what, nominalZ, w.refZ - nominalZ, w.refZ,
+                        s.floorBelowMm, w.floorZ, what));
+            }
+            return w;
+        }
+
+        /**
+         * A window of +-{@code mm} around the nominal Z, without the needle-frame floor: a weigh coupon is
+         * probed against its own place Z only (profile calibration design §7.2 step 2).
+         */
+        public static Window narrow(double nominalZ, double mm, double travelRawZ, Settings s)
+                throws DispenseService.RunRefusedException {
+            Window w = new Window();
+            w.nominalZ = nominalZ;
+            w.refZ = nominalZ;
+            w.startZ = nominalZ + mm;
+            w.approachZ = w.startZ + s.approachAboveStartMm;
+            w.floorZ = nominalZ - mm;
+            w.travelZ = travelRawZ;
+            if (w.floorZ < s.absoluteFloorZ - 1e-9) {
+                throw refused(String.format(Locale.ROOT, "PROBE: the place Z %.3f puts the probe floor at %.3f, below "
+                        + "the lowest N1 Z the probe may use (%.3f)", nominalZ, w.floorZ, s.absoluteFloorZ));
             }
             return w;
         }
@@ -993,6 +1017,15 @@ public final class VacuumProber {
      */
     public static Window preflight(DispenseConfig cfg, boolean board, String what, double nominalZ, double travelRawZ,
             Settings s, Nozzle n1) throws DispenseService.RunRefusedException {
+        return preflight(cfg, board, what, nominalZ, null, travelRawZ, s, n1);
+    }
+
+    /**
+     * As above; a {@code windowMm} (a weigh coupon) gives the window +-windowMm around the nominal Z
+     * ({@link Window#narrow}).
+     */
+    public static Window preflight(DispenseConfig cfg, boolean board, String what, double nominalZ, Double windowMm,
+            double travelRawZ, Settings s, Nozzle n1) throws DispenseService.RunRefusedException {
         DispenseConfig.NeedleAnchor a = cfg.needleAnchor;
         if (board && a == null) {
             throw refused("I4: the needle Z frame is not set: record it first (Setup › Needle Z frame); the probe "
@@ -1012,7 +1045,8 @@ public final class VacuumProber {
         if (state != null) {
             throw refused(state);
         }
-        return Window.of(what, nominalZ, a == null ? null : a.surfaceZMm, travelRawZ, s);
+        return windowMm != null ? Window.narrow(nominalZ, windowMm, travelRawZ, s)
+                : Window.of(what, nominalZ, a == null ? null : a.surfaceZMm, travelRawZ, s);
     }
 
     /** The probe's controller link over the executor: the PROBE gate, abort-checked sleeps, the I1 shutdown. */

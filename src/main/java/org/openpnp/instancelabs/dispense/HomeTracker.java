@@ -91,6 +91,15 @@ public final class HomeTracker extends MachineListener.Adapter {
         homeStartedAtMs = clock.getAsLong();
     }
 
+    /**
+     * Called after every engine or API home, also one a STOP or a failure ended: OpenPnP's home then throws
+     * and never reports homed, and its start must not stay behind, or the next clean home (OpenPnP's own Home
+     * button) would be taken for one a stop came during (review 1).
+     */
+    public void homeEnded() {
+        homeStartedAtMs = null;
+    }
+
     /** Whether a task must home first under {@code policy} ("whenNeeded" | "always"), and why. */
     public Plan plan(boolean enabled, boolean homed, String policy) {
         Plan p = new Plan();

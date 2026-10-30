@@ -73,6 +73,12 @@ public class ZFrameTest {
     }
 
     static InterlockReport check(DispenseConfig c, DispensePlan p, Interlocks.Scope scope) {
+        return check(c, p, scope, null, null);
+    }
+
+    /** As above after a home at {@code home} and the Z check {@code z} (or none). */
+    static InterlockReport check(DispenseConfig c, DispensePlan p, Interlocks.Scope scope, Long home,
+            ZCheck.Result z) {
         Interlocks.Inputs in = new Interlocks.Inputs();
         in.cfg = c;
         in.machineEnabled = true;
@@ -82,6 +88,8 @@ public class ZFrameTest {
         in.plan = p;
         in.estimatedPressurisedSeconds = 10;
         in.scope = scope;
+        in.lastHomeAtMs = home;
+        in.zCheck = z;
         return Interlocks.check(in);
     }
 

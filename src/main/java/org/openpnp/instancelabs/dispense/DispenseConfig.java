@@ -431,6 +431,12 @@ public class DispenseConfig {
         public String boardFingerprint;
         /** True when probed on OpenPnP's simulator: refused on a machine that is not (I4). */
         public Boolean simulated;
+        /**
+         * The blank's points that a probe after a home replaced ({@link ZCheck#kept}): still a Z-check reference of
+         * their Z frame, so a check of older data (the needle frame, the touch-off) has a point to touch. Null when
+         * none was kept.
+         */
+        public SurfaceMap replaced;
     }
 
     public NamedLocation location(String name) {

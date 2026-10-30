@@ -308,6 +308,66 @@ public class ReviewSafetySimTest {
     }
 
     /**
+     * Review 1 (machine safety): OpenPnP drops every task queued behind one that throws, and an engine task
+     * dropped so never ends (its busy flag stayed set until OpenPnP restarted). While the web home runs,
+     * every engine endpoint refuses (OpenPnP is busy); a task queued behind the home all the same (it passed
+     * its checks just before the home started) still runs after a STOP made the home fail, refuses, and
+     * leaves the engine free.
+     */
+    @Test
+    public void aStoppedWebHomeCannotLeaveTheEngineBusy() throws Exception {
+        svc.setLocation("waste", 80, 40, 5.5);
+        sim.server.delayBeforeOkMs.put("G28", 2500L);
+        java.lang.reflect.Field infinity = GcodeDriver.class.getDeclaredField("infinityTimeoutMilliseconds");
+        infinity.setAccessible(true);
+        infinity.setInt(sim.driver, 4000); // a G28 whose answer was cut off ends here (60 s otherwise)
+        sim.server.mark();
+        String[] homed = {""};
+        int[] status = new int[1];
+        Thread home = new Thread(() -> {
+            try {
+                HttpResponse<String> r = http.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:"
+                        + api.getPort() + "/api/machine/home")).timeout(Duration.ofSeconds(120))
+                        .header("Content-Type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString("{\"wait\":true}")).build(),
+                        HttpResponse.BodyHandlers.ofString());
+                status[0] = r.statusCode();
+                homed[0] = r.body();
+            }
+            catch (Exception e) {
+                homed[0] = String.valueOf(e);
+            }
+        });
+        home.start();
+        long t0 = System.currentTimeMillis();
+        while (sim.server.sinceMark().stream().noneMatch(l -> l.startsWith("G28"))) {
+            assertTrue(System.currentTimeMillis() - t0 < 10000, "the home sends G28");
+            Thread.sleep(10);
+        }
+        String[][] engine = {{"/api/prime", "{}"}, {"/api/test-dot", "{}"}, {"/api/calibrations/shots-run",
+            "{\"locationName\":\"waste\",\"rotationDeg\":90,\"count\":1}"}, {"/api/calibrations/dot-ladder", "{}"},
+            {"/api/calibrations/touch-off", "{}"}, {"/api/plan/p1/clean-check", "{}"}, {"/api/run",
+                "{\"planId\":\"p1\"}"}, {"/api/machine/z-check", "{}"}};
+        for (String[] e : engine) {
+            JsonObject o = call("POST", e[0], e[1]);
+            assertEquals(409, lastStatus, e[0] + " " + o);
+            assertEquals("OpenPnP is busy (homing or moving): wait for it to finish", o.get("reason").getAsString(),
+                    e[0]);
+        }
+        assertFalse(svc.isBusy());
+        java.util.concurrent.Future<org.openpnp.instancelabs.dispense.RunResult> queued = svc.checkZ();
+        ok("POST", "/api/stop", null);
+        org.openpnp.instancelabs.dispense.RunResult r = queued.get(30, java.util.concurrent.TimeUnit.SECONDS);
+        assertEquals(org.openpnp.instancelabs.dispense.RunResult.Status.REFUSED, r.status, r.toString());
+        assertEquals(DispenseService.STOPPED_SINCE_QUEUED, r.message);
+        assertFalse(svc.isBusy(), "the engine is free again");
+        home.join(30000);
+        assertEquals(409, status[0], homed[0]);
+        assertTrue(homed[0].contains("homing failed: "), homed[0]);
+        assertFalse(sim.machine.isHomed());
+    }
+
+    /**
      * AUTO_REGISTER_DESIGN §2.7 for POST /api/machine/home: a home that passed its API check, and a hold
      * started after it, meet on the machine thread. The home looks at the hold again there and does
      * not start (G28 is never sent) while the hold is on or starting.

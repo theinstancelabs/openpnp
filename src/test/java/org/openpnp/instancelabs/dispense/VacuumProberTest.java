@@ -1042,10 +1042,20 @@ public class VacuumProberTest {
         // with the needle frame at 5.5 a board top Z typed as 0 leaves nothing to descend through: refused here,
         // not by the probe's own Z assert after travelling over the spot
         e = assertThrows(DispenseService.RunRefusedException.class, () -> VacuumProber.Window.of(0.0, 5.5, 31.5, s));
-        assertEquals("PROBE: the board top Z 0.000 lies 5.500 mm under the needle-frame surface 5.500: the probe would "
-                + "start at Z 2.500, under its floor 4.000 (1.5 mm under the higher of the two). Set the board top Z to "
-                + "roughly the N1 contact height, or record the needle frame again", e.getMessage());
-        assertEquals(4.0, VacuumProber.Window.of(1.5, 5.5, 31.5, s).startZ, 1e-9, "a window one step deep still passes");
+        assertEquals("PROBE: the board top Z 0.000 lies 5.500 mm under the needle-frame surface 5.500, and the probe goes "
+                + "at most 1.5 mm under the higher of the two (down to Z 4.000): it cannot reach that height. Set the "
+                + "board top Z to roughly the N1 contact height, or record the needle frame again; if both are right, "
+                + "probe by hand", e.getMessage());
+        // review 1: planning accepts a board top up to 2.0 mm under the needle frame, and the floor sits 1.5 mm under
+        // the higher of the two: a floor at or above the board top cannot reach it (the probe descended to that floor
+        // three times, then blamed a hole or the board Z)
+        e = assertThrows(DispenseService.RunRefusedException.class, () -> VacuumProber.Window.of(3.9, 5.5, 31.5, s));
+        assertTrue(e.getMessage().startsWith("PROBE: the board top Z 3.900 lies 1.600 mm under the needle-frame surface "
+                + "5.500, and the probe goes at most 1.5 mm under the higher of the two (down to Z 4.000)"), e.getMessage());
+        assertThrows(DispenseService.RunRefusedException.class, () -> VacuumProber.Window.of(4.0, 5.5, 31.5, s),
+                "a floor at the board top");
+        assertEquals(4.0, VacuumProber.Window.of(4.25, 5.5, 31.5, s).floorZ, 1e-9, "a floor under it passes");
+        assertEquals(4.0, VacuumProber.Window.of(4.5, 5.5, 31.5, s).floorZ, 1e-9, "the bench: 0.5 mm under the board");
         assertThrows(DispenseService.RunRefusedException.class, () -> VacuumProber.Window.around(3.0, 31.5, s));
         VacuumProber.Window c = VacuumProber.Window.around(4.5, 31.5, s);
         assertEquals(7.0, c.startZ, 1e-9);
@@ -1080,10 +1090,21 @@ public class VacuumProberTest {
                 + "checks its heights against it", e.getMessage());
         long at = 1_793_200_000_000L;
         cfg.needleAnchor = new DispenseConfig.NeedleAnchor(5.5, 2.91, 322.0, 225.5, at);
-        // a board 1.5 mm under the needle-frame surface is not refused: its reference is its own top Z
-        VacuumProber.Window w = VacuumProber.preflight(cfg, true, "the board top Z", 4.0, 31.5, s, null);
+        // a board 1.0 mm under the needle-frame surface is not refused: its reference is its own top Z
+        VacuumProber.Window w = VacuumProber.preflight(cfg, true, "the board top Z", 4.5, 31.5, s, null);
         assertEquals(5.5, w.refZ, 1e-9);
         assertEquals(4.0, w.floorZ, 1e-9);
+        // 1.5 mm under it the floor lies at the board top: refused before anything moves (review 1)
+        e = assertThrows(DispenseService.RunRefusedException.class,
+                () -> VacuumProber.preflight(cfg, true, "the board top Z", 4.0, 31.5, s, null));
+        assertTrue(e.getMessage().startsWith("PROBE: the board top Z 4.000 lies 1.500 mm under the needle-frame "
+                + "surface 5.500"), e.getMessage());
+        // a weigh coupon's window is its own, +-0.3 mm around its place Z, whatever the needle frame
+        VacuumProber.Window coupon = VacuumProber.preflight(cfg, true, "the 'coupon1' place Z", 3.9, 0.3, 31.5, s, null);
+        assertEquals(3.9, coupon.refZ, 1e-9);
+        assertEquals(4.2, coupon.startZ, 1e-9);
+        assertEquals(3.6, coupon.floorZ, 1e-9);
+        assertEquals(31.5, coupon.travelZ, 1e-9);
         // ... but a board top Z typed as 0 is refused before anything moves (no anchor check catches it now)
         e = assertThrows(DispenseService.RunRefusedException.class,
                 () -> VacuumProber.preflight(cfg, true, "the board top Z", 0.0, 31.5, s, null));
