@@ -1139,8 +1139,7 @@ async function runFirstDots(page, n) {
       {
         await page.waitForFunction(() => !IL.S.planPending && IL.S.plan && IL.S.plan.pasted, null, { timeout: 15000 }).catch(() => {});
         await page.waitForTimeout(1000);
-        const mine = await page.evaluate(() => ({ done: IL.run.doneSet.size, board: IL.S.plan.pasted.board, plan: IL.S.plan.planId,
-          eyebrow: (document.getElementById('chk-eyebrow') || {}).textContent }));
+        const mine = await page.evaluate(() => ({ done: IL.run.doneSet.size, board: IL.S.plan.pasted.board, plan: IL.S.plan.planId }));
         const fresh = await browser.newContext({ viewport: { width: 1440, height: 900 } });
         const tab = await fresh.newPage();
         tab.on('console', (m) => { if (m.type() === 'error') jsErrors.push('new tab: ' + m.text()); });
@@ -1150,7 +1149,7 @@ async function runFirstDots(page, n) {
         const theirs = await tab.evaluate(() => ({ done: IL.run.doneSet.size, board: IL.S.plan.pasted.board, eyebrow: (document.getElementById('chk-eyebrow') || {}).textContent,
           verdict: IL.ready().verdict.text, all: !document.getElementById('run-all-link').hidden }));
         check('the board\'s paste is the server\'s: a new browser sees the same pasted dots and the same board number', mine.done > 0 && theirs.done === mine.done
-          && theirs.board === mine.board && theirs.eyebrow === mine.eyebrow, { mine, theirs });
+          && theirs.board === mine.board && theirs.eyebrow === 'Board ' + mine.board + ' · plan ' + mine.plan.slice(0, 4), { mine, theirs });
         await tab.screenshot({ path: path.join(OUT, 'new-browser-same-board.png') });
         await tab.click(theirs.all ? '#run-all-link' : '#btn-run');
         await tab.waitForSelector('#dlg-run', { timeout: 10000 }).catch(() => {});
