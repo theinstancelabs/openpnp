@@ -917,6 +917,140 @@ public class PadCalibrationSimTest {
         assertTrue(landing(ok(get("/api/pad-calibrations/" + str(asked, "id")))).get("saved").getAsBoolean());
     }
 
+    /** A small JPEG (a picture of the tip from a phone, as the browser sends it). */
+    static byte[] jpeg() throws Exception {
+        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(320, 240,
+                java.awt.image.BufferedImage.TYPE_INT_RGB);
+        java.awt.Graphics2D g = img.createGraphics();
+        g.setColor(new java.awt.Color(90, 120, 150));
+        g.fillRect(0, 0, 320, 240);
+        g.setColor(java.awt.Color.LIGHT_GRAY);
+        g.fillRect(150, 20, 20, 200);
+        g.dispose();
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        javax.imageio.ImageIO.write(img, "jpg", out);
+        return out.toByteArray();
+    }
+
+    JsonObject upload(String query) throws Exception {
+        HttpResponse<String> r = http.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + api.getPort()
+                + "/api/photos?" + query)).header("Content-Type", "image/jpeg").POST(HttpRequest.BodyPublishers
+                        .ofByteArray(jpeg())).build(), HttpResponse.BodyHandlers.ofString());
+        assertEquals(201, r.statusCode(), r.body());
+        return new JsonParser().parse(r.body()).getAsJsonObject().getAsJsonObject("photo");
+    }
+
+    @Test
+    public void aSecondTipIsMeasuredThenCalibratedWithItsOwnLabelsAndPhotos() throws Exception {
+        // the 25G lays smaller dots than the 22G (a footprint of its own) and lands where the 22G does
+        start(sc -> byTip(sc, K25, 2.0, 0.6, 0, 0));
+        mount25();
+        regulatorAtMs = System.currentTimeMillis();
+        assertTrue(landing(landingCheck()).get("saved").getAsBoolean());
+        wipeBlank();
+        JsonObject picture = upload("kind=setup&setup=" + K25 + "&caption=25G%20from%20the%20side");
+        JsonObject pv = ok(get("/api/pad-calibrations/preview?measure=tip&regulatorPsi=18&regulatorAtMs=" + regulatorAtMs
+                + "&pasteLifeAtMs=" + regulatorAtMs));
+        assertNull(str(pv, "refusal"), pv.toString());
+        // spaced for a dot of unknown size, 1.6 mm apart (§22.2): the ladder fits the default 40 x 20 mm area
+        assertTrue(pv.getAsJsonObject("blank").get("usesMm").getAsDouble() <= 20, "the default area holds it: " + pv);
+
+        // Measure its dots: every dose it takes on the blank, the half turn weighed on both coupons; records only
+        JsonObject started = ok(call("POST", "/api/pad-calibrations", "{\"measure\":\"tip\"," + attest() + "}"));
+        JsonObject job = awaitJob("awaiting-reading");
+        assertEquals("awaiting-reading", str(job, "state"), job.toString());
+        JsonObject measured = weighAndType(job);
+        assertEquals("done", str(measured, "state"), measured.toString());
+        assertEquals(str(started, "id"), str(measured, "id"));
+        JsonObject tipDots = result(measured).getAsJsonObject("tipDots");
+        assertEquals(3, tipDots.getAsJsonArray("doses").size(), tipDots.toString());
+        for (JsonElement e : tipDots.getAsJsonArray("doses")) {
+            JsonObject d = e.getAsJsonObject();
+            assertTrue(d.get("pass").getAsBoolean(), d.toString());
+            assertTrue(d.get("d95Mm").getAsDouble() < 1.2, "smaller than the 22G's: " + d);
+        }
+        assertEquals(2.0, tipDots.get("mgPerTurn").getAsDouble(), 0.1, tipDots.toString());
+        assertTrue(tipDots.get("measured").getAsBoolean());
+        assertTrue(str(result(measured), "sentence").startsWith("Measured "), result(measured).toString());
+        assertTrue(str(result(measured), "sentence").contains("the 25G straight's dots: quarter "),
+                str(result(measured), "sentence"));
+        assertTrue(result(measured).getAsJsonArray("photos").size() >= 3, "a result photo per block");
+        assertEquals("measured", str(ok(get("/api/status")).getAsJsonObject("dispense").getAsJsonObject("tip"), "dots"));
+
+        // a status raised by hand is a calibration record of its own, with its label and pictures
+        JsonObject byHand = ok(call("PUT", "/api/pad-types/chip-0805", "{\"forSetup\":\"" + K25 + "\",\"status\":"
+                + "\"characterized\",\"dotSteps\":800,\"dotsPerPad\":2,\"calibration\":{\"label\":\"0805 by hand, "
+                + "25G\",\"photoIds\":[" + picture.get("id").getAsLong() + "]}}"));
+        JsonObject hand = byHand.getAsJsonObject("calibration");
+        assertEquals("0805 by hand, 25G", str(hand, "label"));
+        assertFalse(hand.get("labelAuto").getAsBoolean());
+        assertTrue(hand.getAsJsonArray("photos").size() >= 1, hand.toString());
+        JsonObject handRow = ok2(get("/api/pad-calibrations?typeKey=chip-0805")).get(0).getAsJsonObject();
+        assertEquals("by-hand", str(handRow, "method"));
+        assertEquals(K25, str(handRow, "setupKey"));
+
+        // a reconnect: the camera results go stale (the dot table and the weighings stay), so the calibration lays its
+        // own ladder: chip-0603 calibrated for the 25G, the 22G's version untouched
+        int v22 = typeOf("chip-0603").get("version").getAsInt(); // the 25G's stand-in: version 0
+        assertEquals(0, v22);
+        int own22 = svc.getDb().newestOwnVersion("chip-0603", Tip22.KEY).version;
+        sim.machine.setEnabled(false);
+        sim.enableAndHome();
+        ok(call("POST", "/api/screw/start-angle", "{}"));
+        wipeBlank();
+        JsonObject plan = plan();
+        Map<String, List<JsonObject>> g = groups(plan.getAsJsonObject("profileCheck"));
+        JsonObject r0603 = one(g, "R_0603_1608Metric");
+        assertEquals("calibrate-existing", str(r0603.getAsJsonObject("suggestion"), "kind"), r0603.toString());
+        ok(call("POST", "/api/pad-calibrations", body(str(plan, "planId"), List.of(r0603))));
+        JsonObject cal = awaitJob("awaiting-reading");
+        if ("awaiting-reading".equals(str(cal, "state"))) {
+            cal = weighAndType(cal);
+        }
+        assertEquals("done", str(cal, "state"), cal.toString());
+        JsonObject gr = groupResult(cal, str(r0603, "group"));
+        assertEquals("characterized", str(gr, "outcome"), gr.toString());
+        assertEquals("Chip 0603 · 25G straight · Vieweg DV-5005 · 18 psi · Loctite GC50 SAC305 T5", str(gr, "label"));
+        assertTrue(gr.get("labelAuto").getAsBoolean());
+        boolean result = false;
+        boolean reference = false;
+        for (JsonElement e : gr.getAsJsonArray("photos")) {
+            JsonObject ph = e.getAsJsonObject();
+            result |= "result".equals(str(ph, "kind"));
+            reference |= ph.get("id").getAsLong() == picture.get("id").getAsLong();
+        }
+        assertTrue(result, "the result photo of its dose: " + gr.getAsJsonArray("photos"));
+        assertTrue(reference, "the 25G's main picture as the reference: " + gr.getAsJsonArray("photos"));
+        JsonObject t25 = typeOf("chip-0603");
+        assertEquals("characterized", str(t25, "status"));
+        assertEquals(K25, str(t25, "setupKey"));
+        assertEquals(own22, svc.getDb().newestOwnVersion("chip-0603", Tip22.KEY).version, "the 22G's is untouched");
+        assertEquals("characterized", svc.getDb().newestOwnVersion("chip-0603", Tip22.KEY).status.dbName);
+
+        // the label edit: the operator's words, then the automatic text again
+        long id = gr.get("calibrationId").getAsLong();
+        JsonObject edited = ok(call("PUT", "/api/pad-calibrations/" + id + "/label", "{\"label\":\"  0603, the 25G   "
+                + "on the new jar \"}"));
+        assertEquals("0603, the 25G on the new jar", str(edited, "label"));
+        assertFalse(edited.get("auto").getAsBoolean());
+        JsonObject row = null;
+        for (JsonElement e : ok2(get("/api/pad-calibrations?setup=" + K25))) {
+            if (e.getAsJsonObject().get("id").getAsLong() == id) {
+                row = e.getAsJsonObject();
+            }
+        }
+        assertNotNull(row);
+        assertEquals("0603, the 25G on the new jar", str(row, "label"));
+        assertFalse(row.get("labelAuto").getAsBoolean());
+        assertEquals("25G straight", str(row, "setupName"));
+        assertTrue(row.get("jobInMemory").getAsBoolean());
+        Res empty = call("PUT", "/api/pad-calibrations/" + id + "/label", "{\"label\":\"   \"}");
+        assertEquals(400, empty.status, empty.toString());
+        assertEquals("The label must be 1 to 160 characters.", str(empty.json(), "reason"));
+        assertEquals("Chip 0603 · 25G straight · Vieweg DV-5005 · 18 psi · Loctite GC50 SAC305 T5", str(ok(call("PUT",
+                "/api/pad-calibrations/" + id + "/label", "{\"auto\":true}")), "label"));
+    }
+
     /** The seeded setup's key. */
     static final class Tip22 {
         static final String KEY = "ad22tta-b";

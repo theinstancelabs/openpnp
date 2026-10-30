@@ -536,7 +536,8 @@ final class PadCalibrationJob {
                 p.doses.add(s);
             }
         }
-        p.hopMm = DEFAULT_HOP_MM;
+        // no board gives a hop: the dots are spaced as a dose of unknown size is, max(1.6 mm, OD + 0.4 mm) (§22.2)
+        p.hopMm = unknownSpacingMm();
         groups.add(p);
         evidence = PadInstances.inputs(svc, new ArrayList<>(), false).evidence;
         if (req.planId != null) {
@@ -641,14 +642,20 @@ final class PadCalibrationJob {
 
     /**
      * The dot size the spacing uses: the measured d95, else the tip's upper edge (the bench model's for the 22G, its
-     * dot table's otherwise); a dose whose size the tip does not know is spaced for max(1.6 mm, OD + 0.4 mm) (§22.2).
+     * dot table's otherwise). A dose whose size the tip does not know is spaced for max(1.6 mm, OD + 0.4 mm) (§22.2):
+     * a dot that size less the ladder's edge gap, so the row's pitch is at least that.
      */
     private double d95(int s) {
         DoseEvidence e = evidence.get(s);
         if (e != null && e.hasMeasuredDots()) {
             return Math.max(e.d95Mm, tip.knowsSize(s) ? tip.dLoMm(s) : 0);
         }
-        return tip.knowsSize(s) ? tip.dHiMm(s) : Math.max(UNKNOWN_DOT_MM, tip.odMm + 0.4);
+        return tip.knowsSize(s) ? tip.dHiMm(s) : unknownSpacingMm() - PadLadder.ROW_EDGE_GAP_MM;
+    }
+
+    /** §22.2: the spacing of dots whose size the tip does not know, max(1.6 mm, OD + 0.4 mm). */
+    private double unknownSpacingMm() {
+        return Math.max(UNKNOWN_DOT_MM, tip.odMm + 0.4);
     }
 
     /** The mass of a dot as the job counts and expects it: the tip's, else the bench's (x 1.5 above a 0.41 mm bore). */
@@ -3106,7 +3113,7 @@ final class PadCalibrationJob {
      */
     private Map<String, Object> tipDots() {
         List<Map<String, Object>> doses = new ArrayList<>();
-        for (PadLadder.Dose d : ladderDoses) {
+        for (PadLadder.Dose d : dosesUp()) {
             DoseEvidence e = evidence.get(d.steps);
             boolean seen = e != null && e.opticalFresh;
             doses.add(Views.map("steps", d.steps, "turn", DoseModel.turnNoun(d.steps), "dots", seen ? e.n : 0, "found",
@@ -3121,13 +3128,20 @@ final class PadCalibrationJob {
                 "confirmed", now.mgPerStepConfirmed, "measured", now.isMeasured(), "dots", now.dotsSource());
     }
 
+    /** The ladder's doses, smallest first. */
+    private List<PadLadder.Dose> dosesUp() {
+        List<PadLadder.Dose> l = new ArrayList<>(ladderDoses);
+        l.sort((a, b) -> Integer.compare(a.steps, b.steps));
+        return l;
+    }
+
     /** "Measured {HH:MM}: the {S}'s dots: quarter 0.71, half 0.93, one turn 1.12 mm; 1.57 mg per turn." */
     private String tipSentence(String clock) {
         List<String> sizes = new ArrayList<>();
         List<String> failed = new ArrayList<>();
-        for (PadLadder.Dose d : ladderDoses) {
+        for (PadLadder.Dose d : dosesUp()) {
             DoseEvidence e = evidence.get(d.steps);
-            String turn = DoseModel.turnNoun(d.steps).replace(" turn", "");
+            String turn = d.steps == DoseModel.ONE_TURN ? "one turn" : DoseModel.turnNoun(d.steps).replace(" turn", "");
             if (e == null || !e.opticalFresh || e.dMeanMm == null) {
                 failed.add("no " + DoseModel.turnName(d.steps) + " dots were measured");
             }
