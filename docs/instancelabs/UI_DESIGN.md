@@ -965,7 +965,11 @@ line):
 | I4 Z before the home (as built) | `… The N1 heights predate this home: Run checks Z first, one N1 touch on the {name}.` | `Check Z` (two-press) |
 | I4 surface, no seat (as built) | `No board surface for this seat yet: register the board (fiducials, then N1 touches the board).` | `Register board` · `Do it by hand` |
 | REG / PROBE refusals (as built) | the engine's text (`AUTO_REGISTER_DESIGN.md` §6.2) | `Look with the camera` · `Change board` · `Plan without fiducial correction` · `Register again` · `Do it by hand` · `Probe the blank…` |
-| Upload while a task runs (as built) | `Upload the board when the run has finished.` | — |
+| Upload while a task runs (as built) | `Upload the board when the run has finished.` (also while a pad calibration is between its engine steps) | — |
+| I4 Z moved (as built, final round) | the engine's text: `Z moved 0.80 mm at the home of 14:02: … Record the needle frame again (Setup › Needle Z frame), probe the blank, touch off and register the board again.` | the next step only, in turn: `Open Needle Z frame` · `Probe the blank…` · `Run a touch-off` / `Confirm frame offset −2.590 mm` · `Register board` / `Do it by hand` |
+| Register: board top under the probe's reach (as built, final round) | `the board top Z 3.500 lies 2.000 mm under the needle-frame surface 5.500, … it cannot reach that height. …` | `Board step` · `Needle Z frame` · `Do it by hand` |
+| Locked by the engine's own 409s (as built, final round) | `A board file is being read (an upload takes up to about 20 s): wait for it to finish` (every engine action) · `OpenPnP is busy (homing or moving): wait for it to finish` (what uses the machine) | — |
+| Clean-pad check refused at its start (as built, final round) | `Refused 14:05: the pressure hold is on: Pressure off first.` on the Pads clean card | `Check pads` |
 
 **Missing paste profiles and the pad calibration (as built, pc-web; PC §13):**
 
