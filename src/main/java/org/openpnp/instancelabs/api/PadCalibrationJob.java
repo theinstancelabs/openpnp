@@ -1497,6 +1497,7 @@ final class PadCalibrationJob {
         b.hopMm = DEFAULT_HOP_MM;
         b.matchRadiusMm = searchMm;
         r.blocks.add(b);
+        r.lookXy = looks(b.xy);
         r.purgeXy = new ArrayList<>(); // the needle was primed until paste came out: no purge before the locator
         r.areaReserveMm = landingLayout.reservedMm; // the whole band, as a ladder reserves its rows
         DoseBlocksResult res = engine(() -> engine.runDoseBlocks(r), x -> x.run, x -> x.ok, x -> x.message);
@@ -1532,6 +1533,7 @@ final class PadCalibrationJob {
         row.hopMm = LandingFit.ROW_MM[1];
         row.matchRadiusMm = LandingFit.MATCH_MM + LandingFit.RESIDUAL_MAX_MM;
         r2.blocks.add(row);
+        r2.lookXy = looks(row.xy);
         r2.purgeXy = shifted(l.purge, coarse);
         DoseBlocksResult res2 = engine(() -> engine.runDoseBlocks(r2), x -> x.run, x -> x.ok, x -> x.message);
         results.add(res2);
@@ -1582,18 +1584,38 @@ final class PadCalibrationJob {
         done(ROW, lr.saved ? "saved" : "not saved: asked whether the " + setupName + " is on");
     }
 
-    /** A step of the landing check: its band's frames, every new blob kept, the job's setup and needle. */
+    /** A step of the landing check: every new blob kept, the job's setup and needle. */
     private DoseBlocksRequest landingRequest() {
         DoseBlocksRequest r = new DoseBlocksRequest();
         r.kind = DoseBlocksRequest.LADDER;
         r.landingCheck = true;
         r.parkAfter = false;
-        r.lookXy = new ArrayList<>();
-        for (double[] f : landingLayout.frames) {
-            r.lookXy.add(f.clone());
-        }
         stamp(r);
         return r;
+    }
+
+    /**
+     * The frames a landing check's step looks through: the band's (the new blobs anywhere in it), and one more centred
+     * on each spot that no band frame holds {@link PadLadder#TILE_INSET_MM} inside: the band's frames meet at their
+     * edges, and the bare check before a dot needs its ring inside the frame.
+     */
+    private List<double[]> looks(List<double[]> spots) {
+        double[] fov = fovMm();
+        List<double[]> l = new ArrayList<>();
+        for (double[] f : landingLayout.frames) {
+            l.add(f.clone());
+        }
+        for (double[] p : spots) {
+            boolean held = false;
+            for (double[] f : l) {
+                held |= Math.abs(p[0] - f[0]) <= fov[0] / 2 - PadLadder.TILE_INSET_MM
+                        && Math.abs(p[1] - f[1]) <= fov[1] / 2 - PadLadder.TILE_INSET_MM;
+            }
+            if (!held) {
+                l.add(p.clone());
+            }
+        }
+        return l;
     }
 
     /** Spots moved by minus the coarse shift, so the dots land on them (§22.3). */

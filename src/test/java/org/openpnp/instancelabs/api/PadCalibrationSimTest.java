@@ -785,6 +785,144 @@ public class PadCalibrationSimTest {
     }
 
     // ------------------------------------------------------------------------------------------
+    // Tip setups (§22.3, §22.8): where a tip lands, its dots, a second setup calibrated, labels and photos
+    // ------------------------------------------------------------------------------------------
+
+    static final String K25 = "25g-straight";
+
+    /** The scene's paste with the tip of {@code key} on the SIM head: its own mass per turn, footprint and landing. */
+    static void byTip(JsonObject scene, String key, double mRevMg, double c, double dx, double dy) {
+        JsonObject p = paste(scene);
+        JsonObject by = p.has("byTip") ? p.getAsJsonObject("byTip") : new JsonObject();
+        JsonObject t = new JsonObject();
+        t.addProperty("mRevMg", mRevMg);
+        JsonObject f = new JsonObject();
+        f.addProperty("c", c);
+        f.addProperty("e", 0.77);
+        t.add("footprint", f);
+        JsonArray b = new JsonArray();
+        b.add(new com.google.gson.JsonPrimitive(dx));
+        b.add(new com.google.gson.JsonPrimitive(dy));
+        t.add("landingBiasMm", b);
+        by.add(key, t);
+        p.add("byTip", by);
+    }
+
+    Long token() throws Exception {
+        JsonElement t = ok(get("/api/status")).getAsJsonObject("dispense").getAsJsonObject("needle").get("changedAtMs");
+        return t == null || t.isJsonNull() ? null : t.getAsLong();
+    }
+
+    /** The mounted needle's frame and its offset (the bench's K), under the needle token now. */
+    void frame() throws Exception {
+        String tk = String.valueOf(token());
+        ok(call("POST", "/api/needle/anchor", "{\"surfaceZ\":5.5,\"needleContactRawSum\":65.59,\"needleChangedAtMs\":"
+                + tk + "}"));
+        ok(call("POST", "/api/needle/offset", "{\"offsetMm\":-2.59,\"needleChangedAtMs\":" + tk + "}"));
+    }
+
+    /** Add a tip's 25G straight (its recipe from the 22G's), mounted, its frame recorded. */
+    void mount25() throws Exception {
+        ok(call("POST", "/api/tip-setups", "{\"name\":\"25G straight\",\"gauge\":25,\"idMm\":0.25,\"odMm\":0.51,"
+                + "\"form\":\"straight\",\"taper\":\"straight-steel\",\"lengthMm\":12.7}"));
+        ok(call("POST", "/api/tip-setups/" + K25 + "/mount", "{\"why\":\"test\"}"));
+        frame();
+    }
+
+    /** The blank wiped by the operator: its paste (the SIM's), the calibration area and the purge row free again. */
+    void wipeBlank() throws Exception {
+        ok(call("POST", "/api/sim/paste/wipe", "{\"region\":\"blank\"}"));
+        ok(call("POST", "/api/calibration-area/reset", null));
+        ok(call("POST", "/api/purge-row/reset", null));
+    }
+
+    /** Check where it lands (§22.3), waited for. */
+    JsonObject landingCheck() throws Exception {
+        JsonObject started = ok(call("POST", "/api/pad-calibrations", "{\"measure\":\"landing\"," + attest()
+                + ",\"wait\":true}"));
+        JsonObject job = started.getAsJsonObject("result");
+        assertEquals("done", str(job, "state"), job.toString());
+        assertEquals("landing", str(job, "measure"));
+        return job;
+    }
+
+    static JsonObject landing(JsonObject job) {
+        return result(job).getAsJsonObject("landing");
+    }
+
+    @Test
+    public void theLandingCheckFindsWhereEachTipLandsAndAsksWhenItMoved() throws Exception {
+        start(sc -> {
+            byTip(sc, Tip22.KEY, 2.30, 0.875, 0.4, 0);
+            byTip(sc, K25, 1.6, 0.6, 2.4, -0.4);
+        });
+        // a new 22G that lands 0.4 mm off: everything but prime, the test dot and the landing check waits for it
+        ok(call("POST", "/api/needle/changed", "{\"why\":\"a new 22G\"}"));
+        frame();
+        regulatorAtMs = System.currentTimeMillis();
+        // a by-hand ladder is refused before the landing is checked
+        Res refused = call("POST", "/api/pad-calibrations", "{\"steps\":[\"ladder\"],\"doseSteps\":800,"
+                + "\"typeKeys\":[\"chip-0603\"]," + attest() + "}");
+        assertEquals(409, refused.status, refused.toString());
+        assertTrue(str(refused.json(), "reason").startsWith("I4: the 22G tip was put on at "), refused.toString());
+        assertTrue(str(refused.json(), "reason").endsWith("and where it lands has not been checked: check where it "
+                + "lands (Setup › Dispenser & tip)."), refused.toString());
+        JsonObject pv = ok(get("/api/pad-calibrations/preview?measure=landing"));
+        assertEquals(6, pv.getAsJsonObject("landing").get("searchMm").getAsDouble(), 0, "a bent tip, its bend not recorded");
+        assertTrue(str(pv, "sentence").contains("Lays one dot, then 8 purge dots and 8 dots in a row on the blank (X "
+                + "290.0–330.0, Y 240.0–260.0), looks at them, and saves where the needle lands. Uses 20 mm of the "
+                + "calibration area (20.0 left). Searches ±6 mm."), str(pv, "sentence"));
+        JsonObject l22 = landing(landingCheck());
+        assertTrue(l22.get("saved").getAsBoolean(), l22.toString());
+        assertEquals(0.4, l22.get("dxMm").getAsDouble(), 0.08, l22.toString());
+        assertEquals(0.0, l22.get("dyMm").getAsDouble(), 0.08, l22.toString());
+        assertEquals(8, l22.get("n").getAsInt());
+        JsonObject needle = ok(get("/api/status")).getAsJsonObject("dispense").getAsJsonObject("needle");
+        assertTrue(needle.get("xyChecked").getAsBoolean(), needle.toString());
+
+        // the 25G straight lands 2.4 mm off: the locator finds it within ±6 mm, the row fits it
+        wipeBlank();
+        mount25();
+        JsonObject job = landingCheck();
+        JsonObject l25 = landing(job);
+        assertTrue(l25.get("saved").getAsBoolean(), l25.toString());
+        assertEquals(2.4, l25.get("dxMm").getAsDouble(), 0.08, l25.toString());
+        assertEquals(-0.4, l25.get("dyMm").getAsDouble(), 0.08, l25.toString());
+        assertTrue(Pattern.compile("The 25G straight lands \\+2\\.\\d\\d, −0\\.\\d\\d mm from the N2 head offset \\(8 dots, "
+                + "scatter 0\\.\\d\\d mm\\)\\. Saved: every dot is corrected by it\\.").matcher(str(result(job), "sentence"))
+                .matches(), str(result(job), "sentence"));
+        assertNotNull(l25.get("photoId"), "the band's after frame is its result photo");
+        assertTrue(result(job).getAsJsonArray("photos").size() > 0);
+        assertEquals(2.4, svc.getConfig().needleLanding.dxMm, 0.08);
+
+        // the 25G now lands 1.5 mm from where it landed: the check asks and saves nothing; the operator's answer saves
+        wipeBlank();
+        JsonObject moved = scene("display");
+        byTip(moved, Tip22.KEY, 2.30, 0.875, 0.4, 0);
+        byTip(moved, K25, 1.6, 0.6, 3.9, -0.4);
+        writeScene(moved);
+        Thread.sleep(400); // the scene file is read again when it changed (250 ms)
+        JsonObject asked = landingCheck();
+        JsonObject q = landing(asked);
+        assertEquals(2, q.get("searchMm").getAsDouble(), 0, "a straight tip with a landing of its own");
+        assertFalse(q.get("saved").getAsBoolean(), q.toString());
+        assertTrue(str(q, "question").startsWith("The 25G straight lands 1.5 mm from where it landed on "), q.toString());
+        assertTrue(str(q, "question").endsWith(": is the 25G straight on the dispenser?"), q.toString());
+        assertEquals("question", str(result(asked), "outcome"));
+        assertEquals(2.4, svc.getConfig().needleLanding.dxMm, 0.08, "nothing saved");
+        JsonObject saved = ok(call("POST", "/api/needle/landing", "{\"jobId\":\"" + str(asked, "id") + "\","
+                + "\"accept\":true,\"needleChangedAtMs\":" + token() + "}"));
+        assertEquals(3.9, saved.getAsJsonObject("needleLanding").get("dxMm").getAsDouble(), 0.08);
+        assertEquals(3.9, svc.getConfig().needleLanding.dxMm, 0.08);
+        assertTrue(landing(ok(get("/api/pad-calibrations/" + str(asked, "id")))).get("saved").getAsBoolean());
+    }
+
+    /** The seeded setup's key. */
+    static final class Tip22 {
+        static final String KEY = "ad22tta-b";
+    }
+
+    // ------------------------------------------------------------------------------------------
     // §11.7: the negative controls, each with its expected reason
     // ------------------------------------------------------------------------------------------
 
