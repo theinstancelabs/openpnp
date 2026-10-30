@@ -367,12 +367,6 @@ ask, but each can explain a surprise on the machine.
   anything moves when that floor lies at or above the board top ("… it cannot reach that height …"): a board 1.5 mm
   or more under the anchor is probed by hand. Between about 1.25 and 1.5 mm under it the probe reaches only a board
   that sits at or above its typed Z.
-- **Fiducial search frames and the acceptance circle use different centres** (F4): frames are tiled around the
-  prediction, marks are accepted within the radius of the expected position. A mark well inside the radius can lie
-  outside every frame (at 8 mm the 1920 × 1080 frame tiles only vertically, usable ±9.1 × ±4.6 mm).
-- **The fit against the previous registration depends on the board's rotation**: the machine's anisotropy
-  (1.0014 / 0.9940) is fixed in the machine frame, so re-seating the same board about 10° rotated can exceed the
-  0.15° shear limit and refuse a correct fit ("the fiducials do not fit this board's last registration").
 - **The look before an N1 touch** takes its mm/px from the camera's default Z, not the surface Z: the 1.0 mm disc is
   slightly mis-scaled on the real camera.
 - **Tasks dropped behind a failing OpenPnP task** (fixed in the final round for the web home and every engine
@@ -386,11 +380,8 @@ ask, but each can explain a surprise on the machine.
   the needle frame again, probe the blank, touch off, register the board. Places carry no time: retake the waste
   place's Z with N1 too, as nothing checks it against the move (the frame tolerance is 1.0 mm).
 - **A STOP or failure during an engine home** (fixed in the final round) no longer leaves a stale start time behind.
-- **A run refused after its home and Z check.** The stream check runs last: a board with two pads of one part that
-  share a name (or have none) can be refused there ("a pad's dots are never split") although the plan, the estimate
-  and the interlocks accepted it; so is every run of a two-turn profile (a purge dot is capped at one revolution plus
-  the 20° phase turn), which the settings still accept. Keep the profile at one turn or less.
-- **"Test run with fewer dots" across a multi-dot pad** keeps the pad's full dot count, so the dose check (R6) does not
-  see that the pad gets fewer steps. Weigh or image only whole pads of such a test.
-- **An upload during a run.** The upload checks once, at its start, that the engine is idle; a run or a probe started
-  during the board file's reading (up to 20 s) is not refused. Do not start a run while the upload dialog reads a file.
+- **Fixed in the final fix round (E2):** the fiducial search frames tile the radius around the expected position (the
+  first frame of a re-seated board's later fiducials may then hold the mark off-centre: one more centring look); the
+  fit against the previous registration is compared in the machine frame (re-seat a board about 10° turned once to
+  confirm it is accepted); two pads of one name are no split pad; a two-turn profile is refused by the settings; a test
+  run with fewer dots lays whole pads; no run or probe starts while an upload reads its file.

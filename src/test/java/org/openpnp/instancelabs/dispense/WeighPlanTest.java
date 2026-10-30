@@ -1,6 +1,7 @@
 package org.openpnp.instancelabs.dispense;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -74,6 +75,25 @@ public class WeighPlanTest {
 
     static WeighPlan.Need need(int steps, int groups) {
         return new WeighPlan.Need(steps, groups);
+    }
+
+    /**
+     * Review 2: after the ladder the weighing may lay another dose; the coupon step checked the margin around the
+     * planned grid only (§7.2 step 2), so a new grid must stay inside it, or the coupon keeps its planned weighing.
+     */
+    @Test
+    public void aNewGridStaysInsideTheMarginTheCouponStepChecked() {
+        double one = DoseModel.dHiMm(1600);
+        double half = DoseModel.dHiMm(800);
+        List<double[]> planned = WeighPlan.grid(COUPON, 34, 2.5, one, 3);
+        double in = WeighPlan.insetMm(one, 3);
+        assertTrue(WeighPlan.within(planned, in, planned, in));
+        assertTrue(WeighPlan.within(WeighPlan.grid(COUPON, 28, 2.5, one, 3), in, planned, in), "fewer rows");
+        List<double[]> halves = WeighPlan.grid(COUPON, 68, 2.5, half, 3);
+        assertEquals(68, halves.size(), "68 half-turn dots fit the coupon ...");
+        assertFalse(WeighPlan.within(halves, WeighPlan.insetMm(half, 3), planned, in), "... in two more rows than "
+                + "the 34 one-turn dots the coupon step looked around");
+        assertFalse(WeighPlan.within(null, in, planned, in), "no grid: the dots do not fit the coupon");
     }
 
     @Test

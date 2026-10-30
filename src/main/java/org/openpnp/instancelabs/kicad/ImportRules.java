@@ -22,12 +22,15 @@ import org.openpnp.instancelabs.kicad.KicadPcb.Graphic;
 /**
  * KiCad board + frame → {@link ImportProposal} (design §2.7–§2.9): classifies every footprint (first matching rule
  * wins), takes the paste apertures, names placements and pads uniquely, and groups footprints into package variants.
- * Do-not-place footprints get no paste unless the operator asks for it (main-thread decision, §13 item 1).
+ * Do-not-place footprints get no paste unless the operator asks for it (main-thread decision, §13 item 1); footprints
+ * with a paste opening outside the board's box get none (OFF_BOARD).
  */
 public final class ImportRules {
     private static final Pattern FID_REF = Pattern.compile("(?i)^FID");
     private static final Pattern FID_NAME = Pattern.compile("(?i)^fiducial");
     private static final Pattern DNP_VALUE = Pattern.compile("(?i)^(DNP|DNF|NP|DO NOT PLACE)$");
+    /** A paste opening may reach this far past the board's box (rounding) and still be on the board. */
+    private static final double EDGE_TOL_MM = 0.001;
 
     private final boolean fiducialNameRule;
     private final boolean pasteDnp;
@@ -79,6 +82,7 @@ public final class ImportRules {
         Set<String> usedIds = new HashSet<>();
         Map<String, String> padIds = new HashMap<>(); // pad id -> placement id
         List<String> dnpSkipped = new ArrayList<>();
+        List<String> offBoard = new ArrayList<>();
         out.counts.footprints = pcb.footprints.size();
         for (int i = 0; i < pcb.footprints.size(); i++) {
             deadline.check();
@@ -112,6 +116,12 @@ public final class ImportRules {
                     artOnly(out, f, fp.hasAttr("board_only") ? "board only"
                             : fp.hasAttr("through_hole") ? "through-hole" : "no paste pads");
                 }
+                continue;
+            }
+            if (!fiducial && !onBoard(frame, fp, r.apertures)) {
+                // a spare parked next to the board, or a part past its edge: its paste would land off the board
+                artOnly(out, f, "outside the board");
+                offBoard.add(f.ref);
                 continue;
             }
             if (dnp && !pasteDnp) {
@@ -206,6 +216,13 @@ public final class ImportRules {
                     : "Only 1 fiducial") + " on the top side: Register board needs 2 (3 are better). Without them, "
                     + "place the board by hand and probe it by hand."));
         }
+        if (!offBoard.isEmpty()) {
+            boolean one = offBoard.size() == 1;
+            out.warn(ImportWarning.of("OFF_BOARD", offBoard, ImportWarning.names(offBoard) + (one ? " is" : " are")
+                    + " not inside the board outline: " + (one ? "it gets no paste (its" : "they get no paste (their")
+                    + " paste would land off the board). Move " + (one ? "it" : "them") + " onto the board in KiCad if "
+                    + (one ? "it is" : "they are") + " part of this board."));
+        }
         if (!dnpSkipped.isEmpty()) {
             boolean one = dnpSkipped.size() == 1;
             out.warn(ImportWarning.of("DNP_SKIPPED", dnpSkipped, ImportWarning.names(dnpSkipped)
@@ -226,6 +243,29 @@ public final class ImportRules {
     boolean isFiducial(Footprint fp) {
         return "fiducial".equalsIgnoreCase(fp.lib) || FID_REF.matcher(fp.ref).find()
                 || fiducialNameRule && FID_NAME.matcher(fp.name).find();
+    }
+
+    /**
+     * Every paste opening of the footprint lies inside the board's box (§2.6: the outline's extents), to 0.001 mm;
+     * an opening is a rectangle at the footprint's angle plus its own (§2.8).
+     */
+    private static boolean onBoard(BoardFrame frame, Footprint fp, List<PasteRules.Aperture> apertures) {
+        double w = frame.widthMm();
+        double h = frame.heightMm();
+        double[] at = frame.toBoard(fp.x, fp.y);
+        double t = Math.toRadians(fp.angle);
+        for (PasteRules.Aperture a : apertures) {
+            double cx = at[0] + a.x * Math.cos(t) - a.y * Math.sin(t);
+            double cy = at[1] + a.x * Math.sin(t) + a.y * Math.cos(t);
+            double u = Math.toRadians(fp.angle + a.rotation);
+            double hx = (Math.abs(a.w * Math.cos(u)) + Math.abs(a.h * Math.sin(u))) / 2;
+            double hy = (Math.abs(a.w * Math.sin(u)) + Math.abs(a.h * Math.cos(u))) / 2;
+            if (cx - hx < -EDGE_TOL_MM || cx + hx > w + EDGE_TOL_MM || cy - hy < -EDGE_TOL_MM
+                    || cy + hy > h + EDGE_TOL_MM) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static void artOnly(ImportProposal out, FootprintP f, String why) {
@@ -329,7 +369,7 @@ public final class ImportRules {
         StringBuilder sb = new StringBuilder();
         for (PasteRules.Aperture a : l) {
             sb.append(a.name).append(':').append(f3(a.x)).append(',').append(f3(a.y)).append(',').append(f3(a.w))
-                    .append(',').append(f3(a.h)).append(',').append(f3(a.rotation)).append(',')
+                    .append(',').append(f3(a.h)).append(',').append(deg3(a.rotation)).append(',')
                     .append(String.format(Locale.ROOT, "%.1f", a.roundness)).append(';');
         }
         return sb.toString();
@@ -338,6 +378,15 @@ public final class ImportRules {
     private static String f3(double v) {
         String s = String.format(Locale.ROOT, "%.3f", v);
         return "-0.000".equals(s) ? "0.000" : s;
+    }
+
+    /**
+     * A pad rotation to 0.001° in (−180, 180]: −180.000 reads 180.000. A relative angle of 180 + ε (256.1 − 76.1 in
+     * floating point) normalises to −180 + ε, which rounds to −180.000, and two copies of one footprint were split.
+     */
+    private static String deg3(double v) {
+        String s = f3(v);
+        return "-180.000".equals(s) ? "180.000" : s;
     }
 
     private static double[] bodyBox(Footprint fp, String layer) {

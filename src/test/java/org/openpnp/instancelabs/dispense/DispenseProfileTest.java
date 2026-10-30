@@ -60,20 +60,25 @@ public class DispenseProfileTest {
         assertEquals(p.netDeg(C), p.forwardDeg(C), 0);
     }
 
-    /** A dot turns a whole number of steps that divides a revolution (or 1-2 revolutions): the angle repeats. */
+    /**
+     * A dot turns a quarter, half or whole revolution (R1): the angle repeats. Review 1: two turns (3200 steps)
+     * passed here while the stream validator caps a purge dot, which turns the profile's dose, at one revolution
+     * and the 20° phase turn, so every board run of such a profile was refused only after its home and Z check.
+     */
     @Test
     public void netStepsPerDotMustRepeatTheAngle() {
-        for (int ok : new int[] {1600, 800, 400, 200, 3200}) {
+        for (int ok : new int[] {1600, 800, 400}) {
             DispenseProfile p = new DispenseProfile();
             p.netStepsPerDot = ok;
             assertTrue(p.validate(C).isEmpty(), ok + ": " + p.validate(C));
         }
-        for (int bad : new int[] {600, 0, -800, 4800, 1000, 2400}) {
+        for (int bad : new int[] {3200, 200, 100, 600, 0, -800, 4800, 1000, 2400}) {
             DispenseProfile p = new DispenseProfile();
             p.netStepsPerDot = bad;
             List<String> v = p.validate(C);
-            assertFalse(v.isEmpty(), "" + bad);
-            assertTrue(v.get(0).contains("netStepsPerDot"), v.toString());
+            assertEquals(Arrays.asList("profile netStepsPerDot must be 400, 800 or 1600 steps (a quarter, half or "
+                    + "whole turn of the 1600 steps of a revolution): the start angle repeats and a purge dot turns "
+                    + "at most one revolution"), v, "" + bad);
         }
     }
 

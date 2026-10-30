@@ -195,7 +195,10 @@ public final class DoseRecords {
         return l;
     }
 
-    /** The weighed readings among fresh records, with the dots the camera found on their coupons. */
+    /**
+     * The weighed readings among fresh records, with the dots laid on their coupons (§7.5: mass per dot is the
+     * total over the dots laid, not over those the camera found).
+     */
     public static List<LadderStats.MassReading> readings(List<DoseRecord> fresh, List<DoseRecord> all) {
         Map<Long, DoseRecord> byId = new HashMap<>();
         for (DoseRecord r : all) {
@@ -207,9 +210,7 @@ public final class DoseRecords {
                 continue;
             }
             DoseRecord coupon = r.couponRecordId == null ? null : byId.get(r.couponRecordId);
-            int dots = coupon != null && coupon.found != null && coupon.found > 0 ? coupon.found
-                    : r.mgPerDot != null && r.mgPerDot > 0 ? (int) Math.round(r.totalMg / r.mgPerDot)
-                            : coupon != null ? coupon.n : 0;
+            int dots = coupon != null ? coupon.n : r.n;
             if (dots > 0) {
                 l.add(new LadderStats.MassReading(r.id, r.steps, dots, r.totalMg));
             }

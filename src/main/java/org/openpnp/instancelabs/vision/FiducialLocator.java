@@ -25,10 +25,10 @@ import org.openpnp.util.Utils2D;
  * fit of {@code tools/register.py}.
  *
  * <ul>
- * <li><b>Search.</b> The first frame of each fiducial is centred on its prediction; only marks
- * within searchRadiusMm of its expected position count, so the radius the operator sets bounds how
- * far a board may have moved (a prediction moves the frames, never the bound). If it finds nothing,
- * more frames tile the circle around the prediction, nearest first ({@link #searchTiles}); the
+ * <li><b>Search.</b> Only marks within searchRadiusMm of a fiducial's expected position count, so
+ * the radius the operator sets bounds how far a board may have moved. The frames tile that circle
+ * ({@link #searchTiles}, at most {@link #MAX_SEARCH_FRAMES}), the one nearest the prediction first:
+ * a prediction orders the frames, it never moves the bound or leaves part of the circle unseen. The
  * search stops at the first frame with a mark. A mark that centring carries past the bound is not
  * found either.</li>
  * <li><b>Centring.</b> The camera moves onto the mark until it sits less than
@@ -188,6 +188,9 @@ public final class FiducialLocator {
     private final BooleanSupplier aborted;
     private final Consumer<Found> onFound;
     private final Consumer<String> onStep;
+    /** The camera's frame size (px) and scale (mm/px), from its first frame: the search tiles need them. */
+    private int frameW, frameH;
+    private double frameMmPerPxX, frameMmPerPxY;
 
     /**
      * onFound is told about each fiducial as it is centred; onStep gets the phase text before
@@ -288,8 +291,8 @@ public final class FiducialLocator {
     }
 
     /**
-     * Search, then centre, one fiducial predicted at (px, py): frames around the prediction, marks
-     * within searchRadiusMm of the target's expected position.
+     * Search, then centre, one fiducial predicted at (px, py): marks within searchRadiusMm of the
+     * target's expected position, the frames tiling that circle nearest the prediction first.
      */
     private Found locate(Target t, double px, double py, String label) throws Exception {
         double radius = s.searchRadiusMm;
@@ -298,15 +301,28 @@ public final class FiducialLocator {
         double dMm = t.diameterMm > 0 ? t.diameterMm : s.detector.diameterMm;
         FiducialDetector.Settings ds = s.detector.copy();
         ds.diameterMm = dMm;
+        double margin = dMm * ds.maxDiameterFactor;
         int frames = 0;
-        DotImager.Frame f = capture(px, py, label);
+        DotImager.Frame f;
+        List<double[]> tiles;
+        if (frameW > 0) {
+            tiles = searchOrder(frameW, frameH, frameMmPerPxX, frameMmPerPxY, margin, radius, px - ex,
+                    py - ey);
+            f = capture(ex + tiles.get(0)[0], ey + tiles.get(0)[1], label);
+        }
+        else {
+            // the camera's first frame (its size is not known before it): the expected position's tile
+            f = capture(ex, ey, label);
+            tiles = searchOrder(frameW, frameH, frameMmPerPxX, frameMmPerPxY, margin, radius, px - ex,
+                    py - ey);
+            tiles.removeIf(c -> c[0] == 0 && c[1] == 0);
+            tiles.add(0, new double[] {0, 0});
+        }
         frames++;
-        List<double[]> tiles = searchTiles(f.image.getWidth(), f.image.getHeight(), f.mmPerPxX,
-                f.mmPerPxY, dMm * ds.maxDiameterFactor, radius);
         FiducialDetector.Detection d = null;
         for (int k = 0; k < tiles.size(); k++) {
             if (k > 0) {
-                f = capture(px + tiles.get(k)[0], py + tiles.get(k)[1],
+                f = capture(ex + tiles.get(k)[0], ey + tiles.get(k)[1],
                         label + " · frame " + (k + 1) + " of " + tiles.size());
                 frames++;
             }
@@ -372,7 +388,25 @@ public final class FiducialLocator {
             throw new Exception("the top camera returned no image at X "
                     + String.format(Locale.ROOT, "%.2f, Y %.2f", x, y));
         }
+        if (frameW == 0) {
+            frameW = f.image.getWidth();
+            frameH = f.image.getHeight();
+            frameMmPerPxX = f.mmPerPxX;
+            frameMmPerPxY = f.mmPerPxY;
+        }
         return f;
+    }
+
+    /**
+     * A fiducial's search frames as offsets from its expected position: the tiles of its search
+     * circle ({@link #searchTiles}), nearest the prediction (dx, dy from the expected position)
+     * first, ties in the tiles' own order.
+     */
+    private static List<double[]> searchOrder(int w, int h, double mmPerPxX, double mmPerPxY,
+            double marginMm, double searchRadiusMm, double dx, double dy) {
+        List<double[]> tiles = searchTiles(w, h, mmPerPxX, mmPerPxY, marginMm, searchRadiusMm);
+        tiles.sort(Comparator.comparingDouble(c -> Math.hypot(c[0] - dx, c[1] - dy)));
+        return tiles;
     }
 
     /** Not found within the radius of the target's expected position. */
@@ -386,11 +420,11 @@ public final class FiducialLocator {
     }
 
     /**
-     * Frame centres, as offsets from the prediction, that cover the search circle: a grid of the
-     * usable half-frame hx = W mmPerPxX / 2 - margin, hy = H mmPerPxY / 2 - margin (margin = the
-     * largest 2r ring radius, so every mark in a tile can be scored), keeping the tiles that
-     * reach into the circle, nearest first (ties counter-clockwise from +x), at most
-     * {@link #MAX_SEARCH_FRAMES}. The first is always (0, 0).
+     * Frame centres, as offsets from the search circle's centre (a fiducial's expected position),
+     * that cover the circle: a grid of the usable half-frame hx = W mmPerPxX / 2 - margin,
+     * hy = H mmPerPxY / 2 - margin (margin = the largest 2r ring radius, so every mark in a tile
+     * can be scored), keeping the tiles that reach into the circle, nearest first (ties
+     * counter-clockwise from +x), at most {@link #MAX_SEARCH_FRAMES}. The first is always (0, 0).
      */
     public static List<double[]> searchTiles(int w, int h, double mmPerPxX, double mmPerPxY,
             double marginMm, double searchRadiusMm) {
@@ -446,9 +480,9 @@ public final class FiducialLocator {
      * Fits board -> machine to the found fiducials and checks it: |scale - 1| within
      * maxScaleErrorPct (the one scale for 2 points), |shear| within maxShearDeg (3+), every
      * residual within maxResidualMm (4+; zero by construction for 3), and against previous (may
-     * be null): scales within maxScaleChangePct and shear within maxShearChangeDeg when both are
-     * affine fits, the scale when both are similarities. Throws Failure FEW or FIT; nothing is
-     * stored by this class.
+     * be null): scales within maxScaleChangePct and shear within maxShearChangeDeg in the machine
+     * frame ({@link #machineFrame}) when both are affine fits, the scale when both are
+     * similarities. Throws Failure FEW or FIT; nothing is stored by this class.
      */
     public static Fit fit(List<Found> found, Fit previous, Settings s) throws Failure {
         if (s == null) {
@@ -537,9 +571,33 @@ public final class FiducialLocator {
             // A similarity has one scale, an affine two: they cannot be compared.
             return false;
         }
-        return !(Math.abs(fit.scaleX - prev.scaleX) <= limit)
-                || !(Math.abs(fit.scaleY - prev.scaleY) <= limit)
-                || !(Math.abs(fit.shearDeg - prev.shearDeg) <= s.maxShearChangeDeg);
+        // in the machine frame: the board-frame scales and shear turn with the seat
+        Fit a = machineFrame(fit.boardToMachine);
+        Fit b = machineFrame(prev.boardToMachine);
+        return !(Math.abs(a.scaleX - b.scaleX) <= limit)
+                || !(Math.abs(a.scaleY - b.scaleY) <= limit)
+                || !(Math.abs(a.shearDeg - b.shearDeg) <= s.maxShearChangeDeg);
+    }
+
+    /**
+     * The machine-frame part of a board-to-machine affine: the stretch P of its linear part
+     * L = P Q (P = sqrt(L Lᵀ), symmetric; Q a rotation), as the scales and shear of {@link Fit#of}.
+     * The machine's own scales and skew (bench: X 1.0011, Y 0.9947, shear -0.27 deg) lie in the
+     * machine frame, so P stays when the same board is seated at another angle; the board-frame
+     * scales and shear of Utils2D.affineInfo turn with the seat (about 0.014 deg of shear per deg).
+     */
+    static Fit machineFrame(AffineTransform t) {
+        double a = t.getScaleX();
+        double b = t.getShearX();
+        double c = t.getShearY();
+        double d = t.getScaleY();
+        double s00 = a * a + b * b;
+        double s01 = a * c + b * d;
+        double s11 = c * c + d * d;
+        double det = Math.abs(a * d - b * c);
+        double tr = Math.sqrt(s00 + s11 + 2 * det);
+        return Fit.of(new AffineTransform((s00 + det) / tr, s01 / tr, s01 / tr, (s11 + det) / tr, 0, 0), null,
+                null);
     }
 
     /**

@@ -100,7 +100,7 @@ final class PadProfileViews {
             d.put("clearanceMm", info == null ? null : info.clearanceMm);
         }
         List<Map<String, Object>> dots = (List<Map<String, Object>>) out.get("dots");
-        // the dose the stream gives each dot: a run subset copies its dots without netSteps, its pads keep the dose
+        // the dose the stream gives each dot: its own, else its pad's (a plan copied without the dot fields)
         int[] doses = in == null ? null : DoseBlocks.dosesOf(p, in.profileSteps);
         for (int i = 0; dots != null && i < dots.size() && i < p.dots.size(); i++) {
             DispensePlan.PlannedDot x = p.dots.get(i);

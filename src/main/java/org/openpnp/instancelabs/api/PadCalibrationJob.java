@@ -217,6 +217,8 @@ final class PadCalibrationJob {
     double estimatedSeconds;
     double pasteMg;
     HomeTracker.Plan home;
+    /** Homes the job makes: the first engine step's when one is needed, every engine step's under "always". */
+    int homes;
     DispenseService.ZCheckPlan zCheck;
     String refusal;
     /** refused | suggestion-stale */
@@ -702,7 +704,8 @@ final class PadCalibrationJob {
     private void estimate(DispenseConfig c) {
         home = svc.homePlan();
         zCheck = svc.zCheckPlan(null, home.needed);
-        double homeS = home.needed ? home.estimateS : 0;
+        homes = DispenseConfig.HOME_ALWAYS.equals(c.homeBeforeRun) ? engineSteps() : home.needed ? 1 : 0;
+        double homeS = homes * home.estimateS;
         double zS = zCheck.needed ? DispenseService.PROBE_POINT_ESTIMATE_S : 0;
         Step b = find("blank");
         if (b != null && blankNeeded) {
@@ -735,6 +738,18 @@ final class PadCalibrationJob {
         for (Step s : steps) {
             estimatedSeconds += s.estimateS;
         }
+    }
+
+    /** The engine steps: the blank probe, each coupon's probe and look, the ladder, the weighing. */
+    private int engineSteps() {
+        int n = coupons.size() + (coupons.isEmpty() ? 0 : 1);
+        if (find("blank") != null && blankNeeded) {
+            n++;
+        }
+        if (find(LADDER) != null && layout != null) {
+            n++;
+        }
+        return n;
     }
 
     /** A block program's estimate (the builder's own) and its camera frames before and after. */
@@ -832,6 +847,11 @@ final class PadCalibrationJob {
                         k.dots, DoseModel.turnName(k.steps), k.pitch, k.place, k.rect[2] - k.rect[0],
                         k.rect[3] - k.rect[1], c.padCalibration.couponMarginMm);
             }
+            String over = couponOverlap(c, k.rect);
+            if (over != null) {
+                return "The weigh coupon place " + k.place + " overlaps " + over + ": move it (Setup › Places › "
+                        + k.place + ").";
+            }
             String why = svc.couponReservation(k.place);
             if (why != null) {
                 return why;
@@ -879,14 +899,8 @@ final class PadCalibrationJob {
     /** What the calibration area overlaps: the purge row, a coupon place, the plan's pads + 3 mm; null when nothing. */
     private String overlap(DispenseConfig c) {
         double x0 = area.x0Mm, x1 = area.x0Mm + area.widthMm, y0 = area.y0Mm, y1 = area.y0Mm + area.heightMm;
-        DispenseConfig.PurgeRow row = c.purgeRow;
-        if (row.isDefined()) {
-            for (int i = 0; i < row.spots; i++) {
-                double[] s = row.spot(i);
-                if (distance(x0, y0, x1, y1, s[0], s[1], s[0], s[1]) < CalibrationArea.PURGE_CLEARANCE_MM - 1e-9) {
-                    return "the purge row";
-                }
-            }
+        if (nearPurgeRow(c, x0, y0, x1, y1)) {
+            return "the purge row";
         }
         for (String p : c.padCalibration.couponPlaces) {
             double[] r = c.padCalibration.couponRect(c, p);
@@ -895,6 +909,33 @@ final class PadCalibrationJob {
                 return "the weigh coupon place " + p;
             }
         }
+        return overPads(x0, y0, x1, y1);
+    }
+
+    /**
+     * What a weigh coupon's place overlaps: the purge row (its dots and the needle's Z are the blank's, under a
+     * coupon), the plan's pads + 3 mm (the board); null when nothing.
+     */
+    private String couponOverlap(DispenseConfig c, double[] r) {
+        return nearPurgeRow(c, r[0], r[1], r[2], r[3]) ? "the purge row" : overPads(r[0], r[1], r[2], r[3]);
+    }
+
+    /** A purge spot lies within {@link CalibrationArea#PURGE_CLEARANCE_MM} of the box. */
+    private static boolean nearPurgeRow(DispenseConfig c, double x0, double y0, double x1, double y1) {
+        DispenseConfig.PurgeRow row = c.purgeRow;
+        if (row.isDefined()) {
+            for (int i = 0; i < row.spots; i++) {
+                double[] s = row.spot(i);
+                if (distance(x0, y0, x1, y1, s[0], s[1], s[0], s[1]) < CalibrationArea.PURGE_CLEARANCE_MM - 1e-9) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** "the pads of {board} (3 mm around them)" when the box meets the plan's pads + 3 mm, else null. */
+    private String overPads(double x0, double y0, double x1, double y1) {
         if (entry != null) {
             for (DispensePlan.PlannedPad p : entry.plan.pads) {
                 double h = Math.max(p.wMm, p.hMm) / 2 + 3;
@@ -1200,7 +1241,9 @@ final class PadCalibrationJob {
 
     /**
      * §7.2: when the ladder changed a group's choice (its plan failed and an alternative would pass with a
-     * confirmed mass), the weighing weighs the new choice.
+     * confirmed mass), the weighing weighs the new choice, on a coupon whose checked margin holds its grid: the
+     * coupon step looked at each coupon around its planned grid, so a coupon whose new grid would reach past that
+     * (or not fit at all) weighs its planned dose, and the new one waits for another calibration.
      */
     private void reweigh(DispenseConfig c) throws Exception {
         if (manual != null || coupons.isEmpty()) {
@@ -1234,15 +1277,38 @@ final class PadCalibrationJob {
         }
         WeighPlan.Allocation a = WeighPlan.allocate(l, c.profile.netStepsPerDot,
                 massConfirmed(c.profile.netStepsPerDot), places.size());
+        double margin = c.padCalibration.couponMarginMm;
+        List<String> kept = new ArrayList<>();
         synchronized (lock) {
+            List<CouponPlan> checked = new ArrayList<>(coupons);
             coupons.clear();
             notWeighed.clear();
             notWeighed.addAll(a.notWeighed);
             for (int k = 0; k < a.coupons.size(); k++) {
-                coupons.add(coupon(c, places.get(k), a.coupons.get(k)));
+                CouponPlan was = checked.get(k);
+                CouponPlan now = a.coupons.get(k) == was.steps ? was : coupon(c, places.get(k), a.coupons.get(k));
+                if (now != was && !WeighPlan.within(now.grid, WeighPlan.insetMm(now.d95, margin), was.grid,
+                        WeighPlan.insetMm(was.d95, margin))) {
+                    kept.add(String.format(Locale.ROOT, "the %s weigh dots do not fit where the camera checked %s: it "
+                            + "weighs the %s as planned; Calibrate again weighs the %s", DoseModel.turnName(now.steps),
+                            was.place, DoseModel.turnNoun(was.steps), DoseModel.turnNoun(now.steps)));
+                    now = was;
+                }
+                coupons.add(now);
             }
+            for (int s : a.coupons) {
+                boolean weighed = false;
+                for (CouponPlan k : coupons) {
+                    weighed |= k.steps == s;
+                }
+                if (!weighed && !notWeighed.contains(s)) {
+                    notWeighed.add(s);
+                }
+            }
+            java.util.Collections.sort(notWeighed);
         }
         warnings.add("the ladder changed a group's dose: the weighing weighs " + couponWords());
+        warnings.addAll(kept);
     }
 
     /** A connected balance (the SIM's, §11.6): the job reads both values itself; the emulated human wipes. */
@@ -1326,6 +1392,10 @@ final class PadCalibrationJob {
             if (k == null || k.record == null) {
                 throw ApiException.badRequest("no weigh coupon '" + r.place + "' in this calibration");
             }
+            if (order.contains(k)) {
+                // one mass row per coupon: the second would be refused after the first was written
+                throw ApiException.badRequest(r.place + " is typed twice: type each coupon's two readings once");
+            }
             order.add(k);
         }
         for (CouponPlan k : coupons) {
@@ -1403,19 +1473,22 @@ final class PadCalibrationJob {
         return m.whyStale(now, c, ep);
     }
 
-    /** The mass record of a coupon's readings (§7.5), confirmed by the newest fresh reading it agrees with. */
+    /**
+     * The mass record of a coupon's readings (§7.5), confirmed by the newest fresh reading it agrees with. Per
+     * dot is per dot laid: every screw turn pushes its paste out, and a dot the camera missed left it on the tip
+     * for the next one.
+     */
     static DoseRecord massRow(DispenseService svc, DoseRecord coupon, double fullG, double emptyG, String method,
             String operator, String jobId) throws Exception {
         DispenseConfig c = svc.getConfig();
         DispenseDb db = svc.getDb();
-        int found = coupon.found != null && coupon.found > 0 ? coupon.found : coupon.n;
         DoseRecord m = massBase(coupon, method, operator, jobId);
         m.fullMg = round3(fullG * 1000);
         m.emptyMg = round3(emptyG * 1000);
         m.totalMg = round3(m.fullMg - m.emptyMg);
-        m.mgPerDot = m.totalMg / found;
+        m.mgPerDot = m.totalMg / coupon.n;
         m.mgPerStep = m.mgPerDot / coupon.steps;
-        m.mgSe = Math.sqrt(2) * ManualBalance.RESOLUTION_MG / found;
+        m.mgSe = Math.sqrt(2) * ManualBalance.RESOLUTION_MG / coupon.n;
         long now = System.currentTimeMillis();
         m.weighDelayS = (int) Math.max(0, (now - coupon.createdAtMs) / 1000);
         DoseRecord.Epochs ep = new DoseRecord.Epochs(svc.getControllerConnectedAtMs(), svc.isSimulatorConfirmed());
@@ -1978,11 +2051,13 @@ final class PadCalibrationJob {
     /** §7.9's sentence: what moves, where, how long, when it needs you. */
     String sentence(DispenseConfig c) {
         List<String> s = new ArrayList<>();
-        boolean homes = home != null && home.needed;
+        boolean homing = home != null && homes > 0;
         boolean z = zCheck != null && zCheck.needed;
-        if (homes || z) {
-            s.add((homes ? "Homes first (≈ " + minSec(home.estimateS) + ")" : "")
-                    + (homes && z ? " and checks" : z ? "Checks" : "") + (z ? " Z (≈ "
+        if (homing || z) {
+            s.add((!homing ? "" : homes > 1 ? "Homes before each of its " + homes + " steps (the setting is: always "
+                    + "home first; ≈ " + minSec(homes * home.estimateS) + ")" : "Homes first (≈ "
+                            + minSec(home.estimateS) + ")")
+                    + (homing && z ? " and checks" : z ? "Checks" : "") + (z ? " Z (≈ "
                             + minSec(DispenseService.PROBE_POINT_ESTIMATE_S) + ")" : "") + ".");
         }
         Step b = find("blank");

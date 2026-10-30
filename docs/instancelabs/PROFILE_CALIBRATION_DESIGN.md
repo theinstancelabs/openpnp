@@ -1864,10 +1864,23 @@ Where `pc-api` differs from §12, the code is right:
   fingerprint, partial-paste packages, evidence) hold; a check that fails leaves the plan view whole with
   `profileCheckError`.
 
-Review 1's dose-stream minors, not fixed yet (final fix round): two footprint pads with the same name (or none) get the
-same pad index, and the validator's "a pad's dots are never split" rule can then refuse a plan the planner accepted;
-the purge-row cap (1600 + 89 steps per purge dot) refuses every run of a two-turn profile, which the profile validation
-still accepts; a "Test run with fewer dots" cut in the middle of a multi-dot pad keeps the pad's full dot count, so the
-dose check (R6) does not see the shorter pad.
+Review 1's dose-stream minors and review 2's calibration minors, fixed in the final fix round:
+
+- The stream takes each dot's pad from the planner's `padIndex` (two pads of one name are no split pad); a run subset
+  keeps each dot's pad index and dose.
+- `DispenseProfile.validate` takes 400, 800 or 1600 steps per dot (R1): a two-turn profile is a CONFIG refusal before
+  anything moves, not a stream refusal after the home.
+- A "Test run with fewer dots" lays whole pads: the cut falls before the pad it would split (400 `a test run lays whole
+  pads: the first pad, A.1, has 2 dots, so ask for at least 2` when the first pad alone is larger).
+- §7.5: the readings' answer refuses one coupon typed twice before writing (400 `coupon1 is typed twice: type each
+  coupon's two readings once`); `POST /api/coupons/{recordId}/reading` also takes `{skip: true}` (a coupon left after
+  Cancel or STOP at the readings is freed: `coupon1: weighing skipped; wipe its 68 half-turn dots off before it is used
+  again`); mass per dot is per dot laid, in the mass row and the pooled evidence.
+- §7.2: after the ladder a coupon whose new dose's grid would leave the margin its coupon step checked weighs its
+  planned dose (job warning `the quarter-turn weigh dots do not fit where the camera checked coupon1: it weighs the
+  half turn as planned; Calibrate again weighs the quarter turn`); a coupon place on the purge row or within 3 mm of
+  the plan's pads is refused at the start (`The weigh coupon place coupon1 overlaps the purge row: move it (Setup ›
+  Places › coupon1).`); under `homeBeforeRun` "always" the preview counts a home before every engine step (`Homes
+  before each of its 5 steps (the setting is: always home first; ≈ 2:05)`).
 
 §15 is in `REAL_MACHINE_TODO.md` (items 38–52).

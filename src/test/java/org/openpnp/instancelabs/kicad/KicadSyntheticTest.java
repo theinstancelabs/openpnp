@@ -405,6 +405,62 @@ public class KicadSyntheticTest {
         assertEquals(List.of("U1.1", "U1~2"), v.refs);
     }
 
+    /**
+     * Review 1: KiCad writes absolute pad angles, so a footprint at 76.1° has its 180° pad at 256.1°. 256.1 − 76.1 is
+     * 180 + ε in floating point, which normalises to −180 + ε and gave −180.000 in the package signature, while the
+     * copy at 0° gave 180.000: one footprint was split into two packages with a false PACKAGE_VARIANT warning.
+     */
+    @Test
+    public void aPadTurned180IsOnePackageAtAnyAngle() throws Exception {
+        String d1 = "(pad \"1\" smd rect (at -1.5 0) (size 1 1) " + PASTE + ")\n"
+                + "(pad \"2\" smd rect (at 1.5 0 180) (size 1 1) " + PASTE + ")\n";
+        String d2 = "(pad \"1\" smd rect (at -1.5 0 76.1) (size 1 1) " + PASTE + ")\n"
+                + "(pad \"2\" smd rect (at 1.5 0 256.1) (size 1 1) " + PASTE + ")\n";
+        ImportProposal p = Fixtures.board(20240108, OUTLINE + fp("D1", "SOD-123", 10, 10, 0, "", d1)
+                + fp("D2", "SOD-123", 30, 30, 76.1, "", d2)).proposal;
+        assertEquals(1, p.packages.size(), p.packages.size() > 1 ? p.packages.get(0).signature + " / "
+                + p.packages.get(1).signature : "");
+        assertEquals(List.of("D1", "D2"), p.packages.get(0).refs);
+        assertFalse(codes(p).contains("PACKAGE_VARIANT"), codes(p).toString());
+    }
+
+    /**
+     * Review 1: a footprint outside the board outline (a spare parked next to the board after "Update PCB from
+     * schematic") or with a paste opening past its edge became a pasted placement, and nothing warned. It is drawn
+     * only, with OFF_BOARD; a pad that reaches exactly to the edge is on the board.
+     */
+    @Test
+    public void footprintsOutsideTheBoardGetNoPaste() throws Exception {
+        String r = pad("1", "rect", -0.8, 0, 0.8, 0.95, "") + pad("2", "rect", 0.8, 0, 0.8, 0.95, "");
+        String turned = "(pad \"1\" smd rect (at -0.8 0 90) (size 0.8 0.95) " + PASTE + ")\n"
+                + "(pad \"2\" smd rect (at 0.8 0 90) (size 0.8 0.95) " + PASTE + ")\n";
+        ImportProposal p = Fixtures.board(20240108, OUTLINE + fp("R1", "R_0603", 25, 25, 0, "10k", r)
+                + fp("R2", "R_0603", -15, 25, 0, "10k", r) // parked next to the board
+                + fp("R3", "R_0603", 49.5, 25, 0, "10k", r) // pad 2 reaches X 50.7, the board ends at 50
+                + fp("R4", "R_0603", 48.8, 25, 0, "10k", r) // pad 2 ends on the edge
+                + fp("R5", "R_0603", 25, 49.4, 90, "10k", turned)) // turned: pad 2 reaches Y -0.6
+                .proposal;
+        List<String> placed = new ArrayList<>();
+        for (PlacementP pl : p.placements) {
+            placed.add(pl.id);
+        }
+        assertEquals(List.of("R1", "R4"), placed);
+        assertEquals(List.of("R2", "R3", "R5"), p.skipped.get(ImportProposal.SKIP_ART_ONLY));
+        assertEquals(2, p.counts.placements);
+        assertEquals(4, p.counts.pastePads);
+        assertEquals("outside the board", p.footprints.get(1).why);
+        assertEquals(ImportProposal.FootprintP.ART, p.footprints.get(1).kind);
+        ImportWarning w = p.warnings("OFF_BOARD").get(0);
+        assertEquals(List.of("R2", "R3", "R5"), w.refs);
+        assertEquals(3, w.group);
+        assertEquals("R2, R3, R5 are not inside the board outline: they get no paste (their paste would land off the "
+                + "board). Move them onto the board in KiCad if they are part of this board.", w.text);
+        ImportProposal one = Fixtures.board(20240108, OUTLINE + fp("R1", "R_0603", 25, 25, 0, "10k", r)
+                + fp("R2", "R_0603", -15, 25, 0, "10k", r)).proposal;
+        assertEquals("R2 is not inside the board outline: it gets no paste (its paste would land off the board). "
+                + "Move it onto the board in KiCad if it is part of this board.", one.warnings("OFF_BOARD").get(0).text);
+    }
+
     @Test
     public void customPadsShareOneNote() throws Exception {
         String custom = "(options (clearance outline) (anchor rect)) (primitives (gr_poly (pts (xy 0 0) (xy 1 0) (xy 1 1)) "
