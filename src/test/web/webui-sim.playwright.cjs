@@ -369,10 +369,12 @@ async function runFirstDots(page, n) {
     {
       const regState = () => page.evaluate(() => IL.ready().items.find((x) => x.key === 'regulator').state);
       const psi0 = await page.evaluate(() => IL.S.status.dispense.profile.pressurePsi);
+      // a profile write names the mounted tip setup it was made for (PROFILE_CALIBRATION_DESIGN.md §22.2)
+      const tipKey = () => page.evaluate(() => IL.S.status.dispense.tip.key);
       await page.evaluate(() => IL.attest.set('regulator', IL.S.status.dispense.profile.pressurePsi));
       check('regulator: the gauge tick counts (you)', (await regState()) === 'you', await regState());
       for (const v of [psi0 - 1, psi0]) {
-        const r = await page.request.put(BASE + 'api/config', { data: { profile: { pressurePsi: v } } });
+        const r = await page.request.put(BASE + 'api/config', { data: { profile: { pressurePsi: v }, forTip: await tipKey() } });
         check('regulator: profile saved at ' + v + ' psi', r.ok(), r.status());
         await page.waitForFunction((x) => IL.S.status.dispense.profile.pressurePsi === x, v, { timeout: 10000 });
       }
@@ -381,7 +383,7 @@ async function runFirstDots(page, n) {
       // a tick already at the new psi (another tab read the gauge before this one saw the change) stays
       for (const v of [psi0 - 1, psi0]) {
         await page.evaluate((x) => IL.attest.set('regulator', x), v);
-        await page.request.put(BASE + 'api/config', { data: { profile: { pressurePsi: v } } });
+        await page.request.put(BASE + 'api/config', { data: { profile: { pressurePsi: v }, forTip: await tipKey() } });
         await page.waitForFunction((x) => IL.S.status.dispense.profile.pressurePsi === x, v, { timeout: 10000 });
         check('regulator: a tick made at the new ' + v + ' psi before this tab saw the change stays', (await regState()) === 'you', await regState());
       }
