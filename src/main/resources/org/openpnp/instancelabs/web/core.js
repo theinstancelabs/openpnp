@@ -924,6 +924,16 @@
   };
 
   /**
+   * Dots of a plan its board already has paste on: the server's plan.pasted (each pad's dots laid since the board was
+   * seated), taken in path order on each pad. The same count in every tab and browser.
+   */
+  IL.pastedDots = function (plan) {
+    const laid = Object.assign({}, ((plan && plan.pasted) || {}).pads || {});
+    let n = 0;
+    for (const d of (plan && plan.dots) || []) if (laid[d.padId] > 0) { n++; laid[d.padId]--; }
+    return n;
+  };
+  /**
    * The purge-row spots a board run of the plan lays (I9, as the engine counts them: plan.purgeSpotsNeeded, the profile's
    * purge dots and the phase and flush dots of each further dot size), else the profile's purge dots (row.perBoard).
    * plan defaults to the plan shown.
@@ -1385,8 +1395,12 @@
     const next = notReady.find((x) => x.state !== 'wait') || notReady[0] || null;
     let verdict;
     // the strip drops the part after " · " when it would run under STOP (cells--t2); the title keeps it
+    // every dot of the plan is on its board already (the server's paste): the next action is the next board, not a run
+    const doneDots = plan && plan.dots && plan.dots.length && IL.pastedDots(plan) >= plan.dots.length ? plan.dots.length : 0;
     if (blocked.length) verdict = { state: 'block', text: 'Blocked · ' + blocked[0].short, value: ['Blocked', ' · ' + blocked[0].short, 2], title: blocked.map((x) => x.title + ': ' + x.detail).join('\n') };
     else if (!plan && !c.planForgotten) verdict = { state: 'need', text: 'No plan yet', title: 'Choose a board and plan it (Run).' };
+    else if (doneDots) verdict = { state: 'ok', done: true, text: 'Board done · Next board', value: ['Board done', ' · Next board', 2],
+      title: 'All ' + doneDots + ' dots are on board ' + (plan.pasted && plan.pasted.board) + ': unload it and press Next board (Run), or wipe it before running it again.' };
     else if (notReady.length) verdict = { state: 'need', text: count + ' of 9 · ' + next.short, value: [count + ' of 9', ' · ' + next.short, 2], title: notReady.map((x) => x.title + ': ' + x.detail).join('\n') };
     else if (items[0].homeFirst) {
       // the strip drops the long part when it would run under STOP (cells--t1)

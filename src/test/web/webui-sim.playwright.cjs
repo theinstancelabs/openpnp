@@ -1163,6 +1163,25 @@ async function runFirstDots(page, n) {
           !!cf.wipe && /^I wiped this board: no paste on its \d+ pads now/.test(cf.wipe) && /already has paste on \d+ pads/.test(cf.wipe) && cf.locked && /Tick 1 more to run/.test(cf.go), cf);
         await tab.click('#btn-run-cancel').catch(() => {});
         await fresh.close();
+        // a board with every dot already (UI_DESIGN §8.1.7): "Board done · Next board", Next board the primary action,
+        // no test run, "Run it again" second (its confirm asks "I wiped this board", above). Here the plan's paste as
+        // the server would have it after the whole board, for a moment
+        await page.evaluate(() => {
+          const p = IL.S.plan;
+          IL.run.keepPasted = p.pasted;
+          p.pasted = Object.assign({}, p.pasted, { board: p.pasted.board || 1, pads: Object.fromEntries(p.dots.map((d) => [d.padId, 9])) });
+          IL.go('#run/checks');
+        });
+        await page.waitForFunction(() => IL.run.doneSet.size === IL.S.plan.dots.length && !document.getElementById('btn-run-next').hidden, null, { timeout: 10000 }).catch(() => {});
+        await page.screenshot({ path: path.join(OUT, 'board-done-next-board.png') });
+        const bd = await page.evaluate(() => {
+          const r = IL.ready(), nb = document.getElementById('btn-run-next'), rb = document.getElementById('btn-run');
+          return { verdict: r.verdict.text, done: !!r.verdict.done, strip: document.getElementById('pill-engine').textContent, next: !nb.hidden && nb.classList.contains('btn--primary'),
+            test: !document.getElementById('btn-run-test').hidden, run: rb.textContent.trim(), runPrimary: rb.classList.contains('btn--primary') };
+        });
+        await page.evaluate(() => { IL.S.plan.pasted = IL.run.keepPasted; delete IL.run.keepPasted; IL.render(); });
+        check('a board with every dot: "Board done · Next board", Next board the primary action, no test run, "Run it again" not primary',
+          bd.done && bd.verdict === 'Board done · Next board' && /Board done/.test(bd.strip) && bd.next && !bd.test && /^Run it again · \d+ dots$/.test(bd.run) && !bd.runPrimary, bd);
       }
 
       // 10. Setup › Probe the blank: automatic, beside the purge row, the panel stays open with the result

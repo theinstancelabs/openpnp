@@ -2259,9 +2259,11 @@
       IL.render();
     });
     const allLink = el('button', { type: 'button', class: 'link', id: 'run-all-link', hidden: true, onclick: () => openConfirm('all') }, 'Wipe all, run all…');
-    const nextLink = el('button', { type: 'button', class: 'link', id: 'run-next-link', hidden: true, onclick: () => askNextBoard() }, 'Next board…');
-    return el('div', { class: 'stack', style: 'gap:10px', 'data-refusals': '' }, reason, btn, testRow,
-      el('div', { class: 'run-foot__links' }, el('span', { id: 'run-scope' }), testLink, allLink, nextLink));
+    // a board with all its dots already: Next board is the action (UI_DESIGN §8.1.7), running it again comes second
+    const nextBtn = el('button', { type: 'button', class: 'btn btn--primary btn--lg btn--block', id: 'btn-run-next', hidden: true, onclick: () => askNextBoard() },
+      IL.icon('i-swap'), 'Next board');
+    return el('div', { class: 'stack', style: 'gap:10px', 'data-refusals': '' }, reason, nextBtn, btn, testRow,
+      el('div', { class: 'run-foot__links' }, el('span', { id: 'run-scope' }), testLink, allLink));
   }
   /** Two dots of one pad: the plan's pad index, else the pad id (the engine's rule for a test run's cut, PlanStore). */
   const samePad = (a, b) => (a.padIndex >= 0 || b.padIndex >= 0 ? a.padIndex === b.padIndex : a.padId === b.padId);
@@ -2466,10 +2468,11 @@
     const dec = footDecision(s);
     const total = p ? p.dots.length : 0;
     const complete = !!p && !dec && R.doneSet.size >= total && total > 0;
-    IL.show($('btn-run-test'), !dec);
+    // a test run is not offered on a board that already has paste (§8.1.7), nor on one that has every dot
+    IL.show($('btn-run-test'), !dec && !complete);
     IL.show($('run-all-link'), !!dec);
-    IL.show($('run-next-link'), complete);
-    if (dec) { R.test = false; }
+    IL.show($('btn-run-next'), complete);
+    if (dec || complete) { R.test = false; }
     const lim = dec ? null : testLimit();
     const pending = S.planPending;
     let reason = pending ? 'Re-reading the plan (checking…)' : r.canRun ? null : r.runReason;
@@ -2480,7 +2483,8 @@
     if (dec && !left.length) reason = reason || 'No pads left';
     const style = lim && !lim.bad ? 'btn--test' : r.runStyle === 'go' && !complete ? 'btn--primary' : 'btn--hold';
     IL.setClass(btn, 'btn btn--lg btn--block ' + (reason ? '' : dec ? 'btn--primary' : style));
-    setBtnLabel(btn, [IL.icon('i-play'), dec ? 'Finish ' + IL.plural(left.length, 'pad') + ' left' : lim && lim.n ? 'TEST: first ' + lim.n + ' of ' + total + ' dots' + (lim.n < lim.asked ? ' · whole pads' : '') : 'Run board · ' + IL.plural(total, 'dot')]);
+    setBtnLabel(btn, [IL.icon('i-play'), dec ? 'Finish ' + IL.plural(left.length, 'pad') + ' left' : lim && lim.n ? 'TEST: first ' + lim.n + ' of ' + total + ' dots' + (lim.n < lim.asked ? ' · whole pads' : '')
+      : (complete ? 'Run it again · ' : 'Run board · ') + IL.plural(total, 'dot')]);
     IL.gate(btn, reason);
     // reason line above the button: soft (needs you, run anyway) or blocked (finish first); a lock (a task runs, the
     // recovery) shows the lock glyph, not the red ✕ of a blocked check
@@ -3075,6 +3079,7 @@
         return { sub: 'Finish ' + IL.plural(left, 'pad'), kind: 'need', title: dec.run.dotsDone + ' of ' + dec.run.dotsPlanned + ' dots on this board: finish the ' + IL.plural(left, 'pad') + ' left' };
       }
       const r = IL.ready();
+      if (r.verdict.done) return { sub: 'Board ' + boardNumber() + ' done', kind: 'ok', title: r.verdict.title };
       if (r.verdict.state === 'ok') return { sub: 'Ready: board ' + boardNumber(), kind: 'ok', title: 'Ready: ' + (S.plan.boardName || 'board') };
       return null;
     },

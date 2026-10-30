@@ -445,7 +445,9 @@ new tab, another browser or a reload sees the same board; a run that lays pads t
 board, `Wipe all, run all`, a test run over them) asks `I wiped this board: no paste on its 150 pads now`
 (`#run-tick-wiped`, `This board (board 3) already has paste on 150 pads this run lays: wipe them first, or press
 Cancel and finish the pads left.`) before `Run`, and tells the engine (`{wiped: true}`). The Result step's
-`board 1 ok` names the board that ran, without its tick once `Next board` was pressed.
+`board 1 ok` names the board that ran, without its tick once `Next board` was pressed. A board with every dot already
+reads `Board done · Next board` (strip and Checks; nav `Board 3 done`), with `Next board` (`#btn-run-next`) as the
+primary action, `Run it again · 160 dots` second and no `Test run with fewer dots…`.
 
 #### 8.1.8 Recovery (`data-view=recovery`) — `mockup-run-stopped.html`
 
