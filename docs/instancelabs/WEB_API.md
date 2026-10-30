@@ -460,33 +460,36 @@ Jargon is explained in tooltips (`title`/`abbr`).
 ## 6. Tests
 
 - `mvn -T1 test -Dtest='ApiServerSimTest,ReviewSafetySimTest,RegistrationSimTest,BoardImportSimTest'` (part of `mvn
-  test`): 23 + 10 + 7 + 11 tests on the engine's simulated machine (OpenPnP GcodeDriver over localhost TCP to
+  test`): 23 + 11 + 7 + 12 tests on the engine's simulated machine (OpenPnP GcodeDriver over localhost TCP to
   `RecordingGcodeServer`), real `DispenseService`, real `ApiServer` on an ephemeral port. `RegistrationSimTest` runs
   Register board, the blank probe, the home at run and the Z check end to end on the SIM vacuum and the SIM camera
   (`SceneImager`); `BoardImportSimTest` uploads, saves and attaches the KiCad fixtures and plans them;
   `CameraSnapshotEncodingTest` (2) the PNG fallback of the camera snapshot. Missing paste profiles:
-  `PadProfileApiSimTest` (8: the check, apply, mappings, the upload preview), `PadCalibrationJobTest` (12: the job's
+  `PadProfileApiSimTest` (8: the check, apply, mappings, the upload preview), `PadCalibrationJobTest` (14: the job's
   states, readings, cancel, STOP, refusals in order, on fake engine steps), `PadCalibrationSimTest` (11: PC §14.3 end
   to end on the SIM paste, camera and balance, every negative control of §11.7, the SIM balance after a reconnect),
   `PadProfileUiSimTest` (3: the files are served and loaded).
   Board runs there use the bench geometry (N1 contact 5.5, K 65.59 → needle 2.91, offset −2.59), a purge row on the
   blank, a confirmed start angle and the clean-pad check off, or a fake `DotImager` (`DispenseService.setDotImager`)
-  for the I10 tests. The whole suite on `il/bench-sync-autoreg` b81d73d21: 1029 tests, 743 of them in
-  `org.openpnp.instancelabs` (api 53, dispense 306, sim 86, kicad 77, padprofile 70, vision 62, board 62, serial 27).
+  for the I10 tests. The whole suite on `il/rc1` 69fd1a527: 1103 tests, 817 of them in `org.openpnp.instancelabs`
+  (dispense 332, api 96, sim 87, kicad 79, padprofile 70, vision 64, board 62, serial 27).
 - `src/test/web/run-webui-sim-test.sh`: Playwright (headless Chromium) against this jar running in OpenPnP **sim**
   through openpnp-uinav (config copy, simulated controller and cameras, Xvfb, device stubs). Needs the jar
   (`mvn -q -T1 -DskipTests package`), openpnp-uinav built, and Playwright in `$PLAYWRIGHT_DIR`
   (`npm i playwright && npx playwright install chromium-headless-shell`, browsers in `$PLAYWRIGHT_BROWSERS_PATH`).
   It drives the element ids of `UI_DESIGN.md` §16 (two-press buttons, the in-page run confirm, Recovery after STOP);
-  on `il/ar-webui` also Register board, the blank probe, home at run and Check Z (184 checks in all), and on
-  `il/bi-web-flow` `board-import.playwright.cjs` runs after it in the same session (44 checks: upload, save, replace,
-  attach, Camera is on FID1, the drawing under the plan, the inspector, the preview, the Records map, 1280 and 1024 px,
-  dark theme).
-  `boardview.playwright.cjs` (`run-boardview-test.sh`) checks the drawing on devproxy fixtures.
-  `pad-profile.playwright.cjs` runs third in the same session (52 checks, PC §14.4: the padcal upload's profile column,
+  on `il/ar-webui` also Register board, the blank probe, home at run and Check Z, and on `il/rc1` the final round's
+  locks, the refused clean-pad check, the dose rule, the Z-moved remedy in the SIM and the probe-window refusal (205
+  checks in all), and on `il/bi-web-flow` `board-import.playwright.cjs` runs after it in the same session (57 checks:
+  upload, the off-board warning, save, replace, attach, Camera is on FID1, the drawing under the plan, the inspector,
+  the preview, the Records map, 1280 and 1024 px, dark theme).
+  `boardview.playwright.cjs` (`run-boardview-test.sh`, 67 checks) checks the drawing on the session's import of
+  `ftp.kicad_pcb` through devproxy (mobo from the fixtures for the performance gate).
+  `pad-profile.playwright.cjs` runs third in the same session (54 checks, PC §14.4: the padcal upload's profile column,
   Run › Checks, Needs a profile, the suggestion card, Use, the pad inspector, Calibrate automatically through the
   readings (the test is the operator at the SIM balance) to the result, the by-hand guide, Calibrate › Pad
-  calibration, STOP at the readings; one filled button per screen; screenshots at 1440 and 1280 px, light and dark).
+  calibration, STOP at the readings, a test run that lays whole pads, a coupon weighed and one skipped; one filled
+  button per screen; screenshots at 1440 and 1280 px, light and dark).
 - `python3 -I src/test/sim/il_sim_acceptance.py padcal --prefix P --api-port N` (also in `all`): PC §14.5 in three
   uinav SIM sessions on this jar. **main**: `padcal.kicad_pcb` uploaded (NEEDS_PROFILE, a reason per package), saved
   and planned; the check's groups (SW_SPST new 2 × ½ turn, Test_Strip new 2 × ¼ turn, TestChip_A Use 0603, the WSON's
