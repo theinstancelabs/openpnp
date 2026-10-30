@@ -1051,6 +1051,50 @@ public class PadCalibrationSimTest {
                 "/api/pad-calibrations/" + id + "/label", "{\"auto\":true}")), "label"));
     }
 
+    @Test
+    public void aMountDuringAJobStopsItWithNothingSaved() throws Exception {
+        start(null);
+        ok(call("POST", "/api/tip-setups", "{\"name\":\"25G straight\",\"gauge\":25,\"idMm\":0.25,\"odMm\":0.51,"
+                + "\"form\":\"straight\",\"taper\":\"straight-steel\"}"));
+        int version = typeOf("chip-0603").get("version").getAsInt();
+        ok(call("POST", "/api/pad-calibrations", "{\"steps\":[\"ladder\"],\"doseSteps\":800,\"typeKeys\":"
+                + "[\"chip-0603\"]," + attest() + "}"));
+        long until = System.currentTimeMillis() + 60_000;
+        JsonObject job = null;
+        while (System.currentTimeMillis() < until) {
+            job = ok(get("/api/status")).getAsJsonObject("padCalibration");
+            if ("ladder".equals(str(job, "step"))) {
+                break;
+            }
+            Thread.sleep(20);
+        }
+        assertEquals("running", str(job, "state"), String.valueOf(job));
+        // the needle change is recorded and stops the job; the switch waits until it has ended
+        Res m = call("POST", "/api/tip-setups/" + K25 + "/mount", "{}");
+        assertEquals(409, m.status, m.toString());
+        assertTrue(str(m.json(), "reason").startsWith("A pad calibration is stopping: mount again in a moment."),
+                m.toString());
+        JsonObject end = awaitJob("stopped");
+        assertEquals("stopped", str(end, "state"), end.toString());
+        assertTrue(str(result(end), "sentence").matches("The needle was changed at \\d\\d:\\d\\d during the "
+                + "calibration: nothing was saved\\."), result(end).toString());
+        assertEquals(version, typeOf("chip-0603").get("version").getAsInt(), "nothing written");
+        assertEquals(K25, str(ok(call("POST", "/api/tip-setups/" + K25 + "/mount", "{}")), "mounted"));
+    }
+
+    @Test
+    public void theControlNamesAnotherTipOnTheHead() throws Exception {
+        // the 22G is mounted, the 25G is on the SIM head: its dots are far smaller than the bench's control
+        start(sc -> {
+            byTip(sc, K25, 1.6, 0.6, 0, 0);
+            sc.addProperty("physicalTip", K25);
+        });
+        JsonObject job = ladder(800, "chip-0603");
+        assertEquals("failed", str(job, "state"), job.toString());
+        assertTrue(str(result(job), "sentence").contains("below the bench's 1.06 mm²: check the regulator (18 psi) and "
+                + "the paste before calibrating, or another tip than the 22G tip is on"), result(job).toString());
+    }
+
     /** The seeded setup's key. */
     static final class Tip22 {
         static final String KEY = "ad22tta-b";
