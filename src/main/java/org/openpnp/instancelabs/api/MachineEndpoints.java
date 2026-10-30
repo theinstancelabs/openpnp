@@ -279,10 +279,19 @@ final class MachineEndpoints {
             for (org.openpnp.instancelabs.dispense.ZCheck.Stale x : zc.stale) {
                 stale.add(Views.map("what", x.what, "atMs", x.atMs));
             }
+            // after a failed check of this home: the places set before it (their Z moved too), the derived test dot aside
+            List<Map<String, Object>> places = new ArrayList<>();
+            DispenseConfig cfg = svc.getConfig();
+            for (String name : org.openpnp.instancelabs.dispense.ZCheck.movedPlaces(cfg, zc.last, zc.homeAtMs)) {
+                if (!DispenseEndpoints.TEST_DOT_LOCATION.equals(name)) {
+                    places.add(Views.map("name", name, "atMs", cfg.location(name).setAtMs));
+                }
+            }
             s.put("zCheck", Views.map("needed", zc.needed, "stale", stale, "homeAtMs", zc.homeAtMs, "reference",
                     zc.reference == null ? null : Views.map("name", zc.reference.name, "x", zc.reference.x, "y",
                             zc.reference.y, "z", zc.reference.z), "last", zc.last, "estimateS",
-                    DispenseService.PROBE_POINT_ESTIMATE_S, "touches", zc.touches, "touchesAfterHome", za.touches));
+                    DispenseService.PROBE_POINT_ESTIMATE_S, "touches", zc.touches, "touchesAfterHome", za.touches,
+                    "places", places));
         }
         List<Map<String, Object>> drivers = new ArrayList<>();
         for (Driver d : m.getDrivers()) {

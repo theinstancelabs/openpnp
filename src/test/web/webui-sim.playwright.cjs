@@ -1281,7 +1281,7 @@ async function runFirstDots(page, n) {
         await page.screenshot({ path: path.join(OUT, 'z-moved-1-frame.png') });
         check('Z moved 1: the blocker names the move, the remedy in its order, and offers "Open Needle Z frame"', st.step === 'frame' && !st.canRun && !!st.card
           && st.card[0] && st.card[0][0] === 'go:#setup/needle' && /^Z moved 0\.\d\d mm/.test(st.text || '')
-          && /Record the needle frame again with both tips \(Setup › Needle Z frame\), probe the blank, touch off and register the board again\./.test(st.text || ''), st);
+          && /Record the needle frame again with both tips \(Setup › Needle Z frame\), probe the blank, take the places' Z again with N1 \(Setup › Places\), touch off and register the board again\./.test(st.text || ''), st);
         // the frame from K would give the old offset whatever N1 touches (K moves by twice a zero shift): the card
         // switches to Both tips, says why, and From K is locked (the engine refuses K until the next home)
         await page.click('#chk-needs .ri[data-key="I4-z"] button[data-fix="go:#setup/needle"]');
@@ -1317,9 +1317,38 @@ async function runFirstDots(page, n) {
         check('Z moved 2: the blank probed again at its new height', bz.run.status === 'OK' && bz.dispense.surfaces.blank.points.every((q) => Math.abs((Array.isArray(q) ? q[2] : q.z) - 10.8) < 0.1),
           { status: bz.run.status, message: bz.run.message });
         await page.evaluate(() => { if (IL.panel.isPushed()) IL.panel.close(); IL.go('#run/checks'); });
+        // the places moved with the surfaces: each one set before the home is taken again with N1 (the touch-off primes
+        // at the waste, and the engine refuses a place set before the home while the check of this home failed)
+        st = await zStep('places');
+        await page.screenshot({ path: path.join(OUT, 'z-moved-3-places.png') });
+        const mp = (await status()).machine.zCheck.places.map((x) => x.name);
+        check('Z moved 3: after the blank, "Retake Z with N1" for each place set before the home, the waste among them',
+          st.step === 'places' && mp.includes('waste') && !!st.card && st.card.length === Math.min(3, mp.length)
+          && st.card.every(([f, t], i) => f === 'go:#setup/places/' + encodeURIComponent(mp[i]) && t === 'Retake Z with N1 (' + mp[i] + ')'), { st, mp });
+        const locs0 = (await status()).dispense.locations;
+        await page.click('#chk-needs .ri[data-key="I4-z"] button[data-fix="go:#setup/places/waste"]');
+        await page.waitForSelector('tr[data-place="waste"] input[data-axis=z]', { state: 'visible', timeout: 15000 });
+        await page.waitForTimeout(400);
+        await page.screenshot({ path: path.join(OUT, 'z-moved-3-places-card.png') });
+        const ws = await page.evaluate(() => {
+          const tr = document.querySelector('tr[data-place="waste"]');
+          const b = tr.querySelector('button[data-action=save]');
+          return { invalid: tr.querySelector('input[data-axis=z]').classList.contains('input--invalid'), save: b.textContent, locked: b.disabled, why: b.title,
+            state: document.querySelector('#card-places .card__state').textContent };
+        });
+        check('Z moved 3: Places flags the waste Z, "Retake Z" locked until N1 takes it, the card says which places',
+          ws.invalid && ws.save === 'Retake Z' && ws.locked && /^Z moved 0\.\d\d mm at the home of \d\d:\d\d: take this Z again with N1 touching/.test(ws.why) && /^Z moved · retake waste/.test(ws.state), ws);
+        // the operator takes each place's Z again with N1: 0.8 mm higher, as every surface of the scene
+        for (const n of mp) {
+          const row = page.locator('tr[data-place="' + n + '"]');
+          await row.locator('input[data-axis=z]').fill(String(Number((locs0[n].z + 0.8).toFixed(3))));
+          await row.locator('button[data-action=save]').click();
+          await waitStatus(page, (x) => !(x.machine.zCheck.places || []).some((q) => q.name === n), 10000);
+        }
+        await page.evaluate(() => IL.go('#run/checks'));
         st = await zStep('touch-off');
-        await page.screenshot({ path: path.join(OUT, 'z-moved-3-touch-off.png') });
-        check('Z moved 3: after the blank, "Run a touch-off" only (not the frame\'s own offset: Z moved at this home)', st.step === 'touch-off' && !!st.card
+        await page.screenshot({ path: path.join(OUT, 'z-moved-4-touch-off.png') });
+        check('Z moved 4: after the places, "Run a touch-off" only (not the frame\'s own offset: Z moved at this home)', st.step === 'touch-off' && !!st.card
           && JSON.stringify(st.card) === JSON.stringify([['go:#calibrate/touch-off', 'Run a touch-off']]), st);
         // the SIM scene has no paste for the touch-off's dots: the operator confirms the measured both-tips frame on the
         // Needle Z frame card instead (still allowed, no longer offered by the remedy)
@@ -1329,12 +1358,12 @@ async function runFirstDots(page, n) {
         await waitStatus(page, (x) => x.dispense.needle.touchedOff, 10000);
         await page.evaluate(() => IL.go('#run/checks'));
         st = await zStep('register');
-        await page.screenshot({ path: path.join(OUT, 'z-moved-4-register.png') });
-        check('Z moved 4: after the touch-off, "Register board"', st.step === 'register' && !!st.card && st.card[0] && st.card[0][0] === 'register', st);
+        await page.screenshot({ path: path.join(OUT, 'z-moved-5-register.png') });
+        check('Z moved 5: after the touch-off, "Register board"', st.step === 'register' && !!st.card && st.card[0] && st.card[0][0] === 'register', st);
         const t8 = Date.now() + (await page.evaluate(() => IL.S.skewMs));
         await press2(page, '#chk-needs .ri[data-key="I4-z"] button[data-fix="register"]');
         const rz = await regEnd(t8);
-        check('Z moved 4: Register board measures the board again', rz.run.status === 'OK', { status: rz.run.status, message: rz.run.message });
+        check('Z moved 5: Register board measures the board again', rz.run.status === 'OK', { status: rz.run.status, message: rz.run.message });
         await page.evaluate(() => { if (IL.panel.isPushed()) IL.panel.close(); IL.go('#run/checks'); });
         st = await zStep('done');
         check('Z moved: after the remedy nothing is left to measure, no Z check blocker (the same home)', st.step === 'done' && !st.card, st);

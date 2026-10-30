@@ -397,9 +397,10 @@ surprise on the machine.
 - **Pressure hold race** (fixed in the final round). Every engine task now looks at the hold again on the machine
   thread, prime, the test dot, shots, the dot ladder, the touch-off and the clean check included.
 - **After a failed Z check** (fixed in the final round) the remedy works under the same home, in this order: record
-  the needle frame again, probe the blank, touch off, register the board (the web UI's Z check blocker offers each
-  step in turn; the SIM browser test walks it). Places carry no time: retake the waste place's Z with N1 too, as
-  nothing checks it against the move (the frame tolerance is 1.0 mm).
+  the needle frame again with both tips (K is refused then: it moves by twice a zero shift), probe the blank, take
+  each place's Z again with N1 (the engine refuses a place set before the home where its Z is used: prime, the test
+  dot, shots, the touch-off's prime at the waste, a coupon), touch off, register the board (the web UI's Z check
+  blocker offers each step in turn; the SIM browser test walks it).
 - **A STOP or failure during an engine home** (fixed in the final round) no longer leaves a stale start time behind.
   A web STOP during the web home still answers `homing failed: machine disabled: User requested stop.` (OpenPnP's
   disable listener writes its own reason), not "STOP pressed in the web UI".

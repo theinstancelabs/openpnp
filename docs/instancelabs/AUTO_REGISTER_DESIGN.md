@@ -218,7 +218,12 @@ rep.done = true; rep.seconds = …
   - `needleZOffsetSetAtMs`;
   - `setAtMs` of every surface the scope uses (`sc.surfaceName` and `sc.moreSurfaces`).
 
-  Places carry no time (D/DispenseConfig.java:229-238). The same check covers them.
+  Places carry no time (D/DispenseConfig.java:229-238). The same check covers them. *As built (rc1 review):* a place
+  carries the time it was set and its Z frame (`NamedLocation.setAtMs`, `homeAtMs`; `PUT /api/locations` stamps them,
+  the derived test-dot spot keeps the waste's), but a touch never vouches for it. After a failed check of this home, a
+  place set before it is refused where its Z is used (I4 `place 'waste' Z 5.500 was taken at 13:40, before the home at
+  14:02 where Z moved 0.80 mm: take its Z again with N1 touching (Setup › Places)`): prime, the test dot, shots, the
+  dot ladder's and the touch-off's prime at the waste (`Scope.dispensePlaces`), a coupon's probe and its weigh dots.
 - **Stale** = `lastHomeAtMs != null` and any of those Z data is older than it. Stale data are accepted only if
   `zCheck.homeAtMs == lastHomeAtMs && zCheck.pass`. Otherwise:
   - with `zCheckFirst` (the task will check Z itself): a note, `I4: Z data predate the home at 14:19: checks Z first (one N1 touch)`;
@@ -1326,7 +1331,7 @@ The prefixes `REG:` and `PROBE:` are added to the client's code regex `^(I\d+|MA
 | N1 config | 409 | `PROBE: nozzle 'N1' is not in the machine` / `PROBE: N1's Z is transformed in OpenPnP; the probe needs N1 Z = raw Z` |
 | homing failed | REFUSED | `MACHINE: homing failed: <reason>. Nothing else was done; home from the strip and try again.` |
 | Z not checked | I4 violation | `I4: the needle frame (13:02), the touch-off (13:05) and the 'board' surface (13:40) were measured before the home at 14:19, and Z has not been checked since: Check Z (one N1 touch, ≈ 20 s); Run does it by itself` |
-| Z moved | REFUSED / I4 violation | `I4: Z moved -0.70 mm at the home of 14:19: N1 touched the blank at X 322.00, Y 225.50 at Z 4.920, where it touched 5.620 at 13:40. The needle frame, the touch-off and the surfaces are off by this (the needle by about twice). Record the needle frame again with both tips (Setup › Needle Z frame), probe the blank, touch off and register the board again.` |
+| Z moved | REFUSED / I4 violation | `I4: Z moved -0.70 mm at the home of 14:19: N1 touched the blank at X 322.00, Y 225.50 at Z 4.920, where it touched 5.620 at 13:40. The needle frame, the touch-off and the surfaces are off by this (the needle by about twice). Record the needle frame again with both tips (Setup › Needle Z frame), probe the blank, take the places' Z again with N1 (Setup › Places), touch off and register the board again.` |
 | no Z reference | 409 / REFUSED | `I4: Z must be checked after the home at 14:19, but no point measured before it is left to touch (no blank or board surface, no needle-frame X/Y): record the needle frame again` |
 | STOP | ABORTED | the executor's abort reason, e.g. `STOP pressed in the web UI`; the result card says what was kept (§8.1) |
 | vacuum on too long | ERROR | `N1 vacuum on for 60 s at one point: stopped (N1 lifted, pump and valve off)` |

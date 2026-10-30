@@ -154,9 +154,9 @@ public class ZCheckTest {
         assertEquals(1, i4.size());
         assertEquals("Z moved -0.70 mm at the home of " + ZCheck.clock(HOME_AT) + ": N1 touched the blank at X 322.00, "
                 + "Y 225.50 at Z 4.920, where it touched 5.620 at " + ZCheck.clock(BLANK_AT) + ". The needle frame, the "
-                + "touch-off and the surfaces are off by this (the needle by about twice). Record the needle frame "
-                + "again with both tips (Setup \u203a Needle Z frame), probe the blank, touch off and register the "
-                + "board again.",
+                + "touch-off and the surfaces are off by this (the needle by about twice), and so are the places. Record "
+                + "the needle frame again with both tips (Setup \u203a Needle Z frame), probe the blank, take the "
+                + "places' Z again with N1 (Setup \u203a Places), touch off and register the board again.",
                 i4.get(0));
         // the failed check stands even when the task would check Z itself
         assertEquals(i4, ZFrameTest.i4(check(c, HOME_AT, moved, true)));
@@ -384,6 +384,48 @@ public class ZCheckTest {
         assertEquals(null, ZCheck.kept(old, null));
         old.homeAtMs = null;
         assertEquals(null, ZCheck.kept(old, HOME_AT));
+    }
+
+    /**
+     * rc1 review (machine safety): a place carries the time it was set, no Z frame a touch vouches for. After a failed
+     * check of this home, a place the run dispenses at (prime, the test dot, shots, the touch-off's prime at the waste)
+     * that was set before that home is refused until its Z is taken again; a passing check, a check of an earlier home,
+     * or a place set after the home leave it alone.
+     */
+    @Test
+    public void afterZMovedAPlaceSetBeforeTheHomeIsRefusedWhereTheRunDispensesAtIt() {
+        DispenseConfig c = cfg();
+        c.locations.put("waste", new DispenseConfig.NamedLocation(300, 230, 5.5)); // saved without a time
+        DispenseConfig.NamedLocation cup = new DispenseConfig.NamedLocation(150, 40, 5.0);
+        cup.setAtMs = BLANK_AT;
+        c.locations.put("cup", cup);
+        ZCheck.Reference ref = ZCheck.references(c, ZFrameTest.SEAT, HOME_AT).get(5); // the blank's first point
+        ZCheck.Result moved = ZCheck.result(ref, 4.92, HOME_AT + 60_000, HOME_AT);
+        ZCheck.Result passed = ZCheck.result(ref, 5.62, HOME_AT + 60_000, HOME_AT);
+        assertEquals(java.util.Arrays.asList("waste", "cup"), ZCheck.movedPlaces(c, moved, HOME_AT));
+        assertEquals(Collections.emptyList(), ZCheck.movedPlaces(c, passed, HOME_AT));
+        assertEquals(Collections.emptyList(), ZCheck.movedPlaces(c, moved, HOME_AT + 3_600_000), "an earlier home's");
+        // the needle frame and the touch-off measured again under this home: only the place is left
+        c.needleAnchor.setAtMs = HOME_AT + 120_000;
+        c.needleAnchor.homeAtMs = HOME_AT;
+        c.needleZOffsetSetAtMs = HOME_AT + 240_000;
+        c.needleZOffsetHomeAtMs = HOME_AT;
+        List<String> i4 = ZFrameTest.i4(ZFrameTest.check(c, null, DispenseService.shotsScope("cup", false), HOME_AT,
+                moved));
+        assertEquals(Collections.singletonList("place 'cup' Z 5.000 was taken at " + ZCheck.clock(BLANK_AT) + ", before "
+                + "the home at " + ZCheck.clock(HOME_AT) + " where Z moved -0.70 mm: take its Z again with N1 touching "
+                + "(Setup \u203a Places)"), i4);
+        i4 = ZFrameTest.i4(ZFrameTest.check(c, null, DispenseService.blankScope(c, "blank", true, true, null), HOME_AT,
+                moved));
+        assertTrue(i4.size() == 2 && i4.get(0).startsWith("Z moved -0.70 mm") && i4.get(1).startsWith("place 'waste' "
+                + "Z 5.500 was taken at an unknown time, before the home at "), "the touch-off primes at the waste: "
+                        + i4);
+        assertTrue(ZFrameTest.check(c, null, DispenseService.shotsScope("cup", false), HOME_AT, passed).ok());
+        assertTrue(ZFrameTest.check(c, null, DispenseService.shotsScope("cup", false), null, null).ok());
+        // taken again after the home
+        cup.setAtMs = HOME_AT + 300_000;
+        assertTrue(ZFrameTest.check(c, null, DispenseService.shotsScope("cup", false), HOME_AT, moved).ok());
+        assertEquals(Collections.singletonList("waste"), ZCheck.movedPlaces(c, moved, HOME_AT));
     }
 
     /**

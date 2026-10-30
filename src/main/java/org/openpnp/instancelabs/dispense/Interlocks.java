@@ -78,6 +78,11 @@ public final class Interlocks {
         public boolean touchOffWaiver;
         /** Places whose Z must agree with the needle frame (waste, blank). */
         public final List<String> referencePlaces = new java.util.ArrayList<>();
+        /**
+         * Places whose stored Z the run dispenses at (prime, test dot, shots, the prime at the waste): after a failed Z
+         * check of this home, one set before that home is refused until its Z is taken again (I4).
+         */
+        public final List<String> dispensePlaces = new java.util.ArrayList<>();
         /** Surface map this run takes its dot Z from (board or blank), or null. */
         public String surfaceName;
         /** Machine X/Y of the dots that take their Z from that surface. */
@@ -218,6 +223,25 @@ public final class Interlocks {
             checkSurface(in, r, e.getKey(), e.getValue(), false);
         }
         checkZAfterHome(in, r, sc);
+        checkPlacesAfterZMoved(in, r, sc);
+    }
+
+    /**
+     * I4, places after a failed Z check of this home (rc1 review, machine safety): a place carries the time it was set,
+     * not a Z frame a check can vouch for, so the remedy's frame, blank, touch-off and board left the waste (and a cup,
+     * a coupon) at the old Z, and prime and the test dot then put the needle into the waste by the move. Each place the
+     * run dispenses at must have been set again since that home.
+     */
+    static void checkPlacesAfterZMoved(Inputs in, InterlockReport r, Scope sc) {
+        if (!ZCheck.failed(in.zCheck, in.lastHomeAtMs)) {
+            return;
+        }
+        for (String name : sc.dispensePlaces) {
+            DispenseConfig.NamedLocation loc = in.cfg.location(name);
+            if (ZCheck.placeBefore(loc, in.lastHomeAtMs)) {
+                r.add("I4", ZCheck.placeMovedMessage(name, loc, in.zCheck));
+            }
+        }
     }
 
     /**

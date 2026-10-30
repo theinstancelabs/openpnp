@@ -42,6 +42,7 @@ import org.openpnp.model.Configuration;
 import org.openpnp.model.Package;
 import org.openpnp.model.Part;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -876,6 +877,31 @@ public class RegistrationSimTest {
                 + (BLANK_Z - 0.70 - 2.30) + "}"));
         assertEquals(-2.30, both.get("offsetMm").getAsDouble(), 1e-9, "measured, not carried over from "
                 + offset);
+        // the places moved too: the status lists those set before the home until their Z is taken again
+        JsonArray places = ok(get("/api/status")).getAsJsonObject("machine").getAsJsonObject("zCheck")
+                .getAsJsonArray("places");
+        assertEquals("[\"waste\",\"blank\"]", names(places), places.toString());
+        assertTrue(prime(409).contains("place 'waste' Z 5.500 was taken at "), "prime at the old waste Z");
+        ok(call("PUT", "/api/locations/waste", "{\"x\":80,\"y\":40,\"z\":" + (5.5 - 0.70) + "}"));
+        places = ok(get("/api/status")).getAsJsonObject("machine").getAsJsonObject("zCheck").getAsJsonArray("places");
+        assertEquals("[\"blank\"]", names(places), places.toString());
+        assertFalse(prime(409).contains("place 'waste'"), "the waste taken again");
+    }
+
+    /** The "name" of each entry of {@code a}, as a JSON list. */
+    static String names(JsonArray a) {
+        JsonArray n = new JsonArray();
+        for (JsonElement e : a) {
+            n.add(e.getAsJsonObject().get("name"));
+        }
+        return n.toString();
+    }
+
+    /** POST /api/prime, expecting {@code status}: the answer's body. */
+    String prime(int status) throws Exception {
+        Res r = post("/api/prime", "{}");
+        assertEquals(status, r.status, r.toString());
+        return r.body;
     }
 
     /**

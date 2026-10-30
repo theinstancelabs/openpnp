@@ -305,9 +305,10 @@ final class DispenseEndpoints {
         DispenseConfig.NamedLocation spot = new DispenseConfig.NamedLocation(waste.x + cfg.testDotOffsetXMm,
                 waste.y + cfg.testDotOffsetYMm, waste.z);
         DispenseConfig.NamedLocation cur = cfg.location(TEST_DOT_LOCATION);
-        if (cur == null || cur.x != spot.x || cur.y != spot.y || cur.z != spot.z) {
-            // The engine dispenses shots at named locations; keep this one derived from the waste place.
-            svc.setLocation(TEST_DOT_LOCATION, spot.x, spot.y, spot.z);
+        if (cur == null || cur.x != spot.x || cur.y != spot.y || cur.z != spot.z
+                || !java.util.Objects.equals(cur.setAtMs, waste.setAtMs)) {
+            // The engine dispenses shots at named locations; keep this one derived from the waste place (and its time).
+            svc.setLocation(TEST_DOT_LOCATION, spot.x, spot.y, spot.z, waste);
         }
         ctx.tracker.expect("test dot");
         Future<RunResult> f = svc.runShots(TEST_DOT_LOCATION, rot, 1, true);

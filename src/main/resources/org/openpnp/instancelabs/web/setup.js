@@ -1493,6 +1493,7 @@
     IL.press2(r.save, () => (placeZOff(opt(r.z)) !== null ? 'save Z anyway' : null), async () => {
       const body = { x: need(r.x, name + ' X'), y: need(r.y, name + ' Y'), z: need(r.z, name + ' Z') };
       const res = await IL.api('PUT', '/api/locations/' + encodeURIComponent(name), body);
+      r.zTaken = false;
       clean(r.x, r.y, r.z);
       P.added = P.added.filter((n) => n !== name);
       IL.planRefreshSoon();
@@ -1532,7 +1533,7 @@
       onclick: () => { fn(); closeMenu(); r.save.focus(); } }, el('span', { text: label }), el('b', { text: why ? why : value }));
     const menu = el('div', { class: 'su-menu', role: 'menu', 'aria-label': 'From the head' },
       item('N2 X/Y', pos.n2 ? fmt(pos.n2.x, 2) + ', ' + fmt(pos.n2.y, 2) : '—', () => { setVal(r.x, pos.n2.x.toFixed(2)); setVal(r.y, pos.n2.y.toFixed(2)); }, pos.n2 ? null : 'no position'),
-      item('N1 Z (tip touching)', pos.n1 ? fmt(pos.n1.z, 2) : '—', () => setVal(r.z, pos.n1.z.toFixed(3)), pos.n1 ? null : 'no position'),
+      item('N1 Z (tip touching)', pos.n1 ? fmt(pos.n1.z, 2) : '—', () => { r.zTaken = true; setVal(r.z, pos.n1.z.toFixed(3)); }, pos.n1 ? null : 'no position'),
       item('N2 Z (tip touching)', pos.n2 && isNum(nd.zOffsetMm) ? fmt(pos.n2.z - nd.zOffsetMm, 2) : '—', () => setVal(r.z, (pos.n2.z - nd.zOffsetMm).toFixed(3)),
         !nd.anchored ? 'needs the needle Z frame' : pos.n2 ? null : 'no position'));
     r.wrap.appendChild(menu);
@@ -1590,6 +1591,11 @@
     const i4 = IL.interlock(s, 'I4');
     const fm = i4 && i4.state === 'blocked' ? /place '([^']+)'/i.exec(i4.text || '') : null;
     const lock = IL.lockReason(s, { pressureOff: false, engine: true });
+    // a Z check of this home failed: the places set before it moved too, until N1 takes their Z again (I4)
+    const zc = (s.machine || {}).zCheck || {};
+    const moved = new Set((zc.places || []).map((x) => x.name));
+    const movedWhy = moved.size && zc.last ? 'Z moved ' + IL.fmt(zc.last.deltaMm, 2) + ' mm at the home of ' + IL.fmtTime(zc.homeAtMs - S.skewMs)
+      + ': take this Z again with N1 touching (From head ▾ › N1 Z), then save.' : null;
     let unsaved = 0;
     let farName = null;
     for (const n of names) {
@@ -1600,22 +1606,27 @@
       sync(r.z, loc ? loc.z : null);
       IL.setText(r.use, usedFor(n, d));
       const isNew = !loc;
-      const dd = dirty(r.x) || dirty(r.y) || dirty(r.z) || (isNew && P.added.includes(n));
+      const isMoved = moved.has(n);
+      if (!isMoved) r.zTaken = false;
+      // a moved place saves again once N1 took its Z (the same value too: the engine stamps it with this home)
+      const dd = dirty(r.x) || dirty(r.y) || dirty(r.z) || (isNew && P.added.includes(n)) || (isMoved && !!r.zTaken);
       if (dd) unsaved++;
-      IL.setText(r.save, dd ? 'Save' : isNew ? 'Not set' : 'Saved');
+      IL.setText(r.save, dd ? 'Save' : isNew ? 'Not set' : isMoved ? 'Retake Z' : 'Saved');
       r.save.classList.toggle('btn--primary', dd && !lock);
-      IL.gate(r.save, lock || (dd ? null : isNew ? 'Enter X, Y and Z first' : 'No unsaved changes'));
+      IL.gate(r.save, lock || (dd ? null : isNew ? 'Enter X, Y and Z first' : isMoved ? movedWhy : 'No unsaved changes'));
       IL.show(r.remove, P.added.includes(n) && !loc);
       const farText = loc ? placeZText(n, loc.z) : null;
       if (farText && !farName) farName = n;
-      const flagged = (fm && fm[1] === n) || !!farText;
+      const flagged = (fm && fm[1] === n) || !!farText || (isMoved && !r.zTaken);
       r.z.el.classList.toggle('input--invalid', !!flagged || (val(r.z) !== '' && !Number.isFinite(toNum(val(r.z)))));
-      IL.setAttr(r.z.el, 'title', fm && fm[1] === n ? sentence(i4.text.split('. Place Z')[0]) + ' Retake Z with N1.' : farText);
+      IL.setAttr(r.z.el, 'title', fm && fm[1] === n ? sentence(i4.text.split('. Place Z')[0]) + ' Retake Z with N1.' : farText || (isMoved ? movedWhy : null));
       IL.gate(r.from, IL.lockReason(s, { idle: false, pressureOff: false }));
     }
     if (P.menu && !P.menu.el.isConnected) closeMenu();
     const missing = [wn, bn].filter((n) => !locs[n]);
+    const movedLeft = names.filter((n) => moved.has(n) && !(P.rows.get(n) || {}).zTaken);
     if (unsaved) cardState(c, 'need', unsaved + ' unsaved');
+    else if (movedLeft.length) cardState(c, 'block', 'Z moved · retake ' + movedLeft.slice(0, 3).join(', ') + (movedLeft.length > 3 ? ' +' + (movedLeft.length - 3) : ''), movedWhy);
     else if (fm || farName) cardState(c, 'block', "Check '" + (fm ? fm[1] : farName) + "' Z", fm ? null : placeZText(farName, locs[farName].z));
     else if (missing.length) cardState(c, 'need', IL.cap(missing.join(' and ')) + ' missing');
     else cardState(c, 'ok', Object.keys(locs).filter((n) => n !== 'waste-test-dot').length + ' places set');

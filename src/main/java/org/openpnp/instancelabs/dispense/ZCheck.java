@@ -343,8 +343,9 @@ public final class ZCheck {
     /**
      * The Z data of a scope measured before the home: the needle frame, the touch-off (unless a newer
      * needle frame replaced it, {@link #touchOffReplaced}), and every surface the scope uses
-     * ({@code surfaceName} and {@code moreSurfaces}). Places carry no time; the same check covers them.
-     * Empty without a home.
+     * ({@code surfaceName} and {@code moreSurfaces}). Places carry the time they were set, not a frame a
+     * touch vouches for: a passing check covers them, and after a failed one each place set before the
+     * home is set again ({@link #placeBefore}). Empty without a home.
      */
     public static List<Stale> stale(DispenseConfig cfg, Interlocks.Scope sc, Long lastHomeAtMs) {
         List<String> names = new ArrayList<>();
@@ -394,6 +395,36 @@ public final class ZCheck {
                 && cfg.needleZOffsetSetAtMs < cfg.needleAnchor.setAtMs;
     }
 
+    /** A place set before the home {@code lastHomeAtMs} (one saved without a time counts as before). */
+    public static boolean placeBefore(DispenseConfig.NamedLocation loc, Long lastHomeAtMs) {
+        return loc != null && lastHomeAtMs != null && (loc.setAtMs == null || loc.setAtMs < lastHomeAtMs);
+    }
+
+    /** The places of {@code cfg} set before the home while the last Z check of that home failed (else none). */
+    public static List<String> movedPlaces(DispenseConfig cfg, Result check, Long lastHomeAtMs) {
+        List<String> l = new ArrayList<>();
+        if (!failed(check, lastHomeAtMs) || cfg.locations == null) {
+            return l;
+        }
+        for (Map.Entry<String, DispenseConfig.NamedLocation> e : cfg.locations.entrySet()) {
+            if (placeBefore(e.getValue(), lastHomeAtMs)) {
+                l.add(e.getKey());
+            }
+        }
+        return l;
+    }
+
+    /**
+     * I4 violation (without the code): a place set before a home whose Z check failed. Its Z is off by the move like
+     * the surfaces': the needle would dispense into it (or N1 probe from inside it).
+     */
+    public static String placeMovedMessage(String name, DispenseConfig.NamedLocation loc, Result r) {
+        return String.format(Locale.ROOT, "place '%s' Z %.3f was taken %s, before the home at %s where Z moved %.2f mm: "
+                + "take its Z again with N1 touching (Setup › Places)", name, loc.z, loc.setAtMs == null
+                        ? "at an unknown time" : "at " + clock(loc.setAtMs), r.homeAtMs == null ? "?" : clock(r.homeAtMs),
+                r.deltaMm);
+    }
+
     /** I4 note when the task checks Z itself (the code "I4" included). */
     public static String checksFirstNote(Long lastHomeAtMs, boolean homesFirst) {
         if (homesFirst || lastHomeAtMs == null) {
@@ -413,8 +444,9 @@ public final class ZCheck {
     public static String movedMessage(Result r) {
         return String.format(Locale.ROOT, "Z moved %.2f mm at the home of %s: N1 touched %s at X %.2f, Y %.2f at Z "
                 + "%.3f, where it touched %.3f%s. The needle frame, the touch-off and the surfaces are off by this "
-                + "(the needle by about twice). Record the needle frame again with both tips (Setup › Needle Z "
-                + "frame), probe the blank, touch off and register the board again.", r.deltaMm,
+                + "(the needle by about twice), and so are the places. Record the needle frame again with both tips "
+                + "(Setup › Needle Z frame), probe the blank, take the places' Z again with N1 (Setup › Places), touch "
+                + "off and register the board again.", r.deltaMm,
                 r.homeAtMs == null ? "?" : clock(r.homeAtMs), describe(r.refName), r.x, r.y, r.z, r.refZ,
                 r.refAtMs == null ? "" : " at " + clock(r.refAtMs));
     }

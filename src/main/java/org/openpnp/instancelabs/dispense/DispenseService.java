@@ -380,8 +380,20 @@ public final class DispenseService {
     }
 
     public synchronized void setLocation(String name, double x, double y, double z) throws IOException {
+        setLocation(name, x, y, z, null);
+    }
+
+    /**
+     * As above; a place derived from another ({@code from}: the test-dot spot follows the waste) keeps the time and the
+     * Z frame of the place it follows, else it is stamped now (I4: its Z was taken under this home).
+     */
+    public synchronized void setLocation(String name, double x, double y, double z, DispenseConfig.NamedLocation from)
+            throws IOException {
         DispenseConfig c = cfg.copy();
-        c.locations.put(name, new DispenseConfig.NamedLocation(x, y, z));
+        DispenseConfig.NamedLocation l = new DispenseConfig.NamedLocation(x, y, z);
+        l.setAtMs = from != null ? from.setAtMs : Long.valueOf(System.currentTimeMillis());
+        l.homeAtMs = from != null ? from.homeAtMs : Long.valueOf(homeTracker.frameHomeAtMs());
+        c.locations.put(name, l);
         updateConfig(c);
     }
 
@@ -865,6 +877,7 @@ public final class DispenseService {
         if (referenceSurface) {
             sc.referencePlaces.add(place);
         }
+        sc.dispensePlaces.add(place);
         return sc;
     }
 
@@ -876,6 +889,7 @@ public final class DispenseService {
         sc.referencePlaces.add(blankName);
         if (primeAtWaste) {
             sc.referencePlaces.add(c.wasteLocationName);
+            sc.dispensePlaces.add(c.wasteLocationName);
         }
         sc.surfaceName = blankName;
         if (specs != null) {
@@ -2371,6 +2385,11 @@ public final class DispenseService {
             throw refused(r.interlocks.toString());
         }
         if (req.coupon != null) {
+            // a coupon is probed in a narrow window around its place Z: from a Z that moved N1 would start inside it
+            String moved = placeMovedRefusal(req.surfaceName, c.location(req.surfaceName));
+            if (moved != null) {
+                throw refused(moved);
+            }
             t.stage = "look";
             couponLook(req, t);
         }
@@ -2689,6 +2708,9 @@ public final class DispenseService {
                     throw refused("PCAL: the weigh coupon place '" + b.couponPlace + "' is not set (Setup › Places)");
                 }
                 String why = couponPlane(c, b, place, plane, isSimulatorConfirmed());
+                if (why == null) {
+                    why = placeMovedRefusal(b.couponPlace, place);
+                }
                 if (why != null) {
                     throw refused(why);
                 }
@@ -2939,6 +2961,17 @@ public final class DispenseService {
                     + "its place Z %.3f: probe it again", b.surfaceName, plane.minZ, plane.maxZ, window, place.z);
         }
         return null;
+    }
+
+    /**
+     * I4 refusal (code included) of a place set before this home while the Z check of this home failed (rc1 review: a
+     * coupon's Z moved with the surfaces), or null.
+     */
+    private String placeMovedRefusal(String name, DispenseConfig.NamedLocation place) {
+        ZCheck.Result z = homeTracker.getZCheck();
+        Long home = homeTracker.getLastHomeAtMs();
+        return ZCheck.failed(z, home) && ZCheck.placeBefore(place, home) ? "I4: " + ZCheck.placeMovedMessage(name, place,
+                z) : null;
     }
 
     /** "1 frame", "4 frames": the camera frames of a pad calibration step, as its phase text says them. */

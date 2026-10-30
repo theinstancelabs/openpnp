@@ -353,6 +353,12 @@ public class DispenseConfig {
 
     public static class NamedLocation {
         public double x, y, z;
+        /**
+         * When the place was set, and the Z frame then (the home in effect, {@link HomeTracker#frameHomeAtMs()}); null
+         * for a place saved before they were kept. After a failed Z check of a home, a place set before that home is
+         * refused where its Z is used (I4, {@link ZCheck#placeMovedMessage}).
+         */
+        public Long setAtMs, homeAtMs;
 
         public NamedLocation() {
         }

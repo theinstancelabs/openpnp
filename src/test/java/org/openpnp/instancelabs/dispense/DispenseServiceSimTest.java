@@ -441,9 +441,12 @@ public class DispenseServiceSimTest {
      * the move; the refusal's remedy then works for this home: the needle frame recorded again replaces
      * the touch-off it set the offset over, the blank probed again lets the touch-off run (not before:
      * the blank's stale Z would put the needle 0.8 mm off), and the board registered again lets the run go.
+     * rc1 review: the places moved too. The touch-off primes at the waste, and a cup set before the home
+     * takes shots: each is refused until its Z is taken again (the prime went 0.70 mm into the waste).
      */
     @Test
     public void afterZMovedTheRemedyRecoversWithoutAnotherHome() throws Exception {
+        svc.setLocation("cup", 150, 40, 5.0);
         homeAgain(); // Z moved 0.80 mm at this home: every surface seals 0.80 mm higher than stored
         FlatVacuum.install(sim, FlatVacuum.scene(5.45 + 0.80, new double[] {90, 70, 120, 95}, 5.6 + 0.80));
         DispenseConfig fast = svc.getConfig();
@@ -453,7 +456,8 @@ public class DispenseServiceSimTest {
         assertEquals(RunResult.Status.REFUSED, r.status, r.toString());
         assertTrue(r.message.startsWith("I4: Z moved 0.7"), r.message); // the board: 6.375 for 5.600
         assertTrue(r.message.endsWith("Record the needle frame again with both tips (Setup \u203a Needle Z frame), "
-                + "probe the blank, touch off and register the board again."), r.message);
+                + "probe the blank, take the places' Z again with N1 (Setup \u203a Places), touch off and register the "
+                + "board again."), r.message);
 
         // 1. the needle frame again: N1 and the needle on the blank, both 0.80 mm higher now
         svc.setNeedleAnchor(5.5 + 0.80, 2.91 + 0.80, null, null);
@@ -466,6 +470,21 @@ public class DispenseServiceSimTest {
         // 2. the blank probed again after the home
         svc.setSurface("blank", pts(new double[][] {{85, 35, 6.25}, {130, 35, 6.25}, {85, 50, 6.25},
             {130, 50, 6.25}}), "probed again after Z moved");
+        // the places moved with the surfaces: the touch-off's prime at the waste and shots into the cup are refused
+        sim.server.mark();
+        RunResult atWaste = svc.runNeedleTouchOff(new NeedleTouchOff.Request(), true).get(60, TimeUnit.SECONDS).run;
+        assertEquals(RunResult.Status.REFUSED, atWaste.status, atWaste.toString());
+        assertEquals("interlocks refused: [I4: place 'waste' Z 5.500 was taken at an unknown time, before the home at "
+                + ZCheck.clock(svc.getHomeTracker().getLastHomeAtMs()) + " where Z moved " + String.format(java.util.Locale
+                        .ROOT, "%.2f", svc.getHomeTracker().getZCheck().deltaMm) + " mm: take its Z again with N1 touching "
+                + "(Setup \u203a Places)]", atWaste.message);
+        RunResult cup = svc.runShots("cup", 360, 1, false).get(60, TimeUnit.SECONDS);
+        assertEquals(RunResult.Status.REFUSED, cup.status, cup.toString());
+        assertTrue(cup.message.contains("I4: place 'cup' Z 5.000 was taken at "), cup.message);
+        assertNothingStreamed(sim.server.sinceMark());
+        assertEquals(Arrays.asList("waste", "blank", "cup"), ZCheck.movedPlaces(svc.getConfig(),
+                svc.getHomeTracker().getZCheck(), svc.getHomeTracker().getLastHomeAtMs()));
+        svc.setLocation("waste", 80, 40, 5.5 + 0.80); // N1 touched the waste again
         // 3. the touch-off runs under its waiver
         svc.setDotImager(squashImager());
         DispenseService.TouchOffResult t = svc.runNeedleTouchOff(new NeedleTouchOff.Request(), true)
@@ -485,6 +504,9 @@ public class DispenseServiceSimTest {
         assertEquals(RunResult.Status.OK, r.status, r.toString() + " " + r.interlocks);
         assertEquals(null, r.zCheck, "every Z datum was measured after the home");
         assertEquals(1, count(sim.server.sinceMark(), "M106 P2 S255"), "one pressure session");
+        // prime at the waste taken again; the cup still waits for its Z
+        assertEquals(RunResult.Status.OK, svc.runShots("waste", 360, 1, true).get(60, TimeUnit.SECONDS).status);
+        assertEquals(RunResult.Status.REFUSED, svc.runShots("cup", 360, 1, false).get(60, TimeUnit.SECONDS).status);
     }
 
     /**

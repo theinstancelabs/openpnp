@@ -928,10 +928,11 @@
   /**
    * After a failed Z check ("Z moved", AUTO_REGISTER_DESIGN.md §2.4) the remedy works under the same home, in this
    * order: record the needle frame again with both tips (the engine refuses K then), probe the blank (the touch-off's
-   * dots take their Z from it), touch off (a frame recorded after the home replaces the touch-off, which I4 then asks
-   * for again; not the frame's own offset), register the board. What was measured again since the home drops out of
-   * status.machine.zCheck.stale. Returns {step: frame | blank | touch-off | register | done, fixes} while the last Z
-   * check of this home failed, else null.
+   * dots take their Z from it), take the places' Z again with N1 (status.machine.zCheck.places: the touch-off primes at
+   * the waste), touch off (a frame recorded after the home replaces the touch-off, which I4 then asks for again; not
+   * the frame's own offset), register the board. What was measured again since the home drops out of
+   * status.machine.zCheck.stale. Returns {step: frame | blank | places | touch-off | register | done, fixes} while the
+   * last Z check of this home failed, else null.
    */
   IL.zMoved = function (status) {
     const s = status || S.status || {};
@@ -944,6 +945,8 @@
     const surf = (n) => stale.has("the '" + n + "' surface");
     if (stale.has('the needle frame')) return { step: 'frame', fixes: [{ href: '#setup/needle', label: 'Open Needle Z frame' }] };
     if (surf(d.blankLocationName || 'blank')) return { step: 'blank', fixes: [{ view: 'probe-blank', label: 'Probe the blank…' }] };
+    const places = (zc.places || []).map((x) => x.name);
+    if (places.length) return { step: 'places', fixes: places.slice(0, 3).map((n) => ({ href: '#setup/places/' + encodeURIComponent(n), label: 'Retake Z with N1 (' + n + ')' })) };
     if (stale.has('the touch-off') || !nd.touchedOff) return { step: 'touch-off', fixes: touchOffFixes(nd, true) };
     if (surf(d.boardSurfaceName || 'board')) return { step: 'register', fixes: [{ fix: 'register', label: 'Register board' }, { fix: 'probe-by-hand', label: 'Do it by hand' }] };
     return { step: 'done', fixes: [] };
