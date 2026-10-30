@@ -508,7 +508,7 @@
       const ripple = pr.padRipplePct && (pr.padRipplePct[0] || pr.padRipplePct[1]) ? IL.fmt(pr.padRipplePct[0], 0) + '–' + IL.fmt(pr.padRipplePct[1], 0) + ' %' : '0 % (whole turns per pad)';
       IL.kv($('pt-sugg-kv'), [
         ['Opening', pair2(op.wMm, op.hMm) + ' mm' + (op.roundness ? ' · ' + IL.fmt(op.roundness, 0) + ' % round' : '') + ' · ' + IL.fmt(op.areaMm2, 3) + ' mm²'],
-        ['Target amount', IL.fmt(am.targetMg, 2) + ' mg per pad' + (am.k && am.k !== 1 ? ' (k ' + IL.fmt(am.k, 2) + ')' : '') + (am.capped ? ', capped at a 0.25 mm print' : '') + (am.rule ? ' (' + am.rule + ')' : '')],
+        ['Target amount', IL.fmt(am.targetMg, 2) + ' mg per pad' + (am.k && am.k !== 1 ? ' (k ' + IL.fmt(am.k, 2) + ')' : '') + (am.capped ? ', capped at a 0.25 mm print' : '') + (am.rule ? ' · ' + am.rule : '')],
         ['Dots per pad and turn', d.perPad + ' ' + turnAdj(d.steps) + ' ' + (d.perPad === 1 ? 'dot' : 'dots') + ' per pad (' + IL.fmt(d.netDeg, 2) + '° each)'],
         ['Dot size', dRange(d.diameterMm) + (d.dSource === 'measured' ? ' (measured)' : ' (model)')],
         ['Per pad', mg(pr.mgPerPad) + (isNum(pr.errorPct) ? ', ' + (pr.errorPct === 0 ? 'the target' : Math.abs(pr.errorPct) + ' % ' + (pr.errorPct < 0 ? 'less' : 'more') + ' than the target') : '') + (d.mgSource && d.mgSource !== 'model' ? ' (weighed)' : '')],

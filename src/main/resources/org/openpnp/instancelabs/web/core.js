@@ -1999,7 +1999,9 @@
     const pc = $('pill-pressure'), ac = $('chip-angle'), uc = $('chip-purge');
     const d = (s && s.dispense) || {};
     const prof = d.profile || {};
-    IL.setText(pc.querySelector('.cell__k'), isNum(prof.pressurePsi) ? 'Pressure · set ' + IL.fmtPsi(prof.pressurePsi) + ' psi' : 'Pressure');
+    // the set pressure goes with the other long parts when the strip is narrow (cells--t2): the value stays
+    const pk = pc.querySelector('.cell__k'), set = isNum(prof.pressurePsi) ? ' · set ' + IL.fmtPsi(prof.pressurePsi) + ' psi' : '';
+    if (pk.dataset.v !== set) { pk.dataset.v = set; pk.replaceChildren('Pressure', set ? el('span', { class: 'long', 'data-l': 2, text: set }) : ''); }
     if (!s || off) {
       const t = off ? cap(since) : null;
       setCell(pc, 'off', off ? 'Unknown' : '…', t);
