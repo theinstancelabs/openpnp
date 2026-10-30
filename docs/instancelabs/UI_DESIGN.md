@@ -568,6 +568,9 @@ your tick is kept in this browser.`; filter `All steps | Needs you · 2`.
 2 Settings, 3 Regulator (you), 4 Places, 5 Needle Z frame, 6 Blank surface, 7 Prime and test dot (you),
 8 Needle XY trim, 9 Screw start angle, 10 Purge row, 11 Pad types. The first not-ready step carries `NOW`;
 each row links to its card. Start angle comes before Purge row so the strip verdict's NEXT and the list agree.
+*As built (rc1 review):* after a failed Z check of this home, 4 Places is blocked while any place in
+`status.machine.zCheck.places` waits for its Z: `Z moved: retake 2`, `Z moved at this home: take the Z of waste, blank
+again with N1 touching.`, its link opens the first one's Z (the engine refuses those places meanwhile, I4).
 
 ### 8.3 Profile (not mocked; same frame)
 
