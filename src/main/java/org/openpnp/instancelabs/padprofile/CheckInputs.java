@@ -14,7 +14,11 @@ public final class CheckInputs {
     public Map<String, TypeInfo> types = new HashMap<>();
     /** Lowest status allowed on a board (D/DispenseConfig.minPadTypeStatus). */
     public String gate = TypeInfo.CHARACTERIZED;
-    public Tip tip = Tip.g22();
+    /**
+     * The mounted tip setup with its dot table (tip setups design §22.2: D/DispenseService.mountedTip); required, the
+     * check refuses to run without it (IllegalArgumentException).
+     */
+    public Tip tip;
     /** The profile's dose (D/DispenseProfile.netStepsPerDot). */
     public int profileSteps = DoseModel.HALF;
     public int stepsPerRev = DoseModel.STEPS_PER_REV;

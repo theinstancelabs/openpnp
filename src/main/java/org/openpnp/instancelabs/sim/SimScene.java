@@ -168,6 +168,38 @@ public final class SimScene {
          * head; a tip without an entry uses the fields above.
          */
         public Map<String, TipPaste> byTip = new LinkedHashMap<>();
+
+        /** A field-by-field copy (the per-tip overlays of {@link SimScene#pasteFor}). */
+        public Paste copy() {
+            Paste p = new Paste();
+            p.mRevMg = mRevMg;
+            p.ripple = ripple;
+            p.ripplePeakDeg = ripplePeakDeg;
+            p.cv = cv;
+            p.seed = seed;
+            p.footprintC = footprintC;
+            p.footprintE = footprintE;
+            p.transferRatio = transferRatio;
+            p.oozeFirst = oozeFirst;
+            p.refillDip = refillDip;
+            p.refillTauDots = refillTauDots;
+            p.idleFullS = idleFullS;
+            p.idleDeadS = idleDeadS;
+            p.threadShare = threadShare;
+            p.threadFullMg = threadFullMg;
+            p.threadZeroMg = threadZeroMg;
+            p.missBelowMg = missBelowMg;
+            p.maxGapMm = maxGapMm;
+            p.needleZOffsetMm = needleZOffsetMm;
+            p.feedLimitMgS = feedLimitMgS;
+            p.landingSdMm = landingSdMm;
+            p.landingBiasMm = landingBiasMm == null ? null : landingBiasMm.clone();
+            p.n2OffsetMm = n2OffsetMm == null ? null : n2OffsetMm.clone();
+            p.reportCount = reportCount;
+            p.offsetSteps = offsetSteps;
+            p.byTip = new LinkedHashMap<>(byTip);
+            return p;
+        }
     }
 
     /**
@@ -389,6 +421,8 @@ public final class SimScene {
         if (p != null) {
             s.paste = pasteOf(p);
         }
+        s.physicalTip = o.has("physicalTip") && !o.get("physicalTip").isJsonNull()
+                ? o.get("physicalTip").getAsString() : null;
         if (o.has("coupons") && !o.get("coupons").isJsonNull()) {
             for (JsonElement ce : o.getAsJsonArray("coupons")) {
                 JsonObject co = ce.getAsJsonObject();
@@ -451,6 +485,15 @@ public final class SimScene {
             if (p.landingBiasMm == null || p.landingBiasMm.length != 2 || p.n2OffsetMm == null
                     || p.n2OffsetMm.length != 2) {
                 throw new IllegalArgumentException("paste: landingBiasMm and n2OffsetMm need 2 numbers");
+            }
+            for (Map.Entry<String, TipPaste> e : p.byTip.entrySet()) {
+                TipPaste t = e.getValue();
+                if (t == null || t.mRevMg != null && !(t.mRevMg > 0) || t.footprintC != null && !(t.footprintC > 0)
+                        || t.footprintE != null && !(t.footprintE > 0)
+                        || t.landingBiasMm != null && t.landingBiasMm.length != 2) {
+                    throw new IllegalArgumentException("paste.byTip['" + e.getKey() + "']: mRevMg and footprint c and e "
+                            + "must be > 0, landingBiasMm 2 numbers");
+                }
             }
         }
         Set<String> places = new HashSet<>();
@@ -526,7 +569,56 @@ public final class SimScene {
         p.reportCount = o.has("reportCount") ? o.get("reportCount").getAsBoolean() : p.reportCount;
         p.offsetSteps = o.has("offsetSteps") && !o.get("offsetSteps").isJsonNull()
                 ? Integer.valueOf(Math.floorMod(o.get("offsetSteps").getAsInt(), SimPaste.STEPS_PER_REV)) : null;
+        JsonObject byTip = obj(o, "byTip");
+        if (byTip != null) {
+            for (Map.Entry<String, JsonElement> e : byTip.entrySet()) {
+                if (e.getValue() == null || !e.getValue().isJsonObject()) {
+                    continue;
+                }
+                JsonObject t = e.getValue().getAsJsonObject();
+                TipPaste tp = new TipPaste();
+                tp.mRevMg = t.has("mRevMg") && !t.get("mRevMg").isJsonNull() ? t.get("mRevMg").getAsDouble() : null;
+                JsonObject f2 = obj(t, "footprint");
+                if (f2 != null) {
+                    tp.footprintC = f2.has("c") && !f2.get("c").isJsonNull() ? f2.get("c").getAsDouble() : null;
+                    tp.footprintE = f2.has("e") && !f2.get("e").isJsonNull() ? f2.get("e").getAsDouble() : null;
+                }
+                tp.landingBiasMm = numbers(t, "landingBiasMm", 2);
+                p.byTip.put(e.getKey(), tp);
+            }
+        }
         return p;
+    }
+
+    /** Overlays of {@link #paste} per tip key, made once per scene ({@link #pasteFor}). */
+    private final transient Map<String, Paste> overlays = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * The paste of the SIM needle with the tip {@code tipKey} on the head (§22.8): the scene's paste with that tip's
+     * {@code byTip} entry laid over it, or the paste itself when the tip has none; null without a paste block.
+     */
+    public Paste pasteFor(String tipKey) {
+        Paste base = paste;
+        if (base == null || tipKey == null || !base.byTip.containsKey(tipKey)) {
+            return base;
+        }
+        return overlays.computeIfAbsent(tipKey, k -> {
+            TipPaste tp = base.byTip.get(k);
+            Paste x = base.copy();
+            if (tp.mRevMg != null) {
+                x.mRevMg = tp.mRevMg;
+            }
+            if (tp.footprintC != null) {
+                x.footprintC = tp.footprintC;
+            }
+            if (tp.footprintE != null) {
+                x.footprintE = tp.footprintE;
+            }
+            if (tp.landingBiasMm != null) {
+                x.landingBiasMm = tp.landingBiasMm.clone();
+            }
+            return x;
+        });
     }
 
     /**

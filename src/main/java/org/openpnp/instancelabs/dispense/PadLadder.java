@@ -14,6 +14,7 @@ import javax.imageio.ImageIO;
 
 import org.openpnp.instancelabs.padprofile.Limits;
 import org.openpnp.instancelabs.padprofile.LadderStats;
+import org.openpnp.instancelabs.padprofile.Texts;
 import org.openpnp.instancelabs.vision.BareSpotCheck;
 
 /**
@@ -196,8 +197,87 @@ public final class PadLadder {
      */
     public static LandingLayout landingLayout(CalibrationArea area, double searchMm, double dotMm, double[] fovMm,
             double[] coarse) {
-        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+        LandingLayout l = new LandingLayout();
+        l.searchMm = searchMm;
+        double h = org.openpnp.instancelabs.padprofile.LandingFit.bandHeightMm(searchMm);
+        l.reservedMm = h;
+        if (area == null || !area.isDefined()) {
+            l.problem = "The calibration area is not set: set the blank place first (Setup › Places).";
+            return l;
+        }
+        if (h > area.heightMm + 1e-9) {
+            l.problem = String.format(Locale.ROOT, "Searching ±%s mm needs %s mm of the calibration area; it is %s mm "
+                    + "tall: make it taller (Calibrate › Pad calibration).", Texts.num(searchMm, 0), Texts.num(h, 0),
+                    Texts.num(area.heightMm, 0));
+            return l;
+        }
+        if (h > area.leftMm() + 1e-9) {
+            l.problem = String.format(Locale.ROOT, "The calibration area has %s mm left; the landing check needs %s mm: "
+                    + "wipe the blank (Calibrate › Pad calibration › Blank wiped).", Texts.num(area.leftMm(), 1),
+                    Texts.num(h, 0));
+            return l;
+        }
+        l.x0 = area.x0Mm;
+        l.x1 = area.x0Mm + area.widthMm;
+        l.y0 = area.y0Mm + area.usedMm;
+        l.y1 = l.y0 + h;
+        l.locator = new double[] {(l.x0 + l.x1) / 2, (l.y0 + l.y1) / 2};
+        int nx = fovMm == null ? 1 : Math.max(1, (int) Math.ceil((l.x1 - l.x0) / fovMm[0] - 1e-9));
+        int ny = fovMm == null ? 1 : Math.max(1, (int) Math.ceil((l.y1 - l.y0) / fovMm[1] - 1e-9));
+        for (int j = 0; j < ny; j++) {
+            for (int i = 0; i < nx; i++) {
+                l.frames.add(new double[] {l.x0 + (i + 0.5) * (l.x1 - l.x0) / nx, l.y0 + (j + 0.5) * (l.y1 - l.y0) / ny});
+            }
+        }
+        if (coarse == null) {
+            return l;
+        }
+        // the lines from where the locator's dot landed, on the side of the band with room (§22.3)
+        double fx = l.locator[0] + coarse[0], fy = l.locator[1] + coarse[1];
+        double r = dotMm / 2;
+        double keep = r + LANDING_CLEARANCE_MM;
+        double up = l.y1 - keep - fy, down = fy - (l.y0 + keep);
+        double sign = up >= down ? 1 : -1;
+        double room = Math.max(up, down);
+        double purgeY, rowY;
+        if (room >= LANDING_ROW_MM - 1e-9) {
+            purgeY = fy + sign * LANDING_PURGE_MM;
+            rowY = fy + sign * LANDING_ROW_MM;
+        }
+        else if (Math.min(up, down) >= LANDING_PURGE_MM - 1e-9) {
+            // a band too low for both lines on one side (R 2): the purge on one side, the row on the other
+            purgeY = fy - sign * LANDING_PURGE_MM;
+            rowY = fy + sign * LANDING_PURGE_MM;
+        }
+        else {
+            l.problem = "The locator's dot landed too near the band's edge for the row: wipe the blank and check again.";
+            return l;
+        }
+        double purgeSpan = (LANDING_PURGE_DOTS - 1) * LANDING_PURGE_PITCH_MM;
+        double rowSpan = org.openpnp.instancelabs.padprofile.LandingFit.ROW_MM[
+                org.openpnp.instancelabs.padprofile.LandingFit.ROW_MM.length - 1];
+        double cx = Math.max(l.x0 + keep + rowSpan / 2, Math.min(l.x1 - keep - rowSpan / 2, fx));
+        if (l.x1 - l.x0 < rowSpan + 2 * keep) {
+            l.problem = "The calibration area is too narrow for the landing check's row (" + Texts.num(rowSpan + 2 * keep, 1)
+                    + " mm needed): make it wider (Calibrate › Pad calibration).";
+            return l;
+        }
+        for (int i = 0; i < LANDING_PURGE_DOTS; i++) {
+            l.purge.add(new double[] {cx - purgeSpan / 2 + i * LANDING_PURGE_PITCH_MM, purgeY});
+        }
+        for (double d : org.openpnp.instancelabs.padprofile.LandingFit.ROW_MM) {
+            l.row.add(new double[] {cx - rowSpan / 2 + d, rowY});
+        }
+        return l;
     }
+
+    /** The landing check (§22.3): its purge and row lines this far from the locator's dot (mm). */
+    public static final double LANDING_PURGE_MM = 3, LANDING_ROW_MM = 6;
+    /** Every dot of the landing check keeps this much (edge to edge) from the band's edges (mm). */
+    public static final double LANDING_CLEARANCE_MM = 1.5;
+    /** The profile's purge before the row: 8 dots 2.5 mm apart. */
+    public static final int LANDING_PURGE_DOTS = 8;
+    public static final double LANDING_PURGE_PITCH_MM = 2.5;
 
     // ------------------------------------------------------------------------------------------
     // Camera tiles

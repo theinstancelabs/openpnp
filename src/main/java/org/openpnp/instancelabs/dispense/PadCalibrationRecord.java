@@ -16,8 +16,8 @@ public class PadCalibrationRecord {
     public static final String CANCELLED = "cancelled";
     public static final String FAILED = "failed";
     /**
-     * Written by the by-hand save only (tip setups design §22.5): the job never writes it. Not in
-     * {@link #OUTCOMES} until the engine accepts it for by-hand records.
+     * Written by the by-hand save only (tip setups design §22.5): the job never writes it, so it is not in
+     * {@link #OUTCOMES}; the database accepts it for records of method {@link #METHOD_BY_HAND}.
      */
     public static final String VALIDATED = "validated";
     static final List<String> OUTCOMES = Arrays.asList(CHARACTERIZED, PROVISIONAL, STOPPED, CANCELLED, FAILED);
