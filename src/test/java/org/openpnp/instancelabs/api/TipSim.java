@@ -130,6 +130,43 @@ final class TipSim implements AutoCloseable {
         return new Res(http.send(b.build(), HttpResponse.BodyHandlers.ofByteArray()));
     }
 
+    /**
+     * The answer to a raw request that declares a body of {@code contentLength} bytes and sends only its first 16 KB
+     * (the server answers a declared body over the route's limit before reading it): the status line, the headers and
+     * the body.
+     */
+    String rawAnswer(String path, long contentLength) throws Exception {
+        try (java.net.Socket s = new java.net.Socket(java.net.InetAddress.getLoopbackAddress(), api.getPort())) {
+            s.setSoTimeout(20_000);
+            java.io.OutputStream out = s.getOutputStream();
+            out.write(("POST " + path + " HTTP/1.1\r\nHost: 127.0.0.1:" + api.getPort() + "\r\nContent-Type: "
+                    + "image/jpeg\r\nContent-Length: " + contentLength + "\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+            out.write(new byte[16 * 1024]);
+            out.flush();
+            java.io.InputStream in = s.getInputStream();
+            StringBuilder head = new StringBuilder();
+            int length = 0;
+            String line;
+            while (!(line = readLine(in)).isEmpty()) {
+                head.append(line).append('\n');
+                if (line.toLowerCase(java.util.Locale.ROOT).startsWith("content-length:")) {
+                    length = Integer.parseInt(line.substring(15).trim());
+                }
+            }
+            return head + "\n" + new String(in.readNBytes(length), StandardCharsets.UTF_8);
+        }
+    }
+
+    private static String readLine(java.io.InputStream in) throws java.io.IOException {
+        StringBuilder sb = new StringBuilder();
+        for (int c; (c = in.read()) >= 0 && c != '\n';) {
+            if (c != '\r') {
+                sb.append((char) c);
+            }
+        }
+        return sb.toString();
+    }
+
     Res get(String path, String... headers) throws Exception {
         return call("GET", path, null, headers);
     }
