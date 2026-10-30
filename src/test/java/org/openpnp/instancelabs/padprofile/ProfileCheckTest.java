@@ -246,8 +246,9 @@ public class ProfileCheckTest {
         SuggesterTest.type(in, type("chip-0603", "Chip 0603", TypeInfo.CHARACTERIZED, 0.8, 0.95), "RES");
         in.gate = TypeInfo.VALIDATED;
         g = ProfileCheck.of(in).groups.get(0);
-        assertEquals("Chip 0603 is not calibrated yet (status: characterized). Boards need pad types that are at least "
-                + "validated on a board: calibrate it automatically or by hand.", g.reasonText);
+        assertEquals("Chip 0603 is not calibrated for the " + Tip.SEED_NAME + " yet (status: characterized). Boards need "
+                + "pad types that are at least validated on a board: calibrate it for this tip automatically or by hand.",
+                g.reasonText);
         assertTrue(g.fixable);
     }
 

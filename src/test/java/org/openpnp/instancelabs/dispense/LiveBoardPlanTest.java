@@ -41,7 +41,7 @@ public class LiveBoardPlanTest {
         try (DispenseDb db = DispenseDb.inMemory()) {
             DispenseConfig cfg = GcodeStreamTest.toyConfig(); // bench needle frame, purge row on a probed blank
             cfg.minPadTypeStatus = "not-started"; // seeds only: this checks geometry, not readiness
-            DispensePlan plan = new DispensePlanner(cfg, new PadTypeResolver(db.currentPadTypes(), db.packageMappings()))
+            DispensePlan plan = TestTips.planner(cfg, new PadTypeResolver(db.currentPadTypes(), db.packageMappings()))
                     .planBoard(bl, 150, 100);
             assertEquals(160, plan.pads.size(), plan.summary());
             assertEquals(160, plan.dots.size(), plan.summary());

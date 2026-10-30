@@ -915,6 +915,17 @@ public class DispenseServiceSimTest {
         lr.rotationsDeg = new double[] {30};
         lr.repeats = 1;
         assertEquals(RunResult.Status.REFUSED, svc.runDotLadder(lr).get(60, TimeUnit.SECONDS).run.status);
+        // tip setups §22.3: where the new needle lands is not checked yet, so the touch-off waits for the landing check
+        RunResult early = svc.runNeedleTouchOff(new NeedleTouchOff.Request(), true).get(60, TimeUnit.SECONDS).run;
+        assertEquals(RunResult.Status.REFUSED, early.status, early.toString());
+        assertTrue(early.message.contains("where it lands has not been checked: check where it lands"), early.message);
+        LandingResult landed = new LandingResult();
+        landed.setupKey = svc.getConfig().tip.key;
+        landed.needleSinceMs = svc.getConfig().needleChangedAtMs;
+        landed.n = 8;
+        landed.sdMm = 0.03;
+        assertNotNull(svc.setLanding(landed, false, svc.getConfig().needleChangedAtMs));
+        assertTrue(svc.isNeedleXyChecked());
         // the touch-off runs under its waiver; its prime is 0.5 mm higher than a normal prime
         svc.setDotImager(squashImager());
         sim.server.mark();
