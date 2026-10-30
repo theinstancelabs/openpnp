@@ -694,9 +694,19 @@
     || !!(s.pressure && ((s.pressure.state && s.pressure.state !== 'off') || s.pressure.engineRunActive))
     || !!(s.machine && s.machine.busy));
   IL.interlock = (s, id) => ((s && s.interlocks) || []).find((i) => i.id === id) || null;
+  /** A STOP left N1 low and nothing homed since (status.machine.home.n1Low, with a home policy): the operator looks first. */
+  IL.n1Low = function (status) {
+    const m = ((status || S.status) || {}).machine || {};
+    return !!(m.enabled && !m.homed && m.home && m.home.policy && m.home.n1Low);
+  };
+  /** What the Machine item says then; also why a task that homes by itself waits. */
+  IL.n1LowText = function (status) {
+    const hm = (((status || S.status) || {}).machine || {}).home || {};
+    return 'N1 stopped low (Z ' + IL.fmt(hm.n1Z, 2) + ' mm): look at the board under it. Home raises N1 first, then homes.';
+  };
   /**
    * Why a control is locked now, or null. need: {connected, homed, idle (default true), pressureOff (default true),
-   * engine}. Texts are the spec's (§13 "Locked control").
+   * engine, homes (the task homes by itself: it waits while N1 is low)}. Texts are the spec's (§13 "Locked control").
    */
   IL.lockReason = function (status, need) {
     const s = status || S.status;
@@ -712,6 +722,9 @@
     if (n.pressureOff && pr.state && pr.state !== 'off') return 'Pressure is held: switch it off first';
     if (n.connected && !m.enabled) return 'Not connected: connect first';
     if (n.homed && !m.homed) return 'Not homed: home first';
+    // a task that homes by itself (Register board, Probe the blank, the pad calibration) waits, as Run does, while a STOP
+    // left N1 low: an automatic home must not drag N1 across the board (AUTO_REGISTER_DESIGN.md §8.2)
+    if (n.homes && IL.n1Low(s)) return IL.n1LowText(s);
     if (n.engine && (!d.running || !d.available)) return 'Dispenser unavailable' + (d.unavailableReason ? ': ' + d.unavailableReason : '');
     return null;
   };
@@ -951,9 +964,8 @@
         detail: 'Not connected to the controller.', fixes: [{ fix: 'connect', label: 'Connect', primary: true }] });
     } else if (!m.homed && m.busy) {
       add({ key: 'machine', code: 'MACHINE', title: 'Machine', state: 'live', value: 'homing', short: 'homing', detail: 'Homing…' });
-    } else if (!m.homed && hm && hm.policy && hm.n1Low) {
-      add({ key: 'machine', code: 'MACHINE', title: 'Machine', state: 'need', value: 'N1 low', short: 'N1 low',
-        detail: 'N1 stopped low (Z ' + IL.fmt(hm.n1Z, 2) + '): look at the board under it. Home raises N1 first, then homes.',
+    } else if (IL.n1Low(s)) {
+      add({ key: 'machine', code: 'MACHINE', title: 'Machine', state: 'need', value: 'N1 low', short: 'N1 low', detail: IL.n1LowText(s),
         fixes: [{ fix: 'home', label: 'Home now' }] });
     } else if (!m.homed && hm && hm.policy) {
       const why = IL.homeWhy(hm);
@@ -1570,7 +1582,7 @@
     const homeS = isNum(hm.estimateS) ? hm.estimateS : 25;
     steps.push(m.enabled && !m.homed && hm.policy && hm.n1Low
       ? { key: 'home', title: 'Home', wait: false, done: false,
-        detail: 'N1 stopped low (Z ' + IL.fmt(hm.n1Z, 2) + '): look at the board under it; Home raises N1 first, then homes.',
+        detail: 'N1 stopped low (Z ' + IL.fmt(hm.n1Z, 2) + ' mm): look at the board under it; Home raises N1 first, then homes.',
         fixes: [{ fix: 'home', label: 'Home now', primary: true }] }
       : autoHome
         ? { key: 'home', title: 'Home first', state: 'info', done: true,
@@ -1976,7 +1988,7 @@
         } else {
           const hm = m.home || {};
           const auto = hm.policy && !hm.n1Low ? ' Register board and Run home first (≈ ' + IL.fmtSecs(isNum(hm.estimateS) ? hm.estimateS : 25) + ').'
-            : hm.n1Low ? ' N1 stopped low (Z ' + IL.fmt(hm.n1Z, 2) + '): Home raises it first, then homes.' : ' Home before any move.';
+            : hm.n1Low ? ' N1 stopped low (Z ' + IL.fmt(hm.n1Z, 2) + ' mm): Home raises it first, then homes.' : ' Home before any move.';
           setCell(mc, 'need', undefined, 'Connected, not homed: positions are unknown.' + auto);
           IL.setText(homed, 'Not homed');
           showHome = !IL.taskRunning(s) && (!s.pressure || s.pressure.state === 'off');

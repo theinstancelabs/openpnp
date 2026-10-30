@@ -66,10 +66,15 @@
   }
   const artPart = (ref) => (M.art && (M.art.parts || []).find((x) => x.ref === ref)) || null;
 
+  /** A pad type's status in words ("not-started" → "not started"), as Profile › Pad types says it. */
+  function statusWord(st) {
+    const known = st && IL.pcr && IL.pcr.STATUS && IL.pcr.STATUS[st];
+    return known ? known.word : String(st || '').replace(/-/g, ' ');
+  }
   /** One sentence: why this pad got its pad type (§5.7). */
   function ruleSentence(pad, t) {
     if (!pad || !pad.typeKey) return 'No pad type matches the package ' + ((pad && pad.packageId) || '') + ': it gets no paste until one is added.';
-    const status = t ? t.status : pad.typeStatus;
+    const status = statusWord(t ? t.status : pad.typeStatus);
     const tail = ' (pad type ' + typeName(pad, t) + ', v' + (t ? t.version : pad.typeVersion) + (status ? ', ' + status : '') + ').';
     const r = pad.typeRule || null;
     if (!r) return 'Pad type ' + typeName(pad, t) + ', v' + (t ? t.version : pad.typeVersion) + (status ? ', ' + status : '') + '.';
@@ -299,7 +304,7 @@
       const zs = padDots.map((d) => d.dispenseZ).filter(Number.isFinite);
       const prof = p.profile || {};
       IL.kv(kv, [
-        ['Pad type', pad.typeKey ? typeName(pad, t) + ' · v' + (t ? t.version : pad.typeVersion) + ' · ' + ((t ? t.status : pad.typeStatus) || '—') : 'none'],
+        ['Pad type', pad.typeKey ? typeName(pad, t) + ' · v' + (t ? t.version : pad.typeVersion) + ' · ' + (statusWord(t ? t.status : pad.typeStatus) || '—') : 'none'],
         ['Opening', IL.nb(opening(pad)) + ' · ' + (pad.source === 'FOOTPRINT' ? 'KiCad paste opening' : pad.source === 'PAD_TYPE' ? 'pad type default' : (pad.source || '—'))],
         ['Area', Number.isFinite(pad.areaMm2) ? IL.nb(IL.fmt(pad.areaMm2, 3) + ' mm²') : '—'],
         ['Amount', IL.padProfile && IL.padProfile.amountText(pad) ? IL.padProfile.amountText(pad) : Number.isFinite(pad.targetVolumeMm3) ? 'A ' + IL.fmt(pad.tMm, 2) + ' mm stencil would print ' + IL.fmt(pad.targetVolumeMm3, 3) + ' mm³ ('

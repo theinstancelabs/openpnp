@@ -965,7 +965,8 @@
     IL.keyed(fx, ref || '', () => (ref ? [el('div', { class: 'notebox notebox--need' }, IL.glyph('need', 'xs'), el('span', { text: ref })), IL.fixRow(fixesFor(ref, s), 'btn-row')] : null));
     const start = $('btn-pcal-start');
     if (!IL.isArmed(start)) IL.setText($('pcal-start-l'), 'Calibrate' + estText(e));
-    const why = IL.lockReason(s, { connected: true, engine: true }) || jobLockText(s) || (jobActive(s) ? 'A pad calibration is waiting for its readings: finish or cancel it first' : null)
+    // it homes by itself when needed: not while a STOP left N1 low (as Run, Register board and Probe the blank)
+    const why = IL.lockReason(s, { connected: true, engine: true, homes: true }) || jobLockText(s) || (jobActive(s) ? 'A pad calibration is waiting for its readings: finish or cancel it first' : null)
       || (!pv ? 'Reading the summary…' : ref ? 'Fix the item above first.' : null);
     IL.gate(start, why, $('pcal-why'));
     if (e && !e.loading && Date.now() - e.at > 5000) estimate(C.req, true);

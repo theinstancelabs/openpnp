@@ -211,9 +211,10 @@ Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, (
   "no point measured before the home" → Needle Z frame (`IL.i4Kind` → `zcheck` for all three); `REG` → `Look with the camera`, `Change board`, `Plan without fiducial correction`, `Register again`,
   `Do it by hand`; `PROBE` → `Register again`, `Do it by hand` (+ `Probe the blank…` when it names the blank).
   `IL.CODE_RE` is the code prefix of an engine text (`I4:`, `MACHINE:`, `CONFIG:`, `PLAN:`, `REG:`, `PROBE:`).
-- `IL.lockReason(status, {connected, homed, idle = true, pressureOff = true, engine})` → the spec's locked-control
+- `IL.lockReason(status, {connected, homed, idle = true, pressureOff = true, engine, homes})` → the spec's locked-control
   text (`Locked while the board runs`, `Pressure is held: switch it off first`, `Not connected: connect first`, offline)
-  or null. `IL.gate(btn, reason, reasonEl?)` disables with the reason (title + optional visible `.reason` line).
+  or null; `homes`: the task homes by itself (Register board, Probe the blank, the pad calibration) and waits, as Run
+  does, while a STOP left N1 low (`IL.n1Low(status)`, the text `IL.n1LowText(status)`). `IL.gate(btn, reason, reasonEl?)` disables with the reason (title + optional visible `.reason` line).
 
 ### Router, panel, dialogs, messages
 - Hash grammar `#<ws>[/<section>[/<id>]][?panel=<view>]`; `#dispense` → `#setup`, `#profiles` → `#profile`.
@@ -290,13 +291,16 @@ here moves the machine.
   `#board-thumbs`, `#board-imported`, `#btn-board-use-fid`), `hero(bv, {plan, sel, form, mode, s, hero, stageBar,
   row})` → `{shown}` (H3: the drawing, `#pv-picture`, the preview, `#btn-pad-inspect`; before planning the chosen
   board at the form's seat with the live camera, `#board-preplan`), `onPad` / `onPart` (H2), `recordsMap(bv, plan)`
-  (H4), `onImported(saved)`. Keeps the newest 8 drawings; `localStorage['il.pv.picture']` (default Quiet).
+  (H4), `onImported(saved)`, `preview()` (the hero's path preview). Keeps the newest 8 drawings;
+  `localStorage['il.pv.picture']` (default Quiet). Board pictures say `75 × 75 mm` and `80 parts`; the attach keeps the
+  drawing under the board file's earlier name, else a free one (never another board's).
 - **`IL.boardImport.open({file, onSaved})`**, `isOpen()` (web-flow): `#dlg-board-import`, states choose → reading
   (Cancel aborts, 60 s) → preview → saving (Esc and Cancel do nothing) → saved; 12 MB checked before sending; a refused
   read shows its reason and `Choose another file`. The drop guard: a file dropped outside the drop zone never replaces
   the page; a `.kicad_pcb` opens the dialog.
-- Tests: `boardview.playwright.cjs` (`run-boardview-test.sh`, devproxy `--fixtures`: the drawing, the overlay, the
-  preview, the inspector, the performance gate at 4× CPU throttling), `board-import.playwright.cjs` (web-flow, 44
+- Tests: `boardview.playwright.cjs` (`run-boardview-test.sh`: a SIM session plans its upload of ftp.kicad_pcb, devproxy
+  `--fixtures` adds mobo and a dot size; the drawing, the overlay, the preview, the inspector, the performance gate at 4×
+  CPU throttling, through boardflow's own glue), `board-import.playwright.cjs` (web-flow, 44
   checks, run after `webui-sim.playwright.cjs` in the same SIM session).
 
 ### Profile calibration (to come)
@@ -438,7 +442,9 @@ Never `/dev/ttyACM*`, `/dev/serial/*`, `/dev/video*` or a real-mode OpenPnP.
   extra blocker `I4-z` (`Z check`, fix: Needle Z frame), never the surface item (Register board would not clear them). Recovery's home step is done without a home unless N1 is low. The run confirm
   shows `#run-confirm-home`; the Run step's phases add Home and Z check rows from `run.detail`.
 - **Board step:** `Board top Z (approximate, ±1 mm)`, prefilled when empty (`#board-z-note` says from where), the
-  plan's frame check under it; copy names Register board.
+  plan's frame check under it; copy names Register board. Another board chosen there (picked, or "Use this board"
+  after an upload): the main column shows that board before planning (`R.pending` keeps the plan, which the other
+  steps still show) until Plan.
 - **Setup › Probe the blank** (`probe-blank` view): automatic (`ol.phases#blank-phases`, `table#blank-targets`,
   `div.ri#blank-result`: `Saved 13:20: 6 points, worst 0.012 mm, covers 15 of 15 spots.` / `Not saved: …` / `Stopped …:
   nothing was saved.`), the foot `#blank-note`, `#btn-blank-auto` (two-press), `#blank-why`; `details#blank-by-hand`

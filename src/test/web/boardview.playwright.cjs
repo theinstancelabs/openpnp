@@ -1,13 +1,13 @@
 /*
  * Board render harness (docs/instancelabs/BOARD_IMPORT_DESIGN.md §6.6 a): the board drawing under the job overlay, the
- * path preview, the pad inspector and the Records map, on a seeded SIM session through devproxy.py --fixtures (which
- * answers GET /api/board-art/<id> from src/test/web/fixtures and adds the plan's board block, per-dot times and the dot
- * size). Run by run-boardview-test.sh. Nothing here moves a real machine: the session is a simulator.
+ * path preview, the pad inspector and the Records map, on a seeded SIM session that planned its upload of ftp.kicad_pcb
+ * (the server's drawing and board block), through devproxy.py --fixtures (the fixture drawings, mobo for the
+ * performance gate, and the dot size while the session has none). Run by run-boardview-test.sh. Nothing here moves a
+ * real machine: the session is a simulator.
  *
- * The page glue that boardflow.js (web-flow slice, hooks H1–H5) will own is emulated here with the public APIs:
- * IL.boardart.get → bv.setArt + bv.picture on the hero (H3) and on the Records map (H4), IL.pathPreview.create in the
- * hero stage, IL.padInspect.open for a pad. Pads get the plan fields of §4.5 the server does not send yet (typeRule,
- * padName) through a route, so the inspector's sentences are exercised.
+ * The page glue is boardflow.js's own (hooks H1–H5): the hero is driven through its stage-bar controls (#pv-picture)
+ * and its path preview (IL.boardFlow.preview()), the Records map draws the plan's board by itself, IL.padInspect.open
+ * opens a pad.
  *
  * Checks: (1) structure: two stacked SVGs, no clip path, pad and dot counts equal the plan's; (2) the matrix sign at
  * 30°: R1 pad 1 and every fiducial of the drawing land within 0.5 px of the overlay's pad and the plan's fiducials, on
@@ -17,7 +17,7 @@
  * in the fixtures and a plan of one pad per paste opening of it (mobo: 261); (8) 20 create/destroy cycles leave no
  * ResizeObserver; plus thumbnails, the pad inspector (a dot's outer edge is its real size, path numbers that never overlap
  * on a 48-pin QFP, one pad type said once), the Records map, the preview row's layout at 1440, 1280 and 1024 px with the
- * readout never cut, no reference label on a pad-less footprint, the mask as painted in Quiet, the scale bar's size, keyboard focus
+ * readout never cut and #plan-svg >= 280 px tall, no reference label on a pad-less footprint, the mask as painted in Quiet, the scale bar's size, keyboard focus
  * in the inspector table and after Clear, no rebuild when a render repeats the selection, polls that never touch the
  * drawing (a re-plan only moves it), the dirty layer's casing, the path lines on the Quiet mask (one uncased line), small dots
  * that keep a light centre, unprinted references as fab text, a QFP's selection outline round its leads, no
@@ -73,38 +73,38 @@ async function waitPlan(page, rot) {
   }, rot === undefined ? null : rot, { timeout: 60000 });
 }
 
-/** What boardflow.hero (H3) will do: the drawing under the hero, the picture, the path preview row and #pv-play. */
-async function glueHero(page, picture) {
-  return page.evaluate(async (pic) => {
-    const bv = IL.run.bv;
-    const p = IL.S.plan;
-    const art = await IL.boardart.get(p.board.art.id);
-    bv.setArt(art);
-    bv.picture(pic);
-    document.getElementById('run-hero').classList.add('hero--art');
-    if (!window.__pp) {
-      const stage = document.querySelector('#run-hero .hero__stage');
-      const bar = stage.querySelector('.stage-bar');
-      window.__pp = IL.pathPreview.create({ host: stage, before: document.getElementById('run-timeline'), bv });
-      bar.insertBefore(window.__pp.button, bar.querySelector('.seg'));
-    }
-    window.__pp.setPlan(p);
-    window.__pp.allow((IL.run.mode === 'idle' || IL.run.mode === 'result') && !IL.taskRunning(IL.S.status));
-    return { art: !!art, parts: art ? art.parts.length : 0 };
-  }, picture);
+/**
+ * The hero's picture (Full / Quiet / Off) through boardflow's stage-bar control #pv-picture (its segment when shown, else
+ * its cycling button), then the plan's drawing drawn under the dots: {art, parts}.
+ */
+async function showHero(page, picture) {
+  for (let i = 0; i < 4; i++) {
+    const cur = await page.evaluate(() => IL.run.bv.pic);
+    if (cur === picture) break;
+    const seg = await page.$('#pv-picture .bf-pic__seg button[data-pic="' + picture + '"]');
+    if (seg && await seg.isVisible()) await seg.click();
+    else await page.click('#pv-picture .bf-pic__cycle');
+    // one step at a time: the cycling button goes Full → Quiet → Off on the next render
+    await page.waitForFunction((c) => IL.run.bv.pic !== c, cur, { timeout: 5000 }).catch(() => {});
+  }
+  // the plan shown (a poll may replace IL.S.plan by an equal copy: the same planId), drawn
+  await page.waitForFunction((x) => {
+    const bv = IL.run.bv, p = IL.S.plan;
+    return bv.pic === x && !!(p && p.board && p.board.art && bv.plan && bv.plan.planId === p.planId && bv.art && bv.art.id === p.board.art.id)
+      && (x === 'off' || !bv.artSvg.hidden);
+  }, picture, { timeout: 30000 });
+  return page.evaluate(() => ({ art: !!IL.run.bv.art, parts: (IL.run.bv.art.parts || []).length }));
 }
 
-/** What boardflow.recordsMap (H4) will do: the plan's drawing under the done-dot map, Quiet. */
-async function glueRecords(page) {
-  return page.evaluate(async () => {
+/** boardflow's Records map (H4): the plan's drawing under the done-dot map, Quiet, in view. */
+async function recordsArt(page) {
+  const ok = await page.waitForFunction(() => {
     const host = document.querySelector('.rec-mapbox');
-    const bv = IL.boardview.of(host);
-    if (!bv || !bv.plan || !bv.plan.board) return { ok: false };
-    bv.setArt(await IL.boardart.get(bv.plan.board.art.id));
-    bv.picture('quiet');
-    host.scrollIntoView({ block: 'center' });
-    return { ok: true };
-  });
+    const bv = host && IL.boardview.of(host);
+    return !!(bv && bv.plan && bv.plan.board && bv.art && bv.pic === 'quiet' && !bv.artSvg.hidden);
+  }, null, { timeout: 30000 }).then(() => true, () => false);
+  await page.evaluate(() => { const h = document.querySelector('.rec-mapbox'); if (h) h.scrollIntoView({ block: 'center' }); });
+  return { ok };
 }
 
 (async () => {
@@ -116,28 +116,12 @@ async function glueRecords(page) {
   page.on('console', (m) => { if (m.type() === 'error') jsErrors.push(m.text()); });
   const dialogs = [];
   page.on('dialog', (d) => { dialogs.push(d.message()); d.dismiss(); });
-  // §4.5 pad fields the server adds with the import work (until then: the rule that chose the pad type, the pad name)
-  await page.route(/\/api\/plan(\/[^/?]+)?(\?.*)?$/, async (route) => {
-    const r = await route.fetch();
-    let body = await r.text();
-    try {
-      const j = JSON.parse(body);
-      for (const pad of (j && j.pads) || []) {
-        if (pad.typeRule !== undefined) continue;
-        const m = /0402|0603|0805|1206/.exec(pad.packageId || '');
-        pad.padName = String(pad.padId).split('.').slice(1).join('.');
-        pad.typeRule = pad.typeKey && m ? { kind: 'pattern', detail: '(^|[^0-9])' + m[0] + '([^0-9]|$)', matched: m[0] } : { kind: 'none' };
-      }
-      body = JSON.stringify(j);
-    } catch (e) { /* not JSON: as it came */ }
-    await route.fulfill({ response: r, body });
-  });
   try {
     const resp = await page.goto(BASE + '#run');
     check('UI served through devproxy', resp.ok(), resp.status());
     await waitPlan(page);
-    const g0 = await glueHero(page, 'full');
-    check('the plan names a board drawing and the drawing loads', g0.art && g0.parts > 0, g0);
+    const g0 = await showHero(page, 'full');
+    check('the plan names a board drawing and the drawing loads under the hero (boardflow.js)', g0.art && g0.parts > 0, g0);
 
     // ---- (1) structure -------------------------------------------------------------------------------------------
     const st = await page.evaluate(() => {
@@ -168,20 +152,20 @@ async function glueRecords(page) {
       await page.setViewportSize({ width: w, height: h });
       for (const theme of ['light', 'dark']) {
         await page.evaluate((t) => IL.setTheme(t), theme);
-        await glueHero(page, 'full');
+        await showHero(page, 'full');
         await page.evaluate(() => { IL.run.bv.setView('dots'); IL.render(); });
         await sleep(500);
         await shot(page, 'run-hero-full-' + w + '-' + theme);
-        await glueHero(page, 'quiet');
+        await showHero(page, 'quiet');
         await sleep(300);
         await shot(page, 'run-hero-quiet-' + w + '-' + theme);
         // path preview mid-play (16×, paused half way)
-        await page.evaluate(() => { const pp = window.__pp; pp.setSpeed(16); pp.seek(64); pp.play(); });
-        await page.waitForFunction(() => window.__pp.state.v >= 80, null, { timeout: 15000 });
-        await page.evaluate(() => window.__pp.pause());
+        await page.evaluate(() => { const pp = IL.boardFlow.preview(); pp.setSpeed(16); pp.seek(64); pp.play(); });
+        await page.waitForFunction(() => IL.boardFlow.preview().state.v >= 80, null, { timeout: 15000 });
+        await page.evaluate(() => IL.boardFlow.preview().pause());
         await sleep(200);
         await shot(page, 'path-preview-' + w + '-' + theme);
-        await page.evaluate(() => window.__pp.clear());
+        await page.evaluate(() => IL.boardFlow.preview().clear());
         // pad inspector open on R1 pad 1
         await page.evaluate(() => IL.padInspect.open({ padId: 'R1.1' }, { bv: IL.run.bv }));
         await page.waitForSelector('#panel[data-view=pad] #pad-insp-svg svg.pv-art:not([hidden])', { timeout: 10000 });
@@ -192,7 +176,9 @@ async function glueRecords(page) {
     }
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.evaluate(() => IL.setTheme('light'));
-    await glueHero(page, 'full');
+    // Full is the operator's choice from here on: the hero's renders keep it while the checks below switch the picture
+    // and put it back
+    await showHero(page, 'full');
 
     // ---- (5) picture modes ------------------------------------------------------------------------------------------
     const pm = await page.evaluate(() => {
@@ -271,9 +257,19 @@ async function glueRecords(page) {
     await page.click('#pv-play');
     check('#pv-play expands #run-preview', await page.isVisible('#run-preview'));
     // scrubbing while it plays pauses the play, and onChange hears of that pause (its contract: every start, pause, end)
-    const was = await page.evaluate(() => { window.__ppEv = []; window.__pp.o.onChange = (s) => window.__ppEv.push(s.playing); return window.__pp.state.playing; });
+    const was = await page.evaluate(() => {
+      const pp = IL.boardFlow.preview(), own = pp.o.onChange;
+      window.__ppEv = [];
+      window.__ppOwn = own;
+      pp.o.onChange = (st) => { window.__ppEv.push(st.playing); if (own) own(st); };
+      return pp.state.playing;
+    });
     await page.fill('#pv-scrub', '80');
-    const sp = await page.evaluate(() => { const r = { events: window.__ppEv, playing: window.__pp.state.playing }; window.__pp.o.onChange = null; return r; });
+    const sp = await page.evaluate(() => {
+      const pp = IL.boardFlow.preview(), r = { events: window.__ppEv, playing: pp.state.playing };
+      pp.o.onChange = window.__ppOwn;
+      return r;
+    });
     check('scrubbing while it plays pauses it and tells onChange', was && !sp.playing && sp.events.includes(false), Object.assign({ was }, sp));
     const c80 = await page.evaluate(() => ({ pre: document.querySelectorAll('#plan-svg circle.dot.pv-pre').length,
       text: document.getElementById('pv-readout').textContent, preview: IL.run.bv.svg.classList.contains('pv--preview'),
@@ -292,16 +288,16 @@ async function glueRecords(page) {
       preview: IL.run.bv.svg.classList.contains('pv--preview') }));
     check('Clear: no .pv-pre, the row collapsed', cl.pre === 0 && cl.row && !cl.preview, cl);
     // keyboard: Clear hides its own row, so the focus goes back to #pv-play (not to the page)
-    await page.evaluate(() => window.__pp.seek(10));
+    await page.evaluate(() => IL.boardFlow.preview().seek(10));
     await page.focus('#pv-reset');
     await page.keyboard.press('Enter');
     const kf = await page.evaluate(() => ({ id: document.activeElement && document.activeElement.id, row: document.getElementById('run-preview').hidden }));
     check('keyboard: Clear collapses the row and gives the focus back to #pv-play', kf.row && kf.id === 'pv-play', kf);
-    // the row fits at 1440, 1280 and 1024 px, and its readout is never cut (it takes a line of its own when narrow)
-    // (at 1024 × 768 the hero stage is at its 280 px minimum before the row opens, run.css: only the overflow is checked)
+    // the row fits at 1440, 1280 and 1024 px, and its readout is never cut (it takes a line of its own when narrow); the
+    // drawing keeps at least 280 px of height with the row open (§5.13: at 1024 × 768 the page scrolls instead)
     for (const [w, h] of [[1440, 900], [1280, 800], [1024, 768]]) {
       await page.setViewportSize({ width: w, height: h });
-      await page.evaluate(() => { window.__pp.seek(40); });
+      await page.evaluate(() => { IL.boardFlow.preview().seek(40); });
       await sleep(400);
       const lay = await page.evaluate(() => {
         const r = document.getElementById('run-preview'), bar = document.querySelector('#run-hero .stage-bar');
@@ -312,11 +308,11 @@ async function glueRecords(page) {
           playSw: play.scrollWidth, playCw: play.clientWidth };
       });
       if (w !== 1440) await shot(page, 'layout-preview-row-' + w);
-      check('#run-preview and the stage bar fit at ' + w + ' px' + (w > 1024 ? ', #plan-svg >= 280 px tall' : ''),
-        lay.sw <= lay.cw + 1 && lay.barSw <= lay.barCw + 1 && (w <= 1024 || lay.svgH >= 280), lay);
+      check('#run-preview and the stage bar fit at ' + w + ' px, #plan-svg >= 280 px tall',
+        lay.sw <= lay.cw + 1 && lay.barSw <= lay.barCw + 1 && lay.svgH >= 280, lay);
       check('the readout is never cut at ' + w + ' px ("… · 0:24 of 1:36" stays), #pv-play is not squeezed',
         lay.readSw <= lay.readCw + 1 && lay.playSw <= lay.playCw + 1, lay);
-      await page.evaluate(() => window.__pp.clear());
+      await page.evaluate(() => IL.boardFlow.preview().clear());
     }
     await page.setViewportSize({ width: 1440, height: 900 });
 
@@ -336,7 +332,9 @@ async function glueRecords(page) {
     check('inspector: panel "Pad R1.1", pads of R1 with R1.1 selected', pi.title === 'Pad R1.1' && pi.rows.includes('R1.1:true') && pi.rows.includes('R1.2:false'), pi);
     check('inspector: one sentence on the rule', /^Chosen because the package name contains “0603” \(pad type Chip 0603, v\d+, \w+\)\./.test(pi.rule), pi.rule);
     check('inspector: dots table = the pad\'s dot count, the selected pad .sel, path numbers drawn', pi.dots === pi.dotCount && pi.sel === 1 && pi.labels >= 2, pi);
-    check('inspector: the stencil-equivalent amount and the edit link', /A 0\.10 mm stencil would print 0\.076 mm³ \(0\.28 mg\) here\./.test(pi.kv.replace(/\u00a0/g, ' '))
+    // the amount of PROFILE_CALIBRATION_DESIGN.md §13.8: the planned dots and their mass, the target, the stencil's for comparison
+    check('inspector: the amount (planned dots × mass, the target, what a 0.10 mm stencil would print) and the edit link',
+      /Planned: 1 half.turn dot × \d+\.\d\d mg = \d+\.\d\d mg \(target \d+\.\d\d mg at your 0603 rate; a 0\.10 mm stencil would print \d+\.\d\d mg\)\./.test(pi.kv.replace(/\u00a0/g, ' '))
       && /^Edit pad type Chip 0603$/.test(pi.edit), { kv: pi.kv, edit: pi.edit });
     check('hero marks the part while the inspector is open', pi.hero >= 1, pi.hero);
     const pz = await page.evaluate(() => {
@@ -349,15 +347,20 @@ async function glueRecords(page) {
       const ty = document.getElementById('pad-insp-types');
       const sentence = IL.padInspect.ruleSentence({ typeKey: 'chip-0805', typeVersion: 1, typeStatus: 'characterized', packageId: 'R_0805_2012Metric',
         typeRule: { kind: 'pattern', detail: '(^|[^0-9])0805([^0-9]|$)', matched: '_0805_' } }, null);
-      return { outer: +outer.toFixed(4), half: IL.S.plan.dot.diameterMm / 2, clamped: v.svg.classList.contains('pv--dots-clamped'), overlap,
+      const notStarted = IL.padInspect.ruleSentence({ typeKey: 'chip-0805', typeVersion: 1, typeStatus: 'not-started', packageId: 'R_0805_2012Metric',
+        typeRule: { kind: 'pattern', detail: '(^|[^0-9])0805([^0-9]|$)', matched: '0805', sentence: 'Chosen because the package name contains “0805”.' } }, null);
+      // a dot's own size when the plan gives it (its pad type's turn), else the plan's dot size
+      return { outer: +outer.toFixed(4), half: (Number(c.dataset.d) > 0 ? Number(c.dataset.d) : IL.S.plan.dot.diameterMm) / 2, clamped: v.svg.classList.contains('pv--dots-clamped'), overlap,
         types: ty.hidden ? null : ty.textContent, one: document.getElementById('pad-insp-pads').classList.contains('pad-insp-pads--one'),
-        typeCol: getComputedStyle(document.querySelector('#pad-insp-pads th.pad-insp-type')).display, sentence };
+        typeCol: getComputedStyle(document.querySelector('#pad-insp-pads th.pad-insp-type')).display, sentence, notStarted };
     });
-    check('inspector: a dot\'s outer edge (circle + half its ring) is the plan\'s dot diameter', !pz.clamped && Math.abs(pz.outer - pz.half) <= 0.005, pz);
+    check('inspector: a dot\'s outer edge (circle + half its ring) is its real size (its own diameter, else the plan\'s)', !pz.clamped && Math.abs(pz.outer - pz.half) <= 0.005, pz);
     check('inspector: path numbers do not overlap', !pz.overlap, pz);
     check('inspector: one pad type for both pads is said once, not in every row', pz.types === 'Pad type of both pads: Chip 0603' && pz.one
       && pz.typeCol === 'none', pz);
     check('inspector: the rule names the text without the pattern\'s separators ("_0805_" → “0805”)', /contains “0805” \(pad type chip-0805/.test(pz.sentence), pz.sentence);
+    check('inspector: the pad type\'s status in words ("not-started" → "not started")',
+      /^Chosen because the package name contains “0805” \(pad type chip-0805, v1, not started\)\.$/.test(pz.notStarted), pz.notStarted);
     await page.click('#pad-insp-svg rect.pad[data-pad="R1.2"]');
     await page.waitForFunction(() => document.getElementById('panel-bar-title').textContent === 'Pad R1.2', null, { timeout: 5000 }).catch(() => {});
     check('a pad click in the inspector selects that pad', (await page.textContent('#panel-bar-title')) === 'Pad R1.2', await page.textContent('#panel-bar-title'));
@@ -537,6 +540,28 @@ async function glueRecords(page) {
     check('contrast: in-pad marks >= 3:1 on the finish, the better casing tone >= 3:1 on the finish and every mask composite (2 themes × 8 palettes × Full/Quiet), legend swatches = marks',
       ct.nFails === 0, ct);
 
+    // ---- dark theme: a dark board stands out from the dark stage (a black mask, any board in Quiet) -------------------
+    const rim = await page.evaluate(() => {
+      const rgba = (s) => { const m = /rgba?\(([^)]+)\)/.exec(String(s)); const v = m ? m[1].split(/[ ,/]+/).filter(Boolean).map(Number) : []; return v.length >= 3 ? [v[0], v[1], v[2], v.length > 3 ? v[3] : 1] : null; };
+      const lum = (c) => { const v = c.slice(0, 3).map((x) => { x /= 255; return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4); }); return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]; };
+      const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+      const over = (c, bg) => [0, 1, 2].map((i) => c[i] * c[3] + bg[i] * (1 - c[3]));
+      const out = {};
+      for (const theme of ['dark', 'light']) {
+        IL.setTheme(theme);
+        const sub = getComputedStyle(IL.run.bv.artSvg.querySelector('.pv-a-sub'));
+        const stage = rgba(getComputedStyle(document.querySelector('#run-hero .hero__stage')).backgroundColor);
+        const black = over([0x15, 0x18, 0x1a, 0.86], rgba(sub.fill));   // the black mask over the substrate
+        const st = rgba(sub.stroke);
+        out[theme] = { stroke: sub.stroke, width: parseFloat(sub.strokeWidth), mask: +ratio(black, stage).toFixed(2),
+          rim: st ? +ratio(over(st, stage), stage).toFixed(2) : null };
+      }
+      IL.setTheme('light');
+      return out;
+    });
+    check('dark theme: a 3 px light rim outside the board edge, >= 3:1 on the stage (a black mask alone is about 1.3:1); the light theme draws none',
+      rim.dark.rim >= 3 && rim.dark.width >= 6 && rim.dark.mask < 3 && rim.light.stroke === 'none', rim);
+
     // ---- polls only toggle classes; a hidden layer hides its casing too -----------------------------------------------
     const ch = await page.evaluate(async () => {
       const host = document.createElement('div');
@@ -693,10 +718,10 @@ async function glueRecords(page) {
     check('a 20-dot run on the simulator (for the Records map)', !!runId && run.result.status === 'OK', run && (run.result || run));
     if (runId) {
       await page.evaluate((id) => IL.go('#records/boards/' + id), runId);
-      // the map is rebuilt once the run's dot timings arrive (its done dots): glue the drawing after that
+      // the map is rebuilt once the run's dot timings arrive (its done dots); boardflow draws the board under the rebuilt one
       await page.waitForSelector('.rec-mapbox svg.pv:not(.pv-art) circle.dot.done', { timeout: 30000 });
       await sleep(300);
-      const gr = await glueRecords(page);
+      const gr = await recordsArt(page);
       const rec = await page.evaluate(() => ({ edge: !!document.querySelector('.rec-mapbox .pv-art .pv-a-edge'),
         shown: !document.querySelector('.rec-mapbox svg.pv-art').hasAttribute('hidden'),
         quiet: document.querySelector('.rec-mapbox svg.pv-art').classList.contains('pv-art--quiet'),
@@ -706,7 +731,7 @@ async function glueRecords(page) {
         await page.setViewportSize({ width: w, height: h });
         for (const theme of ['light', 'dark']) {
           await page.evaluate((t) => IL.setTheme(t), theme);
-          await glueRecords(page);
+          await recordsArt(page);
           await sleep(400);
           await shot(page, 'records-map-' + w + '-' + theme);
         }
@@ -716,17 +741,18 @@ async function glueRecords(page) {
     }
 
     // ---- (2) the matrix sign at 30° ---------------------------------------------------------------------------------
+    // the session's board again, at its own origin and board top Z (within 2 mm of the needle frame), turned 30°
+    const src = await page.evaluate(() => IL.S.plan.source);
     await page.evaluate(() => IL.go('#run/board'));
-    await page.waitForFunction(() => [...document.querySelectorAll('#board-select option')].some((o) => /^file:.*ftp\.board\.xml$/.test(o.value)), null, { timeout: 15000 });
-    const opt = await page.$$eval('#board-select option', (os) => os.map((o) => o.value).find((v) => /^file:.*ftp\.board\.xml$/.test(v)));
-    await page.selectOption('#board-select', opt);
-    await page.fill('#board-x', '120');
-    await page.fill('#board-y', '120');
-    await page.fill('#board-z', '10');
+    await page.waitForFunction((f) => [...document.querySelectorAll('#board-select option')].some((o) => o.value === 'file:' + f), src.file, { timeout: 15000 });
+    await page.selectOption('#board-select', 'file:' + src.file);
+    await page.fill('#board-x', String(src.x));
+    await page.fill('#board-y', String(src.y));
+    await page.fill('#board-z', String(src.z));
     await page.fill('#board-rot', '30');
     await page.click('#btn-plan');
     await waitPlan(page, 30);
-    await glueHero(page, 'full');
+    await showHero(page, 'full');
     await sleep(400);
     const al = await page.evaluate(() => {
       const bv = IL.run.bv, p = IL.S.plan, art = bv.art;

@@ -5,18 +5,20 @@ UI development without rebuilding the jar: serves DIR/index.html at / and DIR/<n
 (with the same Content-Security-Policy as the embedded API server), and forwards /api/* to a running OpenPnP web API
 (for example a SIM session from src/test/sim/il_ui_session.py). Listens on 127.0.0.1 only.
 
---fixtures DIR (board drawings before the server makes them, docs/instancelabs/BOARD_IMPORT_DESIGN.md §6.6):
+--fixtures DIR (board drawings, docs/instancelabs/BOARD_IMPORT_DESIGN.md §6.6):
   GET /api/board-art/<id>   answered from DIR/art/<id>.json (the art slice's generated drawings), else from
                             DIR/*.art.json whose id (the first 16 hex digits of the SHA-256 of the file's bytes) is <id>,
-                            with the server's immutable cache header
+                            with the server's immutable cache header; any other id is the session's own drawing (an
+                            import, the fallback of a board file) and goes to the session
   POST /api/plan, GET /api/plan/<id>
                             a plan of a board file listed in DIR/art/board-map-generated.json or DIR/board-map.json
                             ({"ftp.board.xml": "9626d1aefbbc2ad3"}: an art id or a file in DIR; keys starting with "_"
                             are notes; board-map.json's entries win; a uinav "00-" prefix of the file name is
                             ignored) gets the plan's "board" block: toMachine = T(x, y)·R(rotation) of the plan's seat,
                             the drawing's size and fiducials, art {id, kind}; plus synthetic per-dot times (0.6 s per dot:
-                            dots[i].ta / .te) and "dot": {"diameterMm": 0.6}. A plan that already has a board block keeps
-                            it (the server makes them once the import is merged); everything else goes to the session.
+                            dots[i].ta / .te) and "dot": {"diameterMm": 0.6} while the session knows no dot size. A plan
+                            that already has a board block keeps it (the server makes them); everything else goes to the
+                            session.
 
 --route-fixtures DIR (development only: answers the server does not give yet, or a state that takes minutes to reach,
   docs/instancelabs/PROFILE_CALIBRATION_DESIGN.md §13; e.g. src/test/web/fixtures/padprofile): DIR/routes.json (or
@@ -100,7 +102,7 @@ class Fixtures:
             for i, d in enumerate(dots):
                 d["ta"] = round(LEAD_S + DOT_S * i, 2)
                 d["te"] = round(LEAD_S + DOT_S * i + DOT_DWELL_S, 2)
-        if not plan.get("dot"):
+        if not (plan.get("dot") or {}).get("diameterMm"):
             plan["dot"] = {"diameterMm": DOT_MM, "source": "ladder"}
         src = plan.get("source") or {}
         if plan.get("board") or src.get("source") != "file":
@@ -220,8 +222,7 @@ def make_handler(web, api, fx, rf=None):
         def _art(self, art_id):
             data = fx.art_bytes(art_id)
             if data is None:
-                return self._send(404, json.dumps({"error": "art-gone", "reason": "This board drawing is no longer known: "
-                                                   "plan the board again"}).encode(), "application/json")
+                return self._proxy()  # the session's own drawing (an import, a board file's fallback)
             self._send(200, data, "application/json; charset=utf-8", IMMUTABLE)
 
         def _any(self):
