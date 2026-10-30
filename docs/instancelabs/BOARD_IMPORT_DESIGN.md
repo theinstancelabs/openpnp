@@ -2034,8 +2034,11 @@ above, the code is right:
   `padTypesFrom`), `lib`, `kicadName`, `bodyW`, `bodyH`, `untypedPads` and its `outcome`.
 - **§3.2 save and attach.** The 409 `preview-stale` carries the new preview as `preview` (not `details`). Attach
   answers 201 `{slug, name, board, art, maxOffsetMm, offsets, replaced, boards}`. Uploads are refused (409 `refused`,
-  `Upload the board when the run has finished.`) while the engine is busy; that check is made once, at the start of
-  the request (review 1: a run or probe started during a parse is not stopped by it).
+  `Upload the board when the run has finished.`) while the engine is busy or a pad calibration is between its engine
+  steps; the check is made once the request holds the pipeline (§3.4), and while it holds it every engine task that
+  checks the engine is idle (run, clean check, shots, ladders, pressure hold, Register board, probes, Check Z, Home,
+  pad calibration) is refused with 409 `a board file is being read (an upload takes up to about 20 s): wait for it to
+  finish` (final fix round).
 - **§3.2, with the profile check (PC pc-api, built on `il/pc-api`).** Each package also gets `profileCheck` (its
   groups that need a profile), `profileReason` and `profileShort`; `outcome` becomes `needs-profile` (some pads wait for
   a profile) or `not-dispensed` (no pad can get paste: the tip, or a part treated whole), and one `NEEDS_PROFILE`
@@ -2055,7 +2058,10 @@ above, the code is right:
 - **§5.8 upload dialog** (`boardimport.js`, `IL.boardImport.open({file, onSaved})`): states choose → reading → preview
   → saving → saved, warnings in the four groups (Blocks dispensing, Registration, Check in the preview, Notes); a file
   dropped outside the drop zone never replaces the page (a `.kicad_pcb` opens the dialog, anything else gets a toast).
-- **Review 1 minors, not fixed yet** (final fix round): footprints outside the board outline are imported as pasted
-  placements without a warning; a footprint's pad rotation of ±180° from floating-point rounding can split one package
-  into two variants with a false `PACKAGE_VARIANT` warning.
+- **Review 1 minors, fixed in the final fix round.** §2.7 has a rule between 2 and 3: a top footprint with a paste
+  opening outside the board's box (beyond 0.001 mm) is art only (`artOnly`, why `outside the board`), and one
+  `OFF_BOARD` warning (group 3) names them: `R2 is not inside the board outline: it gets no paste (its paste would land
+  off the board). Move it onto the board in KiCad if it is part of this board.` (fiducials are not affected; no
+  fixture changes). §2.8's package signature reads a pad rotation of −180.000 as 180.000, so a footprint at a decimal
+  angle with a 180° pad is no longer split into two variants.
 - **§7** is in `REAL_MACHINE_TODO.md` (items 33–37).

@@ -253,5 +253,8 @@ public class InterlocksTest {
         in = ok();
         in.cfg.profile.netStepsPerDot = 600;
         assertTrue(Interlocks.check(in).has("CONFIG"));
+        // two turns per dot: refused before anything moves, not by the stream check after the home
+        in.cfg.profile.netStepsPerDot = 3200;
+        assertTrue(Interlocks.check(in).has("CONFIG"));
     }
 }

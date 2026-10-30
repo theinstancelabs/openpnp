@@ -100,17 +100,38 @@ public final class BoardImporter {
         T run() throws Exception;
     }
 
+    /** What must hold before a file is read: checked once the request holds the pipeline; it throws when not. */
+    @FunctionalInterface
+    public interface Gate {
+        void check() throws Exception;
+    }
+
     private final Configuration configuration;
     private final DispenseService svc;
     private final BoardStore store;
+    private final Gate gate;
 
     /**
      * @param svc the dispense engine (its pad types, package mappings and minimum status); null: no pad types (tests)
      */
     public BoardImporter(Configuration configuration, DispenseService svc) {
+        this(configuration, svc, null);
+    }
+
+    /**
+     * @param gate checked inside the pipeline before the file is read (the API's engine-idle check: a task that
+     *        starts meanwhile is refused while the pipeline is held, {@link #reading}); null: none
+     */
+    public BoardImporter(Configuration configuration, DispenseService svc, Gate gate) {
         this.configuration = configuration;
         this.svc = svc;
         this.store = new BoardStore(configuration.getConfigurationDirectory());
+        this.gate = gate;
+    }
+
+    /** A preview, save or attach holds the pipeline: a board file is being read (or saved). */
+    public static boolean reading() {
+        return PIPELINE.availablePermits() == 0;
     }
 
     public BoardStore store() {
@@ -172,6 +193,9 @@ public final class BoardImporter {
             throw new ImportException(409, "busy", "Another board file is being read: try again in a moment.");
         }
         try {
+            if (gate != null) {
+                gate.check();
+            }
             Runnable hook = inPipeline;
             if (hook != null) {
                 hook.run();

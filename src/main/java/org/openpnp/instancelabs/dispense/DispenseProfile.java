@@ -181,10 +181,12 @@ public class DispenseProfile {
             p.add(String.format(Locale.ROOT, "profile pressurePsi must be > 0 and <= %.1f (DV-5005 1.5 bar)", MAX_PSI));
         }
         int rev = c.bStepsPerRev;
-        if (!(netStepsPerDot > 0 && netStepsPerDot <= 2 * rev
-                && (rev % netStepsPerDot == 0 || netStepsPerDot % rev == 0))) {
-            p.add("profile netStepsPerDot must divide a revolution (" + rev + " steps: 1600, 800, 400, ...) or be "
-                    + "one or two revolutions, so the start angle repeats");
+        // R1 (profile calibration §1.2): the start angle repeats, and a purge dot (the profile's dose) stays
+        // within the stream validator's one revolution and the 20° phase turn
+        if (!(netStepsPerDot == rev || 2 * netStepsPerDot == rev || 4 * netStepsPerDot == rev)) {
+            p.add("profile netStepsPerDot must be " + rev / 4 + ", " + rev / 2 + " or " + rev + " steps (a quarter, "
+                    + "half or whole turn of the " + rev + " steps of a revolution): the start angle repeats and a "
+                    + "purge dot turns at most one revolution");
         }
         if (!(suckBackDeg >= 0 && suckBackDeg <= 30)) {
             p.add("profile suckBackDeg must be 0 to 30");

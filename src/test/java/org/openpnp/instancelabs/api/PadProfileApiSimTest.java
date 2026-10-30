@@ -1063,7 +1063,7 @@ public class PadProfileApiSimTest {
                 Thread.sleep(20);
             }
         }
-        // the subset's dots were copied without their dose: the view gives each its pad's (what the stream turned)
+        // the subset's dots keep their dose (what the stream turned)
         JsonObject subset = ok(get("/api/plan/" + subsetId));
         assertEquals(20, subset.getAsJsonArray("dots").size());
         for (JsonElement e : subset.getAsJsonArray("dots")) {

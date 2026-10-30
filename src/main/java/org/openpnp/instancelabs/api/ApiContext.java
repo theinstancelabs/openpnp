@@ -6,6 +6,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Function;
 
+import org.openpnp.instancelabs.board.BoardImporter;
 import org.openpnp.instancelabs.dispense.DispensePlan;
 import org.openpnp.instancelabs.dispense.DispenseService;
 import org.openpnp.instancelabs.dispense.InterlockReport;
@@ -88,7 +89,10 @@ final class ApiContext {
         }
     }
 
-    /** No engine task runs, and no pad calibration is between its engine steps (§7.1). */
+    /**
+     * No engine task runs, no pad calibration is between its engine steps (§7.1), and no board upload is reading
+     * its file (BI §3.4: no parse runs while a dispense, registration or probe task streams).
+     */
     void requireEngineIdle(DispenseService s) throws ApiException {
         String job = padCalJobs.lockReason();
         if (job != null) {
@@ -96,6 +100,10 @@ final class ApiContext {
         }
         if (s.isBusy()) {
             throw ApiException.refused("a dispense task is already running; wait for it or press STOP");
+        }
+        if (BoardImporter.reading()) {
+            throw ApiException.refused("a board file is being read (an upload takes up to about 20 s): wait for it "
+                    + "to finish");
         }
     }
 

@@ -223,7 +223,7 @@ public class GcodeStreamBuilder {
             for (int i = r.first; i < r.first + r.count; i++) {
                 DispensePlan.PlannedDot d = plan.dots.get(i);
                 dots.add(new DotSpec(d.xMm, d.yMm, d.dispenseZMm, d.hopZMm, d.rotationDeg, d.index, d.padId,
-                        padIndex.getOrDefault(d.padId, -1)));
+                        padIndexOf(plan, d, padIndex)));
             }
             blocks.add(new BlockSpec(r.netSteps, dots, DoseBlocks.turnName(r.netSteps)));
         }
@@ -235,6 +235,18 @@ public class GcodeStreamBuilder {
         // the purge dots lie on the blank (the anchor's floor); only the board dots take the board's reference
         b.blocks(blocks, purge, cfg.padCalibration.flushDots, plan.boardZMm);
         return b.build();
+    }
+
+    /**
+     * The dot's pad in the plan: the planner's {@link DispensePlan.PlannedDot#padIndex} (two pads of one
+     * footprint may share a name, and so a pad id), else the first pad of its id (a plan made without it).
+     */
+    private static int padIndexOf(DispensePlan plan, DispensePlan.PlannedDot d, Map<String, Integer> byId) {
+        int i = d.padIndex;
+        if (i >= 0 && i < plan.pads.size() && java.util.Objects.equals(plan.pads.get(i).padId, d.padId)) {
+            return i;
+        }
+        return byId.getOrDefault(d.padId, -1);
     }
 
     /**
