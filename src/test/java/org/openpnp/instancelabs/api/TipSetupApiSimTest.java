@@ -74,8 +74,8 @@ public class TipSetupApiSimTest {
         assertEquals(TipSim.SEED, TipSim.str(from22.getAsJsonObject("setup").getAsJsonObject("profile"), "from"));
 
         // another needle is another setup once a setup has records; a correction of the same needle takes two presses
-        JsonObject another = TipSim.refused(t.call("PUT", "/api/tip-setups/" + TipSim.SEED, "{\"form\":\"straight\"}"),
-                409, "another-needle");
+        JsonObject another = TipSim.refused(t.call("PUT", "/api/tip-setups/" + TipSim.SEED, "{\"gauge\":25}"), 409,
+                "another-needle");
         assertEquals("This makes it another needle: add a tip instead (Add a tip…, starting from this one).",
                 TipSim.str(another, "reason"));
         JsonObject corr = TipSim.refused(t.call("PUT", "/api/tip-setups/" + TipSim.SEED, "{\"idMm\":0.42}"), 409,

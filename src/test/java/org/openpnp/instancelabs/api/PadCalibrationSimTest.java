@@ -634,7 +634,7 @@ public class PadCalibrationSimTest {
         Res again = call("POST", "/api/pad-calibrations", "{\"planId\":\"" + newPlanId + "\",\"groups\":\"all\","
                 + "\"save\":true," + attest() + "}");
         assertEquals(409, again.status, again.toString());
-        assertEquals("Nothing to calibrate: every chosen group cannot be dispensed with the 22G tip.",
+        assertEquals("Nothing to calibrate: every chosen group cannot be dispensed with the 22G bent taper.",
                 str(again.json(), "reason"));
 
         // the by-hand weighing (§8) on a connected SIM balance: the coupons the operator wiped look clean again, the job
@@ -864,7 +864,7 @@ public class PadCalibrationSimTest {
         Res refused = call("POST", "/api/pad-calibrations", "{\"steps\":[\"ladder\"],\"doseSteps\":800,"
                 + "\"typeKeys\":[\"chip-0603\"]," + attest() + "}");
         assertEquals(409, refused.status, refused.toString());
-        assertTrue(str(refused.json(), "reason").startsWith("I4: the 22G tip was put on at "), refused.toString());
+        assertTrue(str(refused.json(), "reason").startsWith("I4: the 22G bent taper was put on at "), refused.toString());
         assertTrue(str(refused.json(), "reason").endsWith("and where it lands has not been checked: check where it "
                 + "lands (Setup › Dispenser & tip)."), refused.toString());
         JsonObject pv = ok(get("/api/pad-calibrations/preview?measure=landing"));
@@ -1093,7 +1093,7 @@ public class PadCalibrationSimTest {
         JsonObject job = ladder(800, "chip-0603");
         assertEquals("failed", str(job, "state"), job.toString());
         assertTrue(str(result(job), "sentence").contains("below the bench's 1.06 mm²: check the regulator (18 psi) and "
-                + "the paste before calibrating, or another tip than the 22G tip is on"), result(job).toString());
+                + "the paste before calibrating, or another tip than the 22G bent taper is on"), result(job).toString());
     }
 
     /** The seeded setup's key. */

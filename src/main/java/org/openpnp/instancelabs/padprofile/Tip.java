@@ -17,10 +17,13 @@ public final class Tip {
     /** The seeded setup's key (§22.1): pad types and records without a tip key belong to it. */
     public static final String SEED_KEY = "ad22tta-b";
     /**
-     * The seeded setup's name: every text that names the mounted 22G says it. §22.1 names the seed "22G bent taper";
-     * it stays "22G tip", the name every text has used, while the API's tests pin that text (ts-api renames it).
+     * The seeded setup's name (§22.1): every text that names the mounted 22G says it. The settings file's tip is
+     * named "22G tip" (TipSpec's default, in every file saved before tip setups): the start's reconcile refreshes it
+     * from the setup.
      */
-    public static final String SEED_NAME = "22G tip";
+    public static final String SEED_NAME = "22G bent taper";
+    /** The name the seed had before it was "22G bent taper" (TipSpec's default): the start renames a seed still so. */
+    public static final String OLD_SEED_NAME = "22G tip";
 
     public String key;
     public String name;

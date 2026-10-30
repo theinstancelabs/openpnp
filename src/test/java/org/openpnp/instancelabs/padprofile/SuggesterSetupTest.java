@@ -207,7 +207,7 @@ public class SuggesterSetupTest {
         assertTrue(belowGate > 0, "the seed types put groups below the gate");
     }
 
-    static final Pattern BELOW_GATE_TEXT = Pattern.compile(".+ is not calibrated for the " + Pattern.quote(Tip.SEED_NAME)
+    static final Pattern BELOW_GATE_TEXT = Pattern.compile(".+ is not calibrated for the " + Pattern.quote(goldenTip().name)
             + " yet \\(status: (not started|provisional)\\)\\. Boards need pad types that are at least characterized: "
             + "calibrate it for this tip automatically or by hand\\.");
 

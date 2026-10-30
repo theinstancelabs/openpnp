@@ -532,6 +532,40 @@ public class TipSetupsTest {
     }
 
     @Test
+    public void aSeedStillNamedTheOldWayIsRenamedAtStartAndNeverAgain() throws Exception {
+        // a database migrated while the seed was "22G tip" (§22.1): the start appends its new name, once; a name the
+        // operator gave it stays
+        String json = fixture();
+        try (SimMachine sim = new SimMachine(false)) {
+            DispenseService svc = start(sim, json);
+            TipSetup old = svc.getDb().currentTipSetup(Tip.SEED_KEY).copy();
+            old.name = Tip.OLD_SEED_NAME;
+            old.operator = "seed";
+            svc.getDb().insertTipSetupVersion(old);
+            svc.shutdown();
+            svc = DispenseService.start(Configuration.get());
+            try {
+                TipSetup now = svc.getDb().currentTipSetup(Tip.SEED_KEY);
+                assertEquals(Tip.SEED_NAME, now.name);
+                assertEquals("the seed's name at the update", now.why);
+                assertEquals(Tip.SEED_NAME, svc.getConfig().tip.name);
+                int versions = svc.getDb().tipSetupHistory(Tip.SEED_KEY).size();
+                TipSetup mine = now.copy();
+                mine.name = Tip.OLD_SEED_NAME;
+                mine.operator = "tester";
+                svc.getDb().insertTipSetupVersion(mine);
+                svc.shutdown();
+                svc = DispenseService.start(Configuration.get());
+                assertEquals(Tip.OLD_SEED_NAME, svc.getDb().currentTipSetup(Tip.SEED_KEY).name, "the operator's name");
+                assertEquals(versions + 1, svc.getDb().tipSetupHistory(Tip.SEED_KEY).size());
+            }
+            finally {
+                svc.shutdown();
+            }
+        }
+    }
+
+    @Test
     public void anUnknownKeyBecomesASetup() throws Exception {
         String json = withTip(fixture(), o -> {
             o.getAsJsonObject("tip").addProperty("key", "x30");

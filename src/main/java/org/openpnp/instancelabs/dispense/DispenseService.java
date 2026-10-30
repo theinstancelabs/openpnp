@@ -455,6 +455,15 @@ public final class DispenseService {
             db.event(null, "INFO", TIP_EVENT, "the settings file's tip differs from the " + s.name + "'s version "
                     + (s.version - 1) + ": version " + s.version + " takes its ID, OD and smallest dot");
         }
+        if (Tip.SEED_KEY.equals(s.key) && Tip.OLD_SEED_NAME.equals(s.name) && ("seed".equals(s.operator)
+                || "reconcile".equals(s.operator))) {
+            // a seed written before it was named "22G bent taper" (§22.1), never renamed by the operator
+            TipSetup n = s.copy();
+            n.name = freeName(Tip.SEED_NAME, s.key);
+            n.why = "the seed's name at the update";
+            n.operator = "reconcile";
+            s = db.insertTipSetupVersion(n);
+        }
         TipSpec spec = s.toSpec();
         if (!new com.google.gson.Gson().toJson(spec).equals(new com.google.gson.Gson().toJson(c.tip))) {
             c.tip = spec;

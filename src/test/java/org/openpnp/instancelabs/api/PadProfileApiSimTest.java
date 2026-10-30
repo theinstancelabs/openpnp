@@ -506,10 +506,10 @@ public class PadProfileApiSimTest {
                 needs++;
                 assertEquals(1, w.get("group").getAsInt());
                 assertEquals("5 packages need a profile: LED_0805_2012Metric (not calibrated yet), "
-                        + "Resonator_SMD_Murata_CSTxExxV-3Pin_3.0x1.1mm (cannot be dispensed with the 22G tip), "
-                        + "USB_Mini-B_Lumberg_2486_01_Horizontal (cannot be dispensed with the 22G tip), "
+                        + "Resonator_SMD_Murata_CSTxExxV-3Pin_3.0x1.1mm (cannot be dispensed with the 22G bent taper), "
+                        + "USB_Mini-B_Lumberg_2486_01_Horizontal (cannot be dispensed with the 22G bent taper), "
                         + "SW_SPST_3.9x2.9mm (no pad type), VQFN-32-1EP_5x5mm_P0.5mm_EP3.254x3.254mm (cannot be "
-                        + "dispensed with the 22G tip). After saving, choose a suggestion for each in Profile › Needs "
+                        + "dispensed with the 22G bent taper). After saving, choose a suggestion for each in Profile › Needs "
                         + "a profile.", str(w, "text"));
                 assertEquals(Arrays.asList("TX0", "RX0", "PWR0", "L0", "Y1", "J3", "SW1", "IC3").size(),
                         w.getAsJsonArray("refs").size());

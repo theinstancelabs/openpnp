@@ -719,7 +719,7 @@ public class PadCalibrationJobTest {
         Map<String, java.util.List<JsonObject>> groups = PadCalibrationSimTest.groups(ok(get("/api/pad-profile/check"
                 + "?planId=" + planId)));
         JsonObject tip = groups.get("WSON-8-1EP_2x2mm_P0.5mm_EP0.9x1.6mm").get(0);
-        assertEquals("Nothing to calibrate: every chosen group cannot be dispensed with the 22G tip.",
+        assertEquals("Nothing to calibrate: every chosen group cannot be dispensed with the 22G bent taper.",
                 refused(call("POST", "/api/pad-calibrations", body(tip, attest())), "refused"));
         // the suggestion ids are checked before the attestations
         String stale = body(group, "").replace(str(group.getAsJsonObject("suggestion"), "id"), "s000000000000");
