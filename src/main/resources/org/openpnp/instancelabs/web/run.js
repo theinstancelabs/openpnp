@@ -423,8 +423,12 @@
   const regGate = (s) => { const w = registerWhy(s); return w ? w.text : null; };
   IL.fix('register', { press2: 'register board', gate: regGate, run: () => postRegister('auto'), ok: (r) => regOk(r) });
   // a board without fiducials (F10): Register board with probe "always" probes it only, where the plan puts it
-  IL.fix('register-probe-only', { press2: 'probe only', gate: (s) => { const w = registerWhy(s, true); return w ? w.text : null; },
-    run: () => postRegister('always'), ok: (r) => regOk(r) });
+  IL.fix('register-probe-only', {
+    press2: 'probe only',
+    gate: (s) => { if (plan() && !probeOnlyPlan(plan())) return 'This board has fiducials: use Register board'; const w = registerWhy(s, true); return w ? w.text : null; },
+    run: () => postRegister('always'),
+    ok: (r) => regOk(r),
+  });
   // a new seat on a board with fiducials: the fiducials decide (the 0.1 mm rule and the 3-point check), not trust
   IL.fix('register-check', {
     press2: 'check the fiducials',

@@ -23,7 +23,10 @@
  * correction), what the engine refuses since the final round (OpenPnP busy, an upload reading its file: locked; a
  * clean-pad check refused at its start: its reason on the card; the profile's dose a quarter, half or whole turn), a Z
  * that moved at a home and its remedy under the same home (Z check blocker: the needle frame, the blank, the touch-off,
- * Register board), a board top too far under the needle frame for the probe, no native dialogs, no JS errors.
+ * Register board), a board top too far under the needle frame for the probe, fix round 2's Calibrate › Needle touch-off
+ * (the Pitch field and the engine's 400 at it, a run that records nothing with its message word for word, dots the
+ * camera could not measure) and probe only for a board without fiducials (the primary, the REG refusal's fix-it, the
+ * result), no native dialogs, no JS errors.
  *
  * Env: IL_API_URL (http://127.0.0.1:PORT/), PLAYWRIGHT_DIR (dir with node_modules/playwright),
  *      UINAV (uinav CLI), UINAV_SESSION, OUT_DIR (screenshots + results.json), SIM_SCENE (the session's SIM scene file).
@@ -646,6 +649,103 @@ async function runFirstDots(page, n) {
     const lastTile = await textOf(page, 'run-last').catch(() => '');
     check('Last board tile keeps the board run after a prime and a test dot', !/prime|test dot/i.test(lastTile), lastTile);
 
+    // ---- Calibrate › Needle touch-off (fix round 2: F9, F14): the pitch and its refusal at the field, a run that
+    // records nothing (its message word for word), a recorded run whose dots the camera could not measure ----------
+    {
+      // the blank place on the blank surface, 10 mm from the purge row (the touch-off lays its dots in +X from it)
+      await nav(page, 'setup');
+      await page.waitForSelector('tr[data-place="blank"] input[data-axis=x]');
+      const blankRow = page.locator('tr[data-place="blank"]');
+      await blankRow.locator('input[data-axis=x]').fill('150');
+      await blankRow.locator('input[data-axis=y]').fill('35');
+      await blankRow.locator('input[data-axis=z]').fill('10');
+      await blankRow.locator('button[data-action=save]').click();
+      await waitStatus(page, (s) => s.dispense.locations.blank && s.dispense.locations.blank.x === 150, 10000);
+      await nav(page, 'calibrate');
+      await page.evaluate(() => IL.go('#calibrate/touch-off'));
+      await page.waitForSelector('#to-pitch', { state: 'visible', timeout: 15000 });
+      // the card chose the only place there was before (the waste): the operator picks the blank
+      await page.waitForFunction(() => [...document.getElementById('to-place').options].some((o) => o.value === 'blank'), null, { timeout: 10000 });
+      await page.selectOption('#to-place', 'blank');
+      const pf = await page.evaluate(() => ({ ph: document.getElementById('to-pitch').placeholder, unit: document.querySelector('#to-pitch-wrap .unit').textContent,
+        hint: document.querySelector('#to-pitch-wrap .field__h').textContent }));
+      check('touch-off: a Pitch field (mm, placeholder 1.6, "at least the dot + 0.4 mm")', pf.ph === '1.6' && pf.unit === 'mm' && pf.hint === 'at least the dot + 0.4 mm', pf);
+      await waitText(page, 'to-plan', /· 1\.6 mm apart$/, 10000).catch(() => {});
+      check('touch-off plan line: "· 1.6 mm apart" (the engine\'s pitch for a half-turn dot)', /^6 dots on “blank” at gaps 0\.125, .* · one profile dot each · 1\.6 mm apart$/.test(await textOf(page, 'to-plan')),
+        await textOf(page, 'to-plan'));
+      // 1.0 mm leaves no room between half-turn dots: the engine's 400 is the field's error, and nothing moves
+      await page.fill('#to-pitch', '1.0');
+      await waitText(page, 'to-plan', /· 1\.0 mm apart$/, 5000).catch(() => {});
+      let g2 = gcodeNext();
+      await press2(page, '#btn-to-run');
+      await page.waitForFunction(() => !document.getElementById('to-pitch-err').hidden, null, { timeout: 10000 }).catch(() => {});
+      const pe = await page.evaluate(() => ({ err: document.getElementById('to-pitch-err').textContent, shown: !document.getElementById('to-pitch-err').hidden,
+        invalid: document.getElementById('to-pitch').classList.contains('input--invalid'), reason: document.getElementById('to-reason').textContent,
+        locked: document.getElementById('btn-to-run').disabled, boxes: document.querySelectorAll('#cal-touch-off .refusal').length, toast: document.getElementById('toast').textContent }));
+      const pitch400 = 'the touch-off pitch 1.00 mm is too small for these dots: a half-turn dot is about 1.16 mm across, so dots 1.00 mm apart '
+        + 'touch or string together and cannot be measured; use a pitch of at least 1.56 mm (the dot + 0.40 mm)';
+      check('touch-off pitch 1.0: the engine\'s 400 word for word as the Pitch field\'s error; Run locked, pointing there; no refusal box',
+        pe.shown && pe.err === pitch400 && pe.invalid && pe.locked && pe.reason === 'The pitch is too small for these dots: see the Pitch field.' && pe.boxes === 0
+        && pe.toast === 'Not accepted: ' + pitch400, pe);
+      l = lines(gcode(g2));
+      check('touch-off pitch 1.0: refused before anything moves or pressurises', !l.some((x) => /^(G0|G1|M106)\b/.test(x)), l.slice(0, 12));
+      await page.evaluate(() => document.getElementById('cal-touch-off').scrollIntoView({ block: 'start' }));
+      await page.screenshot({ path: path.join(OUT, 'touchoff-pitch-refused.png') });
+      await page.fill('#to-pitch', '');
+      await page.waitForFunction(() => document.getElementById('to-pitch-err').hidden && !document.getElementById('btn-to-run').disabled, null, { timeout: 10000 }).catch(() => {});
+      check('touch-off: the pitch changed, its error goes and Run unlocks', await page.evaluate(() => document.getElementById('to-pitch-err').hidden
+        && !document.getElementById('btn-to-run').disabled), await textOf(page, 'to-reason'));
+      // a run that records nothing: this SIM scene draws no paste, so no dot forms; the run's message word for word
+      const touchOffs = async () => (await (await page.request.get(BASE + 'api/calibrations')).json()).touchOffs;
+      const rows0 = (await touchOffs()).length;
+      const t9 = Date.now() + (await page.evaluate(() => IL.S.skewMs));
+      await press2(page, '#btn-to-run');
+      await waitText(page, 'toast', /^Touch-off started, dots 1\.6 mm apart: /, 10000).catch(() => {});
+      check('touch-off started: the toast names the 202\'s pitch', /^Touch-off started, dots 1\.6 mm apart: the result is shown only\.$/.test(await textOf(page, 'toast')), await textOf(page, 'toast'));
+      const tr = await waitStatus(page, (x) => x.run && x.run.label === 'needle touch-off' && !x.run.running && x.run.startedAtMs > t9, 240000);
+      check('touch-off run: OK without a contact (no paste in this SIM scene), nothing recorded', tr.run.status === 'OK'
+        && /^no dot at the largest gap: /.test(tr.run.message || '') && (await touchOffs()).length === rows0, { status: tr.run.status, message: tr.run.message });
+      await page.waitForFunction((m) => { const d = document.querySelector('#to-live .cal-live__d'); return !!d && d.textContent === m; }, tr.run.message, { timeout: 15000 }).catch(() => {});
+      const nc = await page.evaluate(() => ({ head: (document.querySelector('#to-live .cal-live__h') || {}).textContent, detail: (document.querySelector('#to-live .cal-live__d') || {}).textContent,
+        shown: !document.getElementById('to-live').hidden }));
+      check('touch-off that recorded nothing: "Finished hh:mm · no contact found: nothing recorded" with the run\'s message word for word',
+        nc.shown && /^Finished \d\d:\d\d · no contact found: nothing recorded$/.test(nc.head) && nc.detail === tr.run.message, nc);
+      await page.screenshot({ path: path.join(OUT, 'touchoff-nothing-recorded.png') });
+      // the result table of a recorded touch-off (a row added to the answer: this scene draws no paste): the dots after
+      // the contact that the camera could not measure read "not measured" with the engine's note, "no dot" only for none
+      const fake = { id: 990001, created_at: tr.run.startedAtMs - 120000, method: 'dot-ladder-touch-off (not applied)', z_offset_mm: -2.5275, previous_offset_mm: -2.59, operator: null,
+        details: JSON.stringify({ analysis: { gapsMm: [0.125, 0.1, 0.075, 0.05, 0.025, 0, -0.025], diametersMm: [1.05, 1.07, 1.06, 1.42, null, null, null],
+          dotStates: ['dot', 'dot', 'dot', 'dot', 'unmeasured', 'unmeasured', 'none'],
+          dotNotes: [null, null, null, null, 'joined to the dot at gap 0.000 mm', 'no dot, only strings or a smear (0.10 mm²)', null],
+          contactGapMm: 0.0625, bracketHighMm: 0.075, bracketLowMm: 0.05, referenceDiameterMm: 1.06, reason: 'dot squashed between 0.075 and 0.050 mm' }, pitchMm: 1.6, blank: 'blank' }) };
+      await page.route('**/api/calibrations', async (route) => {
+        const res = await route.fetch();
+        const body = await res.json();
+        body.touchOffs = [fake].concat(body.touchOffs || []);
+        await route.fulfill({ response: res, json: body });
+      });
+      await page.evaluate(() => IL.pcr.loadCalibrations());
+      await page.waitForFunction(() => document.querySelectorAll('#to-result .cal-to__t tbody tr').length === 7, null, { timeout: 10000 }).catch(() => {});
+      const tbl = await page.evaluate(() => ({ sub: document.querySelector('#to-result .section-k').textContent,
+        rows: Array.from(document.querySelectorAll('#to-result .cal-to__t tbody tr')).map((tr) => [tr.cells[0].textContent, tr.cells[1].textContent, tr.cells[2].textContent, tr.cells[1].title]) }));
+      const r5 = tbl.rows;
+      check('touch-off table: "not measured" with the engine\'s note (third column and title) for an unmeasured dot, "no dot" only for none',
+        r5.length === 7 && r5[0][1] === '1.050' && r5[3][1] === '1.420' && r5[3][2] === 'bracket'
+        && r5[4][1] === 'not measured' && r5[4][2] === 'joined to the dot at gap 0.000 mm' && r5[4][3] === 'joined to the dot at gap 0.000 mm'
+        && r5[5][1] === 'not measured' && r5[5][2] === 'no dot, only strings or a smear (0.10 mm²)' && r5[6][1] === 'no dot' && r5[6][2] === '', r5);
+      check('touch-off: after the run that recorded nothing, the row shown is "Last recorded touch-off"', /^Last recorded touch-off · /.test(tbl.sub), tbl.sub);
+      await page.evaluate(() => document.getElementById('to-result').scrollIntoView({ block: 'center' }));
+      await page.screenshot({ path: path.join(OUT, 'touchoff-not-measured.png') });
+      await nav(page, 'records');
+      await page.evaluate((id) => IL.go('#records/touch-offs/' + id), fake.id);
+      await page.waitForFunction(() => /not measured/.test((document.querySelector('#panel .rec-mini-t') || {}).textContent || ''), null, { timeout: 10000 }).catch(() => {});
+      const rec = await page.evaluate(() => Array.from(document.querySelectorAll('#panel .rec-mini-t tbody tr')).map((tr) => [tr.cells[1].textContent, tr.cells[1].title]));
+      check('Records › Touch-offs: the same reading (not measured, its note as the title; no dot only for none)', rec.length === 7
+        && rec[4][0] === 'not measured' && rec[4][1] === 'joined to the dot at gap 0.000 mm' && rec[6][0] === 'no dot' && rec[0][0] === '1.050', rec);
+      await page.unroute('**/api/calibrations');
+      await page.evaluate(() => { IL.pcr.loadCalibrations(); if (IL.panel.isPushed()) IL.panel.close(); });
+    }
+
     // ---- a run confirm open in a tab that never saw a task running (offline, a throttled hidden tab) closes on its
     // next status: the new run id says a task ran meanwhile, and its "hands clear" tick was for the board before it
     {
@@ -1239,6 +1339,78 @@ async function runFirstDots(page, n) {
         check('clean-pad check refused at its start: "Refused hh:mm: the pressure hold is on: Pressure off first." on its card',
           /Refused \d\d:\d\d: the pressure hold is on: Pressure off first\./.test(cr) && !/No pad was checked/.test(cr), cr);
         await page.evaluate(() => { IL.run.ccRefused = null; IL.render(); });
+      }
+
+      // 13b. Probe only (F10, fix round 2): the board file without its fiducials, planned where the scene seats it. Run ›
+      // Register offers "Probe only (X/Y as planned)" with its note (Do it by hand stays), so does the readiness item; a
+      // Register board with probe "auto" is refused (REG) naming that way out, and its fix-it probes the board where it is
+      // planned: no fiducial, no registration, the surface tied, planned again. Then the board with fiducials again, as 12
+      // left it (14 registers it)
+      {
+        const src = await page.evaluate(() => IL.S.plan.source);
+        const nofid = path.join(path.dirname(path.dirname(SIM_SCENE)), 'nofid-' + Date.now().toString(36) + '.board.xml');
+        fs.writeFileSync(nofid, fs.readFileSync(src.file, 'utf8').replace(/\s*<placement [^>]*type="Fiducial"[\s\S]*?<\/placement>/g, ''));
+        const a = (src.rotation || 0) * Math.PI / 180;
+        const bare = JSON.parse(JSON.stringify(scene));
+        Object.assign(bare.board, { file: path.basename(nofid), fiducials: [], hideFiducials: [] });
+        bare.board.seat.affine = [[Math.cos(a), -Math.sin(a), src.x], [Math.sin(a), Math.cos(a), src.y]];
+        fs.writeFileSync(SIM_SCENE + '.tmp', JSON.stringify(bare));
+        fs.renameSync(SIM_SCENE + '.tmp', SIM_SCENE);
+        await page.waitForTimeout(600);
+        const p0 = await page.evaluate((b) => IL.api('POST', '/api/plan', b).then((p) => { IL.setPlan(p); return p.registrationTargets; }),
+          { source: 'file', file: nofid, x: src.x, y: src.y, z: src.z, rotation: src.rotation || 0 });
+        check('probe only: the board without fiducials is planned with registrationTargets.probeOnly', p0.probeOnly === true && p0.fiducialCount === 0
+          && /^REG: the board has 0 fiducials/.test(p0.error || ''), { probeOnly: p0.probeOnly, error: p0.error });
+        await page.evaluate(() => { if (IL.panel.isPushed()) IL.panel.close(); IL.go('#run/probe'); });
+        await waitText(page, 'btn-register', /^Probe only \(X\/Y as planned\)/, 20000).catch(() => {});
+        const po = await page.evaluate(() => {
+          const b = document.getElementById('btn-register');
+          const it = IL.ready().items.find((x) => x.key === 'surface');
+          return { btn: b.textContent.trim(), primary: b.classList.contains('btn--primary'), locked: b.disabled, note: document.getElementById('register-note').textContent,
+            why: document.getElementById('register-why').hidden ? null : document.getElementById('register-why').textContent,
+            byHand: !document.getElementById('probe-by-hand').hidden, surface: { state: it.state, fixes: (it.fixes || []).map((f) => f.fix + ':' + f.label) } };
+        });
+        check('probe only: the primary "Probe only (X/Y as planned) · ≈ m:ss" with the note "This board has no fiducials: N1 probes it where it is planned; its X/Y are not checked."; Do it by hand stays',
+          /^Probe only \(X\/Y as planned\) · ≈ \d+:\d\d$/.test(po.btn) && po.primary && !po.locked && !po.why && po.byHand
+          && po.note.includes('This board has no fiducials: N1 probes it where it is planned; its X/Y are not checked.'), po);
+        check('probe only: the readiness item offers "Probe only (X/Y as planned)" first, then Do it by hand', po.surface.state !== 'ok'
+          && po.surface.fixes[0] === 'register-probe-only:Probe only (X/Y as planned)' && po.surface.fixes[1] === 'probe-by-hand:Do it by hand', po.surface);
+        await page.screenshot({ path: path.join(OUT, 'register-probe-only.png') });
+        // Register board with probe "auto": the REG refusal names the way out, and its first fix-it is Probe only
+        g1 = gcodeNext();
+        await page.evaluate(() => IL.act(document.getElementById('btn-register'), () => IL.api('POST', '/api/plan/' + IL.S.plan.planId + '/register', { probe: 'auto' })));
+        await page.waitForSelector('#reg-foot .refusal [data-fix]', { timeout: 10000 }).catch(() => {});
+        const rf = await page.evaluate(() => ({ text: (document.querySelector('#reg-foot .refusal .refusal__t') || {}).textContent,
+          fixes: Array.from(document.querySelectorAll('#reg-foot .refusal [data-fix]')).map((b) => [b.dataset.fix, b.textContent.trim(), b.classList.contains('btn--primary')]) }));
+        check('probe only: Register board with probe "auto" is refused (REG … Or probe it only, where it is planned: Register with probe "always".) and offers Probe only first',
+          /^Refused: REG: the board has 0 fiducials; .* Or probe it only, where it is planned: Register with probe "always"\.$/.test(rf.text || '')
+          && JSON.stringify(rf.fixes.map((f) => f[0])) === JSON.stringify(['register-probe-only', 'look-camera', 'board-step', 'probe-by-hand'])
+          && rf.fixes[0][1] === 'Probe only (X/Y as planned)' && rf.fixes[0][2], rf);
+        check('probe only: the refused Register board moved nothing', !lines(gcode(g1)).some((x) => /^(G0|G1|M106)\b/.test(x)));
+        await page.screenshot({ path: path.join(OUT, 'register-probe-only-refusal.png') });
+        // its fix-it: N1 probes the board where it is planned
+        g1 = gcodeNext();
+        const t10 = Date.now() + (await page.evaluate(() => IL.S.skewMs));
+        await press2(page, '#reg-foot .refusal [data-fix="register-probe-only"]');
+        rs = await regEnd(t10);
+        await page.waitForFunction((id) => { const v = IL.S.plan && IL.S.plan.registrationRun; return v && v.runId === id; }, rs.run.runId, { timeout: 20000 }).catch(() => {});
+        await waitText(page, 'reg-result-t', /^Probed/, 15000).catch(() => {});
+        const pv = await page.evaluate(() => ({ t: document.getElementById('reg-result-t').textContent, v: IL.S.plan.registrationRun, reg: IL.S.plan.registration,
+          fixes: Array.from(document.querySelectorAll('#reg-result button')).map((b) => b.id || b.dataset.fix), cont: !document.getElementById('btn-reg-continue').hidden }));
+        check('#reg-result: "Probed hh:mm: no fiducials: probed only, X/Y as planned; N points, worst X mm; planned again."', rs.run.status === 'OK'
+          && /^Probed \d\d:\d\d: no fiducials: probed only, X\/Y as planned; \d+\spoints, worst\s\d\.\d{3}\smm; planned again\.$/.test(pv.t), { t: pv.t, message: rs.run.message });
+        const touches = lines(gcode(g1)).filter((x) => x === 'M106 P1 S180').length;
+        check('probe only: no fiducial, no registration stored; one N1 touch per point; Probe again and Checks › offered', pv.v && pv.v.probeOnly === true
+          && pv.v.fiducials.length === 0 && pv.v.registrationId === null && pv.reg === null && touches === pv.v.probe.points.length
+          && JSON.stringify(pv.fixes) === JSON.stringify(['btn-reg-probe']) && pv.cont, { touches, points: pv.v && pv.v.probe.points.length, fixes: pv.fixes, reg: pv.reg });
+        check('probe only: the board surface is tied to the new plan', await page.waitForFunction(() => IL.ready().items.find((x) => x.key === 'surface').state === 'ok', null, { timeout: 10000 })
+          .then(() => true, () => false), await page.evaluate(() => IL.ready().items.find((x) => x.key === 'surface')));
+        await page.screenshot({ path: path.join(OUT, 'register-probe-only-result.png') });
+        fs.writeFileSync(SIM_SCENE + '.tmp', JSON.stringify(scene));
+        fs.renameSync(SIM_SCENE + '.tmp', SIM_SCENE);
+        await page.evaluate((b) => IL.api('POST', '/api/plan', b).then((p) => IL.setPlan(p)), { source: 'file', file: src.file, x: src.x, y: src.y, z: src.z,
+          rotation: src.rotation || 0, registration: 'none' });
+        await page.evaluate(() => { IL.run.byHand = false; IL.go('#run/checks'); });
       }
 
       // 14. Z moved at a home (AUTO_REGISTER_DESIGN.md §2.4): the scene's board and blank seal 0.8 mm higher after a home,
