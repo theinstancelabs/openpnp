@@ -1230,6 +1230,10 @@ public final class DispenseService {
         RunResult r = newRun("shots", null, locationName, getCurrentCalibration().id, count);
         return submit(r, () -> {
             DispenseConfig c = cfg;
+            String reserved = couponReservation(locationName); // §7.5: a coupon waiting for its readings takes no dots
+            if (reserved != null) {
+                throw refused(reserved);
+            }
             Session s = new Session(c, r);
             Interlocks.Scope scope = shotsScope(locationName, referenceSurface);
             if (!s.preflight(scope, 0)) {

@@ -152,11 +152,23 @@ final class CalibrationEndpoints {
         }
         boolean reference = loc.equals(cfg.wasteLocationName) || loc.equals(cfg.blankLocationName)
                 || loc.equals(DispenseEndpoints.TEST_DOT_LOCATION);
+        refuseReservedCoupon(svc, loc);
         dispense.startChecks(svc, DispenseService.shotsScope(loc, reference), "Scale shots");
         ctx.tracker.expect("scale shots");
         Future<RunResult> f = svc.runShots(loc, rot, count, reference);
         return ApiContext.awaitIf(Json.bool(b, "wait", false), f, rr -> Views.run(rr, false),
                 Views.map("kind", "scale shots", "locationName", loc, "rotationDeg", rot, "count", count));
+    }
+
+    /**
+     * PROFILE_CALIBRATION_DESIGN §7.5 (rc1 review): while a coupon's dots wait for their readings, no task dispenses or
+     * probes at that place (the probe and the weigh dots refused already; shots, the dot ladder and the touch-off now).
+     */
+    static void refuseReservedCoupon(DispenseService svc, String place) throws ApiException {
+        String why = svc.couponReservation(place);
+        if (why != null) {
+            throw ApiException.refused(why);
+        }
     }
 
     Object dotLadder(ApiServer.Request r) throws Exception {
@@ -175,6 +187,7 @@ final class CalibrationEndpoints {
             throw ApiException.badRequest("repeats must be 1 to 50 and the pitch 0 to 10 mm");
         }
         DispenseConfig cfg = svc.getConfig();
+        refuseReservedCoupon(svc, req.locationName == null ? cfg.blankLocationName : req.locationName);
         dispense.startChecks(svc, DispenseService.blankScope(cfg, req.locationName == null ? cfg.blankLocationName
                 : req.locationName, req.primeAtWaste, false, null), "Dot ladder");
         ctx.tracker.expect("dot ladder");
@@ -216,6 +229,7 @@ final class CalibrationEndpoints {
                             + "keep it at -0.1 mm or above", lowest, -lowest));
         }
         DispenseConfig cfg = svc.getConfig();
+        refuseReservedCoupon(svc, req.locationName == null ? cfg.blankLocationName : req.locationName);
         dispense.startChecks(svc, DispenseService.blankScope(cfg, req.locationName == null ? cfg.blankLocationName
                 : req.locationName, req.primeAtWaste, true, null), "Needle touch-off");
         ctx.tracker.expect("needle touch-off");
