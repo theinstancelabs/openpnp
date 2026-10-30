@@ -1671,9 +1671,9 @@ def b_counts(lines, start_b, b_count):
 
 def dose_blocks(streamed, start, plan, b_count, cfg):
     """The run's B feeds against the plan's dose blocks (PC §6.2): per block the phase dot and flush dots on the purge
-    row, then its work dots; net steps and the count each starts at. ok: every flush and work dot turns the block's
-    net steps, each block's first work dot starts at the start angle, every work dot at the start angle plus whole
-    multiples of its net steps (the phase lock, count based), and no feed is left over."""
+    row, then its work dots; net steps and the count each starts at. (rows, ok) ok: every flush and work dot turns the
+    block's net steps, the first work dot of a partial-turn block starts at the start angle and every other one at the
+    start angle plus whole multiples of its net steps (the phase lock, count based), and no feed is left over."""
     feeds = engine_dots(streamed, start)
     counts = b_counts(streamed, start["B"], b_count)
     angle = java_round(cfg["profile"]["startAngleDeg"] / 360.0 * STEPS_PER_REV) % STEPS_PER_REV
@@ -1683,7 +1683,7 @@ def dose_blocks(streamed, start, plan, b_count, cfg):
         first_work = True
         for role in roles:
             if k >= len(feeds):
-                return feeds, rows, False
+                return rows, False
             f = feeds[k]
             k += 1
             net = java_round((f.get("retract_to", f["b_to"]) - f["b_from"]) * STEPS_PER_DEG)
@@ -1691,10 +1691,10 @@ def dose_blocks(streamed, start, plan, b_count, cfg):
             rows.append({"block": b["index"], "role": role, "netSteps": net, "startCountMod1600": at})
             if role != "phase":
                 ok &= net == b["netSteps"]
-            if role == "work":
+            if role == "work" and b["netSteps"] % STEPS_PER_REV:  # whole turns have no phase
                 ok &= (at - angle) % b["netSteps"] == 0 and (not first_work or at == angle)
                 first_work = False
-    return feeds, rows, ok and k == len(feeds)
+    return rows, ok and k == len(feeds)
 
 
 def pad_deposits(plan, laid, tol=0.3):
@@ -1739,9 +1739,8 @@ def padcal_run(s, plan, cfg):
            "bCountAtStart": last.get("bCountAtStart"), "workStartAngleDeg": last.get("workStartAngleDeg"),
            "warnings": last.get("warnings"), "blocks": plan.get("blocks"),
            "m114_sent": sum(1 for l in sent if strip(l) == "M114"), "count_lines": counts}
-    feeds, rows, blocks_ok = dose_blocks(last.get("streamedLines") or [], start, plan, last.get("bCountAtStart") or 0,
-                                         cfg)
-    out["feeds"] = rows
+    out["feeds"], blocks_ok = dose_blocks(last.get("streamedLines") or [], start, plan, last.get("bCountAtStart") or 0,
+                                          cfg)
     order = [d["padId"] for d in sorted(plan["dots"], key=lambda d: d["index"])]
     at = {}
     for i, p in enumerate(order):
