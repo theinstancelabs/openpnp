@@ -31,10 +31,11 @@ public class DispenseConfig {
      * Version of this file's schema. 2: the pneumatic and watchdog G-code strings were removed (they
      * are constants in ControllerCommands). 3: the dose and per-dot motion moved into
      * {@link #profile}; prime + test dot + optical test-dot split replaced by the purge row; the
-     * volumetric q model removed (bench 2026-10-28). Older files load, the removed keys are ignored,
-     * and {@link #migrate()} brings the motion values to the bench recipe.
+     * volumetric q model removed (bench 2026-10-28). 4: tip setups (§22.1): {@code tip} is the mounted setup's view,
+     * {@code parkedTips} what the others keep, {@code needleLanding} where the mounted needle lands. Older files load,
+     * the removed keys are ignored, and {@link #migrate()} brings the motion values to the bench recipe.
      */
-    public static final int SCHEMA_VERSION = 3;
+    public static final int SCHEMA_VERSION = 4;
     /** Largest I4 frame tolerance: below half the needle's 2.59 mm offset from N1 (bench, new mount). */
     public static final double MAX_FRAME_TOLERANCE_MM = 1.2;
     /** Largest {@link #needleLanding} per axis (mm): where a tip lands, measured by a landing check (§22.1). */
@@ -665,9 +666,9 @@ public class DispenseConfig {
      * step never runs again on a newer file, so it cannot reset tuned values). Schema 1/2 -> 3: the per-dot motion
      * becomes the bench recipe (XY and Z at 2000 mm/s², lift at 50 mm/s, B limit 400 rpm) and the I4 tolerances
      * follow the new needle frame (offset -2.59 mm, so the frame tolerance must stay below it). The removed keys were
-     * dropped on load. The tip setups' fields need no step: they are added with their defaults
-     * ({@link #fromJson}), and a file written before them is kept as a backup at its first save
-     * ({@link #save}).
+     * dropped on load. Schema 3 -> 4 changes no value: the tip setups' fields come with their defaults
+     * ({@link #fromJson}); a file written before them (told by the missing {@code parkedTips}, which also catches a
+     * file an older jar saved over) is kept as a backup at its first save ({@link #save}) and reconciled at the start.
      */
     void migrate() {
         if (schemaVersion < 3) {
@@ -681,6 +682,10 @@ public class DispenseConfig {
             if (Math.abs(primeRotationDeg - 360) < 1e-9) {
                 primeRotationDeg = 360.36;
             }
+        }
+        if (schemaVersion < 4) {
+            // tip setups: nothing to change (above); the start's reconcile makes the setups agree with the file
+            schemaVersion = 4;
         }
         if (schemaVersion < SCHEMA_VERSION) {
             schemaVersion = SCHEMA_VERSION;

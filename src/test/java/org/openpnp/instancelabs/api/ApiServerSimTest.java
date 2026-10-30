@@ -980,7 +980,7 @@ public class ApiServerSimTest {
         assertTrue(wide.body.contains("gapMm must be 0.05 to 0.15"), wide.toString());
         JsonObject c = ok(call("PUT", "/api/config", "{\"forTip\":\"ad22tta-b\",\"profile\":{\"gapMm\":0.15}}"));
         assertEquals(0.15, c.getAsJsonObject("profile").get("gapMm").getAsDouble(), 1e-9);
-        assertEquals(3, c.get("schemaVersion").getAsInt());
+        assertEquals(4, c.get("schemaVersion").getAsInt(), "the tip setups' schema (§22.1)");
         assertFalse(c.toString().contains("Gcode"), c.toString());
     }
 
