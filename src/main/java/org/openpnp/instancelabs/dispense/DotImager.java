@@ -5,6 +5,7 @@ import java.util.List;
 
 import org.openpnp.instancelabs.vision.Dot;
 import org.openpnp.instancelabs.vision.PadCleanCheck;
+import org.openpnp.instancelabs.vision.SpotDot;
 
 /**
  * Before/after imaging of dots with the top camera. The OpenPnP implementation uses the vision
@@ -50,6 +51,17 @@ public interface DotImager {
      */
     default List<Dot> inspectAll(Frame before, Frame after) throws Exception {
         return inspect(before, after);
+    }
+
+    /**
+     * The dot laid at each of {@code spotsMm} ({x, y} offsets from the frame centre, mm), found even with paste
+     * strings attached ({@link org.openpnp.instancelabs.vision.DotInspector#inspectSpots}: strings thinner than
+     * {@code cutMm} are cut, paste that is not one dot is {@link SpotDot.State#UNMEASURED}). Imagers without such a
+     * mode give the nearest inspected dot within {@code radiusMm} of each spot, or none.
+     */
+    default List<SpotDot> inspectSpots(Frame before, Frame after, List<double[]> spotsMm, double cutMm,
+            double radiusMm) throws Exception {
+        return SpotDot.nearest(inspect(before, after), spotsMm, radiusMm);
     }
 
     /**

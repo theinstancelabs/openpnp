@@ -13,7 +13,10 @@ public final class RegisterRequest {
         AUTO, ALWAYS, NEVER
     }
 
-    /** Plans the board again with a stored registration (the API's plan store); returns the new plan id. */
+    /**
+     * Plans the board again with a stored registration, or without one when it is null (the API's plan store);
+     * returns the new plan id.
+     */
     public interface Replanner {
         String replan(BoardRegistration reg) throws Exception;
     }
@@ -29,6 +32,12 @@ public final class RegisterRequest {
     /** File board: the source z; job board: the board's global Z. */
     public double nominalZ;
     public ProbeMode probe = ProbeMode.AUTO;
+    /**
+     * Probe only (F10): the board has no fiducials, the plan carries no registration and the probe is ALWAYS. No
+     * fiducial fit: N1 probes the board's targets where the plan puts the board, and the surface is tied to that seat.
+     * Ignored for a board with fiducials (they are fitted, or too few are refused: its checks all stand).
+     */
+    public boolean probeOnly;
     public Replanner replanner;
     /**
      * From the board's KiCad drawing (BOARD_IMPORT_DESIGN.md §10.2 item 4), both null without one: fiducial name ->
