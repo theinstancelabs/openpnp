@@ -181,7 +181,8 @@
     let f = null;
     if (sec === 'places') { const r = P.rows.get(id); f = r && r.z.el; }
     else if (sec === 'settings') f = $({ 'min-status': 'set-minstatus', 'max-on': 'set-maxon', 'refuse-flagged': 'set-refuseflagged' }[id] || '');
-    if (f && f.focus) { f.focus({ preventScroll: true }); if (f.select) f.select(); }
+    // the card's flash scrolled its top into view: the field itself may lie below the fold (Refuse flagged pads)
+    if (f && f.focus) { f.focus({ preventScroll: true }); if (f.select) f.select(); f.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
   }
   const SECTION_CARD = { needle: 'needle', trim: 'needle', surfaces: 'surfaces', blank: 'surfaces', purge: 'purge', pressure: 'pressure',
     prime: 'pressure', places: 'places', camera: 'camera', angle: 'angle', settings: 'settings' };

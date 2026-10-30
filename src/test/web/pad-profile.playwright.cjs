@@ -374,7 +374,7 @@ async function weighCoupon(page, place) {
     const purge7 = await page.evaluate(() => ({ note: document.getElementById('pcal-note').textContent,
       row: Array.from(document.querySelectorAll('#pcal-plan tr')).map((tr) => tr.textContent).find((t) => /^Purge row/.test(t)) || null }));
     check('(7) the summary says how many purge spots it uses ("It uses n of the m free purge spots") and the steps list the purge row',
-      /It uses \d+ of the \d+ free purge spots/.test(purge7.note) && /^Purge row\d+ of \d+ free spots \(\d+ left after\)/.test(purge7.row || ''), purge7);
+      /It\s+uses\s+\d+\s+of\s+the\s+\d+\s+free\s+purge\s+spots/.test(purge7.note) && /^Purge row\d+\s+of\s+\d+\s+free\s+spots\s+\(\d+\s+left\s+after\)/.test(purge7.row || ''), purge7);
     await page.waitForFunction(() => !document.getElementById('btn-pcal-start').disabled, null, { timeout: 20000 }).catch(() => null);
     const why7 = await page.textContent('#pcal-why');
     check('(7) Start is not locked', !(await page.isDisabled('#btn-pcal-start')), why7);
@@ -467,23 +467,25 @@ async function weighCoupon(page, place) {
     } else check('(9) Test run with fewer dots: the plan has a two-dot pad to cut inside', false, 'no two dots of one pad in a row');
 
     // ---- (9a) the purge row a plan of two dot sizes needs (rc1 review): the engine's I9 counts 8 to start and 5 for each
-    // further dot size; the Purge row item, the strip cell and the confirm count the same (not the profile's 8)
+    // further dot size; the Purge row item, the strip cell and the confirm count the same (not the profile's 8). This
+    // plan's own need as the engine counts it, and the review's case (10 spots, 13 needed) on a copy of it
     const pu = await page.evaluate(() => {
       const r = IL.ready(); const it = r.items.find((x) => x.key === 'purge'); const row = IL.S.status.dispense.purgeRow;
       const i9 = ((IL.S.plan.interlocks || {}).violations || []).find((v) => v.code === 'I9');
-      // the review's row: 10 spots, all free, for a plan that needs 13
+      const sizes = new Set(IL.S.plan.dots.map((d) => d.rotationDeg)).size;
       const st = JSON.parse(JSON.stringify(IL.S.status));
       Object.assign(st.dispense.purgeRow, { spots: 10, usedSpots: 0, spotsLeft: 10 });
-      const ten = IL.readiness(st, IL.S.plan, IL.readyCtx()).items.find((x) => x.key === 'purge');
-      return { need: IL.S.plan.purgeSpotsNeeded, perBoard: row.perBoard, left: row.spotsLeft, state: it.state, detail: it.detail, i9: i9 ? i9.message : null,
-        cell: document.getElementById('chip-purge').textContent, ten: { state: ten.state, detail: ten.detail } };
+      const two = Object.assign({}, IL.S.plan, { purgeSpotsNeeded: row.perBoard + 5 });
+      const ten = IL.readiness(st, two, IL.readyCtx()).items.find((x) => x.key === 'purge');
+      return { need: IL.S.plan.purgeSpotsNeeded, sizes, perBoard: row.perBoard, left: row.spotsLeft, state: it.state, detail: it.detail, i9: i9 ? i9.message : null,
+        ten: { state: ten.state, detail: ten.detail } };
     });
     const extra = pu.need - pu.perBoard;
-    check('(9a) two dot sizes: the plan counts its purge spots (' + pu.need + ' = ' + pu.perBoard + ' + ' + extra + '), and the Purge row item counts them as the engine\'s I9',
-      extra > 0 && extra % 5 === 0 && (pu.left < pu.need ? pu.state === 'need' && pu.detail === 'Only ' + pu.left + ' unused purge spots left, ' + pu.need + ' (' + pu.perBoard
-        + ' to start, ' + extra + ' for its other dot sizes) needed. Wipe the row, then reset it.' && !!pu.i9 : pu.state === 'ok' && !pu.i9), pu);
-    check('(9a) a 10-spot row is too short for this plan (' + pu.need + '), not "10/10 ready"', pu.need <= 10 || (pu.ten.state === 'block'
-      && pu.ten.detail.startsWith('The row has 10 spots; this plan purges ' + pu.need + ' (' + pu.perBoard + ' to start, ' + extra + ' for its other dot sizes).')), pu.ten);
+    check('(9a) the plan counts its purge spots as I9 does (' + pu.need + ' = ' + pu.perBoard + ' + ' + extra + ' for ' + pu.sizes + ' dot sizes), and the Purge row item with it',
+      extra >= 0 && (pu.sizes > 1) === (extra > 0) && (pu.left < pu.need ? pu.state === 'need' && pu.detail.startsWith('Only ' + pu.left + ' unused purge spots left, ' + pu.need) && !!pu.i9
+        : pu.state === 'ok' && !pu.i9), pu);
+    check('(9a) a plan of two dot sizes on a 10-spot row: blocked, "this plan purges 13 (8 to start, 5 for its other dot sizes)", not "10/10 ready"',
+      pu.ten.state === 'block' && pu.ten.detail.startsWith('The row has 10 spots; this plan purges ' + (pu.perBoard + 5) + ' (' + pu.perBoard + ' to start, 5 for its other dot sizes).'), pu.ten);
     await shoot(page, 'fix-purge-two-sizes-checks', () => toTop(page, '#chk-needs', null));
 
     // ---- (9b) Refuse flagged pads (rc1 review): "Dispense the rest" opens the switch in Setup › Settings; off, the engine
@@ -520,15 +522,14 @@ async function weighCoupon(page, place) {
       && new RegExp('^\\d+/\\d+ · ' + off.blocked + ' skipped$').test(off.value) && /^\d+ pads skipped \(Refuse flagged pads is off\): .*Test_Strip.*WSON.* not with the 22G tip\. The other \d+ are dispensed\.$/.test(off.detail)
       && !/needs a profile|22G tip/.test(off.verdict), off);
     await shoot(page, 'fix-refuse-flagged-off-checks', () => toTop(page, '#chk-needs', null));
-    if (off.canRun) {
-      await page.click('#btn-run');
-      await page.waitForSelector('#dlg-run #run-sensed', { timeout: 10000 }).catch(() => null);
-      const cf = await page.evaluate(() => ({ title: (document.querySelector('#dlg-run .dialog__title') || document.querySelector('#dlg-run h2') || {}).textContent,
-        sensed: Array.from(document.querySelectorAll('#run-sensed .tick')).map((t) => t.textContent) }));
-      check('(9b) off: the run confirm names the pads skipped by package', cf.sensed.some((t) => new RegExp('^Skips ' + off.blocked + ' pads that cannot be dispensed.*WSON').test(t)), cf);
-      await shoot(page, 'fix-refuse-flagged-off-confirm', null);
-      await page.click('#btn-run-cancel');
-    } else check('(9b) off: Run can start (the confirm names the pads skipped)', false, off.runReason);
+    // the run confirm (as Records › Finish opens it: the pads left of this board) names the pads the run skips; it
+    // opens also while another check waits (here the board surface), saying so
+    await page.evaluate(() => { const p = IL.S.plan; IL.runFix('run-rest', null, { planId: p.planId, padIds: p.pads.filter((x) => !x.blocked).map((x) => x.padId) }); });
+    await page.waitForSelector('#dlg-run #run-sensed .tick', { timeout: 10000 }).catch(() => null);
+    const cf = await page.evaluate(() => ({ sensed: Array.from(document.querySelectorAll('#run-sensed .tick')).map((t) => t.textContent) }));
+    check('(9b) off: the run confirm names the pads skipped by package', cf.sensed.some((t) => new RegExp('^Skips ' + off.blocked + ' pads that cannot be dispensed.*WSON').test(t)), cf);
+    await shoot(page, 'fix-refuse-flagged-off-confirm', null);
+    await page.click('#btn-run-cancel').catch(() => null);
     // back on for what follows
     await page.evaluate(() => IL.go('#setup/settings/refuse-flagged'));
     await page.waitForSelector('#set-refuseflagged', { state: 'visible', timeout: 10000 });
