@@ -169,7 +169,11 @@ public final class PadInstances {
      * The check's inputs around these pads: the current pad types with their rules, the gate, the
      * mounted tip, the profile's dose and recipe, the packages pasted partly. Dose evidence and
      * anchors other than the validated types' are the caller's (none here).
+     *
+     * @deprecated the tip is {@code cfg.tip} without its dot table: {@link #inputs(List, Collection, Map,
+     *             DispenseConfig, Collection, boolean, Tip)} with {@link DispenseService#mountedTip}
      */
+    @Deprecated
     public static CheckInputs inputs(List<PadInstance> pads, Collection<PadType> types, Map<String, PadRule> rules,
             DispenseConfig cfg, Collection<String> pastePartial, boolean planned) {
         return inputs(pads, types, rules, cfg, pastePartial, planned, specTip(cfg.tip));
@@ -211,10 +215,6 @@ public final class PadInstances {
         return in;
     }
 
-    /**
-     * As {@link #inputs(List, Collection, Map, DispenseConfig, Collection, boolean)} with the tip given (tip setups
-     * design §22.2): the mounted setup with its dot table ({@link DispenseService#mountedTip}), not {@code cfg.tip}.
-     */
     /**
      * The check's inputs from the engine as it is now (§3.1): the mounted tip setup with its dot table
      * ({@link DispenseService#mountedTip}), its composed pad types and their rules with the other setups' statuses,
