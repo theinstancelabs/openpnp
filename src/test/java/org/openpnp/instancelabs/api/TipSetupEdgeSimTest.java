@@ -205,10 +205,17 @@ public class TipSetupEdgeSimTest {
         assertTrue(cal.getAsJsonArray("photos").toString().contains("\"id\":" + mine + ","), cal.toString());
         long rec = cal.get("id").getAsLong();
 
-        // a picture from below for that record after a needle change: refused before the head moves
+        // a picture from below for that record: linked while it is the same needle; after a needle change refused
+        // before the head moves
         PhotoApiSimTest.Camera cam = new PhotoApiSimTest.Camera();
         t.svc.setTipCamera(cam);
         try {
+            // the same needle: the picture is linked to the record
+            JsonObject from = TipSim.ok(t.post("/api/tip-setups/" + TipSim.SEED + "/picture", "{\"calibrationIds\":["
+                    + rec + "],\"wait\":true}")).getAsJsonObject("result");
+            assertTrue(from.get("ok").getAsBoolean(), from.toString());
+            assertEquals("[" + rec + "]", from.getAsJsonObject("photo").getAsJsonArray("links").toString());
+            assertEquals(1, cam.captures);
             TipSim.ok(t.post("/api/needle/changed", "{}"));
             JsonObject needle = TipSim.refused(t.post("/api/tip-setups/" + TipSim.SEED + "/picture",
                     "{\"calibrationIds\":[" + rec + "],\"wait\":true}"), 409, "needle-changed");
@@ -216,7 +223,7 @@ public class TipSetupEdgeSimTest {
                     + "calibration " + rec), needle.toString());
             TipSim.refused(t.post("/api/tip-setups/" + TipSim.SEED + "/picture", "{\"calibrationIds\":[99999]}"), 404,
                     "not-found");
-            assertEquals(0, cam.captures, "nothing moved");
+            assertEquals(1, cam.captures, "nothing moved since");
         }
         finally {
             t.svc.setTipCamera(null);
