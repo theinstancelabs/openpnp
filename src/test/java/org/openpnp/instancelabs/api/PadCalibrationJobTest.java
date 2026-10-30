@@ -468,7 +468,8 @@ public class PadCalibrationJobTest {
         assertEquals("characterized", str(g, "outcome"), g.toString());
         String label = str(g, "calibrationLabel");
         assertTrue(label.startsWith("SW_SPST_3.9x2.9mm"), g.toString());
-        assertTrue(label.endsWith(" · " + Tip.SEED_NAME + " · Vieweg DV-5005 · 18 psi · Loctite GC50 SAC305 T5"), label);
+        assertTrue(label.endsWith(" · " + Tip.SEED_NAME + " · Vieweg DV-5005 · 18 psi · Loctite GC50 SAC305 T5"),
+                label);
         assertTrue(g.get("calibrationLabelAuto").getAsBoolean());
         assertFalse(label.equals(str(g, "label")), "the group's own name stays its label: " + g);
         org.openpnp.instancelabs.dispense.PadCalibrationRecord rec = svc.getDb().padCalibration(g.get("calibrationId")

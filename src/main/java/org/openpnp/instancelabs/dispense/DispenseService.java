@@ -4979,8 +4979,13 @@ public final class DispenseService {
         TipSetup s = db.currentTipSetup(rec.setupKey == null ? c.tip.key : rec.setupKey);
         String setupName = s == null ? c.tip.name : s.name;
         String dispenser = s == null ? c.tip.dispenser : s.dispenser;
+        // the recipe of the record's setup: a record of a job a mount stopped names the setup that came off, whose
+        // recipe is parked now (not the incoming setup's)
+        DispenseConfig.ParkedTip parked = rec.setupKey == null || rec.setupKey.equals(c.tip.key) ? null
+                : c.parkedTips.get(rec.setupKey);
+        double psi = parked != null && parked.profile != null ? parked.profile.pressurePsi : c.profile.pressurePsi;
         return Texts.calLabel(type == null ? null : type.family, type == null ? rec.typeKey : type.name, setupName,
-                dispenser, c.profile.pressurePsi, c.paste.name, c.paste.lot);
+                dispenser, psi, c.paste.name, c.paste.lot);
     }
 
     /** A label as typed: control characters removed, spaces joined, 1-160 characters (else 400). */

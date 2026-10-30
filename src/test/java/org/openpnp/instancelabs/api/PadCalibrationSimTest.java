@@ -926,8 +926,8 @@ public class PadCalibrationSimTest {
         regulatorAtMs = System.currentTimeMillis();
         JsonObject job = landingCheck();
         assertEquals("not-found", str(result(job), "outcome"), result(job).toString());
-        assertTrue(str(result(job), "sentence").startsWith("No dot found within ±6 mm of where the 22G bent taper should "
-                + "land"), str(result(job), "sentence"));
+        assertTrue(str(result(job), "sentence").startsWith("No dot found within ±6 mm of where the 22G bent taper "
+                + "should land"), str(result(job), "sentence"));
         assertFalse(landing(job).get("saved").getAsBoolean());
         // "Save it" is the answer to the question of a fit, not a way around the check
         Res accept = call("POST", "/api/needle/landing", "{\"jobId\":\"" + str(job, "id") + "\",\"accept\":true,"

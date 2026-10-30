@@ -54,8 +54,8 @@ public class TipSetupEdgeSimTest {
         assertFalse(t.dispense().getAsJsonObject("needle").get("anchored").getAsBoolean());
         JsonObject stale = TipSim.refused(t.post("/api/needle/anchor", "{\"surfaceZ\":5.5,\"needleContactZ\":2.91,"
                 + "\"needleChangedAtMs\":" + TipSim.js(token) + "}"), 409, "needle-changed");
-        assertTrue(TipSim.str(stale, "reason").matches("The needle was changed at \\d\\d:\\d\\d after these values were "
-                + "taken: take them again\\."), stale.toString());
+        assertTrue(TipSim.str(stale, "reason").matches("The needle was changed at \\d\\d:\\d\\d after these values "
+                + "were taken: take them again\\."), stale.toString());
         assertFalse(t.dispense().getAsJsonObject("needle").get("anchored").getAsBoolean(), "nothing saved");
         TipSim.refused(t.post("/api/needle/offset", "{\"offsetMm\":-2.59,\"needleChangedAtMs\":" + TipSim.js(token)
                 + "}"), 409, "needle-changed");
@@ -65,8 +65,8 @@ public class TipSetupEdgeSimTest {
         // the trim: at most 1 mm, with the text that says what to do instead
         JsonObject far = TipSim.refused(t.post("/api/needle/xy-trim", "{\"dxMm\":1.5,\"dyMm\":0,\"needleChangedAtMs\":"
                 + TipSim.js(t.token()) + "}"), 400, "bad-request");
-        assertEquals("The trim is at most ±1 mm on each axis: a needle that lands farther off needs its landing checked "
-                + "(Setup › Dispenser & tip › Check where it lands).", TipSim.str(far, "reason"));
+        assertEquals("The trim is at most ±1 mm on each axis: a needle that lands farther off needs its landing "
+                + "checked (Setup › Dispenser & tip › Check where it lands).", TipSim.str(far, "reason"));
         JsonObject trim = TipSim.ok(t.post("/api/needle/xy-trim", "{\"dxMm\":0.2,\"dyMm\":-0.1,\"note\":\"hand\","
                 + "\"needleChangedAtMs\":" + TipSim.js(t.token()) + "}"));
         assertEquals(0.2, trim.getAsJsonObject("needleXyTrim").get("dxMm").getAsDouble(), 1e-9);
@@ -193,7 +193,8 @@ public class TipSetupEdgeSimTest {
         JsonObject mismatch = TipSim.refused(t.call("PUT", "/api/pad-types/chip-0805", "{\"forSetup\":\"ad22tta-b\","
                 + "\"status\":\"characterized\",\"calibration\":{\"photoIds\":[" + theirs + "]}}"), 409,
                 "setup-mismatch");
-        assertTrue(TipSim.str(mismatch, "reason").startsWith("This picture is of the 25G straight"), mismatch.toString());
+        assertTrue(TipSim.str(mismatch, "reason").startsWith("This picture is of the 25G straight"),
+                mismatch.toString());
         assertEquals(before, TipSim.str(t.typeRow("chip-0805"), "status"));
         assertEquals(0, TipSim.okArray(t.get("/api/pad-calibrations?typeKey=chip-0805")).size());
         // with a picture of its own tip it goes through and shows it
@@ -243,8 +244,8 @@ public class TipSetupEdgeSimTest {
         assertEquals(off, TipSim.str(TipSim.ok(t.get("/api/tip-setups/" + TipSim.K25 + "/mount-preview")),
                 "refusal"));
         JsonObject no = TipSim.refused(t.post("/api/tip-setups/" + TipSim.K25 + "/mount", "{}"), 409, "refused");
-        assertEquals(off + " The needle change is recorded: nothing dispenses until the 25G straight is mounted and its "
-                + "needle Z frame recorded.", TipSim.str(no, "reason"));
+        assertEquals(off + " The needle change is recorded: nothing dispenses until the 25G straight is mounted and "
+                + "its needle Z frame recorded.", TipSim.str(no, "reason"));
         assertNotNull(no.getAsJsonObject("needleChange"), no.toString());
         assertEquals(TipSim.SEED, t.svc.getConfig().tip.key);
         TipSim.ok(t.post("/api/pressure/stop", null));
@@ -253,7 +254,8 @@ public class TipSetupEdgeSimTest {
 
     @Test
     public void aLabelNeverMakesAPlanStale() throws Exception {
-        TipSim.ok(t.call("PUT", "/api/pad-types/chip-0603", "{\"forSetup\":\"ad22tta-b\",\"status\":\"characterized\"}"));
+        TipSim.ok(t.call("PUT", "/api/pad-types/chip-0603", "{\"forSetup\":\"ad22tta-b\",\"status\":"
+                + "\"characterized\"}"));
         long id = TipSim.okArray(t.get("/api/pad-calibrations?typeKey=chip-0603")).get(0).getAsJsonObject().get("id")
                 .getAsLong();
         JsonObject plan = t.plan(t.writeBoard());
@@ -277,6 +279,25 @@ public class TipSetupEdgeSimTest {
     }
 
     @Test
+    public void theLabelOfARecordOfATipThatCameOffNamesItsOwnRecipe() throws Exception {
+        t.add25();
+        t.mount(TipSim.K25);
+        TipSim.ok(t.call("PUT", "/api/config", "{\"forTip\":\"" + TipSim.K25 + "\",\"profile\":{\"pressurePsi\":20}}"));
+        // a job the mount stopped writes its records as it ends: they name the 22G, whose recipe is parked
+        org.openpnp.instancelabs.dispense.PadCalibrationRecord rec = new org.openpnp.instancelabs.dispense
+                .PadCalibrationRecord();
+        rec.jobId = "pc-stopped";
+        rec.typeKey = "chip-0603";
+        rec.setupKey = TipSim.SEED;
+        rec.outcome = org.openpnp.instancelabs.dispense.PadCalibrationRecord.STOPPED;
+        rec.message = "The tip changed during the calibration: nothing was saved.";
+        t.svc.applyPadCalibration(rec, null);
+        JsonObject row = TipSim.okArray(t.get("/api/pad-calibrations?setup=" + TipSim.SEED)).get(0).getAsJsonObject();
+        assertEquals("Chip 0603 · " + Tip.SEED_NAME + " · Vieweg DV-5005 · 18 psi · Loctite GC50 SAC305 T5",
+                TipSim.str(row, "label"), row.toString());
+    }
+
+    @Test
     public void theUndoSaysWhyItIsTooLate() throws Exception {
         JsonObject nothing = TipSim.refused(t.post("/api/tip-setups/undo-mount", "{}"), 409, "too-late");
         assertEquals("Nothing to undo: no other tip was mounted in the last 2 min.", TipSim.str(nothing, "reason"));
@@ -292,9 +313,9 @@ public class TipSetupEdgeSimTest {
                 + "\"odMm\":1.07,\"form\":\"straight\",\"taper\":\"unknown\"}"));
         String key = TipSim.str(added.getAsJsonObject("setup"), "key");
         JsonObject incomplete = TipSim.refused(t.post("/api/tip-setups/" + key + "/mount", "{}"), 409, "refused");
-        assertEquals("The Footed 19G has no taper yet: fill it in first (Edit…). The needle change is recorded: nothing "
-                + "dispenses until the Footed 19G is mounted and its needle Z frame recorded.", TipSim.str(incomplete,
-                        "reason"));
+        assertEquals("The Footed 19G has no taper yet: fill it in first (Edit…). The needle change is recorded: "
+                + "nothing dispenses until the Footed 19G is mounted and its needle Z frame recorded.", TipSim.str(
+                        incomplete, "reason"));
         assertTrue(t.token() > before, "the needle change is recorded");
         assertEquals(TipSim.K25, t.svc.getConfig().tip.key);
     }

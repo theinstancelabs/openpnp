@@ -62,7 +62,7 @@ final class PhotoEndpoints {
         }
         String key = r.query("setup", null);
         if (key == null) {
-            throw ApiException.badRequest("'setup': the tip setup the picture shows");
+            throw ApiException.badRequest("'setup' is required: the tip setup the picture shows");
         }
         TipSetup s = svc.getDb().currentTipSetup(key);
         if (s == null) {
@@ -184,7 +184,8 @@ final class PhotoEndpoints {
         Photo p = require(svc, r.group(1));
         List<Long> cals = ids(b, "calibrationIds");
         if (cals.isEmpty()) {
-            throw ApiException.badRequest("'calibrationIds': the calibration records to show the picture with");
+            throw ApiException.badRequest("'calibrationIds' is required: the calibration records to show the picture "
+                    + "with");
         }
         String role = Photo.KIND_RESULT.equals(p.kind) ? Photo.ROLE_RESULT : Photo.ROLE_TIP;
         List<Photo.Link> links = svc.linkPhotos(Collections.singletonList(p.id), cals, role);

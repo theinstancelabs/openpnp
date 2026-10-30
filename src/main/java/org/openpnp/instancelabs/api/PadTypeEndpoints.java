@@ -380,7 +380,7 @@ final class PadTypeEndpoints {
         String forSetup = forSetup(svc, b);
         String fromSetup = Json.str(b, "fromSetup", null);
         if (fromSetup == null) {
-            throw ApiException.badRequest("'fromSetup': the tip setup whose dot plan is copied");
+            throw ApiException.badRequest("'fromSetup' is required: the tip setup whose dot plan is copied");
         }
         if (fromSetup.equals(forSetup)) {
             throw ApiException.badRequest("copy from another tip: the " + svc.getConfig().tip.name + " is the one "
