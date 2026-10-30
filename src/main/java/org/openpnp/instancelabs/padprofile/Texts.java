@@ -198,9 +198,15 @@ public final class Texts {
                 + "until a pad type is chosen.";
     }
 
+    /**
+     * The below-gate text of a type for the seeded setup.
+     *
+     * @deprecated the text names the mounted setup and the others' statuses (§22.2):
+     *             {@link #belowGate(String, String, String, String, List)}
+     */
+    @Deprecated
     public static String belowGate(String typeName, String status, String gate) {
-        return typeName + " is not calibrated yet (status: " + statusWord(status) + "). Boards need pad types that are "
-                + "at least " + statusWord(gate) + ": calibrate it automatically or by hand.";
+        return belowGate(typeName, status, gate, Tip.SEED_NAME, null);
     }
 
     /**

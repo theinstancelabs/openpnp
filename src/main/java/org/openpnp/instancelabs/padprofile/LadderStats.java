@@ -568,8 +568,9 @@ public final class LadderStats {
     /**
      * The control for the mounted tip setup (tip setups design §22.2): against the bench only with the bench model,
      * else against the setup's newest passing record of the dose ({@code newestPassingMedianMm2}, from its dot table,
-     * ±10 %), or against nothing (the first measurement of this tip). The failure text adds "or another tip than the
-     * {S} is on" (§22.3). {@code tip} null: as {@link #control(int, double, Double, double, Settings)}.
+     * ±10 %), or against nothing (it passes with the text "first measurement of this tip"). The failure text adds "or
+     * another tip than the {S} is on" (§22.3). {@code tip} null: as {@link #control(int, double, Double, double,
+     * Settings)}.
      */
     public static Check control(int steps, double medianAreaMm2, Double newestPassingMedianMm2, double psi,
             Settings set, Tip tip) {
@@ -593,6 +594,10 @@ public final class LadderStats {
                     + " dots are " + Texts.mm(medianAreaMm2) + " mm², " + Texts.pct(e) + " % "
                     + (e < 0 ? "below" : "above") + " the " + Texts.mm(newestPassingMedianMm2)
                     + " mm² of the last calibration" + fix);
+        }
+        if (!bench0 && newestPassingMedianMm2 == null) {
+            // §22.2: nothing to compare a setup's first dots of this dose with
+            return new Check("control", true, medianAreaMm2, null, "first measurement of this tip");
         }
         return new Check("control", true, medianAreaMm2, bench, null);
     }

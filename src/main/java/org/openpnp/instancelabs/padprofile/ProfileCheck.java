@@ -890,7 +890,7 @@ public final class ProfileCheck {
             case BELOW_GATE:
                 if (c.otherTip(t)) {
                     g.shortText = "calibrated for another tip";
-                    g.reasonText = Texts.belowGateTip(typeName, t.tipKey, tip.name);
+                    g.reasonText = Texts.belowGateTip(typeName, Tip.setupOf(t.tipKey), tip.name);
                 }
                 else if (g.doseUnknown) {
                     g.shortText = "dots not measured for this tip";

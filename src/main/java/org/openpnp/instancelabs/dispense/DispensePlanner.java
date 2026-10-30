@@ -280,7 +280,7 @@ public class DispensePlanner {
         for (Map.Entry<String, Integer> e : otherTip.entrySet()) {
             PadType t = resolver.byKey(e.getKey());
             plan.warnings.add(Texts.belowGateTip(t == null || t.name == null ? e.getKey() : t.name,
-                    t == null ? "?" : t.tipKey, tip.name) + " " + Texts.plural(e.getValue(), "pad", "pads")
+                    t == null ? "?" : Tip.setupOf(t.tipKey), tip.name) + " " + Texts.plural(e.getValue(), "pad", "pads")
                     + " of " + e.getKey() + (e.getValue() == 1 ? " gets" : " get") + " no paste (STATUS_BELOW_MIN).");
         }
         for (Map.Entry<Integer, Integer> e : unknownDose.entrySet()) {

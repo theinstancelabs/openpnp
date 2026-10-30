@@ -102,7 +102,7 @@ public final class Tip {
         }
         if (mgPerStep == null || !(steps > 0)) {
             throw new IllegalStateException("the " + name + " was never weighed at this recipe and paste: the mass of a "
-                    + DoseModel.turnNoun(steps) + " dot is not known");
+                    + DoseModel.turnName(steps) + " dot is not known");
         }
         return mgPerStep * steps;
     }
@@ -120,7 +120,7 @@ public final class Tip {
     private Measured size(int steps) {
         Measured m = measured == null ? null : measured.get(steps);
         if (m == null) {
-            throw new IllegalStateException("the " + name + " has no measured " + DoseModel.turnNoun(steps)
+            throw new IllegalStateException("the " + name + " has no measured " + DoseModel.turnName(steps)
                     + " dots at this recipe and paste: its dot size is not known");
         }
         return m;

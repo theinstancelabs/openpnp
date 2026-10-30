@@ -152,6 +152,46 @@ public class PlannerMeasuredTipTest {
     }
 
     @Test
+    public void aVersionWithoutATipKeyFromTheStoredRowsIsBelowTheGateUnderAnotherTip() throws Exception {
+        try (DispenseDb db = DispenseDb.inMemory()) {
+            PadType v = db.currentPadType("chip-0603", Tip.SEED_KEY).copy();
+            v.status = PadTypeStatus.CHARACTERIZED;
+            v.tipKey = null; // as every version written before tip setups
+            v.dotSteps = 400;
+            v.dotsPerPad = 2;
+            db.insertPadTypeVersion(v);
+            // a resolver of the newest rows as stored (pad_types_current), not of the 25G's composed view
+            List<PadType> raw = new ArrayList<>();
+            for (PadType t : db.currentPadTypes(Tip.SEED_KEY)) {
+                List<PadType> h = db.padTypeHistory(t.typeKey);
+                raw.add(h.get(h.size() - 1));
+            }
+            PadTypeResolver r = new PadTypeResolver(raw, null);
+            PadType chip = r.resolve("R_0603_1608Metric", Double.NaN, Double.NaN, Double.NaN);
+            assertEquals("chip-0603", chip.typeKey);
+            assertEquals(null, chip.tipKey);
+            assertEquals(PadTypeStatus.CHARACTERIZED, chip.status);
+            List<PadGeometry> pads = PlannerDoseTest.part("R1", "R_0603_1608Metric", 100, 80, 1.65, 0.8, 0.95, chip);
+            DispensePlan p = new DispensePlanner(cfg25(), r).withTip(measured25()).plan("raw", pads, 77.5, 40);
+            for (DispensePlan.PlannedPad x : p.pads) {
+                assertTrue(x.flags.contains(PadFlag.STATUS_BELOW_MIN), x.padId + " " + x.flagNames());
+            }
+            assertTrue(p.dots.isEmpty());
+            assertTrue(p.warnings.contains(chip.name + " was calibrated with another tip (" + Tip.SEED_KEY + "); the mounted "
+                    + "tip is the 25G straight. Mass per turn and dot size change with the tip: calibrate it again for "
+                    + "this tip. 2 pads of chip-0603 get no paste (STATUS_BELOW_MIN)."), p.warnings.toString());
+            // the same rows with the 22G mounted: its own version
+            DispensePlan p22 = new DispensePlanner(GcodeBlocksTest.cfg(), r).withTip(Tip.g22()).plan("raw", pads,
+                    77.5, 40);
+            for (DispensePlan.PlannedPad x : p22.pads) {
+                assertFalse(x.flags.contains(PadFlag.STATUS_BELOW_MIN), x.padId + " " + x.flagNames());
+            }
+            assertFalse(p22.dots.isEmpty());
+            assertEquals(Tip.SEED_KEY, PadInstances.typeInfo(chip, null).tipKey);
+        }
+    }
+
+    @Test
     public void thePlannerRefusesWithoutATip() {
         DispenseConfig c = cfg25();
         PadType sot = of25(PlannerDoseTest.SOT);
