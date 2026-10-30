@@ -85,6 +85,8 @@ public class PadCalibrationJobTest {
         volatile String aborted;
         /** The camera misses the first this many weigh dots of each coupon. */
         volatile int missWeighDots;
+        /** The dose-blocks steps as the job queued them (their setup and needle token, §22.3). */
+        final List<DoseBlocksRequest> requests = new CopyOnWriteArrayList<>();
 
         private <T> Future<T> step(String what, java.util.function.Function<RunResult, T> result) {
             calls.add(what);
@@ -129,6 +131,7 @@ public class PadCalibrationJobTest {
 
         @Override
         public Future<DoseBlocksResult> runDoseBlocks(DoseBlocksRequest req) {
+            requests.add(req);
             return step(req.kind, r -> {
                 DoseBlocksResult res = new DoseBlocksResult();
                 res.run = r;
@@ -429,6 +432,49 @@ public class PadCalibrationJobTest {
         assertEquals("characterized", str(type, "status"));
         assertEquals(2.12, type.get("massPerPadMg").getAsDouble(), 0.01);
         assertNotNull(type.getAsJsonObject("lastCalibration"), type.toString());
+    }
+
+    /**
+     * Tip setups (§22.3, §22.5): the job belongs to the setup and needle token of its start: every dose-blocks step
+     * carries them, and so does its record, with its method and its automatic "calibrated for" label.
+     */
+    @Test
+    public void everyStepAndRecordCarriesTheSetupAndTheNeedleOfTheStart() throws Exception {
+        ok(call("POST", "/api/needle/changed", "{\"why\":\"a new needle\"}"));
+        Long token = svc.getConfig().needleChangedAtMs;
+        ok(call("POST", "/api/needle/anchor", "{\"needleChangedAtMs\":" + token + ",\"surfaceZ\":5.5,"
+                + "\"needleContactRawSum\":65.59}"));
+        ok(call("POST", "/api/needle/offset", "{\"needleChangedAtMs\":" + token + ",\"offsetMm\":-2.59}"));
+        // where it lands, kept for the 22G: a test without the landing check (its job is PadCalibrationSimTest's)
+        org.openpnp.instancelabs.dispense.LandingResult l = new org.openpnp.instancelabs.dispense.LandingResult();
+        l.setupKey = Tip.SEED_KEY;
+        l.needleSinceMs = token;
+        l.n = 8;
+        svc.setLanding(l, true, token);
+        attestAtMs = System.currentTimeMillis();
+        plan();
+        String id = str(ok(call("POST", "/api/pad-calibrations", body(group, attest()))), "id");
+        JsonObject waiting = awaitState("awaiting-reading");
+        assertEquals(Tip.SEED_KEY, str(waiting, "forTip"));
+        assertEquals(token.longValue(), waiting.get("needleSinceMs").getAsLong());
+        assertEquals(2, engine.requests.size(), "the ladder and the weighing");
+        for (DoseBlocksRequest r : engine.requests) {
+            assertEquals(Tip.SEED_KEY, r.forTip, r.kind);
+            assertEquals(token, r.needleSinceMs, r.kind);
+        }
+        JsonObject done = ok(call("POST", "/api/pad-calibrations/" + id + "/answer", readings("4.172", "4.100", "4.132",
+                "4.060") + ",\"confirm\":true,\"wait\":true}"));
+        JsonObject g = done.getAsJsonObject("result").getAsJsonArray("groups").get(0).getAsJsonObject();
+        assertEquals("characterized", str(g, "outcome"), g.toString());
+        assertTrue(str(g, "label").startsWith("SW_SPST_3.9x2.9mm"), g.toString());
+        assertTrue(str(g, "label").endsWith(" · " + Tip.SEED_NAME + " · Vieweg DV-5005 · 18 psi · Loctite GC50 SAC305 T5"),
+                str(g, "label"));
+        assertTrue(g.get("labelAuto").getAsBoolean());
+        org.openpnp.instancelabs.dispense.PadCalibrationRecord rec = svc.getDb().padCalibration(g.get("calibrationId")
+                .getAsLong());
+        assertEquals(Tip.SEED_KEY, rec.setupKey);
+        assertEquals(token, rec.needleSinceMs);
+        assertEquals("auto", rec.method);
     }
 
     @Test

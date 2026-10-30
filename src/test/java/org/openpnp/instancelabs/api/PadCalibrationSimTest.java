@@ -988,6 +988,7 @@ public class PadCalibrationSimTest {
         JsonObject handRow = ok2(get("/api/pad-calibrations?typeKey=chip-0805")).get(0).getAsJsonObject();
         assertEquals("by-hand", str(handRow, "method"));
         assertEquals(K25, str(handRow, "setupKey"));
+        assertTrue(handRow.get("versionFrom").isJsonNull(), "a stand-in was calibrated from nothing: " + handRow);
 
         // a reconnect: the camera results go stale (the dot table and the weighings stay), so the calibration lays its
         // own ladder: chip-0603 calibrated for the 25G, the 22G's version untouched

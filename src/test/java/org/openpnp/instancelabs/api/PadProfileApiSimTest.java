@@ -720,6 +720,48 @@ public class PadProfileApiSimTest {
         assertFalse(all.get("planStale").getAsBoolean());
     }
 
+    /**
+     * Tip setups (§22.2, §22.6): with a tip whose dots were never measured mounted, the check names no tip or part
+     * reason it cannot know, asks to measure its dots in every group below the gate, writes null where a size is not
+     * known (never a NaN token), and names the setup that has every pad type of the board; a suggestion shown before a
+     * mount is stale after it.
+     */
+    @Test
+    public void theCheckOfATipNeverMeasuredAsksForItsDots() throws Exception {
+        characterize("chip-0603");
+        File board = chipBoard("chips", new Object[][] {{"TestChip_A", 0.80, 0.95, 1.65, 3}});
+        ok(call("POST", "/api/package-mappings", "{\"packageId\":\"TestChip_A\",\"typeKey\":\"chip-0603\"}"));
+        JsonObject plan = planOf(board);
+        assertTrue(plan.getAsJsonObject("profileCheck").get("ok").getAsBoolean(), plan.toString());
+        Res added = call("POST", "/api/tip-setups", "{\"name\":\"25G straight\",\"gauge\":25,\"idMm\":0.25,"
+                + "\"odMm\":0.51,\"form\":\"straight\",\"taper\":\"straight-steel\"}");
+        assertEquals(201, added.status, added.toString());
+        ok(call("POST", "/api/tip-setups/25g-straight/mount", "{}"));
+
+        Res raw = get("/api/pad-profile/check?boardFile=" + enc(board.getCanonicalPath()));
+        assertFalse(raw.body.contains("NaN") || raw.body.contains("Infinity"), "JSON.parse would refuse it: " + raw);
+        JsonObject pc = raw.json();
+        JsonObject tip = pc.getAsJsonObject("tip");
+        assertEquals("25g-straight", str(tip, "key"));
+        assertEquals("none", str(tip, "dots"));
+        assertTrue(tip.get("minDotMm").isJsonNull(), tip.toString());
+        assertEquals("Vieweg DV-5005", str(tip, "dispenser"));
+        JsonObject g = group(pc, "TestChip_A");
+        assertEquals("below-gate", str(g, "reason"), g.toString());
+        assertTrue(g.getAsJsonObject("type").get("standIn").getAsBoolean(), g.toString());
+        JsonObject s = g.getAsJsonObject("suggestion");
+        assertEquals("measure-tip", str(s, "kind"), s.toString());
+        assertEquals("Measure the 25G straight's dots first (Setup › Dispenser & tip › Measure its dots, ≈ 8 min and "
+                + "two coupons to weigh): suggestions need its dot sizes and paste per turn.", str(s, "sentence"));
+        JsonArray others = pc.getAsJsonArray("otherTips");
+        assertEquals(1, others.size(), pc.toString());
+        assertEquals("ad22tta-b", str(others.get(0).getAsJsonObject(), "key"));
+        assertEquals(1, others.get(0).getAsJsonObject().get("of").getAsInt());
+        // the plan made with the 22G: its pads' dots and masses null where the 25G does not know them
+        JsonObject view = ok(get("/api/plan/" + str(plan, "planId")));
+        assertFalse(view.toString().contains("NaN"), view.toString());
+    }
+
     @Test
     public void nothingIsWrittenUntilEveryIdIsCurrentAndCalibrateExistingSaves() throws Exception {
         characterize("chip-0603");
