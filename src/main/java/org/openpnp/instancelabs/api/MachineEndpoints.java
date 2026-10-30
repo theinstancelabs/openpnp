@@ -191,6 +191,8 @@ final class MachineEndpoints {
             ctx.requireEngineIdle(svc);
         }
         ctx.requireNoPressureHold();
+        // OpenPnP homing or jogging by itself: a home queued behind a task of its own that fails is dropped (rc1 review)
+        ctx.requireMachineIdle();
         boolean wait = Json.bool(r.json(), "wait", false);
         // With the engine: N1 raised first when a STOP left it low, and a STOP during the home stops the
         // head for good (the drivers are disconnected), as the engine's own homes (§2.3).
@@ -230,6 +232,11 @@ final class MachineEndpoints {
         }
         catch (ExecutionException e) {
             throw ApiException.refused("homing failed: " + rootMessage(e));
+        }
+        catch (TimeoutException e) {
+            // OpenPnP dropped the home (a task of its own ahead of it failed), or it never ended: nothing homed
+            throw ApiException.refused("the home did not start or did not end within 5 min: nothing homed; press Home "
+                    + "again");
         }
         if (rep == held) {
             throw ApiException.refused("the pressure hold came on before the home started: switch the pressure off "
