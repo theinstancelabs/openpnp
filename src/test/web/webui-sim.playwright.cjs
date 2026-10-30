@@ -170,6 +170,12 @@ async function runFirstDots(page, n) {
   try {
     const resp = await page.goto(BASE);
     check('UI served by OpenPnP', resp.ok(), resp.status());
+    // a simulator only, before anything is changed or pressed (rc1 review: this test homes, runs boards and presses STOP;
+    // the runner starts its own SIM session, a hand run could point it anywhere): every driver link is loopback now
+    // (status.server.simulated), and the controller answers as OpenPnP's simulator once connected (below)
+    const sim0 = await page.request.get(BASE + 'api/status').then((r) => r.json()).catch(() => ({}));
+    check('the server is an OpenPnP simulator (status.server.simulated)', !!sim0.server && sim0.server.simulated === true, sim0.server);
+    if (!sim0.server || sim0.server.simulated !== true) throw new Error('not a simulator: nothing was done');
     await waitText(page, 'pill-engine', /Ready to run|ready|Blocked|unavailable|Stopped|No plan|of 9/, 20000);
     check('board run verdict in the strip', /Ready to run|ready|Blocked|unavailable|Stopped|No plan|of 9/.test(await textOf(page, 'pill-engine')),
       await textOf(page, 'pill-engine'));
@@ -306,6 +312,9 @@ async function runFirstDots(page, n) {
     await page.click('#btn-start');
     await waitText(page, 'pill-conn', /^Connected$/, 60000);
     check('Connect connects (sim)', true);
+    const confirmed = await waitStatus(page, (x) => x.server && x.server.simulatorConfirmed === true, 15000).then(() => true, () => false);
+    check('the controller answered as OpenPnP\'s simulator (status.server.simulatorConfirmed) before the first motion', confirmed);
+    if (!confirmed) throw new Error('the controller is not the simulator: stopped before Home');
     const homeLabel = await press2(page, '#btn-home');
     check('Home asks for a second press', /Press again: home/i.test(homeLabel), homeLabel);
     await waitText(page, 'pill-homed', /^Homed$/, 120000);

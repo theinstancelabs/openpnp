@@ -210,6 +210,10 @@ async function weighCoupon(page, place) {
     // ---- (0) set-up -------------------------------------------------------------------------------------------------
     let s = await status(page);
     if (!s.machine.enabled) { await api(page, 'POST', '/api/machine/enable'); await page.waitForFunction(() => IL.S.status.machine.enabled, null, { timeout: 30000 }); }
+    // the controller itself answers as OpenPnP's simulator before anything moves (a loopback serial bridge would not)
+    const confirmed = await page.waitForFunction(() => IL.S.status.server.simulatorConfirmed === true, null, { timeout: 15000 }).then(() => true, () => false);
+    check('the controller answered as OpenPnP\'s simulator (status.server.simulatorConfirmed)', confirmed);
+    if (!confirmed) throw new Error('the controller is not the simulator: nothing moved');
     if (!s.machine.homed) await api(page, 'POST', '/api/machine/home', { wait: true });
     await api(page, 'POST', '/api/machine/z-check', { wait: true }).catch(() => null);   // an engine task: the simulator confirms itself
     const cfgDir = SCENE ? path.dirname(path.dirname(SCENE)) : null;
