@@ -1871,3 +1871,765 @@ still accepts; a "Test run with fewer dots" cut in the middle of a multi-dot pad
 dose check (R6) does not see the shorter pad.
 
 §15 is in `REAL_MACHINE_TODO.md` (items 38–52).
+
+---
+
+## 22. Tip setups, per-tip profiles and calibration labels
+
+Status: design for implementation (2026-10-29), written after §21; built after `finish-pr2` on a branch off `il/rc1`
+(PR #3, stacked on PR #2). The user (2026-10-29, verbatim): "Another thing is that we should have calibration profiles
+for pads. Also assuming a certain dispenser, not head/nozzle/needle, I don't know, but you know what I mean. After we
+self-calibrate I should just take a picture and mark down what this was calibrated for, like 0603 for a 22 bent tip
+versus a straight needle tip, etc." The main thread's decisions D1–D7 (PT/tip-setups-brief.md) are binding; each is
+cited where it applies. Code is cited as it is on `il/bench-sync-autoreg` a4bb6d20d (= `il/rc1` today; `il/fixround1`
+and `il/fixround1b` move a few lines of A/PadCalibrationJob.java, D/DispenseService.java and D/DispenseConfig.java, the
+methods named stay), web files as on `il/pc-web` 66ef2d749, cited `W/…@pc`. `B/` = `src/main/java/org/openpnp/
+instancelabs/board/`.
+
+### 22.0 Where it starts
+
+| what | today | source |
+|---|---|---|
+| the tip | one `TipSpec` in the config: key `ad22tta-b`, name `22G tip`, ID 0.41 mm, OD 0.72 mm (assumed), smallest dot 400 steps; changed with `PUT /api/config` (a nested setting) | D/TipSpec.java:18-29, D/DispenseConfig.java:202-203, A/DispenseEndpoints.java:60-62 |
+| pad profiles | a pad type has **one** current version (the highest per key) and every reader takes it; a version names a tip (`tip_key`; null on seeds and on edits that kept the dose) | D/DispenseDb.java:60-62, :490-512; A/PadTypeEndpoints.java:350-352 |
+| another tip | a type whose `tipKey` is another tip is below the gate (decision 5) in plans, in the check and at Run. So calibrating 0603 with a 25G writes chip-0603 v(n+1) for the 25G and **replaces** the 22G profile; mounting the 22G again finds a blocked type | D/DispensePlanner.java:205-209, P/ProfileCheck.java:261-267, D/Interlocks.java:129-145 |
+| dose records | name the tip (`tip_key NOT NULL`); another tip's are stale, so are records older than a needle change | D/DispenseDb.java:251, D/DoseRecord.java:122-128 |
+| dispense profile | one `DispenseProfile` for every tip (pressure, turn, speed, dwell, gap, start angle) | D/DispenseConfig.java:57-58 |
+| paste model | the 22G bent taper's at 18 psi (M_rev 2.11 mg/rev, the §1.4 dot sizes), used for every tip at about 20 call sites | P/DoseModel.java:19-69; e.g. P/Suggester.java:78-93, D/DispensePlanner.java:283, :386, A/PadCalibrationJob.java:459, :512 |
+| needle change | "I changed the needle" stales the needle Z frame and the touch-off (I4), not the XY trim | D/DispenseService.java:395-400, D/Interlocks.java:183-193, D/DispenseConfig.java:88-93 |
+| dispenser, form, pictures | nothing: no dispenser identity, no bent or straight, no photo, no "calibrated for" | – |
+
+The real machine (PT/software-autoregister.md, "SESSION 4 RESULTS", 2026-10-29): the needle frame belongs to the
+mounted needle. K = 65.60 came from the side camera (needle level with N1) and a touch-off dot ladder confirmed it
+(round dots at commanded gaps 0.00–0.20 mm, strings from 0.25): every needle needs its own frame. Needles on hand
+(calibration brief, mem:dispenser-hardware-facts): ADL AD22TTA-B 22G bent (30°) tapered plastic, ID 0.41 mm, in use;
+straight 0.5 in (12.7 mm) steel 25G (ID 0.25), 27G (0.20), 30G (0.15) and 14–23G; 45° bent 0.5 in variants of 14–30G.
+Dispenser: Vieweg DV-5005 (400 rpm, 1.5 bar, D/DispenseProfile.java:28-31) with the DFS16-A auger. A finer tip changes
+the flow (shear-thinning paste, about 1/r^1.8 and the tube length, §1.5 and the brief): mass per turn and dot size do
+not carry over from one tip to another.
+
+**What changes.** A library of tip setups, one mounted (D1). Pad type versions, the dispense profile and the numbers of
+the paste model become the mounted setup's (D2). Mounting is a needle change that also stales the XY trim (D3). Every
+calibration saves a "calibrated for" label, the top camera's photo of its dots and optional pictures of the tip (D4);
+the UI shows all of it for the mounted setup (D5); schema 3 only adds (D6). Out of scope (D7): recognising a tip from
+its photo, per-tip profiles of the placement nozzles, and any vision on the tip picture (it is a record, not a
+measurement).
+
+| decision | where |
+|---|---|
+| D1 a library of tip setups, one mounted, seeded with the 22G bent taper | §22.1 (tables, fields, seed, migration) |
+| D2 pad type versions and the dispense profile per setup; a copy only when asked, never above provisional | §22.1 (`parkedTips`), §22.2 |
+| D3 mounting = a needle change (frame, touch-off, XY stale; records not reused; profile switches) | §22.3 |
+| D4 label, automatic result photo, optional tip pictures, one step on the result card | §22.4, §22.5, §22.7 |
+| D5 the Setup card, Profile per setup, "for the 22G bent taper", result card, Records | §22.7 |
+| D6 additive schema 3, photos as files with a row each | §22.1, §22.4 |
+| D7 out of scope | above |
+
+### 22.1 Data model and schema 3
+
+**Key rule.** A setup's key is the tip key the engine already writes (`TipSpec.key`, `pad_types.tip_key`,
+`dose_records.tip_key`), so every record made so far names its setup and nothing is rewritten. One special case:
+`pad_types` rows with `tip_key` null (the seeds, and edits that kept the dose) belong to the seeded setup `ad22tta-b`
+(D1). From schema 3 on, every new pad type version carries the mounted setup's key: `DispenseService.savePadType`
+(D/DispenseService.java:644-648), the one writer of versions, stamps `tipKey = cfg.tip.key`.
+
+New tables (append-only, triggers as D/DispenseDb.java:210-215):
+
+```sql
+CREATE TABLE IF NOT EXISTS tip_setups (
+  row_id INTEGER PRIMARY KEY AUTOINCREMENT, setup_key TEXT NOT NULL, version INTEGER NOT NULL,
+  name TEXT NOT NULL, dispenser TEXT NOT NULL, tip_model TEXT, gauge INTEGER,
+  id_mm REAL, od_mm REAL, od_source TEXT CHECK (od_source IN ('measured','assumed')),
+  form TEXT NOT NULL CHECK (form IN ('bent','straight','unknown')), bend_deg REAL,
+  taper TEXT NOT NULL CHECK (taper IN ('tapered-plastic','straight-steel','unknown')), length_mm REAL,
+  min_dot_steps INTEGER NOT NULL, model TEXT, notes TEXT, retired INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL, operator TEXT, UNIQUE(setup_key, version));
+CREATE TABLE IF NOT EXISTS tip_mounts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, setup_key TEXT NOT NULL,
+  setup_version INTEGER NOT NULL, from_setup_key TEXT, needle_changed_at_ms INTEGER NOT NULL,
+  profile_json TEXT NOT NULL, xy_trim_json TEXT, why TEXT NOT NULL, simulated INTEGER NOT NULL DEFAULT 0, operator TEXT);
+CREATE TABLE IF NOT EXISTS photos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('tip','setup','result')),
+  source TEXT NOT NULL CHECK (source IN ('bottom-camera','top-camera','upload')),
+  setup_key TEXT NOT NULL, job_id TEXT, dose_steps INTEGER, coupon_place TEXT,
+  file TEXT NOT NULL, sha256 TEXT NOT NULL, bytes INTEGER NOT NULL, width_px INTEGER NOT NULL, height_px INTEGER NOT NULL,
+  mm_per_px REAL, x_mm REAL, y_mm REAL, caption TEXT, simulated INTEGER NOT NULL DEFAULT 0, operator TEXT);
+CREATE TABLE IF NOT EXISTS photo_links (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, photo_id INTEGER NOT NULL,
+  pad_calibration_id INTEGER NOT NULL, UNIQUE(photo_id, pad_calibration_id));
+CREATE TABLE IF NOT EXISTS photo_removals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, photo_id INTEGER NOT NULL UNIQUE,
+  why TEXT, operator TEXT);
+CREATE TABLE IF NOT EXISTS cal_labels (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, pad_calibration_id INTEGER NOT NULL,
+  label TEXT NOT NULL, auto INTEGER NOT NULL CHECK (auto IN (0, 1)), operator TEXT);
+CREATE VIEW IF NOT EXISTS pad_types_by_setup AS SELECT p.*, COALESCE(p.tip_key, 'ad22tta-b') AS setup_key
+  FROM pad_types p JOIN (SELECT type_key, COALESCE(tip_key, 'ad22tta-b') AS s, MAX(version) AS v
+                         FROM pad_types GROUP BY type_key, COALESCE(tip_key, 'ad22tta-b')) m
+  ON p.type_key = m.type_key AND COALESCE(p.tip_key, 'ad22tta-b') = m.s AND p.version = m.v;
+```
+
+| table | one row is | written by |
+|---|---|---|
+| `tip_setups` | a version of a setup; the current one is the highest (as pad types) | add, edit, retire (§22.6); the schema 3 seed |
+| `tip_mounts` | one mount: the setup put on, the one taken off, the profile it brought | a mount and "I changed the needle" (§22.3) |
+| `photos` | one stored picture: its file and what it shows | the tip picture task, an upload, a job's result photos (§22.4) |
+| `photo_links` | a photo shown with a calibration record (`pad_calibrations` row) | the job, the by-hand save, a picture or upload made at a result card |
+| `photo_removals` | the operator removed a photo: the row stays, the file goes | `DELETE /api/photos/{id}` |
+| `cal_labels` | a "calibrated for" label of a calibration record; the newest row counts | the job and the by-hand save (auto), the operator's edits (§22.5) |
+
+New nullable columns: `pad_calibrations.setup_key TEXT`, `pad_calibrations.method TEXT` (`auto` | `by-hand`; null =
+`auto`, the only kind before schema 3), `dose_records.landing_dx_mm REAL` and `landing_dy_mm REAL` (the mean landing,
+found − commanded, per axis; today only its length is kept, `landing_mean_mm`), `runs.setup_key TEXT`.
+
+Setup fields (`D/TipSetup.java`, new; `TipSetup.problems()` checks them engine-side):
+
+| field | meaning | allowed |
+|---|---|---|
+| `key` | identity, = the tip key on records | `TipSpec.KEY` (D/TipSpec.java:15); default from gauge and form (`25g-straight`, `27g-bent45`, `22g-taper`), made unique with `-2`, `-3` |
+| `name` | the words in every text ("not dispensable with the 25G straight") | 1–40 characters, unique among setups not retired |
+| `dispenser` | the dispenser the tip sits on | 1–60 characters, default `Vieweg DV-5005` |
+| `tipModel`, `gauge` | part number; needle gauge | ≤ 60 characters or null; 10–34 or null |
+| `idMm`, `odMm`, `odSource` | bore and outer diameter at the end, and whether the OD was `measured` or `assumed` | ID 0.05–2.0 mm; OD above the ID and at most 3.0 mm (as D/TipSpec.java:44-46) |
+| `form`, `bendDeg` | `bent` (with its angle) or `straight` | 1–90° when bent, null when straight |
+| `taper` | `tapered-plastic` or `straight-steel` | – |
+| `lengthMm` | tube length from the hub; null = not recorded | 3–60 mm or null |
+| `minDotSteps` | the smallest dot the tip takes reliably | 400, 800 or 1600 (R1); default 400 |
+| `model` | `bench-22g` when §1's model (P/DoseModel) describes this tip, else null (§22.2) | only the seed has it |
+| `notes`, `retired` | free text; a retired setup cannot be mounted | notes ≤ 500 characters |
+| photos | the setup's `photos` rows of kind `setup` or `tip` | §22.4 |
+
+A setup is **complete** when it has ID, OD, form and taper; only a complete setup can be mounted.
+
+**The seeded setup** (inserted by the migration, operator `seed`): key `ad22tta-b`, name `22G bent taper`, dispenser
+`Vieweg DV-5005`, tip model `ADL AD22TTA-B`, gauge 22, ID 0.41, OD 0.72 `assumed`, `bent` 30°, `tapered-plastic`,
+length null, minDotSteps 400, model `bench-22g`, notes `In use since the ADL order of 2026-10-16; §1's bench model was
+measured with it on 2026-10-27/28. OD assumed (REAL_MACHINE_TODO 38), length not recorded. Auger: Vieweg DFS16-A.`
+
+**Schema 3 migration** (`SCHEMA_VERSION = 3`, D/DispenseDb.java:46; `migrate()`, :225-300, becomes `to2()` as today then
+`to3()`, run in order from the version found, each in one transaction):
+
+1. the backup of today (`VACUUM INTO dispense.db.v2-<yyyyMMdd-HHmmss>.bak`, :325-336) before the first step that runs;
+2. the new columns (`PRAGMA table_info`, `ALTER TABLE … ADD COLUMN`, which fires no trigger);
+3. the six tables, their triggers and the view; the names added to `TABLES` (:48-50) and to a `V3_TABLES` set that
+   `createSchema()` skips, as it skips `V2_TABLES` (:51-53, :201-205);
+4. the seeded setup's row (when no `tip_setups` row has its key);
+5. a **placeholder** setup for every other distinct key in `pad_types.tip_key` and `dose_records.tip_key`: name = the
+   key, dispenser `Vieweg DV-5005`, form and taper `unknown`, no ID or OD, minDotSteps 400, notes `Made by the schema 3
+   upgrade from records that name this tip: fill in its bore before mounting it.` It keeps those records' setup
+   visible and cannot be mounted until it is completed;
+6. a `schema_info` row 3 and a `SCHEMA` event (as :269-286).
+
+A fresh database is created at schema 3 and seeds the setup with the pad types (`seedIfEmpty`, :338-378). **Nothing
+existing is rewritten**: a test compares every row that existed before the upgrade with the same row after it (§22.8).
+
+| existing data | belongs to | why |
+|---|---|---|
+| `pad_types` rows with `tip_key` null or `ad22tta-b` | the seeded setup | D1 |
+| `pad_types` rows with another `tip_key` | that key's (placeholder) setup | the key names the tip they were made with |
+| `dose_records` | the setup of their `tip_key` | today's freshness rule already keys on it (D/DoseRecord.java:122) |
+| `pad_calibrations` with `setup_key` null | the setup of the version it wrote (`version_to`), else the seeded one | before schema 3 the job wrote with the configured tip only |
+| `runs` with `setup_key` null | not known (shown `—`) | runs did not record the tip |
+| `calibration`, `dot_ladder`, `scale_entries` (q model, records only) | no setup; their `tip` text stays | records only |
+| `package_pad_type`, `package_options`, `pad_rules` | every setup | a mapping says which pad type a package's pads are: the pad, not the needle |
+
+**Config (`dispense-config.json` schema 4**, D/DispenseConfig.java:37, `migrate()` :599-614):
+
+- `tip` stays the engine's view of the **mounted** setup (key, name, idMm, odMm, minDotSteps; new `setupVersion`,
+  `model`, `dispenser`), so the 20-odd readers of `cfg.tip` keep working. It becomes engine-stamped:
+  `PROTECTED_SETTINGS` gains `tip` and `parkedTips`, `NESTED_SETTINGS` loses `tip` (A/DispenseEndpoints.java:53-62);
+  an unchanged round trip from the settings editor passes as today (:507-516), a changed `tip` answers 400 `The tip
+  is the mounted tip setup: change it in Setup › Dispenser & tip (Change tip, or Edit).`
+- `profile` stays the **mounted** setup's dispense profile (every plan, run and check reads `cfg.profile`).
+- new `parkedTips: {setupKey: {profile, needleXyTrim, needleAnchor, needleZOffsetMm, parkedAtMs, profileFrom}}`: what
+  every setup that is not mounted keeps (its own dispense profile and its last needle data). A setup gets its entry
+  when it is added (§22.3), so a mount always finds one.
+- At load (`DispenseService.start`) the engine reconciles: `cfg.tip` is refreshed from its setup's newest version; a
+  `cfg.tip.key` that names no setup gets a setup made from `cfg.tip` (form and taper `unknown`, editable) and an event;
+  when the seeded setup is mounted and `cfg.tip` differs from its row (an OD typed in before), a seeded version with
+  the config's values is appended, notes `from dispense-config.json at the schema 3 upgrade`.
+- The 3 → 4 migration stamps the XY trim of a needle change that was finished before this version: when
+  `needleChangedAtMs` is set, the needle is touched off after it (`isNeedleTouchedOff()`, :449-458) and
+  `needleXyTrim.setAtMs` is null or older, then `setAtMs = needleZOffsetSetAtMs`, note `counted as checked at the
+  schema 4 upgrade (boards ran with it)`. Otherwise §22.3's XY rule asks for the landing.
+
+### 22.2 Resolution: what the mounted setup uses
+
+The mounted setup **S** is `cfg.tip.key`. One engine method gives every reader its pad types:
+`DispenseService.getPadTypes()` (D/DispenseService.java:639-641) → `TipSetups.typesFor(db, S)` (`D/TipSetups.java`,
+new):
+
+1. **S's own versions**: per type key, the highest version whose setup is S (`pad_types_by_setup`).
+2. **Stand-ins** for every other key (a type S has no version of): the type's newest version of any setup
+   (`pad_types_current`), copied with status `not-started`, its dot plan, recipe, weighed mass, calibrated area and
+   origin cleared (D2: no plan carries over), `tipKey = S`, the transient flag `standIn`, notes `Not calibrated for the
+   {S} yet.` and the template's version number. Pad size, layout, pitch, k, t, family, name and package pattern stay:
+   they describe the pad, not the needle.
+3. Versions keep one number line per type key across setups (the `UNIQUE(type_key, version)` of D/DispenseDb.java:148
+   stays: no table rebuild). `chip-0603 v6` may be the 25G's while v5 is the 22G's; each version names its setup.
+
+The resolver's fingerprint (D/PadTypeResolver.java:74-87) becomes `key:version@setup` per type, with `~` for a
+stand-in: mounting another setup makes every plan stale (the profile fingerprint changes too). Every reader of
+`db.currentPadTypes()` or `db.currentPadType(key)` moves to the mounted view: D/DispenseService.java:640, :889, :1421,
+:1938, D/PadInstances.java:181, B/BoardArtStore.java:312, S/SimBoardRenderer.java:208, A/PadCalibrationJob.java:427,
+:1594, A/PadProfileEndpoints.java:270, :390, A/PadTypeEndpoints.java:250. Checks for "does this key exist" look
+across all setups (`db.typeKeyExists`): A/PadProfileEndpoints.java:247, A/PadTypeEndpoints.java:154, :428.
+
+| reader | with S mounted | when S has no data | blocked |
+|---|---|---|---|
+| planner (D/DispensePlanner.java:155-268) | S's versions and stand-ins; S's profile; same-pad pitch and the dot-gap flag from S's dot sizes (`tip.dHiMm`, :283, :386) | – | stand-ins (not started, `STATUS_BELOW_MIN`); decision 5's other-tip rule (:205-209) stays as a guard and cannot fire for S's own versions |
+| profile check (P/ProfileCheck.java) | S's types, tip, fresh evidence and profile; texts name S | anchors: §1.3's validated, weighed versions of **every** setup (each names its setup), then the bench anchor | as §3.3 |
+| suggester (P/Suggester.java:44-96) | a dose's size and mass: S's fresh records (as today), then S's **dot table**, then the bench model (only when `S.model = bench-22g`) | not known: suggestion `measure-tip` | – |
+| dose records (D/DoseRecord.java:106-153) | fresh by today's rules with S (tip key, needle change, the recipe of S's profile) | – | other setups' records never count (D3) |
+| calibration job (A/PadCalibrationJob.java) | S's profile, versions or stand-ins and dot table; writes versions, records, labels and photos with S | unknown dot size: spaced for a 1.6 mm dot (larger than any 22G dot, 1.345 mm at one turn); unknown mass: weigh dots counted with the bench model's mass (a count, not a claim) and the readings' plausibility band 0.1–10 × the bench model's (a unit check) | a mount while the job has not ended (§22.3); the XY rule (§22.3) |
+| by-hand guide (§8) | the same job steps and records with S; the editor saves S's version (§22.5) | as the job | as the job |
+| Run (D/Interlocks.java) | the plan's setup must be S | – | `PLAN`; §22.3's XY rule; a planned dose S never measured (below) |
+
+**S's dot table** (`DoseRecords.dotTable(records, S, doseFp, simulated)`, new): per dose, the newest **passing** optical
+record of S at the recipe of S's profile (`dose_fp`) and the current simulator flag, **any age**: it describes the tip
+the way the bench model describes the 22G, while §1.7's freshness still decides `characterized`. The mass per step is
+the newest confirmed weighing of S at that recipe (§7.5), else its newest single weighing (the suggestion's confidence
+then says `weighed once`). Records of other setups never enter it; it is computed from `dose_records` (no new table).
+S counts as **measured** when its smallest dose has a dot size in the table and S has a weighing.
+
+`P/Tip` (P/Tip.java:8-31) gains `benchModel` (`S.model = bench-22g`), `measured` (per dose: d̄, d95, record id, time),
+`mgPerStep`, `mgPerStepAtMs`, and the methods that replace every `DoseModel` size or mass call: `knows(steps)`,
+`dLoMm(steps)`, `dHiMm(steps)`, `massMg(steps)`. With the bench model they return DoseModel's values (the 22G bent taper
+behaves exactly as today: golden test, §22.8; its `measured` is left empty); otherwise the measured d̄, d95 and
+mgPerStep × steps, else NaN. The call sites: P/Suggester.java:78, :90, :93, P/ProfileCheck.java:281-282,
+P/Decider.java:235, D/DispensePlanner.java:283, :386, D/DispenseService.java:2775, :3014, D/DoseBlocks.java:145,
+A/PadCalibrationJob.java:459, :512, :716, :720, :1380-1381, :2099, :2129, :2390-2391, A/PadCalibrationEndpoints.java:344.
+`PadInstances.tip(cfg.tip)` (D/PadInstances.java:138-140) becomes `svc.mountedTip()`: the setup with its dot table,
+cached per evidence version. R7's feed check (D/DoseBlocks.java:145) uses S's weighed mass per step, else the bench's
+1.32 µg (a finer tip lays less per step, so the bench value overstates the demand: the safe side).
+
+Rules that follow (each tested, §22.8):
+
+- **An unmeasured setup** (not the bench model and not measured, above) cannot say which pads it can dispense, nor
+  how much a dot lays: the check reports no `tip` or `part` reason, and every group with a gate reason gets the suggestion
+  `measure-tip`, sentence `Measure the {S}'s dots first (Setup › Dispenser & tip › Measure its dots, ≈ 8 min and two
+  coupons to weigh): suggestions need its dot sizes and paste per turn.` Nothing new is held back by the planner (every
+  type of S is below the gate anyway).
+- **`characterized` without the bench model needs measured evidence for every dose**, the profile's dose included.
+  Today the profile's dose is exempt (A/PadTypeEndpoints.java:354-357) because the bench measured it with the 22G.
+  `PadTypeEndpoints.checkDose` and `DispenseService.applyPadCalibration` refuse it otherwise (409 `status-evidence`,
+  the text of A/PadTypeEndpoints.java:375-378); the validated rule (:359-369) counts only S's own characterized
+  versions. So every version of S at or above the gate has measured dots, and Run's `checkDoses`
+  (D/Interlocks.java:381) refuses a planned dose S never measured (a database edited by hand): `pad type {key} v{n}
+  has {turn} dots, which were never measured with the {S}: measure its dots (Setup › Dispenser & tip)`.
+- **The control and the predictions** (§7.4 control, §1.8 P3 and P8) compare with the bench only with the bench
+  model; otherwise with S's newest passing record of the profile's dose (±10 %), or with nothing (`first measurement of
+  this tip`).
+- **Anchors stay shared.** The amount a pad needs (§1.3: mass per mm² that reflow accepted) belongs to the joint and the
+  paste, not to the needle, so a validated, weighed version of any setup anchors every setup: `PadInstances.inputs`
+  passes the other setups' ones in a new list `CheckInputs.moreAnchors` (the `anchors` map, P/CheckInputs.java:25-29,
+  holds one per family) and `Anchor` gains `setupName`; `confidenceWhy` adds `the amount is anchored on pads validated
+  with the {other setup}` when the anchor is another setup's. What delivers the amount (turn, dots per pad, dot size,
+  mass per step) never carries over (§22.11 item 1).
+- **Stand-ins in the texts.** `TypeInfo` gains `standIn`, `setupName` and the other setups' statuses; §3.4's
+  `below-gate` text becomes `{type} is not calibrated for the {S} yet (status: {status}{; {other status} for the
+  {other setup}}). Boards need pad types that are at least {gate}: calibrate it for this tip automatically or by
+  hand.` (`Texts.belowGate`, P/Texts.java:200-203); decision 5's `belowGateTip` (:205-210) stays for the guard.
+- **Copy from another setup** (D2: only when the operator asks): `POST /api/pad-types/{key}/copy {fromSetup}` writes a
+  version for S with the source version's pad fields and dot plan (dotSteps, dotsPerPad, calAreaMm2), status
+  `provisional`, origin `copied` (new, D/PadType.java:24-29), no recipe, no weighed mass, notes `Copied from the
+  {source} (v{n}, {status}) as a starting point: nothing was measured with the {S}.` It is refused when S's own version
+  is `characterized` or `validated` (`{type} is {status} for the {S} already: a copy would make it provisional.`).
+  The suggester shows the copy as `your plan`, confidence `low`, reason `the plan was copied from the {source} and never
+  measured with this tip`; only a calibration of S raises it.
+- **Blocked, in one list:** a mount while an engine task, the pressure hold or a pad calibration job is active (§22.3);
+  anything that dispenses before S's needle frame and offset are recorded (I4); board runs and pad calibrations before
+  S's landing is checked (§22.3); every type of S below the gate; `characterized` on S without S's evidence;
+  suggestions on an unmeasured S; a copy over a characterized or validated version of S.
+
+### 22.3 Mounting
+
+`DispenseService.mountTip(key, why, confirm, operator)` (synchronized) serves `POST /api/tip-setups/{key}/mount` and
+"I changed the needle" (`POST /api/needle/changed`, A/DispenseEndpoints.java:96, now a remount of S with why `needle
+changed`; D/DispenseService.java:395-400 calls it):
+
+1. **Refusals** (409 `refused`, first match): a dispense task runs (`A dispense task is running: change the tip when it
+   has finished, or press STOP.`); the pressure hold is on (`Switch the pressure off first: a needle comes off with the
+   pressure off.`); a pad calibration job has not ended, its readings included (A/PadCalibrationJobs.java:100-103:
+   `A pad calibration is {running | waiting for its readings}: finish or cancel it first (its records are the
+   {old}'s).`); the setup is retired (`The {name} is retired: bring it back first (Add a tip… › Retired tips).`) or
+   incomplete (`The {name} has no {ID | OD | form | taper} yet: fill it in first (Edit…).`); without `confirm`,
+   coupons of the outgoing setup wait for readings (409 `pending-coupons`:
+   `coupon1 carries 136 quarter-turn dots of the {old} waiting to be weighed: after the change they no longer count.
+   Type the readings first, or change the tip anyway.`). Nothing moves, so the machine need not be homed or idle.
+2. **Park** the outgoing setup: `parkedTips[old] = {profile, needleXyTrim, needleAnchor, needleZOffsetMm, parkedAtMs}`.
+3. **Bring in** the incoming setup's parked entry: its profile, trim, frame and offset (a remount keeps its own; a
+   setup without an entry, such as a completed placeholder, brings a copy of the outgoing profile). A profile that no
+   longer validates is replaced by the default `DispenseProfile` named `{name} (reset: {problem})`, and the event says
+   so.
+4. `cfg.tip` = the incoming setup's view; `needleChangedAtMs = now`.
+5. One config write, a `tip_mounts` row, event `TIP` `mounted the {new} (was the {old}): needle Z frame, offset and
+   landing to do`. The write validates as `updateConfig` (D/DispenseService.java:339-356) does but **skips its
+   stamping** of a changed start angle and a changed trim (:346-351): the incoming values are restored, not new
+   measurements, so `profile.startAngleSetAtMs` and `needleXyTrim.setAtMs` keep their old times (stamping them would
+   pass I11 and the XY rule without a measurement).
+
+Response: `{mounted, from, atMs, needleChangedAtMs, profile, stale: [...], next: [{label, href|fix}], text}`, text
+`{S} mounted at {HH:MM}. Next: record its needle Z frame and confirm the offset (Setup › Needle Z frame), then check
+where it lands (Setup › Dispenser & tip › Check the landing).`
+
+What goes stale (nothing is deleted; the parked values come back as starting values but count only once renewed):
+
+| what | rule | asks again |
+|---|---|---|
+| needle Z frame | `isNeedleAnchored()`: frame older than the change (D/DispenseConfig.java:444-447) | I4 `the needle was changed after the needle Z frame was recorded…` (D/Interlocks.java:183-186) |
+| touch-off / offset | `isNeedleTouchedOff()` (:449-458) | I4 `needle Z offset has not been set since the last needle change…` (:191-192) |
+| XY trim | **new** `isNeedleXyChecked()`: `needleXyTrim.setAtMs ≥ needleChangedAtMs`, or no change recorded | **new I4 rule** and the pad calibration refusal (below) |
+| dose records | made before the change or with another tip (D/DoseRecord.java:122-128) | the next calibration measures again |
+| dispense profile | switches with the setup (step 3) | plans stale (profile fingerprint) |
+| pad types | S's versions and stand-ins (§22.2) | plans stale (resolver fingerprint); `PLAN` |
+| start angle | stays per profile; I11 as today (set again after a controller connect) | only when the incoming profile's angle predates the last connect |
+| surfaces, purge row, places, calibration area, coupons | N1 heights and bed geometry, not the needle | nothing |
+
+- **New I4 rule** (in `Interlocks.check`, D/Interlocks.java:430, when `in.boardRun`): `I4: the needle was changed at
+  {HH:MM} ({S}) and where it lands has not been checked since: check the landing (Setup › Dispenser & tip) or keep the
+  XY trim (Setup › Needle Z frame)`. A bent and a straight tip land millimetres apart, and a remounted needle moves by
+  tenths (the bench: "re-check the needle offset after any tip change", mem:lumen-calibration-state).
+- **Pad calibrations** (auto, by hand, `measure: "tip"`) refuse the same way, after §12.2's regulator and paste checks:
+  `Check where the needle lands first (Setup › Dispenser & tip › Check the landing): the needle was changed at
+  {HH:MM}.` Weigh dots sit 3 mm inside a coupon's edge (§7.5) and ladder dots about 1 mm inside the area: a landing
+  millimetres off would put paste on the bed. The landing check itself, the touch-off, the old dot ladder, prime and
+  the test dot stay allowed (they are how the new needle is set up).
+- **Order after a mount** (the `next` list and Setup's `#tip-next`): needle Z frame (from K by the side camera, or both
+  tips touching: nothing dispenses) → confirm the offset (or touch off) → **check the landing** → measure its dots
+  (a setup without a dot table) → calibrate pad types.
+- **The PLAN text** of D/Interlocks.java:142-145 becomes `the tip changed after planning (the {S} was mounted at
+  {HH:MM}): plan again`; plans carry `setupKey` and `setupName` (D/DispensePlan.java).
+- **Keep the trim**: `POST /api/needle/xy-trim {keep: true}` stamps `setAtMs`, note `kept after the needle change at
+  {HH:MM}`; two presses with `Keep the XY trim ({dx}, {dy} mm) for the {S}: only if you saw its dots land where they
+  should.` The trim panel's Save (W/setup.js:642-686@pc) moves to the same route, which always stamps (`PUT
+  /api/config` stamps only a changed value, D/DispenseService.java:349-351).
+
+**The landing check** (`POST /api/pad-calibrations {measure: "landing"}`, a records-only job on §8's path, ≈ 45 s):
+eight dots of the profile's dose in one row on the calibration area, at 0, 2.0, 4.5, 7.5, 11.0, 15.0, 19.5 and 24.5 mm
+(every gap different, the smallest 2.0 mm), after the profile's purge. It needs I4 (frame and offset since the change),
+§12.2's regulator, paste and area checks (no coupons), and 5 mm of clean area on each side of the row: it reserves
+11 mm of the area's height. The top camera images two frames (the row's 24.5 mm and 5 mm beyond each end; a 1920 ×
+1080 frame covers ±5.8 mm across the row). `P/LandingFit` (new, pure) tries every shift (blob − target) within
+±5.5 mm and keeps the one that puts at least 6 of the 8 targets within 0.3 mm of a blob; the next-best shift must
+match at most 3. A wrong shift matches at most 2: within ±5.5 mm the only distance between two dots that occurs twice
+is 4.5 mm (0 → 4.5 and 15.0 → 19.5), and a shift across the row matches none. The landing is the mean of the matched
+pairs, with their scatter. Without such a shift: `Not enough dots found near their spots ({n} of 8): the needle
+may land more than 5 mm off, or not lay dots (check the needle Z frame). Look at the result photo.` The result gives
+`suggestedTrim = trim + landing`. Within ±1 mm on both axes it offers `Save as the XY trim ({dx}, {dy} mm)`
+(`POST /api/needle/xy-trim {dxMm, dyMm, note: "landing check {job}"}`, which always stamps `setAtMs`); beyond it:
+`The needle lands {dx}, {dy} mm off: beyond the ±1 mm trim. Move OpenPnP's N2 head offset by that much for this tip,
+then check the landing again.` (the trim's limit, D/DispenseConfig.java:704-705). Every pad calibration ladder records
+`landing_dx_mm` and `landing_dy_mm` too (P/LadderStats.java:420 has the mean already) and its result card offers the
+same button.
+
+**Add, edit, retire** (no motion): `POST /api/tip-setups` appends version 1 and writes `parkedTips[key]` with a copy of
+the profile it names (`profileFrom`: a setup's current profile, or `default` for `DispenseProfile`'s defaults) named
+`{profile name} · {new setup name}`: a recipe to start from, nothing measured (D2). A parked profile is edited on
+Profile once its setup is mounted (Profile edits `cfg.profile`). `PUT /api/tip-setups/{key}` appends a version; for S
+it also refreshes `cfg.tip` (refused while the engine is busy; an OD or minDotSteps change makes plans stale). Retire
+appends a version with `retired 1` (not S).
+
+### 22.4 Photos
+
+**Taking a picture of the tip** (`DispenseService.takeTipPicture(req)` → `Future<TipPictureResult>`, run kind
+`tip-picture`, tracker label `tip picture`, an engine task as `checkCleanPads`, D/DispenseService.java:1010-1024):
+
+1. Before it is queued (A/): `ctx.requireEngineIdle` (a pad calibration between steps included, A/ApiContext.java:92-100),
+   `requireNoPressureHold` (:83-89), `requireMachineIdle` (:106-110); the setup must be S (`Only the mounted tip can be
+   photographed: mount the {name} first.`); an up-looking camera must exist (`No bottom camera: OpenPnP has no camera
+   looking up.`).
+2. On the machine thread: refuses if the stop epoch moved (§7.8), if the pressure hold came on (`Switch the pressure
+   off first: the head moves to the bottom camera.`), or unless the machine is started and homed (`Home first: the head
+   moves to the bottom camera.`). It never homes by itself: a picture is not worth a home.
+3. N2 (the dispenser nozzle, `cfg.nozzle`) goes to the bottom camera's X/Y with OpenPnP's
+   `MovableUtils.moveToLocationAtSafeZ` (as D/DispenseService.java:3107), **target Z = the higher of
+   `cfg.travelSafeZMm` (31.5, D/DispenseConfig.java:75-76) and OpenPnP's safe Z for N2**: the needle never goes below
+   travel height, whatever its length and whether its frame is known yet. With the 22G's offset (−2.60 mm, session 4)
+   its end is then about 34 mm in N1 contact height, about 28 mm above the board and roughly 10 mm above the bottom
+   camera's focal plane (N1's 24.5 mm on the bench, mem:lumen-calibration-state): a wide-angle, deep-focus view
+   (session 4 found no focus peak on the needle, PT/software-autoregister.md), good enough for a record (§22.10 T1).
+4. `TipCamera.capture()`: OpenPnP's light-settle-capture of the up-looking camera (`CameraCapture.captureLit(camera,
+   null)`, V/CameraCapture.java:45-49: its light actuator on for the capture, as bottom vision does).
+5. The head stays at travel height over the camera (the next task moves from there at safe Z, as after a camera tour).
+6. The frame is stored (below) as kind `tip`, source `bottom-camera`, setup S, caption `Bottom camera {HH:MM}: the {S}
+   from below, at travel height`, `mm_per_px` the camera's at its focal plane (information only), linked to the
+   calibration records the request names; event `TIP` `picture {id} of the {S}`.
+
+About 5 s (≤ 400 mm at 200 mm/s, D/DispenseConfig.java:124, plus the camera's settle). STOP aborts it like any engine
+task (no photo). `D/TipCamera` is an interface (`isAvailable()`, `locationMm()`, `capture()`) with
+`D/OpenPnpTipCamera` (the first camera looking up, its own location) and `DispenseService.setTipCamera(TipCamera)` for
+tests, as `setDotImager` (D/DispenseService.java:618-619).
+
+**The result photo** (automatic, D4): `DoseBlocksResult` gains one `BlockPhoto` per block: the after frame of the
+block's first tile (D/DispenseService.java:2969-2973 captures it), scaled to at most 1600 px wide. The job stores them
+when each engine step ends (`svc.storeResultPhotos(jobId, result)`): kind `result`, source `top-camera`, `dose_steps`,
+`coupon_place` for weigh blocks, `x_mm`/`y_mm` the frame centre, caption `Top camera {HH:MM}: {n} {turn} test dots on
+the blank` or `… on {coupon}`. At the decision (§7.7) each group's record is linked to the photos of its chosen dose
+(blank and coupon). A records-only ladder (by hand, `measure`) stores its photos with the job only; the by-hand save
+links the newest of S's dose within `doseRecordMaxAgeH` (§22.5). At most 6 per job (4 blocks, 2 coupons); about
+300 KB each.
+
+**Uploads** (`POST /api/photos`): a picture from a phone reaches the page either through the phone's own browser (with
+`lanAccess` on, the API listens on the LAN, A/ApiServer.java:100-101; the file input then offers the phone's camera)
+or as a file copied to this computer. The browser first draws the file into a canvas (`createImageBitmap` with
+`imageOrientation: 'from-image'`, at most 2048 px on the long side) and sends a JPEG of quality 0.85, so a phone's
+orientation is right and its metadata (location) never leaves the browser. The engine checks again:
+
+| limit | value | refusal |
+|---|---|---|
+| type | JPEG (`FF D8 FF`) or PNG (`89 50 4E 47`), by the bytes, then decoded | 400 `not-an-image`: `This file is not a JPEG or PNG picture.` |
+| size | request body ≤ 8 MiB (the route's own limit, A/ApiServer.java:187-195) | 413: `The picture is larger than 8 MB: send a smaller one (phones can share a reduced size).` |
+| pixels | ≥ 64 px a side; ≤ 12,000 px a side and ≤ 40 Mpx, read from the header before decoding | 400 `The picture is {w} × {h} px: at least 64 and at most 12,000 px a side.` |
+| count | ≤ 6 tip pictures per calibration record; ≤ 20 pictures of a setup not linked to a calibration | 409 `too-many`: `The 25G straight has 20 pictures already: remove one first.` |
+| disk | all live photos ≤ 2 GB | 409 `disk`: `The pictures take 2.0 GB already: remove old ones first.` |
+
+**Storage** (`D/PhotoStore.java`, new, synchronized): every photo is re-encoded by the engine (JPEG quality 0.85, at most
+2048 px on the long side, no metadata) and a 320 px thumbnail made; both are written to a temporary file and moved
+into `<configDir>/instancelabs/photos/<yyyy-MM>/<first 20 hex of the JPEG's SHA-256>.jpg` and `….thumb.jpg`; then the
+row is inserted with that relative path. Equal pictures share a file (content-addressed). The DB backup does not copy
+the folder.
+
+**Serving** by id only: `GET /api/photos/{id}.jpg` and `GET /api/photos/{id}/thumb.jpg` read the row, refuse a removed
+photo (410 `removed`, with when and why), resolve the file under `<configDir>/instancelabs/photos/` (a path that leaves
+it: 500 `photo file outside its folder`), and answer `image/jpeg` (`Response.bytes`, A/ApiServer.java:310-312) with
+`Cache-Control: private, max-age=604800, immutable` (`Response.header`, :300-303; a photo never changes). Pages use
+them as `<img src>`: same origin, allowed by the CSP (`img-src 'self' data: blob:`, :523-526).
+
+**Removal**: `DELETE /api/photos/{id} {why?}` appends a `photo_removals` row and deletes the file and its thumbnail
+unless another live row shares them. Result photos are refused (409: `A result photo is the calibration's evidence: it
+stays.`); tip and setup pictures can go.
+
+### 22.5 The "calibrated for" label
+
+Every calibration record (`pad_calibrations` row) gets one, D4:
+
+- **Who writes a record:** the job's decision (today, A/PadCalibrationJob.java:1591-1672 through
+  `applyPadCalibration`, D/DispenseService.java:3121-3149: method `auto`), and, new, **the by-hand save**: the pad-type
+  editor saving S's version with its status raised to `characterized` or `validated`
+  (`DispenseService.savePadTypeByHand(version, label, photoIds, operator)`): method `by-hand`, outcome the new status
+  (`validated` joins `PadCalibrationRecord.OUTCOMES`, D/PadCalibrationRecord.java:13-18, for by-hand records only: the
+  job still never writes it), checks = the status-evidence rule that let it pass (`status-evidence`: the record ids;
+  `validated-by-you` for a validation), `job_id` `hand-{createdAt}`.
+- **Auto-fill** (`Texts.calLabel`, engine-side, at the time the record is written):
+  `{type} · {setup} · {dispenser} · {psi} psi · {paste}{ lot {lot}}`: the pad type as Profile names it (the family's
+  word and the name, W/padprofile.js:49-56@pc: `Chip 0603`; a suggested type keeps `SOT-23 · 1.48 × 0.60 mm`), S's name
+  and dispenser, the profile's pressure (`DispenseProfile.plain`, D/DispenseProfile.java:173-175) and the paste's name
+  and lot (D/PasteSpec.java:12-16). Example: `Chip 0603 · 22G bent taper · Vieweg DV-5005 · 18 psi · Loctite GC50
+  SAC305 T5` (77 characters; the user's "0603 for a 22 bent tip"). Over 160 characters the paste, then the type, is cut
+  with `…`. Stored as a `cal_labels` row with `auto 1`.
+- **Editing:** `PUT /api/pad-calibrations/{id}/label {label}` appends a row (`auto 0`, the operator); 1–160 characters
+  after trimming and joining spaces, control characters removed (400 `The label must be 1 to 160 characters.`).
+  `{auto: true}` appends the record's first automatic text again. A label is never part of a fingerprint, so editing
+  it never makes a plan stale; that is why it lives on the record, not on the pad type version.
+- **Shown:** on the result card (`Calibrated for`, or `Measured for` when the outcome is below `characterized`), in
+  Records, in Profile's other-tips list and in the pad type row's title (S's newest record of that version).
+
+### 22.6 Web API (conventions of WEB_API.md §2–3; new groups `A/TipSetupEndpoints.java`, `A/PhotoEndpoints.java`, registered after PadCalibrationEndpoints, A/ApiServer.java:121)
+
+| route | body / query | response; refusals |
+|---|---|---|
+| `GET /api/tip-setups` | `retired?` | `{mounted, mountedAtMs, needleChangedAtMs, setups: [setup view]}` |
+| `POST /api/tip-setups` | the §22.1 fields, `key?`, `profileFrom?` (a setup key or `default`; default S) | 201 `{setup, note: "Added. It has no pad profiles yet: mount it when it is on the dispenser."}`; 400 field text; 409 key or name taken |
+| `PUT /api/tip-setups/{key}` | fields to change | the setup view; 409 while the engine is busy (S only) |
+| `POST /api/tip-setups/{key}/retire` · `/unretire` | – | the setup view; 409 `The mounted tip cannot be retired.` |
+| `GET /api/tip-setups/{key}/mount-preview` | – | `{text, consequences: [...], warnings: [...], refusal}` (the change panel's text) |
+| `POST /api/tip-setups/{key}/mount` | `{confirm?, why?, operator?}` | §22.3 response; 409 §22.3 refusals, `pending-coupons` |
+| `POST /api/tip-setups/{key}/picture` | `{calibrationIds?, jobId?, wait?}` | 202 `{kind: "tip picture", started: true}`, with `wait` the photo (`ApiContext.awaitIf`, A/ApiContext.java:145); 409 §22.4 refusals |
+| `POST /api/needle/changed` (changed) | `{operator?}` | a remount of S: the mount response |
+| `POST /api/needle/xy-trim` | `{dxMm, dyMm, note?}` or `{keep: true}` | `{needleXyTrim, checked: true}`; 400 beyond ±1 mm; 409 while the engine is busy |
+| `POST /api/photos` | query `kind` (`tip`/`setup`), `setup`, `calibrations?` (comma-separated ids), `job?`, `caption?`; body the image | 201 `{photo}`; §22.4 refusals |
+| `GET /api/photos` | `setup?, calibration?, job?, kind?, removed?, limit?` | `[photo]`, newest first |
+| `GET /api/photos/{id}.jpg` · `/{id}/thumb.jpg` | – | `image/jpeg`; 404, 410 |
+| `DELETE /api/photos/{id}` | `{why?}` | `{removed: true, id}`; 409 result photo |
+| `PUT /api/pad-calibrations/{id}/label` | `{label}` or `{auto: true}` | `{id, label, auto, atMs}`; 400 |
+| `GET /api/pad-calibrations` (changed) | `typeKey?, setup?, limit?` | rows + `setupKey, setupName, method, label, labelAuto, photos` |
+| `POST /api/pad-calibrations` (changed), its `preview` | `measure?: "tip" \| "landing"` | as §12.2; `measure` = records only, no pad types |
+| `GET /api/pad-types` (changed) | – | `forSetup: {key, name}`; rows of S with `setupKey, standIn, nextVersion, label, others: [{setupKey, setupName, version, status, label, atMs, thumbUrl}]` |
+| `GET /api/pad-types/{key}` (changed) | – | `current` (S's or the stand-in), `history` (every setup, each with `setupKey`, `setupName`), `bySetup` |
+| `POST /api/pad-types/{key}/copy` | `{fromSetup}` | the new version; 409 §22.2 |
+| `POST`/`PUT /api/pad-types` (changed) | `calibration?: {label?, photoIds?}` | + `calibration: {id, label, photos}` when the status was raised |
+
+Setup view and photo view:
+
+```json
+{"key": "ad22tta-b", "version": 1, "name": "22G bent taper", "dispenser": "Vieweg DV-5005", "tipModel": "ADL AD22TTA-B",
+ "gauge": 22, "idMm": 0.41, "odMm": 0.72, "odSource": "assumed", "form": "bent", "bendDeg": 30, "taper": "tapered-plastic",
+ "lengthMm": null, "minDotSteps": 400, "model": "bench-22g", "complete": true, "retired": false, "mounted": true,
+ "lastMountedAtMs": 1793…, "summary": "ADL AD22TTA-B · 22G · bent 30° · tapered plastic · ID 0.41 mm · OD 0.72 mm (assumed)",
+ "profile": {"name": "18 psi half turn", "pressurePsi": 18, "netStepsPerDot": 800, "parked": false},
+ "padTypes": {"validated": 1, "characterized": 8, "provisional": 2},
+ "dots": {"source": "bench", "atMs": null, "mgPerStep": 0.00132,
+          "doses": [{"steps": 400, "diameterMm": [0.83, 1.00], "source": "model"}, {"steps": 800, "diameterMm": [1.16, 1.16], "source": "model"},
+                    {"steps": 1600, "diameterMm": [1.345, 1.345], "source": "model"}]},
+ "photos": [{"id": 12, "kind": "tip", "source": "bottom-camera", "atMs": 1793…, "url": "/api/photos/12.jpg",
+             "thumbUrl": "/api/photos/12/thumb.jpg", "caption": "Bottom camera 14:07: the 22G bent taper from below, at travel height",
+             "widthPx": 1920, "heightPx": 1080, "links": [41, 42], "removable": true}]}
+```
+
+`dots.source` is `bench`, `measured` (with `atMs`; `diameterMm` then the measured mean and d95, as §4.6's) or `none`.
+`GET /api/status` adds `dispense.tip` = `{key, name, setupVersion, dispenser, summary, mountedAtMs, dots: "bench" |
+"measured" | "none", thumbUrl}`, and `dispense.needle` gains `xyTrimChecked` and `changedTo`
+(A/DispenseEndpoints.java:152-156). The job view (`status.padCalibration`, §12.3)
+adds `measure`, `result.landing: {dxMm, dyMm, sdMm, n, found, trimNow, trimSuggested, withinTrim, text}`,
+`result.tipDots` (measure tip: per dose found, d̄, d95, threads/hops, spread, pass; `mgPerStep`), `result.photos`, and
+per group `calibrationId`, `label`, `labelAuto`, `photos`. The check's `tip` (A/PadProfileViews.java:131-132) adds
+`setupVersion`, `dispenser` and `dots`.
+
+### 22.7 Web UI
+
+New module `W/tipsetup.js` + `W/tipsetup.css` (loaded after `padprofile.js`, W/index.html:13, :25@pc): `IL.tips`
+(the Setup card, the change panel, the add dialog, picture and upload actions) and `IL.photos` (`normalize(file)`, a
+thumbnail strip, a full-size viewer `#photo-view` with its caption and a two-press Remove). Binding rules as §13: CSP,
+no inline handlers, never `prompt()`, `confirm()` or `showModal()`; machine motion two-press (`IL.press2`): **Take a
+picture** (verb `move to the camera`), **Mount** (verb `mount`), **Check the landing** and **Measure its dots** start
+from the pad-cal view like every calibration.
+
+**Setup › Dispenser & tip** (`section.card#card-tip`, first in the grid, W/setup.js:2145@pc; `SECTION_CARD.tip`,
+:186-187@pc):
+
+| id | content |
+|---|---|
+| `#tip-state` | `22G bent taper` (ok) · `Changed {HH:MM}: frame and landing to do` (block) · `Dots not measured` (need) · `Incomplete` (block) |
+| `img#tip-photo`, `#tip-photo-cap` | the newest `tip` or `setup` picture of S (thumbnail, opens `#photo-view`); without one `#tip-photo-none` `No picture of this tip yet.` |
+| `h3#tip-name`, `dl#tip-kv` | name; Dispenser; Tip (`ADL AD22TTA-B · 22G · bent 30° · tapered plastic`); Bore (`ID 0.41 mm · OD 0.72 mm (assumed)`); Smallest dot (`quarter turn (400 steps)`); Dots (`bench model (2026-10-28)` · `measured {date}: quarter 0.71, half 0.93, one turn 1.12 mm; 0.98 µg per step` · `not measured yet`); Pad types (`8 characterized, 1 validated, 2 provisional`); Recipe (`18 psi half turn`); Mounted (`since 2026-10-27 18:30`) |
+| `ol#tip-next` | after a change: the §22.3 order with a glyph and a fix button per step |
+| foot | `#btn-tip-change` `Change tip…` · `#btn-tip-add` `Add a tip…` · `#btn-tip-landing` `Check the landing…` · `#btn-tip-measure` `Measure its dots…` · `#btn-tip-picture` `Take a picture` · `#btn-tip-upload` `Upload a photo` (+ hidden `input#tip-file`, `accept="image/jpeg,image/png"`) · `#btn-tip-edit` `Edit…` |
+
+Bring-up (W/setup.js:213-319@pc): a step `Dispenser & tip` after Settings (ok: the name; need: `dots not measured`, fix
+`Measure its dots…`; block: `incomplete`, fix `Edit…`). The trim step (:286-290@pc) becomes `block` `landing to
+check` when `needle.xyTrimChecked` is false, fixes `Check the landing…` and `Keep the XY trim` (two presses).
+`STAMPED_TOP` (:24-26@pc) gains `tip` and `parkedTips`.
+
+**Change tip** (panel view `tip-change`, `?panel=tip-change`): lead `Pick the tip that is on the dispenser now, or the
+one you are about to put on. Each tip keeps its own pad profiles and dispense profile.`; `ul#tip-list`
+(`li[data-setup][aria-selected]`, radio behaviour): thumbnail, name, summary, `{n} characterized`, `Mounted` on S,
+`incomplete` on placeholders; `#tip-change-what` (the mount preview: `Nothing dispenses until you record the 25G
+straight's needle Z frame and check where it lands. The 22G bent taper keeps its 9 calibrated pad types; the 25G
+straight has none yet. Recipe: 18 psi half turn · 25G straight (copied 2026-10-29). Plans made before go stale.`);
+`label.check#tip-change-anyway` (only with waiting coupons: `Change anyway: coupon1's dots will not count`);
+`#btn-tip-mount` `Mount the {name}`; `#tip-change-why`. Toast after: `{name} mounted: record its needle Z frame next.`
+
+**Add a tip** (in-page dialog `#dlg-tip-add`, opened as `#dlg-padtype` is, W/profile.js:725@pc; also Edit with the key
+read-only): `#ta-preset` (fills the form only: the needles on hand, chart values below, OD `assumed`), `#ta-name`,
+`#ta-dispenser`, `#ta-model`, `#ta-gauge`, `#ta-id`, `#ta-od`, `#ta-od-src`, `#ta-form` + `#ta-bend`, `#ta-taper`,
+`#ta-length`, `#ta-mindot`, `#ta-profile-from` (`Start its dispense profile from`: the setups' profiles, or `the
+defaults (18 psi half turn)`), `#ta-notes`, `#ta-photo` (file) + `img#ta-photo-img`, more: `#ta-key`; `#ta-save` `Add
+the tip`. The photo is uploaded after the setup is created (`kind=setup`); if that fails the dialog says `The tip was
+added without its picture: {reason}`.
+
+| preset | ID mm | OD mm | form | taper | length |
+|---|---|---|---|---|---|
+| 22G bent 30° tapered (ADL AD22TTA-B) | 0.41 | 0.72 | bent 30° | tapered plastic | – |
+| 25G / 27G / 30G straight 0.5 in | 0.25 / 0.20 / 0.15 | 0.51 / 0.41 / 0.31 | straight | steel | 12.7 |
+| 25G / 27G / 30G bent 45° 0.5 in | 0.25 / 0.20 / 0.15 | 0.51 / 0.41 / 0.31 | bent 45° | steel | 12.7 |
+| 23G / 21G / 18G / 14G straight 0.5 in | 0.33 / 0.51 / 0.84 / 1.54 | 0.64 / 0.82 / 1.27 / 1.83 | straight | steel | 12.7 |
+
+**Profile** (W/profile.js@pc): `#pf-h1-sub` (:1189@pc) reads ` · for the {S}`; the profile card's sub (:473@pc)
+`{profile} · the recipe of the {S}: every dot on a board and on the purge row`. Pad types: the Status column is S's
+(a stand-in's badge `not started`, title `Not calibrated for the {S} yet`); a column `Other tips` (`td.pt-c-tips`,
+COLS :577-579@pc) with `span.pt-tip-chip[data-setup]` `{name}: {status}` (two, then `+n`; a chip opens the side panel
+at `#pt-side-tips`); the Edit button's title and the editor's version note use `nextVersion` (today `version + 1`,
+:629, :733@pc: versions now count across setups). The side panel (`renderTypePanel`, :1045@pc) gains
+`section#pt-side-tips` `Other tips`: per setup `div.pt-tip[data-setup]` with the version, status, label, a result-photo
+thumbnail and `button[data-action=copy-from]` `Start from this plan` (shown while S's version is below
+`characterized`; `Saves a provisional version for the {S} with this plan: {n} {turn} dots per pad. Nothing measured
+comes with it.`). The editor (`#dlg-padtype`, via `IL.pt.editorExtras`) gains `fieldset#pt-calfor` `Calibrated for`,
+shown when the status rises to `characterized` or `validated`: `#pt-label` (prefilled), `#pt-cal-photos` (a
+`label.check` per photo: the guide ladder's result photo of this dose ticked, the tip pictures), `#btn-pt-picture`,
+`#btn-pt-upload` (+ `input#pt-file`).
+
+**Needs a profile** (W/padprofile.js:325-356@pc): the title reads `Needs a profile` + `span#pt-needs-for` ` for the 22G
+bent taper`; with an unmeasured S, `div.notebox#pt-needs-measure` (the §22.2 sentence) and `#btn-needs-measure`
+`Measure its dots… · ≈ 8 min`; rows whose suggestion is `measure-tip` show it and no calibrate button. The texts of
+§3.4 already name the tip through `profileCheck.tip.name` (W/padprofile.js:213, :412@pc), now the setup's name (the
+fallback `22G tip` becomes `22G bent taper`). The suggestion card gains `details.disclose#pt-sugg-tips` `Calibrated for
+other tips ({n})` with `Start from this plan`.
+
+**The result card** (`pad-cal` view, W/padprofile.js:995-1047, :1216-1263@pc), new parts at the top of
+`#pcal-result-more`:
+
+| id | content |
+|---|---|
+| `section#pcal-for` | heading `Calibrated for` (`Measured for` below characterized); per record `div.pcal-for__g[data-calibration]`: `input#pcal-label-{id}` (maxlength 160, prefilled), `#btn-pcal-label-{id}` `Save the label` (shown when edited), `button.link[data-action=label-auto]` `Use the automatic label`, `figure.pcal-photo` (`img`, the result photo of its dose, opens `#photo-view`; caption) |
+| `div#pcal-tip-photos` | `Pictures of the tip`, lead `Add a picture of the tip: later it shows which needle this was calibrated for.`; thumbnails (`img.pcal-tipthumb`, a two-press `×` each), `#btn-pcal-picture` `Take a picture of the tip`, `#btn-pcal-upload` `Upload a photo` (+ `input#pcal-file`): linked to every record of the job |
+| `#pcal-landing` | `The needle lands {dx} mm {right/left} and {dy} mm {above/below} its targets ({n} dots, scatter {sd} mm).` + `#btn-pcal-trim` `Save as the XY trim ({dx'}, {dy'} mm)`, or the beyond-the-trim notebox (§22.3) |
+| `table#pcal-tipdots` | measure tip: Turn · Found · Mean · d95 · Threads · Spread · Pass; then `{mg} µg per step ({n} readings{, confirmed})` |
+
+**Records** (W/records.js@pc): the Calibrations tab (:138-146, :221-236@pc) lists pad calibrations in
+`table#rec-pcals-t`: When · Calibrated for (the label; title `{type} v{n}`) · Tip · How (`automatic` / `by hand`) ·
+Outcome (badge) · Pictures (`span.rec-thumbs`, three, then `+n`); a row opens `#records/calibrations/p{id}` with the
+label (editable: `#rec-label`, `#btn-rec-label`), setup, type and versions, checks, the photos full width
+(`figure.rec-photo`) and the evidence ids. The q-model table moves into `details.disclose#rec-cals-old` `Older
+calibration records (volume model, records only)`. The Boards table gains a `Tip` column (`runs.setup_key`);
+`runTitle` (:19-35@pc) names `tip-picture` `Tip picture`.
+
+**Core** (W/core.js@pc): the readiness Needle item (:1003-1027@pc) gains, after the drift check, `{state: 'block',
+value: 'landing', short: 'needle landing', detail: 'The needle was changed at {HH:MM} ({S}): where it lands has not been
+checked.', fixes: [Check the landing…, Keep the XY trim]}`; `TASK_WORD`/`taskParts` (:1370-1373, :1396@pc) add
+`tip picture` → `Tip picture · moving to the bottom camera`.
+
+**Calibrate** (W/calibrate.js@pc): the guide (`#setup-guide`) shows the ladder step's result photo (`img.guide-photo`)
+under `table#pcal-ladder`.
+
+### 22.8 Tests
+
+**Unit** (JUnit, `mvn -B -o -T1 test`):
+
+- **`T/dispense/DispenseDbMigrationV3Test`**: a v2 file made with the v2 DDL and rows (pad types with `tip_key` null,
+  `ad22tta-b` and `x25`; dose records; pad calibrations; runs) → open → `schema_info` 3; the tables, view and triggers
+  (UPDATE and DELETE abort on each); the columns; the seeded setup; a placeholder `x25` (incomplete); every old row
+  equal before and after (`SELECT *` compared); the `.v2-*.bak`; a second open changes nothing; a v1 file goes to 3 in
+  one open; a fresh database starts at 3.
+- **`T/dispense/TipSetupsTest`**: `typesFor` (S's highest versions; stand-ins with the plan cleared and the template's
+  version; null `tip_key` = seeded; numbering across setups), the fingerprint per setup, key derivation and
+  uniqueness, every field check and its text, reconcile (an unknown `cfg.tip.key`; a typed OD), copy rules.
+- **`T/dispense/MountTest`**: park and restore of profile, trim, frame and offset; `needleChangedAtMs`; I4 refuses
+  dispensing until frame and offset; older records stale; a `tip_mounts` row and event; each refusal in order with its
+  text, `pending-coupons` and `confirm`; a remount keeps the parked values; an invalid incoming profile is reset.
+- **`T/dispense/PhotoStoreTest`**: JPEG and PNG accepted; GIF and garbage refused; a 20,000 px header refused before
+  decoding; a JPEG with an EXIF GPS segment stored without APP1; 4000 × 3000 → 2048 × 1536 and a 320 px thumbnail;
+  equal pictures share a file; removal keeps a shared file; a row whose path leaves the folder is refused; counts and
+  the disk cap.
+- **`T/dispense/TipPictureTaskTest`** (SimMachine, a fake `TipCamera` at (217.13, 152.32) that draws a ring): the
+  recorded G-code moves N2 to the camera's X/Y and never below travel Z; refused unhomed, under the pressure hold, for
+  a setup not mounted; STOP during the move leaves no photo; the row and its links.
+- **`T/dispense/InterlocksXyTest`**: a board run refused with the stale trim (text); the landing check, touch-off and
+  prime allowed; a pad calibration refused (text); keep and save stamp; the 3 → 4 config migration stamps a finished
+  needle change and not an open one.
+- **`T/dispense/DotTableTest`**: the newest passing optical record per dose of S at S's recipe, any age; failed
+  records, other setups, another recipe and the other simulator flag ignored; mass per step from the newest confirmed
+  pair.
+- **`T/padprofile/LandingFitTest`**: shifts up to ±5 mm in X and Y found within 0.02 mm with 2 of 8 dots missing and one
+  foreign blob; no answer with 5 matches; no aliasing at any gap; the second-best match ≤ 3 on 1,000 seeded rows.
+- **`T/padprofile/SuggesterSetupTest`**: the bench setup gives exactly today's results (every §1.9 fixture row, a golden
+  file from a4bb6d20d); an unmeasured setup gives `measure-tip` and no `tip` groups; a measured table gives plans from
+  its d95 and mass; another setup's anchor and its reason; a stand-in's below-gate text; a copied plan is `low`.
+- **`T/padprofile/ProfileCheckTest`** (changed): `Tip.g22()` is named `22G bent taper` and every exact text follows; new
+  texts: `belowGate` for a setup (`{type} is not calibrated for the {S} yet (status: not started; characterized for the
+  22G bent taper). Boards need pad types that are at least characterized: calibrate it for this tip automatically or by
+  hand.`), `measure-tip`, the landing texts.
+
+**API and SIM** (SimMachine + the real ApiServer, as T/api/ApiServerSimTest.java:50-75):
+
+- **`T/api/TipSetupApiSimTest`**: add with `profileFrom`, list, edit, retire; mount: response, stale list, status
+  `dispense.tip`, the plan stale (`PLAN` text), the needle readiness; `PUT /api/config {tip}` refused; mount back:
+  chip-0603's characterized version is S's again (no new version); copy from another setup; `GET /api/pad-types` per
+  setup with `others`.
+- **`T/api/PhotoApiSimTest`**: upload (201, served, thumbnail), each refusal, list filters, delete (410 after), a result
+  photo cannot be deleted; the picture route with the fake camera (`wait`), and its refusals.
+- **`T/api/PadCalibrationSimTest`** (added cases): the §14.3 job on a second setup with `SimPaste` per tip (below):
+  the 25G writes chip-0603 v(n+1) for the 25G and the 22G's version is untouched; a result photo per dose, linked; the
+  auto label `… · 25G straight · Vieweg DV-5005 · 18 psi · Loctite GC50 SAC305 T5`; the label edit; a by-hand save
+  writes a `by-hand` record with its label and photos; `measure: "landing"` finds a 0.4 mm `landingBiasMm` and
+  `suggestedTrim`; `measure: "tip"` fills the dot table.
+
+**What the SIM fakes:**
+
+- **`S/SimTipCamera`** (new, an OpenPnP `ReferenceCamera` looking up, like OpenPnP's SimulatedUpCamera,
+  O/machine/reference/camera/SimulatedUpCamera.java:108-162): a session gets it with one more `--xml-set
+  ".//camera[@looking='Up']@class=org.openpnp.instancelabs.sim.SimTipCamera"`, as the top camera is installed
+  (src/test/web/run-webui-sim-test.sh:57-59@pc; `il_sim_scene.py` exports it as `TIP_CAMERA_XML_SET` next to
+  `CAMERA_XML_SETS`, src/test/sim/il_sim_scene.py:52-55). Its frame is
+  1280 × 960 px at 0.02 mm/px, dark grey (25, 25, 25); when N2 is in view it draws the mounted setup end-on (read
+  in-process from the engine, `DispenseService.get()`, D/DispenseService.java:161, as S/SimBoardRenderer.java:204-215
+  reads the pad types): a grey disc of its OD with a black bore of its ID, an amber ring of 2.5 mm for
+  `tapered-plastic`, for `bent` a grey capsule of length `lengthMm · sin(bendDeg)` (6 mm when not recorded) towards
+  the hub, blurred by its height above the focal plane, and the tag `SIM bottom camera`. With N2 elsewhere the frame
+  is empty, so a test proves the head went there; two setups give different rings, so it proves the picture is of the
+  mounted one. JUnit uses the fake `TipCamera` instead (the SimMachine has no camera).
+- **`SimPaste` per tip**: the scene's `paste` gains `byTip: {"<setup key>": {mRevMg, footprint: {c, e}, …}}`, chosen by
+  the mounted key (in-process, as above); `il_sim_scene.py --paste-by-tip 25g-straight:mRevMg=1.6,c=0.6`. The 25G
+  then lays smaller dots than the 22G, so measuring its dots and calibrating it give numbers of its own.
+
+**Playwright** (`src/test/web/tip-setups.playwright.cjs`, after `pad-profile.playwright.cjs` in
+`run-webui-sim-test.sh`, ≤ 5 min; the session launched with the tip camera's `--xml-set` and the padcal scene written
+with `--paste-by-tip`):
+
+0. Set-up as `pad-profile.playwright.cjs` step 0.
+1. Setup › Dispenser & tip: `#tip-name` `22G bent taper`, `#tip-kv` has `Vieweg DV-5005` and `bench model`,
+   `#tip-photo-none` shown.
+2. Add a tip: `#btn-tip-add`, preset `25G straight 0.5 in` fills ID 0.25 and OD 0.51; a PNG fixture into `#ta-photo`
+   shows `#ta-photo-img`; `#ta-save` → `GET /api/tip-setups` has two, the 25G with one `setup` photo that loads.
+3. Change tip: `#btn-tip-change` → `li[data-setup="25g-straight"]` → `#tip-change-what` names the 22G's profiles;
+   `#btn-tip-mount` twice → `status.dispense.tip.key` is `25g-straight`; the readiness Needle item is `block`; Profile's
+   `#pf-h1-sub` says `for the 25G straight`; chip-0603's badge is `not started` with
+   `span.pt-tip-chip[data-setup="ad22tta-b"]` `22G bent taper: characterized`; the plan shown is stale.
+4. Plan the padcal board: `#pt-needs-for` says `for the 25G straight`; `#pt-needs-measure` is shown.
+5. Needle frame and offset through the API (as PW does); `#btn-tip-landing` → pad-cal → start (two presses) →
+   `#pcal-landing` matches `/lands/`, `#btn-pcal-trim` → the trim step is `ok`.
+6. `#btn-needs-measure` → start → the readings (SIM balance, typed as §14.4 step 8) → `table#pcal-tipdots` has 3 rows;
+   `#tip-kv` says `measured`.
+7. Calibrate the SW group → `#pcal-label-{id}` starts `SW_SPST_3.9x2.9mm` and contains `25G straight · Vieweg DV-5005`;
+   edit and save → `GET /api/pad-calibrations` has the new label with `labelAuto` false; `figure.pcal-photo img`
+   loaded (`naturalWidth > 0`); `#btn-pcal-picture` twice → one `img.pcal-tipthumb`; `#btn-pcal-upload` with a JPEG
+   fixture → two.
+8. Records › Calibrations: the first row of `#rec-pcals-t` shows the edited label and ≥ 2 thumbnails; its panel shows
+   the photos.
+9. Mount the 22G again: chip-0603 `characterized` with its old version; the SW type `not started` with
+   `25G straight: characterized`.
+10. Remove the uploaded photo (two presses) → gone, 410 from its URL; the result photo has no remove button.
+11. No JavaScript errors and no native dialogs (its own checks).
+
+### 22.9 Implementation slices (one build wave after `il/rc1`)
+
+Branch `il/tip-setups` off `il/rc1` once `finish-pr2`'s gate has passed and `il/rc1` holds fixround1, fixround1b,
+fixround2 and pc-web. Three builders in parallel worktrees on disjoint files; `ts-api` and `ts-web` code against the
+contracts below, `ts-web` with devproxy fixtures; merges in the order of the table; green at every merge:
+`env -u DISPLAY -u WAYLAND_DISPLAY mvn -B -o -q -T1 -Dmaven.test.skip=true package`, `mvn -B -o -T1 test`,
+`src/test/web/run-webui-sim-test.sh`. PR #3, stacked on PR #2.
+
+| key | merges | owns |
+|---|---|---|
+| `ts-engine` | 1st | D/DispenseDb (schema 3, the six tables, `currentPadTypes(setup)`, `currentPadType(key, setup)`, `typeKeyExists`, `padCalibrations(type, setup, limit)`, photos, links, removals, labels, mounts), D/TipSetup, D/TipSetups, D/PhotoStore, D/Photo, D/TipCamera, D/OpenPnpTipCamera, D/TipPictureRequest, D/TipPictureResult (new); D/TipSpec, D/DispenseConfig (schema 4, `parkedTips`, `isNeedleXyChecked`), D/DispenseService (`getPadTypes`, `padType`, `padTypeResolver`, `mountedTip`, `mountTip`, `setXyTrim`, `takeTipPicture`, `setTipCamera`, `storePhoto`, `storeResultPhotos`, `savePadTypeByHand`, `applyPadCalibration` with setup, auto label and links; `markNeedleChanged` → remount), D/DoseRecord, D/DoseRecords (`dotTable`), D/PadInstances, D/PadType (`ORIGIN_COPIED`, transient `standIn`), D/PadCalibrationRecord, D/PadTypeResolver (fingerprint), D/Interlocks (I4 XY, PLAN text, unmeasured dose), D/DispensePlanner, D/DispensePlan, D/DoseBlocks, D/DoseBlocksResult (block photos), D/RunResult, B/BoardArtStore (one line); P/Tip, P/Suggester, P/Suggestion (`MEASURE_TIP`), P/ProfileCheck, P/Texts, P/TypeInfo, P/Decider, P/LadderStats (landing per axis), P/Anchor, P/CheckInputs (`moreAnchors`), P/LandingFit (new); S/SimTipCamera (new), S/SimPaste (`byTip`), S/SimScene (parses it), S/SimBoardRenderer (one line); src/test/sim/il_sim_scene.py (`TIP_CAMERA_XML_SET`, `--paste-by-tip`); the unit tests of §22.8 and the existing tests the 22G's new name touches |
+| `ts-api` | 2nd (rebased on ts-engine) | A/TipSetupEndpoints, A/PhotoEndpoints (new); A/ApiServer (two registrations), A/DispenseEndpoints (status `tip` and `needle` fields, the protected settings, `needle/changed`, `needle/xy-trim`), A/PadTypeEndpoints (per setup, `others`, `nextVersion`, copy, the by-hand record, key checks across setups), A/PadProfileEndpoints (mounted current type), A/PadProfileViews (tip view), A/PadCalibrationEndpoints (`measure`, label route, list fields), A/PadCalibrationJob (`measure` modes, landing, tip dots, result photos, labels and links, the XY refusal, unknown sizes and masses), A/PadCalibrationJobs (`activeText()` for the mount), A/Views (setup and photo views); T/api/TipSetupApiSimTest, PhotoApiSimTest (new), PadCalibrationSimTest and PadProfileApiSimTest (added cases) |
+| `ts-web` | 3rd (its Playwright on the merged engine and API) | W/tipsetup.js, W/tipsetup.css (new); W/setup.js, W/padprofile.js, W/padprofile.css, W/profile.js, W/records.js, W/core.js, W/calibrate.js, W/index.html; src/test/web/tip-setups.playwright.cjs, src/test/web/fixtures/tips/* (new), two lines in run-webui-sim-test.sh (the tip camera's `--xml-set`, the new test); T/api/TipSetupUiSimTest (the static files are served, as PadProfileUiSimTest) |
+| `ts-integration` | 4th | src/test/sim/il_sim_acceptance.py (`tips`: add, mount, frame, landing, measure, calibrate, picture, label, Records, mount back), il_ui_session.py (`--tip-camera`); WEB_API.md (§22.6), DISPENSE_API.md (schema 3, config schema 4, mounting, photos), UI_DESIGN.md (§22.7), REAL_MACHINE_TODO.md (§22.10), W/DEV_NOTES.md (`tipsetup.js`, `IL.tips`, `IL.photos`, the `tip-change` view, `#dlg-tip-add`); fixes after the merge |
+
+**Contracts:** §22.1's tables, columns and setup fields; `TipSetups.typesFor`; the `DispenseService` methods named
+above (`mountTip(key, why, confirm, operator) → MountResult`, `takeTipPicture(TipPictureRequest) →
+Future<TipPictureResult>`, `storePhoto(PhotoStore.Input) → Photo`, `savePadTypeByHand(PadType, String label,
+List<Long> photoIds, String operator) → PadCalibrationRecord`, `setXyTrim(Double dx, Double dy, boolean keep, String
+note)`); `P/Tip`'s methods; every route and JSON of §22.6; the ids of §22.7.
+
+### 22.10 What only the real machine can confirm (to REAL_MACHINE_TODO.md, a new section after item 52; renumber if session 4's items land first)
+
+- **T1 The bottom-camera picture at travel height** (N2 Z 31.5): focus, scale and glare of the ring light; does it
+  tell the bent 22G from a straight 25G from below? If not, the phone picture is the record; a lower picture height
+  would need the needle frame first.
+- **T2 Landing offset between tips:** the straight 25G and a 45° bent 25G against the 22G bent taper, in mm. Within the
+  ±1 mm trim, or does OpenPnP's N2 head offset have to change per tip (then per-setup head offsets are the next
+  design)?
+- **T3 The landing check on the real blank:** 8 dots found and fitted, its 11 mm reserve, and the purge dots of a needle
+  whose landing is not known yet (they may miss the purge spots by millimetres).
+- **T4 The needle frame of each new tip** (K by the side camera, session 4's method) and the touch-off of a needle whose
+  landing moved: does the touch-off still find its dots (F9's fix)?
+- **T5 Needle length and travel height:** the end of a straight 12.7 mm tube against the tapered 22G's at travel Z (side
+  camera); clearance over feeders and boards.
+- **T6 Mass per step of the 25G, 27G and 30G at 18 psi:** how far below the 22G's 1.32 µg/step (slip in the auger against
+  the tube's resistance, about 1/r^1.8 and its length)? Measure its dots weighs it.
+- **T7 Pressure for fine tips:** does 18 psi feed a 27G or 30G (the DV-5005 allows 21.7 psi)? Does the 30G clog (0.15 mm
+  bore ≈ 6 T5 balls of 25 µm across)?
+- **T8 The smallest dot per tip:** the quarter turn's thread rate at the hop with a 25G (§1.5's rule was the 22G's).
+- **T9 OD of each tip** (bottom or side camera) → `odSource measured`, which moves the same-pad pitch.
+- **T10 Start angle after a tip change:** the ripple peak (ψ ≈ 299°) should stay with the screw, which a needle change
+  does not turn.
+- **T11 Photos in practice:** a phone picture through the LAN page (`lanAccess`) or copied to the PC, its orientation,
+  disk use per month.
+- **T12 A remount of the same 22G model** ("I changed the needle"): how far does the landing move (0.1–0.4 mm
+  expected)? Is "Keep the XY trim" ever right without the landing check?
+
+### 22.11 Choices this section makes (defaults; the main thread may reverse any)
+
+1. **Anchors are shared by all setups** (§22.2): the amount a joint needs is the paste's and the pad's; only the dose
+   that delivers it is per tip. Reversal: anchors per setup, so a new tip starts from the bench anchor only.
+2. **The XY trim goes stale at every needle change** and blocks board runs and pad calibrations until the landing is
+   checked or the trim kept: one more step after "I changed the needle" on the 22G too (D3 read literally).
+3. **The tip picture is taken at travel height only**: safe for any needle length and before its frame is known;
+   possibly soft (T1).
+4. **Only the seeded setup uses §1's model**; every other setup measures its dots before it gets suggestions.
+5. **Result photos cannot be removed** (they are the evidence of a `characterized` version); tip and setup pictures can.
+6. **The label belongs to the calibration record**, not the pad type version, so editing it never makes a plan stale.
+7. **Pad rules, package mappings and the "paste partly" option stay shared** (they describe pads and packages).
+8. **A stand-in takes the type's newest pad definition** from any setup, a retired family included.
