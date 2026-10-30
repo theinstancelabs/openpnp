@@ -708,7 +708,7 @@ public class DispenseDbTest {
                 + "\"locations\":{\"waste\":{\"x\":1,\"y\":2,\"z\":3}}}";
         DispenseConfig c = DispenseConfig.fromJson(v2);
         assertEquals(DispenseConfig.SCHEMA_VERSION, c.schemaVersion);
-        assertEquals(3, c.schemaVersion);
+        assertEquals(4, c.schemaVersion, "every step from 2 on: the tip setups' schema (§22.1)");
         assertEquals(0.10, c.gapMm(), 0, "needleGapMm is gone: the gap is the profile's");
         assertEquals(new DispenseProfile().fingerprint(), c.profile.fingerprint());
         assertEquals(2000, c.travelAccelMmS2, 0);

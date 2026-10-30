@@ -668,8 +668,8 @@ final class PadCalibrationJob {
      * count and R7's demand, not a claim).
      */
     static double countMgPerDot(Tip tip, int s) {
-        if (tip.knows(s)) {
-            return tip.massMg(s);
+        if (tip.benchModel || tip.mgPerStep != null) {
+            return tip.massMg(s); // the bench's, or the weighed mass per step of this tip (any of its doses)
         }
         return DoseModel.massMg(s) * (tip.idMm > WIDE_BORE_MM + 1e-9 ? WIDE_BORE_MASS : 1);
     }
@@ -2027,7 +2027,7 @@ final class PadCalibrationJob {
         double perDot = countMgPerDot(tip, coupon.steps);
         double expected = found * perDot;
         // §22.2: a tip never weighed at this recipe is counted with the bench's mass: plausible at 0.1 to 10 times it
-        boolean plausible = tip.knows(coupon.steps) ? LadderStats.plausible(mg, found, perDot)
+        boolean plausible = tip.benchModel || tip.mgPerStep != null ? LadderStats.plausible(mg, found, perDot)
                 : mg >= 0.1 * expected && mg <= 10 * expected;
         if (!plausible) {
             throw new ApiException(409, "implausible", String.format(Locale.ROOT, "You typed %.3f g − %.3f g = %.0f mg; "

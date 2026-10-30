@@ -619,8 +619,9 @@ final class Views {
         }
         else {
             String fp = p == null ? null : p.doseFingerprint();
-            m.put("dots", dots(DoseRecords.dotTable(db.doseRecords(null, 0), s.key, fp, cfg.paste.key,
-                    svc.isSimulatorConfirmed(), db.flaggedJobs()), s.minDotSteps, cfg.bStepsPerRev));
+            boolean sim = svc.isSimulatorConfirmed();
+            m.put("dots", dots(DoseRecords.dotTable(db.doseRecordsOf(s.key, fp, cfg.paste.key, sim), s.key, fp,
+                    cfg.paste.key, sim, db.flaggedJobs()), s.minDotSteps, cfg.bStepsPerRev));
         }
         m.put("mainPhoto", photo(db.mainPhoto(s.key)));
         List<Map<String, Object>> photos = new ArrayList<>();

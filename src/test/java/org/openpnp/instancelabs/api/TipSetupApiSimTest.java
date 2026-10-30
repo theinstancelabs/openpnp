@@ -108,6 +108,15 @@ public class TipSetupApiSimTest {
         assertFalse(TipSim.ok(t.post("/api/tip-setups/" + TipSim.K25 + "/unretire", "{}")).get("retired")
                 .getAsBoolean());
         TipSim.refused(t.call("PUT", "/api/tip-setups/nope", "{\"odMm\":1}"), 404, "not-found");
+
+        // Add and mount: the tip is on the dispenser now
+        TipSim.Res both = t.post("/api/tip-setups", "{\"name\":\"18G straight taper\",\"gauge\":18,\"idMm\":0.84,"
+                + "\"odMm\":1.27,\"form\":\"straight\",\"taper\":\"tapered-plastic\",\"mount\":true}");
+        assertEquals(201, both.status, both.toString());
+        JsonObject mounted = both.json().getAsJsonObject("mount");
+        assertEquals("18g-taper", TipSim.str(mounted, "mounted"), mounted.toString());
+        assertTrue(both.json().getAsJsonObject("setup").get("mounted").getAsBoolean());
+        assertEquals("18g-taper", TipSim.str(t.dispense().getAsJsonObject("tip"), "key"));
     }
 
     @Test
