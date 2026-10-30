@@ -2432,8 +2432,10 @@
         el('div', { class: 'run-refused__t', title: ref.message || '' }, el('b', { text: 'Refused ' + IL.fmtTime(ref.finishedAtMs ? ref.finishedAtMs - S.skewMs : Date.now()) + ': ' }), ref.message || 'the run was refused'),
         m ? el('div', { class: 'btn-row', style: 'margin-top:8px' }, IL.fixesForCode(m[1], s, m[2]).map((f) => fixBtn(f, 'btn--sm'))) : null);
     });
-    // needs you (extras first, fixed order), ready tiles, items known after planning
-    const needs = r.needs.filter((x) => x.state !== 'wait');
+    // needs you: NEXT first (the blocked item the verdict names, else the first not ready), then extras and the items in
+    // their fixed order; ready tiles; items known after planning
+    const needs0 = r.needs.filter((x) => x.state !== 'wait');
+    const needs = r.next && needs0.includes(r.next) ? [r.next].concat(needs0.filter((x) => x !== r.next)) : needs0;
     const run = s.run;
     const ccKey = S.cleanCheck ? S.cleanCheck.checkedAtMs : '';
     const checking = !!(run && run.running && run.label === 'clean-pad check');

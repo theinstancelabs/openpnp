@@ -353,7 +353,9 @@ bar `#ready-segbar` in the fixed order of §9.1 (colours by state; `you` attesta
 `#plan-interlocks`: `13 interlocks: 10 ok · 1 needs you · 2 not fitted` + `All 13` (opens the Interlocks view).
 When every plan interlock passes, this line reads `All interlocks pass for this plan · 11 ok · 2 not fitted`.
 
-**Needs you (n)**: one card per not-ready item, in the fixed order, the first carrying a black `NEXT` tag. Card:
+**Needs you (n)**: one card per not-ready item, in the fixed order, the first carrying a black `NEXT` tag (as built, rc1
+review: the `NEXT` card is the first blocked item, the one the verdict names, else the first not-ready item, and it
+comes first; the nav subline is its short name). Card:
 glyph, title in plain words, detail with numbers, the I-code at the right, fix-it buttons (44–46 px). Pads clean
 card = `#clean-result`; its first sentence is machine-readable for tests and always one of:
 `All 160 pads are clean (13:09).` · `158 of 160 pads clean, 2 with paste left (13:09).` ·

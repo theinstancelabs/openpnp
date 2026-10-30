@@ -1391,8 +1391,9 @@
     const notReady = all.filter((x) => !x.ready);
     const blocked = all.filter((x) => x.state === 'block');
     const count = items.filter((x) => x.ready).length;
-    // NEXT: the first not-ready item in the fixed order; items that only wait for a plan never come first
-    const next = notReady.find((x) => x.state !== 'wait') || notReady[0] || null;
+    // NEXT: the first blocked item, the one the verdict names (rc1 review: NEXT, the nav and the verdict agree), else
+    // the first not-ready item in the fixed order; items that only wait for a plan never come first
+    const next = blocked[0] || notReady.find((x) => x.state !== 'wait') || notReady[0] || null;
     let verdict;
     // the strip drops the part after " · " when it would run under STOP (cells--t2); the title keeps it
     // every dot of the plan is on its board already (the server's paste): the next action is the next board, not a run

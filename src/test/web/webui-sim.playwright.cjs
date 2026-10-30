@@ -1277,6 +1277,19 @@ async function runFirstDots(page, n) {
       check('Plan without fiducial correction: no registration, #reg-correction says so',
         await page.evaluate(() => IL.S.plan.registration === null) && /^no fiducial correction/.test(await textOf(page, 'reg-correction')), await textOf(page, 'reg-correction'));
 
+      // NEXT, the nav subline and the verdict agree (rc1 review): with an item blocked (here the purge row not set) and the
+      // regulator still to read, NEXT is the blocked item the verdict names, not the regulator
+      {
+        const nx = await page.evaluate(() => {
+          const s = JSON.parse(JSON.stringify(IL.S.status));
+          s.dispense.purgeRow = Object.assign({}, s.dispense.purgeRow, { defined: false });
+          const r = IL.readiness(s, IL.S.plan, Object.assign(IL.readyCtx(), { attest: {} }));
+          return { next: r.next && r.next.key, short: r.next && r.next.short, verdict: r.verdict.text, regulator: r.items.find((x) => x.key === 'regulator').state };
+        });
+        check('NEXT is the blocked item the verdict names (purge row), not the regulator that only needs you', nx.regulator === 'need' && nx.next === 'purge'
+          && nx.verdict === 'Blocked · ' + nx.short, nx);
+      }
+
       // 13. What the engine refuses, the UI locks or says (the final round's engine fixes, E1 and E2). Pure checks on the
       // status: OpenPnP homing or jogging by itself (409 "OpenPnP is busy"), an upload reading its file
       // (status.boardImport.reading, 409 on every engine endpoint); a clean-pad check refused at its start (the pressure
