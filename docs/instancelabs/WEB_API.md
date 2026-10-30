@@ -134,7 +134,7 @@ Also added for Register board and the home at run:
 | `machine.zCheck` | `{needed, stale: [{what, atMs}], homeAtMs, reference: {name, x, y, z} \| null, last, estimateS}`: the Z data measured before the last home and the point the check would touch. |
 | `run.detail` | Structured progress. Register board: `{stage, stepsDone, stepsPlanned, estimatedSecondsLeft, home: {needed, whyCode, why, estimateS}, fiducials: [{name, expected, found, state, iterations, frames}], seat, movedMm, probes: [{n, x, y, state, z, lastZ, alternate}]}`; the blank probe: the same without fiducials and seat; a board run: `{stage: home \| z check \| dispense, home, zCheck}`. |
 | `run.nextPlanId` | Register board: the plan made at its end (another page loads it once). |
-| `run.label` | Adds `board registration`, `blank probe`, `z check` (`runs` kinds `board-registration`, `surface-probe`, `z-check`), and `pad calibration` while a pad calibration's engine step runs (`runs` kinds `pad-ladder`, `pad-weigh`; `run.detail` `{stage, home, blocks, dots, stepsDone, stepsPlanned}`). |
+| `run.label` | Adds `board registration`, `blank probe`, `z check` (`runs` kinds `board-registration`, `surface-probe`, `z-check`), and `pad calibration` while a pad calibration's engine step runs (`runs` kinds `pad-ladder`, `pad-weigh`; `run.detail` `{stage, home, blocks, dots, stepsDone, stepsPlanned, estimatedSecondsLeft}`). |
 | `padCalibration` | The pad calibration of this session (running, waiting for the readings, or the last one that ended), else null: the job view of §3.5. Next to `run`; a second browser shows the same job. |
 
 The run view (`lastRun`, `/api/runs/last`, a run's `result`) adds `profile` (the profile used), `cleanCheck`
@@ -454,19 +454,19 @@ Jargon is explained in tooltips (`title`/`abbr`).
   Run › Checks, Needs a profile, the suggestion card, Use, the pad inspector, Calibrate automatically through the
   readings (the test is the operator at the SIM balance) to the result, the by-hand guide, Calibrate › Pad
   calibration, STOP at the readings; one filled button per screen; screenshots at 1440 and 1280 px, light and dark).
-- `python3 -I src/test/sim/il_sim_acceptance.py padcal --prefix P --api-port N` (also in `all`): PC §14.5 in three uinav
-  SIM sessions on this jar. **main**: `padcal.kicad_pcb` uploaded (NEEDS_PROFILE, a reason per package), saved and
-  planned; the check's groups (SW_SPST new 2 × ½ turn, Test_Strip new 2 × ¼ turn, TestChip_A Use 0603, the WSON's two
-  groups not dispensable); Use; Calibrate automatically with the script as the operator at the SIM balance (weigh, wipe,
-  weigh, readings typed); both types characterized at the SIM's 2.30 mg per turn (not the model's 2.11); the plan made
-  at the end run with the WSON skipped: per-pad SIM paste within 30 % of the plan's predicted mass, the two dose blocks
-  (phase and flush dots on the purge row, every block start at 298° by the controller's count), the M114 `Count` reply
-  in the controller log equal to the run's B count; `pad_calibrations` and the weighings `simulated`; a reconnect then
-  refuses the quarter-turn block (I11) and makes the quarter-turn camera records stale. **nano**: the Arduino Nano's
-  upload (40 pads `tip`, 15 with a plan, 5 of them partial), Calibrate automatically for its two groups (SW_SPST
-  characterized; LED_0805 stays provisional: one turn is 47 % over its amount in the SIM, 33 % on the machine), its
-  next plan run (the switch's 4 dots). **controls**: every other negative control of §11.7 ends with its reason.
-  About 25 min.
+- `python3 -I src/test/sim/il_sim_acceptance.py padcal --prefix P --api-port N` (also in `all`): PC §14.5 in three
+  uinav SIM sessions on this jar. **main**: `padcal.kicad_pcb` uploaded (NEEDS_PROFILE, a reason per package), saved
+  and planned; the check's groups (SW_SPST new 2 × ½ turn, Test_Strip new 2 × ¼ turn, TestChip_A Use 0603, the WSON's
+  two groups not dispensable); Use; Calibrate automatically with the script as the operator at the SIM balance (weigh,
+  wipe, weigh, readings typed); both types characterized at the SIM's 2.30 mg per turn (not the model's 2.11); the
+  plan made at the end run with the WSON skipped: the SIM paste of every pad within 30 % of the plan's predicted mass
+  and each package's mean within 10 %, the two dose blocks (phase and flush dots on the purge row, every block start
+  at 298° by the controller's count), the M114 `Count` reply in the controller log equal to the run's B count;
+  `pad_calibrations` and the weighings `simulated`; a reconnect then refuses the quarter-turn block (I11) and makes
+  the quarter-turn camera records stale. **nano**: the Arduino Nano's upload (40 pads `tip`, 15 with a plan, 5 of them
+  partial), Calibrate automatically for its two groups (SW_SPST characterized; LED_0805 stays provisional: one turn is
+  47 % over its amount in the SIM, 33 % on the machine), its next plan run (the switch's 4 dots). **controls**: every
+  other negative control of §11.7 ends with its reason. About 25 min.
 - `src/test/sim/il_ui_session.py start --jar … --name …`: a seeded SIM session for UI work (machine homed, needle
   frame, blank surface and purge row, start angle, a planned board with its surface tied); `--padcal` adds the SIM
   paste, coupons and balance, the calibration area and coupon places, and plans `padcal.kicad_pcb` (Needs a profile
