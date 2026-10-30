@@ -1913,7 +1913,7 @@ public final class DispenseService {
      * machine affine, decide the seat, touch the board with N1's vacuum (or re-touch 3 stored points of
      * a same seat), save the surface tied to the registration and plan the board again. A registration
      * once stored stays (also after a refused probe or a STOP) and the board is planned with it. A board
-     * with fewer fiducials than needed is refused, or probed only when the request says so
+     * with fewer fiducials than needed is refused; one without any is probed only when the request says so
      * ({@link RegisterRequest#probeOnly}, F10). The Future never throws for task failures; see the result.
      */
     public Future<RegistrationResult> registerBoard(RegisterRequest req) throws Exception {
@@ -1963,7 +1963,9 @@ public final class DispenseService {
         BoardFeatures f = BoardFeatures.of(board, new PadTypeResolver(db.currentPadTypes(), db.packageMappings()),
                 req.fiducialHints);
         String few = fewFiducials(f, c.fiducialCheck.minFiducials);
-        if (few != null && !req.probeOnly) {
+        // probe only (F10) is for a board without a single fiducial: one that has some is fitted by them, or refused
+        boolean onlyProbe = few != null && req.probeOnly && f.fiducials.isEmpty();
+        if (few != null && !onlyProbe) {
             throw refused(few);
         }
         DotImager im = imager();
@@ -1972,7 +1974,7 @@ public final class DispenseService {
         }
         boolean sim = isSimulatorConfirmed();
         res.simulated = sim;
-        if (few != null) {
+        if (onlyProbe) {
             probeOnly(req, res, t, f, few, sim);
             s.ok();
             return;
@@ -2196,8 +2198,8 @@ public final class DispenseService {
     }
 
     /**
-     * Register board on a board with fewer fiducials than it needs (F10), asked with probe "always" on a plan
-     * without a registration: no fiducial fit and no registration stored; N1 probes the board's targets where the
+     * Register board on a board without fiducials (F10), asked with probe "always" on a plan without a registration:
+     * no fiducial fit and no registration stored; N1 probes the board's targets where the
      * plan puts the board (each spot looked at first), the surface is tied to that seat (a board planned at another
      * X/Y, rotation or side is not tied to it), and the board is planned again on it.
      */
@@ -2217,7 +2219,7 @@ public final class DispenseService {
         res.probeOnly = true;
         t.stage = "probe";
         pr.needed = true;
-        pr.why = probeOnlyNote(f.fiducials.size(), c.fiducialCheck.minFiducials);
+        pr.why = PROBE_ONLY_NOTE;
         Probe p = new Probe(t.s, t::aborted, pt -> t.point("probe", Math.max(1, t.points.size()), pt));
         pr.window = VacuumProber.preflight(c, true, "the board top Z", req.nominalZ, p.travelZ, p.settings,
                 p.n1.getNozzle());
@@ -2246,10 +2248,7 @@ public final class DispenseService {
     }
 
     /** The result's word for a probe-only Register board (F10). */
-    static String probeOnlyNote(int fiducials, int min) {
-        return (fiducials == 0 ? "no fiducials" : String.format(Locale.ROOT, "%d of the %d fiducials needed", fiducials,
-                min)) + ": probed only, X/Y as planned";
-    }
+    static final String PROBE_ONLY_NOTE = "no fiducials: probed only, X/Y as planned";
 
     /**
      * Every target of the board probed (§5.2), the plane checked and saved as the board surface tied to {@code tie}:

@@ -987,7 +987,8 @@ public class RegistrationSimTest {
      * give it a 'board' surface): Register with probe "always" on a plan without a registration probes it only, where
      * the plan puts it (home if needed, the camera look and N1 at its targets), stores no registration, ties the
      * surface to that seat and plans the board again on it, which then runs; a plan of the board 1 mm further is not
-     * tied to it until probed there. The other probe modes keep the fiducial refusal, which names the way out.
+     * tied to it until probed there. The other probe modes keep the fiducial refusal, which names the way out. A STOP
+     * during a probe only vents N1 and saves nothing.
      */
     @Test
     public void aBoardWithoutFiducialsIsProbedOnlyWhereItIsPlanned() throws Exception {
@@ -1066,14 +1067,50 @@ public class RegistrationSimTest {
         assertEquals("OK", again.get("status").getAsString(), again.toString());
         assertTrue(again.get("probeOnly").getAsBoolean());
         assertTrue(again.getAsJsonObject("home").get("done").getAsBoolean(), "homed first: " + again);
-        assertTrue(ok(get("/api/plan/" + again.get("newPlanId").getAsString())).getAsJsonObject("interlocks")
-                .get("ok").getAsBoolean());
+        String p2 = again.get("newPlanId").getAsString();
+        assertTrue(ok(get("/api/plan/" + p2)).getAsJsonObject("interlocks").get("ok").getAsBoolean());
+
+        // a STOP while N1 is down at a point of a probe only (slow reads): ABORTED in the probe, N1 vented by the I1
+        // shutdown, no surface saved (the last one stays), nothing planned again, still no registration (F10 review)
+        long surfaceAt = boardSurfaceAt();
+        sim.server.delayBeforeOkMs.put("M261", 25L);
+        sim.server.mark();
+        started(post("/api/plan/" + p2 + "/register", "{\"probe\":\"always\"}"));
+        waitStatus(x -> {
+            JsonObject r = x.get("run").isJsonNull() ? null : x.getAsJsonObject("run");
+            JsonObject d = r == null || r.get("detail").isJsonNull() ? null : r.getAsJsonObject("detail");
+            if (d == null || !"probe".equals(d.get("stage").getAsString()) || !d.has("probes")) {
+                return false;
+            }
+            for (JsonElement e : d.getAsJsonArray("probes")) {
+                JsonObject p = e.getAsJsonObject();
+                if ("now".equals(p.get("state").getAsString()) && !p.get("lastZ").isJsonNull()) {
+                    return true; // N1 is down at a probe step
+                }
+            }
+            return false;
+        });
+        ok(post("/api/stop", null));
+        assertAborted(waitStatus(RegistrationSimTest::finished), p2, "probe");
+        List<String> l = commands(sim.server.sinceMark());
+        int stop = Collections.indexOfSubList(l, ControllerCommands.STOP_SEQUENCE);
+        assertTrue(stop >= 0, "the I1 shutdown vents N1: " + l);
+        assertTrue(l.subList(stop, l.size()).stream().noneMatch(x -> x.startsWith("G1 Z")), "no Z after the M410");
+        assertTrue(l.lastIndexOf("M107 P1") > l.lastIndexOf(ControllerCommands.LEFT_VALVE_ON), "the valve off");
+        assertTrue(l.lastIndexOf("M107 P0") > l.lastIndexOf(ControllerCommands.LEFT_PUMP_ON), "the pump off");
+        JsonObject stopped = ok(get("/api/plan/" + p2)).getAsJsonObject("registrationRun");
+        assertTrue(stopped.get("probeOnly").getAsBoolean(), stopped.toString());
+        assertFalse(stopped.getAsJsonObject("probe").get("saved").getAsBoolean(), "never a partial surface");
+        assertTrue(stopped.get("newPlanId").isJsonNull(), stopped.toString());
+        assertEquals(surfaceAt, boardSurfaceAt());
+        assertEquals(0, ok(get("/api/config")).getAsJsonObject("boardRegistrations").entrySet().size());
+        sim.server.delayBeforeOkMs.clear();
     }
 
     /**
      * F10 keeps every refusal of a board that has its fiducials: probe "always" on a plan without a registration
      * still finds them first (a hidden one refuses before N1 moves), and registers by them. Probe only is not offered
-     * on a plan that carries a registration.
+     * on a plan that carries a registration, nor for a board whose fiducials are too few for the setting.
      */
     @Test
     public void probeOnlyNeverSkipsTheFiducialsOfABoardThatHasThem() throws Exception {
@@ -1102,6 +1139,17 @@ public class RegistrationSimTest {
         assertEquals(409, few.status, few.toString());
         assertTrue(few.body.contains("REG: the board has 3 fiducials (FID1, FID2, FID3); Register board needs at least "
                 + "4") && !few.body.contains("probe it only"), few.toString());
+        // nor on a plan without a registration: a board with fiducials, too few for the setting, is never probed
+        // without them (F10 review)
+        String p2 = ok(post("/api/plan", planBody("none"))).get("planId").getAsString();
+        assertFalse(ok(get("/api/plan/" + p2)).getAsJsonObject("registrationTargets").get("probeOnly").getAsBoolean());
+        sim.server.mark();
+        Res none = post("/api/plan/" + p2 + "/register", "{\"probe\":\"always\"}");
+        assertEquals(409, none.status, none.toString());
+        assertTrue(none.body.contains("REG: the board has 3 fiducials (FID1, FID2, FID3); Register board needs at "
+                + "least 4") && !none.body.contains("probe it only"), none.toString());
+        assertFalse(commands(sim.server.sinceMark()).stream().anyMatch(x -> x.startsWith("G") || x.startsWith("M106")),
+                "refused before anything moves");
     }
 
     /** The first probe target of a plan's registration preview (board and machine mm, alternates). */

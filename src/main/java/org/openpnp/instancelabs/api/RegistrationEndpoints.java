@@ -69,8 +69,8 @@ final class RegistrationEndpoints {
     /**
      * POST /api/plan/{planId}/register {"wait"?, "probe"?: "auto" | "always" | "never"}: home if needed,
      * the fiducials, the probe, plan again. Obvious misconfigurations are refused (409) before anything
-     * moves. A board with fewer fiducials than Register board needs is refused, except with "probe": "always" on a
-     * plan without a registration: then it is probed only (F10), where the plan puts it.
+     * moves. A board with fewer fiducials than Register board needs is refused; one without any, with "probe":
+     * "always" on a plan without a registration, is probed only (F10), where the plan puts it.
      */
     Object registerBoard(ApiServer.Request r) throws Exception {
         JsonObject b = r.json();
@@ -91,10 +91,10 @@ final class RegistrationEndpoints {
         DispenseConfig c = svc.getConfig();
         BoardFeatures f = BoardFeatures.of(nominal.getBoard(), svc.padTypeResolver());
         String few = DispenseService.fewFiducials(f, c.fiducialCheck.minFiducials);
-        boolean probeOnly = few != null && probeOnlyPlan(e) && mode == RegisterRequest.ProbeMode.ALWAYS;
+        boolean probeOnly = probeOnlyBoard(f, few, e) && mode == RegisterRequest.ProbeMode.ALWAYS;
         if (few != null && !probeOnly) {
-            throw ApiException.refused(few + (probeOnlyPlan(e) ? " Or probe it only, where it is planned: Register with "
-                    + "probe \"always\"." : ""));
+            throw ApiException.refused(few + (probeOnlyBoard(f, few, e) ? " Or probe it only, where it is planned: "
+                    + "Register with probe \"always\"." : ""));
         }
         if (!svc.hasTopCamera()) {
             throw ApiException.unavailable("REG: no top camera in OpenPnP: Register board needs it. Check the board X/Y "
@@ -129,9 +129,12 @@ final class RegistrationEndpoints {
         return ApiContext.awaitIf(Json.bool(b, "wait", false), f2, Views::registration, accepted);
     }
 
-    /** A plan without a registration (registration "none", or "auto" with nothing stored): probe only may run on it. */
-    private static boolean probeOnlyPlan(PlanStore.Entry e) {
-        return e.source.get("registrationId") == null;
+    /**
+     * Probe only may run (F10): a board without a single fiducial (one with some is fitted by them, or refused), on a
+     * plan without a registration (registration "none", or "auto" with nothing stored).
+     */
+    private static boolean probeOnlyBoard(BoardFeatures f, String few, PlanStore.Entry e) {
+        return few != null && f.fiducials.isEmpty() && e.source.get("registrationId") == null;
     }
 
     /** The plan's board at its nominal seat; 409 when it is gone, bottom-up or its registration no longer applies. */
@@ -244,8 +247,8 @@ final class RegistrationEndpoints {
                 probes.add(Views.map("n", t.n, "bx", t.bx, "by", t.by, "x", t.x, "y", t.y, "alternates", alts));
             }
             out.put("error", few);
-            // too few fiducials on a plan without a registration: Register with probe "always" probes it only (F10)
-            out.put("probeOnly", few != null && probeOnlyPlan(e));
+            // no fiducials, on a plan without a registration: Register with probe "always" probes it only (F10)
+            out.put("probeOnly", probeOnlyBoard(f, few, e));
         }
         catch (Exception x) {
             out.put("error", MachineEndpoints.rootMessage(x));

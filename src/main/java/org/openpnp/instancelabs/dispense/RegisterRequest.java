@@ -33,9 +33,9 @@ public final class RegisterRequest {
     public double nominalZ;
     public ProbeMode probe = ProbeMode.AUTO;
     /**
-     * Probe only (F10): the board has fewer fiducials than Register board needs, the plan carries no registration
-     * and the probe is ALWAYS. No fiducial fit: N1 probes the board's targets where the plan puts the board, and the
-     * surface is tied to that seat. Ignored for a board with enough fiducials (its checks all stand).
+     * Probe only (F10): the board has no fiducials, the plan carries no registration and the probe is ALWAYS. No
+     * fiducial fit: N1 probes the board's targets where the plan puts the board, and the surface is tied to that seat.
+     * Ignored for a board with fiducials (they are fitted, or too few are refused: its checks all stand).
      */
     public boolean probeOnly;
     public Replanner replanner;
