@@ -874,8 +874,15 @@ public class RegistrationSimTest {
         assertEquals(409, post("/api/surfaces/board/probe", "{}").status);
         JsonObject t = ok(get("/api/surfaces/blank/probe-targets"));
         assertTrue(t.get("error").isJsonNull(), t.toString());
+        // §10.2 case 17 (rc1 review: not exercised): a paste dot under the first target: the look sends N1 to an alternate
+        JsonObject t0 = t.getAsJsonArray("targets").get(0).getAsJsonObject();
+        scene.blankDots.add(new double[] {t0.get("x").getAsDouble(), t0.get("y").getAsDouble()});
         JsonObject blank = ok(post("/api/surfaces/blank/probe", "{\"wait\":true}")).getAsJsonObject("result");
+        scene.blankDots.clear();
         assertEquals("OK", blank.get("status").getAsString(), blank.toString());
+        JsonObject b0 = blank.getAsJsonArray("points").get(0).getAsJsonObject();
+        assertEquals(1, b0.get("alternate").getAsInt(), b0.toString());
+        assertTrue(b0.get("notes").toString().contains("paste, a part or print seen"), b0.toString());
         assertTrue(blank.get("saved").getAsBoolean());
         int n = blank.getAsJsonArray("points").size();
         assertTrue(n >= 4 && n <= 6, blank.toString());
@@ -895,7 +902,7 @@ public class RegistrationSimTest {
         assertTrue(zc.get("needed").getAsBoolean(), zc.toString());
         // rc1 review (AR §2.4 step 1): paste on every stored point (purge dots beside the row, the blank slid): the check
         // touches none of them and refuses with what to do; paste on the first only: it touches the next one
-        JsonArray stored = blank.getAsJsonArray("points");
+        JsonArray stored = blank.getAsJsonObject("surface").getAsJsonArray("points"); // the Z check's references
         for (JsonElement e : stored) {
             scene.blankDots.add(new double[] {e.getAsJsonObject().get("x").getAsDouble(), e.getAsJsonObject().get("y")
                     .getAsDouble()});
