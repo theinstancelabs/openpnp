@@ -920,6 +920,41 @@ public class PadCalibrationSimTest {
         assertTrue(str(result(job), "sentence").contains("were not found"), job.toString());
     }
 
+    /**
+     * rc1 review (tests), PC §7.4: the control's tolerance in a job (only the pure LadderStats.control was tested). The
+     * SIM paste gives 1.6 mg per turn instead of 2.30 (a starved screw, a low regulator): the half-turn control dots are
+     * found but about a fifth under the bench's 1.06 mm², and the job stops after the ladder with the control's text.
+     */
+    @Test
+    public void aStarvedScrewFailsTheControlAndTheJobStops() throws Exception {
+        start(sc -> paste(sc).addProperty("mRevMg", 1.6));
+        JsonObject job = ladder(800, "chip-0603");
+        assertEquals("failed", str(job, "state"), job.toString());
+        String sentence = str(result(job), "sentence");
+        assertTrue(sentence.contains("the control half-turn dots are ") && sentence.contains(" % below the bench's 1.06 mm²: "
+                + "check the regulator (18 psi) and the paste before calibrating"), sentence);
+    }
+
+    /**
+     * rc1 review (tests), PC §7.3 step 5: the look at every spot before the dots (only the pure PadLadder.bareAt was
+     * tested). Blank wiped pressed without wiping: the area's band starts at 0 again over the old dots, and the next
+     * ladder is refused before anything is laid, naming the spots it saw paste on.
+     */
+    @Test
+    public void aLadderOnAnAreaThatWasNotWipedIsRefused() throws Exception {
+        start(null);
+        JsonObject first = ladder(800, "chip-0603");
+        assertEquals("done", str(first, "state"), first.toString());
+        ok(call("POST", "/api/calibration-area/reset", "{}")); // "Blank wiped", and nothing was wiped
+        int laid = SimPaste.Store.forFile(sceneFile).deposits(null).size();
+        JsonObject again = ladder(800, "chip-0603");
+        assertEquals("failed", str(again, "state"), again.toString());
+        String sentence = str(result(again), "sentence");
+        assertTrue(sentence.contains("the calibration area is not clean or not flat under ") && sentence.contains(
+                "wipe it, or move the calibration area (Calibrate › Pad calibration)"), sentence);
+        assertEquals(laid, SimPaste.Store.forFile(sceneFile).deposits(null).size(), "nothing laid on the old dots");
+    }
+
     @Test
     public void thePurgeAbsorbsDeadFirstDots() throws Exception {
         start(sc -> paste(sc).addProperty("idleDeadS", 0));
