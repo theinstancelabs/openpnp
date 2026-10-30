@@ -2700,8 +2700,11 @@
   // core fix-its
   IL.fix('connect', { run: () => IL.api('POST', '/api/machine/enable'), ok: 'Connecting to the controller…',
     gate: (s) => (S.online === false ? IL.lockReason(s) : null) });
-  IL.fix('home', { press2: 'home', run: () => IL.api('POST', '/api/machine/home'), ok: 'Homing…',
-    gate: (s) => IL.lockReason(s, { connected: true }) });
+  // the home's own answer (wait): a home that fails says why (`homing failed: …`, the pressure hold, a STOP before it
+  // started), as the strip alone cannot; the engine waits up to 5 min for it
+  IL.fix('home', { press2: 'home', gate: (s) => IL.lockReason(s, { connected: true }),
+    run: () => { IL.toast('Homing…'); return IL.api('POST', '/api/machine/home', { wait: true }, { timeoutMs: 320000 }); },
+    ok: (r) => (r && isNum(r.n1RaisedFromZ) ? 'Homed: N1 was raised from Z ' + IL.fmt(r.n1RaisedFromZ, 2) + ' mm first.' : 'Homed.') });
   IL.fix('I11-confirm', {
     gate: (s) => IL.lockReason(s, { connected: true, pressureOff: false }),
     run: async () => { const p = await IL.api('POST', '/api/screw/start-angle', {}); IL.planRefreshSoon(); return p; },

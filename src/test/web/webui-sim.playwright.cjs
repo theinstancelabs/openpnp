@@ -1271,6 +1271,7 @@ async function runFirstDots(page, n) {
           });
         };
         let st = await zStep('frame');
+        await page.screenshot({ path: path.join(OUT, 'z-moved-1-frame.png') });
         check('Z moved 1: the blocker names the move, the remedy in its order, and offers "Open Needle Z frame"', st.step === 'frame' && !st.canRun && !!st.card
           && st.card[0] && st.card[0][0] === 'go:#setup/needle' && /^Z moved 0\.\d\d mm/.test(st.text || '')
           && /Record the needle frame again \(Setup › Needle Z frame\), probe the blank, touch off and register the board again\./.test(st.text || ''), st);
@@ -1283,6 +1284,7 @@ async function runFirstDots(page, n) {
         await waitStatus(page, (x) => x.dispense.needle.anchor && Math.abs(x.dispense.needle.anchor.surfaceZMm - 10.8) < 1e-6, 10000);
         await page.evaluate(() => IL.go('#run/checks'));
         st = await zStep('blank');
+        await page.screenshot({ path: path.join(OUT, 'z-moved-2-blank.png') });
         check('Z moved 2: after the needle frame, the fix is "Probe the blank…"', st.step === 'blank' && !!st.card && st.card[0] && st.card[0][0] === 'view:probe-blank', st);
         await page.click('#chk-needs .ri[data-key="I4-z"] button[data-fix="view:probe-blank"]');
         // the view keeps "Do it by hand" open from step 10: the automatic probe is the one this step wants
@@ -1296,11 +1298,13 @@ async function runFirstDots(page, n) {
           { status: bz.run.status, message: bz.run.message });
         await page.evaluate(() => { if (IL.panel.isPushed()) IL.panel.close(); IL.go('#run/checks'); });
         st = await zStep('touch-off');
+        await page.screenshot({ path: path.join(OUT, 'z-moved-3-touch-off.png') });
         check('Z moved 3: after the blank, "Run a touch-off" or the frame\'s own offset', st.step === 'touch-off' && !!st.card
           && st.card.some(([f]) => f === 'go:#calibrate/touch-off') && st.card.some(([f, t]) => f === 'needle-confirm' && /^Confirm frame offset [−-]?\d+\.\d{3} mm$/.test(t)), st);
         await page.click('#chk-needs .ri[data-key="I4-z"] button[data-fix="needle-confirm"]');
         await waitStatus(page, (x) => x.dispense.needle.touchedOff, 10000);
         st = await zStep('register');
+        await page.screenshot({ path: path.join(OUT, 'z-moved-4-register.png') });
         check('Z moved 4: after the touch-off, "Register board"', st.step === 'register' && !!st.card && st.card[0] && st.card[0][0] === 'register', st);
         const t8 = Date.now() + (await page.evaluate(() => IL.S.skewMs));
         await press2(page, '#chk-needs .ri[data-key="I4-z"] button[data-fix="register"]');
@@ -1321,6 +1325,7 @@ async function runFirstDots(page, n) {
         await page.evaluate((b) => IL.api('POST', '/api/plan', b).then((p) => IL.setPlan(p)), { source: 'file', file: src.file, x: src.x, y: src.y, z: lowZ, rotation: src.rotation || 0 });
         await page.evaluate(() => { if (IL.panel.isPushed()) IL.panel.close(); IL.go('#run/probe'); });
         await page.waitForFunction(() => /cannot reach that height/.test(document.getElementById('register-why').textContent), null, { timeout: 20000 }).catch(() => {});
+        await page.screenshot({ path: path.join(OUT, 'register-board-too-low.png') });
         const rw = await page.evaluate(() => ({ text: document.getElementById('register-why').textContent, shown: !document.getElementById('register-why').hidden,
           links: Array.from(document.querySelectorAll('#register-why button')).map((b) => b.textContent.trim()), locked: document.getElementById('btn-register').disabled }));
         check('Register board: a board top 1.7 mm under the needle frame is refused before anything moves, with Board step · Needle Z frame · Do it by hand',
