@@ -107,6 +107,12 @@
     if (need.engine && (!d.running || !d.available)) rows.push({ kind: 'block', title: 'Dispenser available', value: 'unavailable', title2: d.unavailableReason || '' });
     if (need.frame) rows.push(n.anchored ? { kind: 'ok', title: 'Needle Z frame recorded', value: IL.fmtSigned(n.anchorOffsetMm, 3) + ' mm' }
       : { kind: 'block', title: 'Needle Z frame recorded', value: 'not set', fix: { href: '#setup/needle', label: 'Needle Z frame' } });
+    // after a failed Z check the blank's dots wait for the needle frame and the blank to be measured again (the
+    // remedy's order, IL.zMoved): the touch-off comes after them
+    const zm = need.zmoved ? IL.zMoved(s) : null;
+    if (zm && (zm.step === 'frame' || zm.step === 'blank')) {
+      rows.push({ kind: 'block', title: 'Z moved at the home: measured again', value: zm.step === 'frame' ? 'needle frame next' : 'the blank next', fix: zm.fixes[0] });
+    }
     if (need.touched) rows.push(n.touchedOff ? { kind: 'ok', title: 'Needle touched off', value: n.setAtMs ? IL.fmtTime(n.setAtMs - S.skewMs) : 'yes' }
       : { kind: 'need', title: 'Needle touched off', value: 'not yet', fix: { href: '#calibrate/touch-off', label: 'Touch-off' } });
     place = place || d.blankLocationName;
@@ -515,7 +521,7 @@
     showErrs(p.errs);
     IL.setText($('to-plan'), p.gaps ? IL.plural(p.gaps.length, 'dot') + (place ? ' on “' + place + '”' : '') + ' at gaps ' + p.gaps.map((g) => IL.fmt(g, 3)).join(', ') + ' mm'
       + ' · one profile dot each' + (IL.num('to-rot') ? ' (here ' + IL.fmt(IL.num('to-rot'), 2) + '°)' : '') : 'Enter the gaps to see the dots.');
-    const blockers = renderPrereqs($('to-pre'), prereqs(s, { machine: true, engine: true, frame: true, place: true, surface: true, pressure: true }, place));
+    const blockers = renderPrereqs($('to-pre'), prereqs(s, { machine: true, engine: true, frame: true, zmoved: true, place: true, surface: true, pressure: true }, place));
     const own = Object.values(p.errs).find(Boolean) || (!place ? 'Choose the place.' : null);
     IL.gate($('btn-to-run'), runReason(s, blockers, own), $('to-reason'));
     renderLive($('to-live'), s, 'needle touch-off', (run) => {
@@ -595,7 +601,7 @@
     const ok = !Object.values(p.errs).some(Boolean);
     IL.setText($('dl-plan'), ok ? IL.plural(p.rots.length * p.body.repeats, 'dot') + ': ' + p.rots.length + ' turns × ' + p.body.repeats + ' repeats' + (place ? ' on “' + place + '”' : '') + ' at '
       + IL.fmt(p.body.pitchMm, 1) + ' mm, imaged before and after' + ($('dl-prime').checked ? '; a prime on the waste first' : '') + '.' : 'Fix the marked fields to see the dots.');
-    const blockers = renderPrereqs($('dl-pre'), prereqs(s, { machine: true, engine: true, frame: true, touched: true, place: true, surface: true, pressure: true }, place));
+    const blockers = renderPrereqs($('dl-pre'), prereqs(s, { machine: true, engine: true, frame: true, zmoved: true, touched: true, place: true, surface: true, pressure: true }, place));
     const n = d.needle || {};
     const own = Object.values(p.errs).find(Boolean) || (!place ? 'Choose the place.' : !n.touchedOff ? 'Touch off the needle first (the ladder needs the touched-off offset).' : null);
     IL.gate($('btn-dl-run'), runReason(s, blockers, own), $('dl-reason'));
@@ -932,6 +938,7 @@
       for (const n of root.querySelectorAll('input, select')) n.addEventListener(n.tagName === 'SELECT' || n.type === 'checkbox' ? 'change' : 'input', () => IL.render());
       pcr.stickyTop(root);
       IL.on('taskend', (run) => { if (CAL_TASKS.has(run.label) || C.data) loadCalibrations(); if (run.label === 'pad calibration') loadArea(); });
+      IL.on('coupon-reading', () => loadArea());   // a pending coupon weighed or skipped (padprofile.js pendingForm)
     },
     show() { loadCalibrations(); loadArea(); if (!S.config) IL.loadConfig(); },
     route(r) {

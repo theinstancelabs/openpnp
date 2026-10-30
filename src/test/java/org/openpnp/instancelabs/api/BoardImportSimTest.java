@@ -778,6 +778,8 @@ public class BoardImportSimTest {
         try {
             assertTrue(inside.await(20, TimeUnit.SECONDS));
             BoardImporter.inPipeline = null;
+            // the status says so: the web UI locks what the engine refuses meanwhile
+            assertTrue(ok(get("/api/status")).getAsJsonObject("boardImport").get("reading").getAsBoolean());
             String why = "a board file is being read (an upload takes up to about 20 s): wait for it to finish";
             assertEquals(why, refused(postJson("/api/run", run), 409, "refused").get("reason").getAsString());
             assertEquals(why, refused(postJson("/api/surfaces/blank/probe", "{}"), 409, "refused").get("reason")
@@ -789,6 +791,7 @@ public class BoardImportSimTest {
             t.join(60_000);
         }
         assertEquals(200, uploaded.get().status, String.valueOf(uploaded.get()));
+        assertFalse(ok(get("/api/status")).getAsJsonObject("boardImport").get("reading").getAsBoolean());
         sim.server.delayBeforeOkMs.put("G4", 60L);
         try {
             assertEquals(202, postJson("/api/run", run).status, "the upload has finished");

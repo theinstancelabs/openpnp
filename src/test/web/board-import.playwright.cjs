@@ -10,10 +10,11 @@
  * the drawing within 0.5 px of the plan's, every pad on drawn copper; (2) a pad click opens the inspector (rule
  * sentence, dots, the selected pad, the top camera, Esc back) and #btn-pad-inspect opens the first pad in path order;
  * (3) #pv-play expands #run-preview, Clear collapses it; (4) a file dropped outside the drop zone never replaces the
- * page; (5) a file the server refuses shows its reason with "Choose another file", Cancel while reading goes back to
- * the file choice; upload of ftp.kicad_pcb: 80 parts get paste (160 pads), 3 fiducials, the drawing, three packages new
- * or suffixed, nothing that blocks dispensing, PACKAGE_SUFFIXED a note, the attach offer naming ftp.board.xml and FID1,
- * a package row focused from the keyboard outlines its parts;
+ * page; (5) a part outside the board outline is drawn only, with OFF_BOARD in group 3; a file the server refuses shows
+ * its reason with "Choose another file", Cancel while reading goes back to the file choice; upload of ftp.kicad_pcb:
+ * 80 parts get paste (160 pads), 3 fiducials, the drawing, three packages new or suffixed, nothing that blocks
+ * dispensing, PACKAGE_SUFFIXED a note, the attach offer naming ftp.board.xml and FID1, a package row focused from the
+ * keyboard outlines its parts;
  * (6) save under a unique name, Use this board: the Board step has it, with its picture (every picture with its size
  * and parts), and the main column draws it before planning while the plan of (1) stays; (7) the same file dropped on
  * the drop zone under the same name: "exists", a two-press replace, Esc does nothing while it saves; (8) the import
@@ -248,6 +249,19 @@ const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y
 
     // ---- (5) upload ftp ---------------------------------------------------------------------------------------------
     await openDialog(page);
+    // a footprint outside the board outline (padcal.kicad_pcb's R1 parked left of the board): drawn only, no paste, and
+    // OFF_BOARD under "Check in the preview" (group 3)
+    const offBoard = fs.readFileSync(path.join(FIX, '..', 'padprofile', 'padcal.kicad_pcb'), 'utf8').replace('(at 104 126)', '(at 90 126)');
+    await page.setInputFiles('#board-import-file', { name: 'padcal-off-board.kicad_pcb', mimeType: 'application/octet-stream', buffer: Buffer.from(offBoard) });
+    await page.waitForSelector('#dlg-board-import[data-state="preview"]', { timeout: 60000 }).catch(() => {});
+    const ob = await page.evaluate(() => {
+      const li = document.querySelector('#board-import-warn li[data-code="OFF_BOARD"]');
+      return { group: li ? li.dataset.group : null, section: !!(li && li.closest('section[data-group="3"]')), text: li ? li.textContent : null,
+        found: document.getElementById('board-import-found').textContent };
+    });
+    check('(5) a part outside the board outline: OFF_BOARD under "Check in the preview" (group 3), drawn only, no paste',
+      ob.group === '3' && ob.section && /^R1 is not inside the board outline: it gets no paste \(its paste would land off the board\)\./.test(ob.text)
+      && /1 part drawn only \(R1\)/.test(ob.found), ob);
     // first the server's refusal of a .kicad_pcb that is not a board, shown as it says it, with one way on
     await page.setInputFiles('#board-import-file', { name: 'notes.kicad_pcb', mimeType: 'application/octet-stream', buffer: Buffer.from('(kicad_sch (version 20231120) (generator "eeschema"))') });
     await page.waitForSelector('#dlg-board-import[data-state="error"]', { timeout: 30000 }).catch(() => {});

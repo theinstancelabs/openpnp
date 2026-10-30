@@ -937,10 +937,14 @@
     IL.setText($('pcal-note'), pv ? IL.nb(pv.sentence) : e && e.error ? 'Could not read the summary: ' + e.error : 'Reading the summary…');
     IL.setText($('pcal-needs'), pv && pv.needsText ? IL.nb(pv.needsText) : '');
     IL.show($('pcal-needs'), !!(pv && pv.needsText));
-    IL.keyed($('pcal-plan').tBodies[0], JSON.stringify(pv ? [pv.steps, pv.home, pv.zCheck] : null), () => {
+    IL.keyed($('pcal-plan').tBodies[0], JSON.stringify(pv ? [pv.steps, pv.home, pv.homes, pv.zCheck] : null), () => {
       if (!pv) return null;
       const rows = [];
-      if (pv.home && pv.home.needed) rows.push(['Home', 'not homed: ' + (pv.home.why || ''), pv.home.estimateS]);
+      // under the "always home first" setting it homes before every engine step (pv.homes of them)
+      if (pv.home && pv.home.needed) {
+        rows.push(pv.homes > 1 ? ['Home', 'before each of its ' + pv.homes + ' steps (the setting is: always home first)', pv.homes * pv.home.estimateS]
+          : ['Home', 'not homed: ' + (pv.home.why || ''), pv.home.estimateS]);
+      }
       if (pv.zCheck && pv.zCheck.needed) rows.push(['Z check', 'one N1 touch', pv.zCheck.estimateS]);
       for (const x of pv.steps) rows.push([STEP_TITLE[x.key] || x.key, x.state === 'skipped' ? x.text || 'skipped' : stepDetail(pv, x.key), x.state === 'skipped' ? null : x.estimatedSeconds, x.key]);
       // the time column: the machine's estimate, "you" for the readings, nothing for a step that takes no time
@@ -990,7 +994,11 @@
     if (/mm left and this calibration needs/.test(t)) return [{ fix: 'pcal-wiped', label: 'Blank wiped' }, { fix: 'pcal-area', label: 'Set the calibration area' }];
     if (/calibration area overlaps|calibration area/.test(t)) return [{ fix: 'pcal-area', label: 'Set the calibration area' }];
     if (/coupon places/.test(t)) return [{ href: '#setup/places', label: 'Set the coupon places' }];
-    if (/carries \d+ dots waiting/.test(t)) return [{ fix: 'pcal-open', label: 'Type the readings' }];
+    // a coupon place on the purge row or on the board's pads
+    const cp = /weigh coupon place (\S+) overlaps/.exec(t);
+    if (cp) return [{ href: '#setup/places/' + encodeURIComponent(cp[1]), label: 'Move ' + cp[1] + ' (Setup › Places)' }];
+    // its readings, or a skip, in Calibrate › Pad calibration (the job that laid the dots may be gone)
+    if (/carries \d+ dots waiting/.test(t)) return [{ href: '#calibrate/padcal', label: 'Type the readings or skip them' }];
     const m = IL.CODE_RE.exec(t);
     return m ? IL.fixesForCode(m[1], s, m[2]) : [];
   }
@@ -1180,22 +1188,30 @@
     });
     IL.setText($('btn-pcal-readings'), C.confirm ? 'Save anyway' : 'Save the readings');
   }
-  /** The readings of coupons whose job is gone (stopped, cancelled, a restart): POST /api/coupons/{id}/reading each. */
+  /**
+   * The readings of coupons whose job is gone (stopped, cancelled, a restart): POST /api/coupons/{id}/reading each; or
+   * Skip (two presses, {skip: true}): no readings, the coupon's place is free again once its dots are wiped off.
+   */
   function pendingForm(host, pend) {
     if (!host) return;
     IL.show(host, pend.length > 0);
     if (!pend.length) { IL.keyed(host, '', () => null); return; }
+    const done = () => IL.emit('coupon-reading');
     IL.keyed(host, JSON.stringify(pend.map((x) => x.recordId)), () => [IL.sectionK('Coupons to weigh'),
       ...pend.map((k) => {
         const save = el('button', { type: 'button', class: 'btn btn--primary btn--sm', 'data-record': k.recordId }, 'Save');
+        const skip = el('button', { type: 'button', class: 'btn btn--sm', 'data-skip': k.recordId, title: 'Do not weigh ' + k.place + ': its dots count for nothing; wipe them off before it is used again' }, 'Skip');
         const fid = 'pcal-pf-' + k.recordId, eid = 'pcal-pe-' + k.recordId;
-        save.addEventListener('click', () => IL.act(save, () => IL.api('POST', '/api/coupons/' + k.recordId + '/reading', { fullG: IL.num(fid), emptyG: IL.num(eid) }), { ok: (r) => r.text + '.' }));
+        save.addEventListener('click', () => IL.act(save, async () => { const r = await IL.api('POST', '/api/coupons/' + k.recordId + '/reading', { fullG: IL.num(fid), emptyG: IL.num(eid) }); done(); return r; },
+          { ok: (r) => r.text + '.' }));
+        IL.press2(skip, 'skip weighing', async () => { const r = await IL.api('POST', '/api/coupons/' + k.recordId + '/reading', { skip: true }); done(); return r; },
+          { ok: (r) => IL.cap(r.text) + '.' });
         return el('div', { class: 'pcal-coupon pcal-coupon--pending', 'data-refusals': '', 'data-enter-submits': '' },
           el('div', { class: 'pcal-coupon__f' },
             el('div', { class: 'pcal-coupon__t' }, el('b', { text: k.place }), ' · ' + IL.plural(k.dots, turnAdj(k.steps) + ' dot') + ' · about ' + k.expectedMg + ' mg · until ' + IL.fmtTime(IL.toClient(k.staleAtMs))),
             el('div', { class: 'pcal-coupon__in' },
               field(fid, 'With paste', 'g', el('input', { class: 'input', id: fid, type: 'text', inputmode: 'decimal', autocomplete: 'off', placeholder: '0.000' })),
-              field(eid, 'Wiped', 'g', el('input', { class: 'input', id: eid, type: 'text', inputmode: 'decimal', autocomplete: 'off', placeholder: '0.000' })), save)));
+              field(eid, 'Wiped', 'g', el('input', { class: 'input', id: eid, type: 'text', inputmode: 'decimal', autocomplete: 'off', placeholder: '0.000' })), save, skip)));
       })]);
   }
   /** A decision check in words when the engine gave none (§7.6: key, predicted, measured, limit). */
@@ -1222,11 +1238,11 @@
     const box = $('pcal-result');
     IL.setClass(box, 'ri ri--' + kind);
     IL.setAttr(box, 'data-outcome', res.outcome);
-    IL.keyed(box, JSON.stringify([res.sentence, res.control && res.control.drift, res.planError]), () => [IL.glyph(kind),
+    IL.keyed(box, JSON.stringify([res.sentence, res.control && res.control.drift, res.planError, j.warnings]), () => [IL.glyph(kind),
       el('div', {}, el('div', { class: 'ri__t', id: 'pcal-result-t' }, headSplit(res.sentence)),
         res.control && res.control.drift ? el('div', { class: 'ri__d', text: IL.cap(res.control.drift) + '.' }) : null,
         res.planError ? el('div', { class: 'ri__d', text: 'Not planned again: ' + res.planError }) : null,
-        (j.warnings || []).slice(0, 2).map((w) => el('div', { class: 'ri__d', text: IL.cap(w) + '.' })))]);
+        Array.from(new Set(j.warnings || [])).slice(0, 3).map((w) => el('div', { class: 'ri__d', text: IL.cap(w) + '.' })))]);
     IL.keyed($('pcal-groups'), JSON.stringify(res.groups), () => (res.groups || []).map((g) => {
       const ok = g.outcome === 'characterized';
       const checks = g.checks || [];

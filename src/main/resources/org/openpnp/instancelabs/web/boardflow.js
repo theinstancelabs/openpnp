@@ -140,7 +140,7 @@
   function patchStep(s) {
     const st = M.step;
     if (!st || !st.body.isConnected) return;
-    IL.gate(st.upload, IL.taskRunning(s) ? RUNNING : null);
+    IL.gate(st.upload, IL.taskRunning(s) || (IL.padProfile && IL.padProfile.jobLock(s)) ? RUNNING : null);
     const form = stepForm();
     const sel = form.sel || '';
     const e = entryOf(sel);

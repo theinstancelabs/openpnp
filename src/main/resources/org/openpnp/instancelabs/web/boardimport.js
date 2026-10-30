@@ -106,7 +106,8 @@
   function query(o) {
     return Object.keys(o).filter((k) => o[k] !== undefined && o[k] !== null).map((k) => k + '=' + encodeURIComponent(o[k])).join('&');
   }
-  const taskLock = () => (IL.taskRunning(IL.S.status) ? RUNNING : null);
+  /** The engine refuses an upload while a task runs or a pad calibration is between its engine steps. */
+  const taskLock = () => (IL.taskRunning(IL.S.status) || (IL.padProfile && IL.padProfile.jobLock(IL.S.status)) ? RUNNING : null);
 
   // ------------------------------------------------------------------------------------------ the dialog
   function open(opts) {

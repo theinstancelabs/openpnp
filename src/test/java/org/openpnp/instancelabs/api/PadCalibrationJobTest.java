@@ -811,6 +811,7 @@ public class PadCalibrationJobTest {
         JsonObject pv = ok(get("/api/pad-calibrations/preview?planId=" + planId + "&groups=" + str(group, "group")));
         assertTrue(str(pv, "sentence").startsWith("Homes before each of its 5 steps (the setting is: always home "
                 + "first; ≈ "), str(pv, "sentence"));
+        assertEquals(5, pv.get("homes").getAsInt(), "the homes the steps table shows");
         long steps = 0;
         for (JsonElement e : pv.getAsJsonArray("steps")) {
             steps += e.getAsJsonObject().get("estimatedSeconds").getAsLong();

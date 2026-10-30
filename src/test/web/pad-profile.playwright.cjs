@@ -20,10 +20,12 @@
  * second press, the phases advance, the strip names the pad calibration; (8) the readings prompt: the strip "Waiting
  * for you · weigh", a reload brings it back with the coupon fields, the SIM balance read with paste and wiped (the
  * test is the operator), "= n mg of paste" echoed, saved; (9) result "Characterized …", ≥ 3 crops load, the new plan
- * shown, SW and TestChip_A gone from the list, Test_Strip left; (10) I'll do it by hand on Test_Strip: the guide names
+ * shown, SW and TestChip_A gone from the list, Test_Strip left, a test run asked to stop inside a two-dot pad lays
+ * whole pads; (10) I'll do it by hand on Test_Strip: the guide names
  * it, its ladder (two presses) fills table#pcal-ladder, the Weigh dots card has the quarter turn and a count;
  * (11) Calibrate › Pad calibration: "… mm left", Blank wiped (two presses) → 0 mm used; (12) the by-hand weighing,
- * STOP at its readings prompt: "Stopped … the coupons still need weighing …" and "Type the readings"; (13) no
+ * STOP at its readings prompt: "Stopped … the coupons still need weighing …" and "Type the readings" (the first coupon
+ * weighed, the last skipped with two presses); (13) no
  * JavaScript errors, no native dialogs. Screenshots (PP_SHOTS=0 skips): the nano upload preview, Run › Checks with the
  * Pad types card, the Needs list, the suggestion, the pad-cal view before start, the job running, the readings prompt and
  * the result at 1440 and 1280 px, light and dark.
@@ -430,6 +432,22 @@ async function weighCoupon(page, place) {
     await sleep(1500);
     const rows9 = await page.evaluate(() => Array.from(document.querySelectorAll('#pt-needs-table tbody tr[data-group] .pt-needs__n')).map((n) => n.textContent));
     check('(9) Needs a profile: Test_Strip left, SW and TestChip_A gone', rows9.length === 1 && /Test_Strip/.test(rows9[0]), rows9);
+    // a test run with fewer dots lays whole pads (the engine cuts before the pad it would split): asked to stop inside a
+    // two-dot pad, Run says how many it lays (or, inside the first pad, how many to ask for at least)
+    await page.evaluate(() => IL.go('#run/checks'));
+    await page.waitForSelector('#btn-run-test', { state: 'visible', timeout: 15000 });
+    const cut = await page.evaluate(() => { const d = IL.S.plan.dots; for (let k = 1; k < d.length; k++) if (d[k].padIndex >= 0 && d[k].padIndex === d[k - 1].padIndex) return k; return 0; });
+    if (cut) {
+      if (!(await page.isVisible('#run-maxdots'))) await page.click('#btn-run-test');
+      await page.fill('#run-maxdots', String(cut));
+      await sleep(300);
+      const t9 = await page.evaluate(() => ({ scope: document.getElementById('run-scope').textContent.trim(), btn: document.getElementById('btn-run').textContent,
+        err: document.getElementById('run-maxdots-err').textContent }));
+      check('(9) Test run with fewer dots: ' + cut + ' asked inside a two-dot pad lays whole pads', cut > 1
+        ? new RegExp('^TEST · first ' + (cut - 1) + ' of \\d+ dots \\(whole pads: ' + (cut - 1) + ' of the ' + cut + ' asked for\\)$').test(t9.scope) && /whole pads/.test(t9.btn)
+        : /^A test run lays whole pads: the first pad, \S+, has \d+ dots, so ask for at least \d+$/.test(t9.err), t9);
+      await page.click('#btn-run-test');   // back to the full board
+    } else check('(9) Test run with fewer dots: the plan has a two-dot pad to cut inside', false, 'no two dots of one pad in a row');
 
     // ---- (10) by hand on Test_Strip ---------------------------------------------------------------------------------------------
     await api(page, 'POST', '/api/purge-row/reset', {});   // the operator wiped the purge row after the job
@@ -489,7 +507,10 @@ async function weighCoupon(page, place) {
     const pend = await page.evaluate(() => Array.from(document.querySelectorAll('#pcal-pending button[data-record]')).map((b) => b.dataset.record));
     const places = (j12.coupons || []).filter((k) => k.recordId).map((k) => [String(k.recordId), k.place]);
     check('(12) Type the readings lists the stopped job\'s coupons', pend.length === places.length && places.every(([id]) => pend.includes(id)), { pend, places });
-    for (const [id, place] of places) {
+    // the first coupons are weighed; with two or more the last one is skipped (two presses, {skip: true}): no readings,
+    // and it leaves the coupons to weigh
+    const skipOne = places.length > 1 ? places[places.length - 1] : null;
+    for (const [id, place] of skipOne ? places.slice(0, -1) : places) {
       const r = await weighCoupon(page, place);
       await page.fill('#pcal-pf-' + id, r.full.toFixed(3));
       await page.fill('#pcal-pe-' + id, r.empty.toFixed(3));
@@ -497,6 +518,23 @@ async function weighCoupon(page, place) {
       await page.click('#pcal-pending button[data-record="' + id + '"]');
       const rr = await saved;
       check('(12) ' + place + ': its readings saved (' + Math.round((r.full - r.empty) * 1000) + ' mg)', !!rr && rr.status() === 200, rr ? [rr.status(), (await rr.text()).slice(0, 300)] : 'no request');
+    }
+    if (skipOne) {
+      const [id, place] = skipOne;
+      const sel = '#pcal-pending button[data-skip="' + id + '"]';
+      // the list is drawn again once the weighed coupons leave it: press Skip on the list that stays
+      const weighed = places.slice(0, -1).map(([i]) => i);
+      await page.waitForFunction((ids) => ids.every((i) => !document.querySelector('#pcal-pending button[data-record="' + i + '"]')), weighed, { timeout: 15000 }).catch(() => {});
+      const skipped = page.waitForResponse((x) => x.url().endsWith('/api/coupons/' + id + '/reading'), { timeout: 20000 }).catch(() => null);
+      await press2(page, sel);
+      const rs = await skipped;
+      const sent = rs ? rs.request().postDataJSON() : null;
+      const got = rs ? await rs.json().catch(() => null) : null;
+      check('(12) ' + place + ': Skip (two presses) sends {skip: true}; the answer "' + place + ': weighing skipped; wipe its … dots off before it is used again"',
+        !!rs && rs.status() === 200 && !!sent && sent.skip === true && !!got && !!got.record && got.record.skipped === true
+        && new RegExp('^' + place + ': weighing skipped; wipe its \\d+ \\S+ dots off before it is used again$').test(got.text), { sent, got, status: rs && rs.status() });
+      await page.waitForFunction((s) => !document.querySelector(s), sel, { timeout: 15000 }).catch(() => {});
+      check('(12) ' + place + ': skipped, it leaves the coupons to weigh', !(await page.$(sel)));
     }
   } catch (e) {
     check('no exception', false, String(e && e.stack || e));

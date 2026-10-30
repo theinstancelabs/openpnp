@@ -719,6 +719,10 @@
       return lab === 'board' ? 'Locked while the board runs' : 'Locked while the ' + (lab === 'z check' ? 'Z check' : lab) + ' runs';
     }
     if (n.idle && IL.padProfile && IL.padProfile.jobLock(s)) return 'Locked while the pad calibration runs';
+    // the engine's own refusals (409): an upload holds the import pipeline; OpenPnP homes or jogs by itself, and what
+    // uses the machine waits (a task queued behind one of OpenPnP's own that fails would be dropped)
+    if (n.idle && s.boardImport && s.boardImport.reading) return 'A board file is being read (an upload takes up to about 20 s): wait for it to finish';
+    if (n.idle && (n.connected || n.homed) && m.enabled && m.busy) return 'OpenPnP is busy (homing or moving): wait for it to finish';
     if (n.pressureOff && pr.state && pr.state !== 'off') return 'Pressure is held: switch it off first';
     if (n.connected && !m.enabled) return 'Not connected: connect first';
     if (n.homed && !m.homed) return 'Not homed: home first';
@@ -828,7 +832,8 @@
   };
   /** Adopts a clean-pad report of the plan shown (or a subset) if newer than the one shown. */
   IL.adoptCleanCheck = function (cc, planId) {
-    if (!cc || !IL.planMatches(planId || cc.planId)) return false;
+    // a check refused at its start (the pressure hold, a STOP) looked at nothing: its reason is the run's (cleanCard)
+    if (!cc || (!cc.checkedAtMs && !(cc.pads || []).length) || !IL.planMatches(planId || cc.planId)) return false;
     if (S.cleanCheck && S.cleanCheck.checkedAtMs >= cc.checkedAtMs) return false;
     S.cleanCheck = cc;
     planVersion++;
@@ -914,6 +919,31 @@
     return 'surface-bad';
   }
   IL.i4Kind = i4Kind;
+  /**
+   * After a failed Z check ("Z moved", AUTO_REGISTER_DESIGN.md §2.4) the remedy works under the same home, in this
+   * order: record the needle frame again, probe the blank (the touch-off's dots take their Z from it), touch off (a
+   * frame recorded after the home replaces the touch-off, which I4 then asks for again), register the board. What was
+   * measured again since the home drops out of status.machine.zCheck.stale. Returns {step: frame | blank | touch-off |
+   * register | done, fixes} while the last Z check of this home failed, else null.
+   */
+  IL.zMoved = function (status) {
+    const s = status || S.status || {};
+    const zc = (s.machine || {}).zCheck || {};
+    const d = s.dispense || {};
+    const nd = d.needle || {};
+    const last = zc.last;
+    if (!last || last.pass !== false || !zc.homeAtMs || last.homeAtMs !== zc.homeAtMs) return null;
+    const stale = new Set((zc.stale || []).map((x) => x.what));
+    const surf = (n) => stale.has("the '" + n + "' surface");
+    if (stale.has('the needle frame')) return { step: 'frame', fixes: [{ href: '#setup/needle', label: 'Open Needle Z frame' }] };
+    if (surf(d.blankLocationName || 'blank')) return { step: 'blank', fixes: [{ view: 'probe-blank', label: 'Probe the blank…' }] };
+    if (stale.has('the touch-off') || !nd.touchedOff) {
+      return { step: 'touch-off', fixes: [{ href: '#calibrate/touch-off', label: 'Run a touch-off' }].concat(isNum(nd.anchorOffsetMm)
+        ? [{ fix: 'needle-confirm', label: 'Confirm frame offset ' + IL.fmt(nd.anchorOffsetMm, 3) + ' mm' }] : []) };
+    }
+    if (surf(d.boardSurfaceName || 'board')) return { step: 'register', fixes: [{ fix: 'register', label: 'Register board' }, { fix: 'probe-by-hand', label: 'Do it by hand' }] };
+    return { step: 'done', fixes: [] };
+  };
   const sentence = (t) => { const x = cap(String(t || '').trim()); return x && !/[.:!?]$/.test(x) ? x + '.' : x; };
 
   /**
@@ -2628,11 +2658,20 @@
           const pm = /^place '([^']+)'/i.exec(msg);
           return [{ href: '#setup/places' + (pm ? '/' + encodeURIComponent(pm[1]) : ''), label: 'Retake Z with N1' + (pm ? ' (' + pm[1] + ')' : '') }];
         }
-        // Z after a home: one N1 touch checks it; with no point left to touch, or a Z that moved, the frame (and
-        // everything after it) is measured again
+        // Z after a home: one N1 touch checks it; with no point left to touch the frame (and everything after it) is
+        // measured again; a Z that moved: the remedy's next step (IL.zMoved)
         if (k === 'zcheck') {
-          return /no point measured before/i.test(msg) || /^(I4:\s*)?z moved\b/i.test(msg) ? [{ href: '#setup/needle', label: 'Open Needle Z frame' }]
-            : [{ fix: 'check-z', label: 'Check Z' }];
+          if (/^(I4:\s*)?z moved\b/i.test(msg)) {
+            const zm = IL.zMoved(s);
+            return zm && zm.fixes.length ? zm.fixes : [{ href: '#setup/needle', label: 'Open Needle Z frame' }];
+          }
+          return /no point measured before/i.test(msg) ? [{ href: '#setup/needle', label: 'Open Needle Z frame' }] : [{ fix: 'check-z', label: 'Check Z' }];
+        }
+        // the needle frame recorded again replaced the touch-off: touch off, or take the frame's own offset
+        if (k === 'needle' && /run a touch-off/i.test(msg)) {
+          const nd = d.needle || {};
+          return [{ href: '#calibrate/touch-off', label: 'Run a touch-off' }].concat(isNum(nd.anchorOffsetMm)
+            ? [{ fix: 'needle-confirm', label: 'Confirm frame offset ' + IL.fmt(nd.anchorOffsetMm, 3) + ' mm' }] : []);
         }
         if (k === 'other-surface') return [{ href: '#setup/surfaces', label: 'Open Probed surfaces' }];
         if (k === 'seat' || k === 'surface-bad' || k === 'plan') return [{ fix: 'register', label: 'Register board' }, { fix: 'probe-by-hand', label: 'Do it by hand' }];
@@ -2643,6 +2682,10 @@
         { fix: 'plan-unregistered', label: 'Plan without fiducial correction' }, { fix: 'register', label: 'Register again' },
         { fix: 'probe-by-hand', label: 'Do it by hand' }];
       case 'PROBE': {
+        // the board top Z lies too far under the needle frame for the probe's floor: fix the Z or the frame, or by hand
+        if (/cannot reach that height/i.test(msg)) {
+          return [{ fix: 'board-step', label: 'Board step' }, { href: '#setup/needle', label: 'Open Needle Z frame' }, { fix: 'probe-by-hand', label: 'Do it by hand' }];
+        }
         const out = [{ fix: 'register', label: 'Register again' }, { fix: 'probe-by-hand', label: 'Do it by hand' }];
         if (/\b(blank|purge row)\b|'(?!board')[^']+' (surface|place)/i.test(msg) && !/board top/i.test(msg)) out.push({ view: 'probe-blank', label: 'Probe the blank…' });
         return out;

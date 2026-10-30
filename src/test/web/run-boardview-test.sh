@@ -11,12 +11,17 @@
 #
 # Needs: target/openpnp-gui-*.jar built (mvn -q -T1 -Dmaven.test.skip=true package), openpnp-uinav built,
 #        Playwright installed in $PLAYWRIGHT_DIR (npm i playwright; npx playwright install chromium).
-# Env: OUT_DIR (results.json, default /tmp/il-boardview-test-out), SHOTS_DIR (screenshots, default OUT_DIR).
+# Env: OUT_DIR (results.json, default /tmp/il-boardview-test-out), SHOTS_DIR (screenshots, default OUT_DIR),
+#      BOARDVIEW_SESSION / BOARDVIEW_PREFIX (the uinav session is PREFIX + SESSION, default il-ui-boardview-<time>),
+#      IL_API_PORT (the session's web API on the first free port of N … N+8; default any free port).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
 JAR="${OPENPNP_JAR:-$REPO/target/openpnp-gui-0.0.1-alpha-SNAPSHOT.jar}"
 NAME="${BOARDVIEW_SESSION:-boardview-$(date +%Y%m%d-%H%M%S)}"
+PREFIX="${BOARDVIEW_PREFIX:-il-ui-}"
+PORT_ARGS=()
+[ -n "${IL_API_PORT:-}" ] && PORT_ARGS=(--api-port "$IL_API_PORT")
 export PLAYWRIGHT_DIR="${PLAYWRIGHT_DIR:-/tmp/il-webui-pw}"
 export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/tmp/il-webui-pw-browsers}"
 export OUT_DIR="${OUT_DIR:-/tmp/il-boardview-test-out}"
@@ -28,11 +33,11 @@ mkdir -p "$OUT_DIR" "$SHOTS_DIR"
 PROXY_PID=""
 cleanup() {
   [ -n "$PROXY_PID" ] && kill "$PROXY_PID" >/dev/null 2>&1 || true
-  python3 "$REPO/src/test/sim/il_ui_session.py" stop --name "$NAME" >/dev/null 2>&1 || true
+  python3 "$REPO/src/test/sim/il_ui_session.py" stop --name "$NAME" --prefix "$PREFIX" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
-INFO="$(python3 "$REPO/src/test/sim/il_ui_session.py" start --jar "$JAR" --name "$NAME" \
+INFO="$(python3 "$REPO/src/test/sim/il_ui_session.py" start --jar "$JAR" --name "$NAME" --prefix "$PREFIX" "${PORT_ARGS[@]}" \
   --kicad "$REPO/src/test/resources/kicad/ftp.kicad_pcb.gz" 2>"$OUT_DIR/session.log" | tail -n 1)"
 API_PORT="$(printf '%s' "$INFO" | python3 -c 'import json, sys; print(json.load(sys.stdin)["port"])')"
 PROXY_PORT="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"

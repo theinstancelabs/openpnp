@@ -1982,6 +1982,7 @@ final class PadCalibrationJob {
         DispenseConfig.PurgeRow row = c.purgeRow;
         m.put("purgeSpots", Views.map("need", purgeNeed, "left", row.spotsLeft()));
         m.put("home", Views.home(home));
+        m.put("homes", homes); // under homeBeforeRun "always" one before every engine step
         m.put("zCheck", Views.map("needed", zCheck.needed, "estimateS", zCheck.needed
                 ? DispenseService.PROBE_POINT_ESTIMATE_S : 0));
         List<Map<String, Object>> probes = new ArrayList<>();
