@@ -1285,6 +1285,9 @@ async function runFirstDots(page, n) {
         st = await zStep('blank');
         check('Z moved 2: after the needle frame, the fix is "Probe the blank…"', st.step === 'blank' && !!st.card && st.card[0] && st.card[0][0] === 'view:probe-blank', st);
         await page.click('#chk-needs .ri[data-key="I4-z"] button[data-fix="view:probe-blank"]');
+        // the view keeps "Do it by hand" open from step 10: the automatic probe is the one this step wants
+        await page.waitForSelector('#blank-by-hand', { state: 'attached', timeout: 15000 });
+        await page.evaluate(() => { const d = document.getElementById('blank-by-hand'); if (d.open) d.open = false; });
         await page.waitForSelector('#btn-blank-auto', { state: 'visible', timeout: 15000 });
         const t7 = Date.now() + (await page.evaluate(() => IL.S.skewMs));
         await press2(page, '#btn-blank-auto');
