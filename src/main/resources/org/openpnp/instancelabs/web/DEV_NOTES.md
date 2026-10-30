@@ -23,11 +23,11 @@ something new from core, ask for it (or add it to your module and propose it for
 | `board.css` | board import (web-render) | The board palette, `.pv--art` and the casing, picture modes, the preview row, the inspector. Loaded after `run.css`. |
 | `boardflow.js` | board import (web-flow, `il/bi-web-flow`) | `IL.boardFlow`: fills the hooks H1–H5 of `run.js` / `records.js` (§11; §5 › Board drawing). |
 | `boardimport.js` + `boardimport.css` | board import (web-flow, `il/bi-web-flow`) | `IL.boardImport`: the upload dialog `#dlg-board-import` and the page-wide drop guard (§5 › Board drawing). |
-| `padprofile.js` + `padprofile.css` | profile calibration (pc-web, to come) | `IL.padProfile`, the `pad-cal` view, Profile › Needs a profile (`PROFILE_CALIBRATION_DESIGN.md` §13). |
+| `padprofile.js` + `padprofile.css` | profile calibration (pc-web) | `IL.padProfile`, the `pad-cal` view, Profile › Needs a profile and the suggestion card, the profile column of the upload, the pad inspector's profile notebox (§5 › Missing paste profiles; `PROFILE_CALIBRATION_DESIGN.md` §13). |
 | `run.js` + `run.css` | Run stage | `#ws-run`, Run panel steps (board, probe, checks, run, result, recovery override), run confirm `#dlg-run`. |
 | `setup.js` + `setup.css` | Setup stage | `#ws-setup` (cards §8.2), default panel `head`. `calibrate.js` may reuse `setup.css`. |
 | `profile.js` + `profile.css` | Profile stage | `#ws-profile` (§8.3), `#dlg-padtype`, `#dlg-history`, panel `pt`. |
-| `calibrate.js` | Calibrate stage | `#ws-calibrate` (§8.4), panel `cal`. |
+| `calibrate.js` | Calibrate stage | `#ws-calibrate` (§8.4), panel `cal`; the Pad calibration and Weigh dots cards and the guide's ladder (pc-web). |
 | `records.js` | Records stage | `#ws-records` (§8.5), panel `record`. |
 | `favicon.svg` | core | Idle favicon (live / stopped variants are `data:` URLs in core). |
 
@@ -303,11 +303,58 @@ here moves the machine.
   CPU throttling, through boardflow's own glue), `board-import.playwright.cjs` (web-flow, 44
   checks, run after `webui-sim.playwright.cjs` in the same SIM session).
 
-### Profile calibration (to come)
+### Missing paste profiles and the pad calibration (PROFILE_CALIBRATION_DESIGN.md §13, as built 2026-10-29)
 
-The pc-web slice adds `padprofile.js` + `padprofile.css`, the hooks H-P1 … H-P9 in core, profile, run, records,
-boardimport, padinspect and boardview, `IL.padProfile`, the `pad-cal` view and its sessionStorage key
-(`PROFILE_CALIBRATION_DESIGN.md` §13). The API it codes against (`il/pc-api`) is in `WEB_API.md` §3.4.
+`padprofile.js` + `padprofile.css` (pc-web) load after `boardimport.js` / `boardimport.css` and before the workspace
+modules (H-P9 in `index.html`). Every hook in another module's file is a no-op without them. API: `WEB_API.md`
+§3.4–3.5. The file header lists its API; in short:
+
+- **`IL.padProfile`**: `groups(plan)` → `{fix, tip, notes}`; `padTypesItem(plan, d, viol)` (pure: Run readiness item
+  5 from `plan.profileCheck`, or null); `setSource({planId} | {boardFile, boardName})` and `current()` → `{kind, check,
+  label, planId?, boardFile?}` (the check Profile shows: the plan shown, or a board file chosen in the upload);
+  `mountNeeds(host)`; `profileHooks(pt)`; `importRows(table, preview)` / `importSaved(preview, {leaveTo})` (the upload
+  dialog); `inspectorBlock(host, pad, plan)` → shown?, `amountText(pad)` (the pad inspector); `openCal(request)` (the
+  `pad-cal` view before start), `startManual(request)` (the by-hand ladder or weighing, Calibrate's cards),
+  `estimate(request)` (the preview, cached per request); `taskParts(run)`, `verdict(status)`, `jobLock(status)` (a
+  job runs, decides or plans: everything else is locked), `jobActive(status)` (also while it waits for the readings),
+  `needsHref()` (`#profile/needs` while the check has groups); `pendingForm(host, pending)` (readings of coupons whose
+  job is gone); `turnAdj(steps)` (`quarter-turn`, `half-turn`, `one-turn`).
+- **Fix-its** (`data-fix`): `profile-use` (arg: the group id; plans again), `profile-needs`, `pcal-open`, `pcal-area`,
+  `pcal-wiped` (two-press).
+- **Views and routes**: Profile › Needs a profile is `#pt-needs` (the card above the pad types, filter button
+  `#pt-filter-needs`), the suggestion card is Profile's side panel at `#profile/needs/<group>`, the pad calibration
+  is the panel view `pad-cal` (`?panel=pad-cal`: before start, running, the readings prompt `#pcal-ask`, the result
+  `#pcal-result`). A page that finds a job of its own tab (or one waiting for readings) running opens `pad-cal` (H-P2
+  in `core.js`).
+- **`IL.pt`** (H-P3, `profile.js`): the hook object profile.js calls and padprofile.js fills (`profileHooks`):
+  `route`, `panel`, `planStats`, `newForPackage`, `openPadType`, `selectType`, `filters`, `sectionExtras`,
+  `renderExtras`, `editorExtras` (the pad-type editor's `#pt-dotsteps`, `#pt-dotsperpad`, `#pt-calinfo`),
+  `sidePanelExtras` (`Calibrate automatically…` `#btn-pt-auto` next to Set up / Validate), `navSubs` (`Needs 3
+  profiles`), `texts`. Without padprofile.js they are profile.js's own.
+- **Hooks in other owners' files** (PC §13.9): H-P1 `core.js` readiness item 5; H-P2 `core.js` `taskParts`, the
+  strip verdict (`Pad calibration · test dots 14/48 · ≈ 2:50 left`, `Waiting for you · weigh`), `lockReason` (`Locked
+  while the pad calibration runs`) and the `pad-cal` view after a reload; H-P3 `profile.js` `IL.pt`; H-P4 `run.js`
+  the Pad types tile goes to `needsHref()`; H-P5 `records.js` run titles `Pad calibration · blank` / `Pad calibration
+  · coupons` (kinds `pad-ladder`, `pad-weigh`); H-P6 `boardimport.js` the profile column (`importRows`) and the saved
+  state's actions (`importSaved`); H-P7 `padinspect.js` `#pad-insp-profile` (one notebox instead of the flag
+  noteboxes and the new-type link) and the Amount row; H-P8 `boardview.js` a dot's own size from
+  `plan.dots[i].diameterMm` and `update({sugg})` (`g.pv-l-sugg circle.pv-sugg`, never `circle.dot`: dot counts stay
+  the plan's); H-P9 `index.html`. `calibrate.js` (owned by pc-web for this): the Pad calibration card `#cal-padcal`
+  (`#pca-*`: area left, `Blank wiped` `#btn-pca-wiped`, paste loaded `#btn-pca-paste`, coupon places, pending
+  coupons), the Weigh dots card `#cal-weigh` (`#wd-*`) and the guide's ladder `#btn-guide-ladder`.
+- **sessionStorage** (per tab): `il.pp.source` (a board file as Profile's source), `il.pcal.req` (the calibration
+  being set up before start), `il.pcal.job` (the job this tab started), `il.pcal.loaded` (job ids whose new plan this
+  tab loaded: a result's `newPlanId` is loaded once).
+- **Rules kept**: one filled button per screen (the Needs list's turns plain while the side panel shows a suggestion
+  or the calibration); every start is a two-press button with its time (`Calibrate · ≈ 5:45`); the readings are
+  typed in grams and echoed in mg (`= 78 mg of paste`); STOP stays visible in every state (`STOP stops it at once
+  (F9).`).
+- Tests: `PadProfileUiSimTest` (the files are served and loaded), `pad-profile.playwright.cjs` (52 checks, third in
+  `run-webui-sim-test.sh`'s SIM session; `SIM_SCENE` lets it add the SIM paste, coupons and balance), fixtures for
+  devproxy in `src/test/web/fixtures/padprofile/` (`devproxy.py --route-fixtures`), and the SIM acceptance
+  `il_sim_acceptance.py padcal` (API level, `WEB_API.md` §6). A seeded SIM session: `il_ui_session.py start --padcal`.
+- Not in this PR: the test-board ladder (PC §20 decision 8, `pc-ladder`, a follow-up) and the per-run "Skip these N
+  pads" (no API yet: the Pad types card points to Setup › Settings › Refuse flagged pads).
 
 ### Since §10
 

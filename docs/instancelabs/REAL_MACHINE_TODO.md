@@ -4,9 +4,10 @@ The engine follows the bench recipe (`p18_board1`: 18 psi, half a screw turn per
 F9 Stop), and the simulator acceptance passes on it
 (`/home/lumen/instancelabs/sim-acceptance/bench-sync-20261028-003315/results.json`). Branch `il/bench-sync-autoreg`
 adds Register board (fiducials and the N1 vacuum probe), home at job start and the Z check
-(`AUTO_REGISTER_DESIGN.md`), the KiCad upload and the board drawing (`BOARD_IMPORT_DESIGN.md`), and per-pad-type
-doses (`PROFILE_CALIBRATION_DESIGN.md`; the profile check's API is built on `il/pc-api`, not merged yet). The
-simulator cannot show the items below. Each one says why, and how to check it on the machine.
+(`AUTO_REGISTER_DESIGN.md`), the KiCad upload and the board drawing (`BOARD_IMPORT_DESIGN.md`), and missing paste
+profiles: the profile check, per-pad-type doses and the pad calibration with the weigh coupons
+(`PROFILE_CALIBRATION_DESIGN.md`; the SIM acceptance `il_sim_acceptance.py padcal` runs it end to end on the SIM
+paste and balance). The simulator cannot show the items below. Each one says why, and how to check it on the machine.
 
 ## Next session, in this order
 
@@ -17,7 +18,7 @@ simulator cannot show the items below. Each one says why, and how to check it on
    about 0.8 mm off (below).
 4. **Vent before lift** (item 22, F7): check the proposal on the held-down blank and on board 3.
 5. Then the first-session items still open (1, 2, 4, 5, 9–13), the registration items 15–32, and the board-import and
-   profile items 33–52 as their slices reach the machine.
+   profile items 33–54.
 
 ## Real sessions of 2026-10-28/29 (automatic registration, board 3 and the blank)
 
@@ -327,8 +328,11 @@ has since run on the machine (sessions 2 and 3, no STOP during it); 16 is measur
 
 ## Profile calibration (`PROFILE_CALIBRATION_DESIGN.md` §15)
 
-The profile check, the suggestions and the per-type doses in the plan are built; the calibration job (pc-task) and its
-web UI (pc-web) are still to come. These items need the job or a test board.
+Built: the profile check and its suggestions, the per-type doses in the plan, Calibrate automatically (the ladder on
+the blank, the weigh dots on two coupons, one operator step at the balance, the decision, the plan made again), the
+by-hand path and their web UI; the SIM acceptance passes on them. Not in this PR: the test-board ladder (PC §20
+decision 8, `pc-ladder`, a follow-up), so `validated` stays on the Validate guide. These items need the machine, the
+job, or a test board.
 
 38. **Tip OD** of the AD22TTA-B (bottom camera, side camera): the 0.72 mm assumption (`TipSpec.odMm`) behind the
     same-pad dot pitch.
@@ -338,7 +342,8 @@ web UI (pc-web) are still to come. These items need the job or a test board.
 41. **The footprint law** at quarter and full turns, by camera on the blank (the band 0.83–1.00 mm decides SOT-23,
     SOIC-8 and 1.27 mm headers).
 42. **Block switch.** Are 1 phase dot + 4 flush dots enough between doses? Count the `Count B` lines and the first
-    dots of each block.
+    dots of each block. In the SIM a switch from half to quarter turns made the phase dot a whole turn (1600 steps:
+    the screw already rested at the start angle and a phase dot turns at least 20°): about 2.1 mg on one purge spot.
 43. **Weigh coupons.** Where two 40 × 30 mm coupons lie on the bed, N1's vacuum touch on them, the camera look's margin
     check, flux evaporation over 15 min, the wipe's residue.
 44. **Balance data port** (U.S. Solid 110 g × 0.001 g): RS-232 or USB, protocol; a check weight at the first weighing
@@ -347,8 +352,10 @@ web UI (pc-web) are still to come. These items need the job or a test board.
     the bench's "~0.9 mm apart": a test board on mobo-class parts.
 46. **DotInspector circularity on real half-turn dots** (0.42–0.74, `runs/p18_half/meas.txt`) against the 0.35 string
     threshold, and the corridor thread test on real frames.
-47. **The calibration area on the real blank:** flatness with the purge row in one plane (the blank is bowed and loose,
-    F3), the bare check of every spot, calibrations per wipe.
+47. **The calibration area on the real blank:** where it goes (unset it is 40 × 20 mm at the blank place, moved off the
+    purge row; the SIM acceptance used 75 × 14 mm 3 mm above its purge row, and a two-dose job took 9.1 mm of it),
+    flatness with the purge row in one plane (the blank is bowed and loose, F3), the bare check of every spot,
+    calibrations per wipe.
 48. **Image tiles:** dot diameters near the frame edge against the centre (scale error ±3 % in Y, item 18).
 49. **Freshness window** (8 h, `doseRecordMaxAgeH`): does mass per step drift with paste age or barrel level?
 50. **Sustained feed** at 18 psi (2.56 mg/s seen with one-turn dots): where starving begins.
@@ -356,6 +363,18 @@ web UI (pc-web) are still to come. These items need the job or a test board.
     not apply to it).
 52. **The fine-pitch cap** (0.25 mm print) and the −25 %/+10 % band on SOIC-8, headers and PicoBlade after reflow
     (bridges counted).
+53. **A full pad calibration on the machine** before any type counts: the coupon look and N1 touch on real coupons,
+    the ladder's camera checks on the real blank, the operator step (weigh, wipe with isopropyl alcohol, dry, weigh
+    again within 15 min), the decision on measured numbers, then a board run of the new types checked after reflow.
+    The SIM numbers (`il_sim_acceptance.py padcal`: 2.30 mg per turn by design) are never evidence on the machine.
+54. **The Arduino Nano (the next job), top side:** 55 paste openings; 40 cannot be dispensed with the 22G tip (VQFN-32
+    perimeter, USB data, resonator) and 5 more sit on those parts (USB shell tabs, the VQFN exposed pad: not pasted
+    unless "paste the dispensable pads of this part anyway" is set), so those parts are hand-soldered or stencilled.
+    Two sizes need a profile: SW_SPST (2 half-turn dots per pad: the SIM characterizes it) and LED_0805 (1.05 × 1.05
+    mm). No allowed dose brings the LED within −25 %/+10 % of its 1.58 mg (one turn +33 %, half a turn −33 % at 2.11 mg
+    per turn), so Calibrate automatically leaves it `provisional`: a run refuses the board while its 8 pads are blocked
+    (or skips them with Setup › Settings › Refuse flagged pads off). Decide on a reflowed test board (one turn against
+    half a turn) and raise the type by hand, or wait for the test-board ladder (`pc-ladder`, a follow-up).
 
 ## Software limits to keep in mind on the machine (review 1, not fixed yet)
 

@@ -8,7 +8,10 @@ Updated 2026-10-29 for what is built on `il/bench-sync-autoreg` and its web bran
 preview and pad inspector (merged), Register board, the blank probe, home at run and the Z check (`il/ar-webui`,
 `AUTO_REGISTER_DESIGN.md` §8), and the KiCad upload, board thumbnails and "Camera is on FID1" (`il/bi-web-flow`,
 `BOARD_IMPORT_DESIGN.md` §5). Those sections say "as built"; where they differ from the mockups, the code is right.
-Profile › Needs a profile and the pad calibration UI (`PROFILE_CALIBRATION_DESIGN.md` §13) are still to come.
+Profile › Needs a profile, the suggestion card, the pad calibration view and Calibrate › Pad calibration
+(`PROFILE_CALIBRATION_DESIGN.md` §13, slice pc-web, `padprofile.js`) are built: §8.3, §8.4, §9.1 item 5, §13, §16
+and §17 say "as built (pc-web)", written from the code on `il/pc-integration`. Not in this PR: the test-board ladder
+(PC §20 decision 8, `pc-ladder`, a follow-up) and the per-run "Skip these N pads" (decision 6; no API yet).
 
 Mockups (self-contained, no script, light theme) and their screenshots:
 
@@ -574,6 +577,38 @@ each row links to its card. Start angle comes before Purge row so the strip verd
   `dialog.show()` (non-modal) plus our scrim, never `showModal()`; the `[open]` attribute still marks them.
 - Default panel: `What this profile does` and the gate `Lowest pad-type status allowed on a board: characterized`.
 
+**As built (pc-web, PC §13.3–13.4):**
+
+- **Needs a profile** `section.card#pt-needs` above the pad types while the plan shown (or a board file chosen after an
+  upload) has pads without a usable profile: `Needs a profile` + `#pt-needs-count` (the sizes to choose), the source
+  (`From the plan of padcal mvufckey (20:40)`), the lead `These pads get no paste until each has a pad type. Use an
+  existing type of the same size, or let the machine calibrate the suggested one.` and `table#pt-needs-table`, one
+  row per pad size `tr[data-group][data-reason]`: package, parts and pads (`J1, J2 · 4 pads`), openings (`0.86 × 1.83
+  mm openings`), the reason badge (`no pad type`, `not calibrated yet`, …), the suggestion in a few words with its
+  confidence (`New: 2 half turns per pad, ≈ 2.11 mg · medium confidence`, `Use Chip 0603 · medium confidence`), and
+  `Use Chip 0603 · plans again` (one click: the mapping, then the board planned again) or `Calibrate automatically…`
+  (opens the pad-cal view before start), `I’ll do it by hand`, `Suggestion…`. Collapsed below: `Cannot be dispensed
+  with the 22G tip (9 pads)` (`#pt-needs-tip`, no actions) and the notes (`#pt-needs-notes`). Foot:
+  `#btn-needs-use-all` (`Use the matching pad types (n) · plans again`) and `#btn-needs-auto-all` (`Calibrate all
+  automatically… · 2 sizes · ≈ 3:26`). The filter segment gets `Needs a profile · 2` (`#pt-filter-needs`), the nav
+  sub `Needs 3 profiles`. One filled button per screen: the list's own filled button turns plain while the side panel
+  shows a suggestion or the calibration.
+- **The suggestion card** (side panel `#profile/needs/<group>`): `#pt-sugg-reason` (the reason notebox),
+  `#pt-sugg-text` (the sentence: `New pad type SW_SPST_3.9x2.9mm · 1.83 × 0.86 mm: 2 half-turn dots per pad (1.16 mm
+  wide), about 2.11 mg per pad, 8 % less than the 2.29 mg these pads would get at your 0603 rate; at most 0.15 mm
+  past the pad edge.`), `#pt-sugg-preview` (the board's pads with the suggested dots drawn at their size,
+  `circle.pv-sugg`; the plan's own `circle.dot` count is unchanged), `#pt-sugg-kv` (Opening, `Target amount` with its
+  rule after a `·`, Dots per pad and turn, Dot size, Per pad, Spread, Clearances, Phase, Confidence and why),
+  `#pt-sugg-alt` (`Other plans` with why each was not chosen), and `#btn-pt-sugg-use` / `#btn-pt-sugg-auto` /
+  `#btn-pt-sugg-manual` / `#pt-sugg-edit` (`Edit before saving…`); a group the tip cannot dispense shows only
+  `#pt-sugg-tip`.
+- **Pad-type editor and side panel**: `#pt-dotsteps` (`Turn per dot`: `the profile’s (half turn)`, `quarter turn (400
+  steps)`, `half turn (800)`, `one turn (1600)`), `#pt-dotsperpad` (1 to 6, empty = by the pad size), read-only
+  `#pt-calinfo` (tip, recipe, calibrated pad area, weighed mass per pad, origin, last calibration);
+  `Calibrate automatically…` (`#btn-pt-auto`) next to Set up / Validate. Texts replaced: the meta `One recipe; a pad
+  type may use another turn per dot (quarter, half or one turn). Plans made before a change are refused: plan
+  again.`, the column hint `Dots per pad and turn`, a type's dots `2 × ¼ turn`.
+
 ### 8.4 Calibrate (not mocked)
 
 Banner `#cal-history-note`: `Records only: boards use the dispense profile.` Cards, each listing its
@@ -587,6 +622,47 @@ the last 20 touch-offs), **Start angle** (guided dot-pair procedure; `#pf-angle`
 profile), **Dot batch** (`#sd-*`, `#btn-sd-save`), **Dot ladder** (`#dl-*`, `#btn-dl-run` two-press),
 records `#cal-current`, `#cal-table`, `#ladder-table` (ladder of any record via `GET /api/calibrations/{id}/ladder`),
 `#cal-result`. Set up / Validate from a pad type open this workspace with `#setup-guide` filled.
+
+**As built (pc-web, PC §8, §13.5–13.6):** the page meta `The touch-off sets the needle offset, the start angle sets
+where dots start and the pad calibration sets a pad type’s dots. Everything else is a record.`; the banner
+`#cal-history-note` now reads `Boards use the profile’s dot unless a pad type has its own turn (set by Calibrate
+automatically or by hand). The dot ladder and scale cards below are records only: their dots are not phase-locked, so
+partial turns there vary about ±50 % with the screw angle.`; the dot ladder's subtitle `camera · records only (no phase
+lock)`; the cup shots are folded into `Older method: shots into a cup (records only)` (`#cal-shots-older`).
+
+- **Pad calibration** card `#cal-padcal` (`where the test dots go on the blank, the paste, the weigh coupons`): a map
+  `svg#pca-map` (the area and its used band, the purge spots, the coupon places), the area `#pca-x0`, `#pca-y0`,
+  `#pca-w`, `#pca-h` (`Lower-left corner and size. Default: 40 × 20 mm at the blank place, off the purge row.`),
+  `Save the area` `#btn-pca-save`, `Use the default` `#btn-pca-default`; `Left on the blank` `#pca-left` (`… mm
+  left`) and `Blank wiped` `#btn-pca-wiped` (two presses, `The calibration area is free again: 14.0 mm left.`);
+  `Paste`: `New paste loaded` `#btn-pca-paste` (two presses: weighings and camera results from before stop counting);
+  `Weigh coupons`: their places and `#pca-pending` (coupons whose dots wait for their readings, typed here after a
+  STOP or a restart: `#pcal-pf-k`, `#pcal-pe-k`).
+- **Weigh dots** card `#cal-weigh` (the by-hand weighing, PC §8): `#wd-type` (pad type), `#wd-steps` (turn per dot),
+  `#wd-count` (dots per coupon: a whole number of screw turns in total, so the angle ripple cancels), `#wd-plan`,
+  `#wd-pre` (before it runs), `Lay the weigh dots` `#btn-wd-run` (two presses); the readings are then asked for in the
+  pad-cal view.
+- **The guide** (`#setup-guide`, from `I’ll do it by hand`): names the suggestion, `#btn-guide-ladder` lays its
+  ladder (two presses) and `table#pcal-ladder` shows the measured numbers against their limits; then Weigh dots,
+  prefilled, then the type's dots and status in Profile.
+- **The pad-cal panel view** (`?panel=pad-cal`; stays open from every workspace while the operator weighs): before
+  start `#pcal-note` (the summary: `Checks and touches your two weigh coupons (≈ 1:44). Lays 76 test dots on the
+  blank … Then it needs you once: weigh each coupon, wipe it and weigh it again (4 readings). About 0.23 g of paste,
+  ≈ 5:45 before your readings.`), `#pcal-needs` (`You need: two clean weigh coupons on coupon1 and coupon2 (blank PCB,
+  40 × 30 mm, at least 3 g), the balance, a lint-free wipe and isopropyl alcohol.`), `table#pcal-plan` (the steps
+  with their times), `#pcal-groups-list`, `#pcal-fixes` (fix-its for a refusal), `Calibrate · ≈ 5:45`
+  (`#btn-pcal-start`, two presses: the only start); running `ol.phases#pcal-phases` (Home, Z check, Probe the blank,
+  Find and touch the coupons, Test dots on the blank, Weigh dots on the coupons, Your readings, Decide, Plan again), `#pcal-live`
+  (`0 of 6 dots`), `table#pcal-ladder`, `STOP stops it at once (F9).`; the readings `div.ri.ri--need#pcal-ask`
+  (`#pcal-ask-text`, per coupon its camera picture `#pcal-coupon-k`, `#pcal-full-k` and `#pcal-empty-k` in grams,
+  `#pcal-mg-k` `= 78 mg of paste (0.574 mg per dot)`), `Save the readings` `#btn-pcal-readings`, `Skip weighing (the
+  types stay provisional: boards still refuse these pads)` `#btn-pcal-skip`, `Cancel the calibration`
+  `#btn-pcal-cancel`; a reload or a second browser brings the prompt back; the result `div.ri#pcal-result` (the first
+  sentence, e.g. `Characterized 20:47: …; planned again.`, the control's drift), `#pcal-groups` (per group its numbers
+  and checks), `#pcal-crops` (camera crops, 12 px under the card), `#pcal-pred` (`Predicted and measured`, P1–P8),
+  and `Calibrate again…` `#btn-pcal-again`, `Type the readings` `#btn-pcal-weigh-now` (a stopped job's coupons),
+  `Finish the calibration` `#btn-pcal-finish`, `I’ll do it by hand` `#btn-pcal-manual`, `Checks ›` `#btn-pcal-plan`
+  (the board planned again).
 
 ### 8.5 Records (not mocked)
 
@@ -615,7 +691,7 @@ the Run button state and the tab title. Nothing else may compute "ready". Unit-t
 | 2 | Start angle (I11) | I11 `ok` or `off` | reconnect → needs-you: the two answers in place; never set → blocked: `Measure the angle` |
 | 3 | Needle offset (I4 needle) | frame set, touched off or confirmed, drift ≤ 1.0 mm | not touched off but frame set → needs-you: `Confirm frame offset −2.590 mm`; frame missing / needle changed → blocked: `Open Needle Z frame` |
 | 4 | Regulator (I6, you) | a valid attestation (§9.4) | needs-you: `Pressure on to read the gauge` + `Reads 18 psi` |
-| 5 | Pad types (PLAN) | no blocked pads | blocked: `3 pads below characterized: chip-0603 ×2, sot-23 ×1` → each opens that type |
+| 5 | Pad types (PLAN) | no blocked pads | blocked: `3 pads below characterized: chip-0603 ×2, sot-23 ×1` → each opens that type. **As built (pc-web), with the plan's profile check:** groups that need a profile → `Blocked · needs a profile`, `21 pads cannot be dispensed: 12 need a profile, 9 not with the 22G tip (WSON-8…)`, fixes `Use Chip 0603 for TestChip_A · plans again` / `Needs a profile: SW_SPST_3.9x2.9mm` (up to 3), `All 3 in Profile › Needs a profile`, `Lowest pad-type status`; only pads the tip cannot dispense → blocked, `9 pads cannot be dispensed with the 22G tip: WSON-8… (9 pads).`, fixes `Dispense the rest (Setup › Settings › Refuse flagged pads)` and `Why`; only notes → a Note that counts ready (`160/160 · 2 notes`). The Pad types tile goes to `#profile/needs` |
 | 6 | Board surface (I4 board) | tied to this plan's registration, covers every dot, fit ok, and the operator did not answer "new seat" since | needs-you: `Probe this seat` / `Same board, not moved`; fit or coverage problem → blocked with the bad points/dots. **As built:** the fix is `Register board` (`register`, two-press) or `Same seat? Check the fiducials` (`register-check`), with `Do it by hand`; texts `No board surface for this seat yet: register the board (fiducials, then N1 touches the board).`, `You said the board was re-seated: register it …`, `The board surface belongs to another seat of this board: register it again.` |
 | 7 | Plan current | plan exists on the server and its fingerprints match (profile, surface, needle, registration) | needs-you: `Plan again` (in place); 404 → `Plan forgotten (OpenPnP restarted): plan again` |
 | 8 | Purge row (I9) | `spotsLeft ≥ perBoard` | needs-you: `Wiped: reset row` (two-press); not set → blocked: `Set the purge row` |
@@ -891,6 +967,22 @@ line):
 | REG / PROBE refusals (as built) | the engine's text (`AUTO_REGISTER_DESIGN.md` §6.2) | `Look with the camera` · `Change board` · `Plan without fiducial correction` · `Register again` · `Do it by hand` · `Probe the blank…` |
 | Upload while a task runs (as built) | `Upload the board when the run has finished.` | — |
 
+**Missing paste profiles and the pad calibration (as built, pc-web; PC §13):**
+
+| Where | Exact text |
+|---|---|
+| Strip, a job's engine step | `Pad calibration · test dots 14/48 · ≈ 2:50 left` (`Pad calibration` alone when the strip is narrow); between steps `Pad calibration · deciding`; at the readings `Waiting for you · weigh` (a click opens the pad-cal view) |
+| Locked control while a job runs | `Locked while the pad calibration runs`; while it waits for readings, a new calibration: `A pad calibration is waiting for its readings: finish or cancel it first` |
+| Run › Checks item 5 | `Blocked · needs a profile`, `21 pads cannot be dispensed: 12 need a profile, 9 not with the 22G tip (WSON-8…)`; tip only: `9 pads cannot be dispensed with the 22G tip: WSON-8… (9 pads).` + `Dispense the rest (Setup › Settings › Refuse flagged pads)` |
+| Upload preview warning (`NEEDS_PROFILE`) | `4 packages need a profile: TestChip_A (no pad type), SW_SPST_3.9x2.9mm (no pad type), Test_Strip_0.62x1.50 (no pad type), WSON-8-1EP_2x2mm_P0.5mm_EP0.9x1.6mm (cannot be dispensed with the 22G tip). After saving, choose a suggestion for each in Profile › Needs a profile.` (one line per reason in the dialog, the tip's last) |
+| Needs a profile lead | `These pads get no paste until each has a pad type. Use an existing type of the same size, or let the machine calibrate the suggested one.` |
+| Reason badges | `no pad type` · `not calibrated yet` · `cannot be dispensed with the 22G tip` · the group's `short` for the others |
+| Before start | the engine's sentence (`WEB_API.md` §3.5) and `You need: two clean weigh coupons on coupon1 and coupon2 (blank PCB, 40 × 30 mm, at least 3 g), the balance, a lint-free wipe and isopropyl alcohol.`; button `Calibrate · ≈ 5:45`; started `Pad calibration started: STOP stops it at once (F9).` |
+| Readings prompt | `The dots are laid and the head is parked over the purge row. For each coupon: put it on the balance and type the reading; wipe the paste off with a lint-free wipe and isopropyl alcohol, let it dry, put it back on the balance and type the second reading. Coupon 1 has 136 quarter-turn dots (about 0.072 g); … Waiting for you since 21:25.`; echo `= 78 mg of paste (0.574 mg per dot)`, else `Type both readings in grams.`; `Save the readings` · `Skip weighing (the types stay provisional: boards still refuse these pads)` · `Cancel the calibration` |
+| Result, first sentence | `Characterized 21:50: SW_SPST_3.9x2.9mm · 1.83 × 0.86 mm gets 2 half-turn dots per pad, about 2.29 mg per pad (0 % more than the 2.29 mg target); …; planned again.` · `Not characterized 21:58: … stays provisional: the two start angles of the half-turn dots differ 19 % in area (at most 13 % allowed); …` · `Measured 22:02: 62 half-turn dots on the blank: the dots landed 0.20 mm off on average (at most 0.15 mm allowed): check the needle offset.` · `Failed 22:03: Coupon 1 is not at its place: …` · `Stopped 13:06 during weigh: the blank results were kept; the coupons still need weighing until 21:13.`; the control's drift `The validated half turn now gives 1.15 mg, 9 % more than the 1.06 mg weighed on 2026-10-27.` |
+| Decider check lines (shown as the engine words them) | `Amount 2.37 mg per pad (target 2.29 mg per pad, -25 % to +10 %)`, `overhang 0.12, dot gap 2.83, copper gap 2.99 mm (limits overhang 0.20, gaps 0.30 / 0.15 mm)`: the engine still writes a hyphen for the minus and a single mm for the list (open UI need: `−25 %`, a unit on every number) |
+| Calibrate › Pad calibration | `Lower-left corner and size. Default: 40 × 20 mm at the blank place, off the purge row.` · `The calibration area is free again: 14.0 mm left.` · `New paste noted: weighings and camera results from before stop counting.` · `Wipe the area with a lint-free wipe and isopropyl alcohol first.` |
+
 ## 14. Keyboard and pointer
 
 | Key | Action |
@@ -1001,6 +1093,23 @@ duplicate id). `#run-live` carries `data-label` and `data-status` mirroring `run
   `board-preplan`, `dlg-board-import`, `board-import-*` (`drop`, `file`, `size`, `status`, `preview`, `found`, `warn`,
   `packages`, `paste-dnp`, `name`, `name-err`, `slug`, `exists`, `stale`, `attach`, `saved`), `btn-board-import-*`
   (`choose`, `cancel`, `save`, `attach`, `use`, `again`, `other`).
+- Missing paste profiles (pc-web, `padprofile.js`, PC §13): Profile `pt-needs` (`-count`, `-src`, `-state`, `-lead`,
+  `-table` with `tr[data-group][data-reason]` and `button[data-action=open|use|auto|manual]`, `-tip`, `-tip-s`,
+  `-notes`, `-notes-s`, `-host`), `btn-needs-use-all`, `btn-needs-auto-all`, `needs-why`, `pt-filter-needs`; the
+  suggestion card `pt-sugg` (`-back`, `-e`, `-n`, `-b`, `-reason`, `-text`, `-preview`, `-pvhost`, `-cap`, `-kv`,
+  `-alt`, `-tip`, `-why`, `-edit`), `btn-pt-sugg-use`, `btn-pt-sugg-auto`, `btn-pt-sugg-manual`; the editor
+  `pt-dotsteps`, `pt-dotsperpad`, `pt-calinfo`, side panel `btn-pt-auto`; the pad-cal view `pcal-*` (`note`, `needs`,
+  `plan`, `groups-list`, `fixes`, `refusal`, `why`, `start-l`, `phases`, `live`, `ladder`, `ladder-box`, `ask`,
+  `ask-text`, `ask-ref`, `coupons`, `coupon-k`, `full-k`, `empty-k`, `mg-k`, `pending`, `pf-k`, `pe-k`, `result`,
+  `result-t`, `result-more`, `groups`, `crops`, `pred`, `pred-d`, `drift`, `foot-why`, `stopline`), `btn-pcal-*`
+  (`start`, `readings`, `skip`, `cancel`, `again`, `weigh-now`, `finish`, `manual`, `plan`); the upload's
+  `board-import-profile`; the pad inspector's `pad-insp-profile`, `btn-pad-insp-use`, `btn-pad-insp-auto`,
+  `btn-pad-insp-manual`; Calibrate `cal-padcal` (`pca-map`, `pca-x0`, `pca-y0`, `pca-w`, `pca-h`, `pca-hint`,
+  `pca-left`, `pca-far`, `pca-coupons`, `pca-pending`, `pca-paste-now`, `pca-wiped-reason`), `btn-pca-save`,
+  `btn-pca-default`, `btn-pca-wiped`, `btn-pca-paste`, `cal-weigh` (`wd-type`, `wd-steps`, `wd-count`, `wd-plan`,
+  `wd-pre`, `wd-reason`), `btn-wd-run`, `btn-guide-ladder`, `guide-target`, `cal-shots-older`; fix-its `data-fix` =
+  `profile-use`, `profile-needs`, `pcal-open`, `pcal-area`, `pcal-wiped`. The board view's suggested dots are
+  `g.pv-l-sugg circle.pv-sugg` (never `circle.dot`). Tested by `pad-profile.playwright.cjs` (PC §14.4).
 
 **Removed:** `banner`, `banner-text`, `banner-close` (replaced by `msg-area` and inline refusals), `tab-run`,
 `tab-dispense`, `tab-calibrate`, `tab-profiles` containers (replaced by `[data-workspace]` sections with ids
@@ -1046,6 +1155,11 @@ duplicate id). `#run-live` carries `data-label` and `data-status` mirroring `run
 **As built:** `GET /api/plans`, `run.pressureOnAtMs` and `server.simulated` (with `server.simulatorConfirmed`) exist
 (`WEB_API.md`); `run.checkDone` / `run.checkPlanned` do not (the camera tour is estimated, labelled `≈`). Register board
 added `run.detail`, `run.nextPlanId`, `machine.home`, `machine.zCheck` and `dispense.newSeatAtMs` (`WEB_API.md` §3.1).
+The pad calibration (pc-task, pc-web) added `status.padCalibration` (the job view, with `result.newPlanId` loaded once
+per job id), `run.label` `pad calibration`, the plan's `profileCheck` and per-pad / per-dot dose fields, the upload
+preview's profile column, and the routes of `WEB_API.md` §3.4–3.5 (the crops as PNG; the SIM balance and paste for
+tests). Still missing for the UI: a per-run skip of undispensable pads (PC §20 decision 6: `POST /api/run`
+`{skipPads}` recorded as `skippedPads`); until then the Pad types card points to the Refuse flagged pads setting.
 | Run-only abort (stop after this dot, stay connected and homed) | softer stop | not offered; STOP is the only stop (open question, not required) |
 
 ## 18. Acceptance checklist
