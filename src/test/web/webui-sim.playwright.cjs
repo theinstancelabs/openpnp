@@ -719,10 +719,12 @@ async function runFirstDots(page, n) {
           dotNotes: [null, null, null, null, 'joined to the dot at gap 0.000 mm', 'no dot, only strings or a smear (0.10 mm²)', null],
           contactGapMm: 0.0625, bracketHighMm: 0.075, bracketLowMm: 0.05, referenceDiameterMm: 1.06, reason: 'dot squashed between 0.075 and 0.050 mm' }, pitchMm: 1.6, blank: 'blank' }) };
       await page.route('**/api/calibrations', async (route) => {
-        const res = await route.fetch();
-        const body = await res.json();
-        body.touchOffs = [fake].concat(body.touchOffs || []);
-        await route.fulfill({ response: res, json: body });
+        try {
+          const res = await route.fetch();
+          const body = await res.json();
+          body.touchOffs = [fake].concat(body.touchOffs || []);
+          await route.fulfill({ response: res, json: body });
+        } catch (e) { /* unrouted while it was being answered: Playwright let the request go on */ }
       });
       await page.evaluate(() => IL.pcr.loadCalibrations());
       await page.waitForFunction(() => document.querySelectorAll('#to-result .cal-to__t tbody tr').length === 7, null, { timeout: 10000 }).catch(() => {});
