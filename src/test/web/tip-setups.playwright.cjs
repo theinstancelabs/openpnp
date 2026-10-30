@@ -656,7 +656,7 @@ const ticks = (page) => page.evaluate(() => { IL.attest.set('regulator', IL.S.st
     const unticked = confirmShown ? !(await page.isChecked('#run-tick-tip')) : tickGone;
     check('(10) the run confirm\'s #run-confirm-tip is unticked after the mount', tickGone && unticked, { tickGone, confirmShown });
     if (confirmShown) {
-      await shoot(page, 'run-confirm-tip');
+      await shoot(page, 'run-confirm-tip', () => page.evaluate(() => { const t = document.getElementById('run-confirm-tip'); if (t) t.scrollIntoView({ block: 'center' }); }));
       await page.click('#btn-run-cancel');
     }
 
@@ -664,18 +664,27 @@ const ticks = (page) => page.evaluate(() => { IL.attest.set('regulator', IL.S.st
     await closePanels(page);
     const lib11 = await api(page, 'GET', '/api/tip-setups');
     const up = ((lib11.setups || []).find((x) => x.key === k25) || {}).photos.find((p) => p.kind === 'setup' && p.removable);
-    await page.evaluate(() => IL.go('#records/calibrations'));
-    await page.evaluate((id) => IL.go('#records/calibrations/p' + id), c7.id);
-    await page.waitForSelector('#panel figure.rec-photo button', { timeout: 15000 });
-    // a result photo: no remove button
-    const resultBtn = await page.evaluateHandle(() => Array.from(document.querySelectorAll('#panel figure.rec-photo button')).find((b) => /Top camera/.test(b.title)));
-    if (resultBtn && (await resultBtn.evaluate((b) => !!b))) {
-      await resultBtn.click();
-      await page.waitForSelector('#photo-view', { timeout: 5000 });
-      check('(11) a result photo has no remove button', await page.isHidden('#btn-photo-remove'));
+    // a result photo: no remove button. The record of (7) has one when its job laid dots of its own, else the newest
+    // record that has one (a calibration decided from fresh evidence links none), else the newest result photo of all
+    // (the landing check's or the measure's) in the same viewer
+    const recs11 = await api(page, 'GET', '/api/pad-calibrations?limit=100');
+    const hasResult = (r) => (r.photos || []).some((p) => p.kind === 'result' && !p.removedAtMs);
+    const r11 = recs11.find((x) => x.id === c7.id && hasResult(x)) || recs11.find(hasResult);
+    if (r11) {
+      await page.evaluate(() => IL.go('#records/calibrations'));
+      await page.evaluate((id) => IL.go('#records/calibrations/p' + id), r11.id);
+      await page.waitForSelector('#panel figure.rec-photo button', { timeout: 15000 }).catch(() => null);
+      const resultBtn = await page.evaluateHandle(() => Array.from(document.querySelectorAll('#panel figure.rec-photo button')).find((b) => /Top camera/.test(b.title)));
+      if (resultBtn && (await resultBtn.evaluate((b) => !!b))) await resultBtn.click();
+    } else {
+      const rp = ((await api(page, 'GET', '/api/photos?kind=result&limit=1')) || [])[0];
+      if (rp) await page.evaluate((p) => IL.photos.view(p, {}), rp);
+    }
+    if (await page.waitForSelector('#photo-view', { timeout: 5000 }).then(() => true, () => false)) {
+      check('(11) a result photo has no remove button', await page.isHidden('#btn-photo-remove'), { record: r11 ? r11.id : null });
       await page.keyboard.press('Escape');
       await page.waitForSelector('#photo-view', { state: 'detached', timeout: 5000 });
-    } else check('(11) a result photo has no remove button', false, 'no result photo in the record');
+    } else check('(11) a result photo has no remove button', false, 'no result photo');
     // the uploaded setup picture: STOP stays clickable while #photo-view is open, Esc closes it
     await page.evaluate(() => IL.go('#setup/tip'));
     await page.evaluate(() => IL.tips.openChange({ select: '25g-straight' }));

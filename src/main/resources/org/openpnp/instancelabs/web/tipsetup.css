@@ -160,6 +160,8 @@ details.menu[open] > summary .ic { transform: rotate(-90deg); }
 .pt-tip__a { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .pt-tip__none { margin: 0; font-size: 13.5px; }
 .pt-hist__tools { padding: 0 24px 4px; }
+/* the history's Tip column made the table wider than 1000 px: a wide screen shows it whole (narrower ones scroll it) */
+#dlg-history { width: min(1360px, calc(100vw - 48px)); }
 .su-frame-q { display: flex; gap: 12px; align-items: flex-start; }
 .su-frame-q[hidden] { display: none; }
 .su-frame-q__t { display: flex; flex-direction: column; gap: 6px; }
@@ -184,4 +186,6 @@ details.menu[open] > summary .ic { transform: rotate(-90deg); }
 
 /* ------------------------------------------------------------------ Run: the tip in the run confirm and the recipe token */
 #run-confirm-tip .tip-thumb { flex: none; }
+/* a row of its own: the tip's name, its picture and "after every needle change" (in half the row the name took 5 lines) */
+#dlg-run #run-confirm-tip { grid-column: 1 / -1; }
 .recipe .recipe__tip { color: var(--ink-2); }
