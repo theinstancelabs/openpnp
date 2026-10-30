@@ -81,6 +81,35 @@ public class SimGuardTest {
         assertTrue(SimGuard.isSimulated(sim.machine));
     }
 
+    /**
+     * What asks at a connect is noted after the last connection's answer is forgotten, in SimGuard's one
+     * listener, so every connect of the simulator is confirmed at once, whatever order OpenPnP fires its
+     * listeners in; with nothing asking, a connect needs an M115 of its own again.
+     */
+    @Test
+    public void theAnswerAskedAtAConnectIsNotedAfterTheForget() throws Exception {
+        sim = new SimMachine(false);
+        sim.server.firmwareName = "GcodeServer (RecordingGcodeServer)";
+        SimGuard.askAtConnect(sim.machine, () -> new DriverGcodeChannel(sim.driver).sendAndCollect("M115", 5000));
+        for (int i = 1; i <= 3; i++) {
+            sim.machine.setEnabled(true);
+            assertTrue(SimGuard.isSimulated(sim.machine), "asked at connect " + i);
+            sim.machine.setEnabled(false);
+            assertFalse(SimGuard.isSimulated(sim.machine), "forgotten on disable");
+        }
+        SimGuard.askAtConnect(sim.machine, () -> {
+            throw new IllegalStateException("no answer");
+        });
+        sim.machine.setEnabled(true);
+        assertFalse(SimGuard.isSimulated(sim.machine), "a failed question confirms nothing");
+        sim.machine.setEnabled(false);
+        SimGuard.askAtConnect(sim.machine, null);
+        sim.machine.setEnabled(true);
+        assertFalse(SimGuard.isSimulated(sim.machine), "nothing asks");
+        identify();
+        assertTrue(SimGuard.isSimulated(sim.machine));
+    }
+
     @Test
     public void serialWithAnUnusedLoopbackTcpEntryIsNotSimulated() throws Exception {
         sim = new SimMachine(false);

@@ -156,7 +156,7 @@
     n.key = el('div', { class: 'bi-key', 'aria-hidden': 'true' },
       el('span', { 'data-k': 'paste' }, el('i', { class: 'bi-sw' }), 'gets paste'),
       el('span', { 'data-k': 'wait' }, el('i', { class: 'bi-sw bi-sw--wait' }), 'pad type to characterize'),
-      el('span', { 'data-k': 'block' }, el('i', { class: 'bi-sw bi-sw--block' }), 'no pad type yet'),
+      el('span', { 'data-k': 'block' }, el('i', { class: 'bi-sw bi-sw--block' }), IL.padProfile ? 'needs a profile' : 'no pad type yet'),   // H-P6
       el('span', { 'data-k': 'none' }, el('i', { class: 'bi-sw bi-sw--dim' }), 'not dispensed'));
     n.found = el('div', { class: 'bi-found', id: 'board-import-found' });
     n.attach = el('div', { class: 'notebox notebox--info bi-attach', id: 'board-import-attach', hidden: true });
@@ -403,7 +403,7 @@
     const out = new Map();
     for (const p of pv.placements || []) {
       const k = pk.get(p.packageId);
-      let o = p.type === 'Fiducial' || p.outcome === 'not-dispensed' ? 'none' : p.outcome === 'no-pad-type' ? 'block' : 'paste';
+      let o = p.type === 'Fiducial' || p.outcome === 'not-dispensed' ? 'none' : p.outcome === 'no-pad-type' || p.outcome === 'needs-profile' ? 'block' : 'paste';
       if (o === 'paste' && k && !k.fiducial) o = blocked(k) ? 'block' : waiting(k) ? 'wait' : 'paste';
       out.set(p.id, o);
     }
@@ -544,6 +544,7 @@
       tr.addEventListener('focus', hi);
       return tr;
     }));
+    if (IL.padProfile) IL.padProfile.importRows(n.pkgs, pv);   // the profile column (PROFILE_CALIBRATION_DESIGN.md §13.7, H-P6)
   }
   /** No pad type for some of the package's pads; its pad types not all characterized yet. */
   const blocked = (p) => !p.fiducial && (!(p.padTypes || []).length || (p.padTypes || []).some((t) => !t.typeKey));
@@ -717,12 +718,15 @@
       return el('li', {}, el('div', { class: 'bi-todo__t' }, el('b', { text: typeLabel(t) }),
         el('span', { class: 'muted', text: ' · ' + (t.status ? statusText(t.status) : 'not characterized') + ' · ' + refList(refs, 3) })), b);
     });
+    // with the profile check: the packages that need a profile and their actions instead of "New pad type" (H-P6)
+    const pp = how !== 'attach' && IL.padProfile ? IL.padProfile.importSaved(pv, { file: M.saved.file, name: M.saved.name, leaveTo }) : null;
     n.saved.replaceChildren(...[
       el('div', { class: 'bi-saved__head' }, IL.glyph('ok'), el('div', {}, head)),
-      todo.length ? el('div', { class: 'bi-todo' },
+      pp || null,
+      !pp && todo.length ? el('div', { class: 'bi-todo' },
         el('h3', { text: IL.plural(todo.length, 'package needs', 'packages need') + ' a pad type before ' + (todo.length === 1 ? 'its' : 'their') + ' parts get paste' }),
         el('ul', {}, rows)) : null,
-      crows.length ? el('div', { class: 'bi-todo' },
+      !pp && crows.length ? el('div', { class: 'bi-todo' },
         el('h3', { text: crows.length === 1 ? 'Characterize this pad type before its parts get paste' : 'Characterize these pad types before their parts get paste' }),
         el('ul', {}, crows)) : null,
       el('p', { class: 'bi-saved__next', text: how === 'attach'

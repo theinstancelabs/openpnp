@@ -13,7 +13,9 @@
 #      fiducial). The web API listens on $IL_API_PORT (env var read by ApiSettings).
 #   4. Playwright (headless Chromium) runs webui-sim.playwright.cjs with SIM_SCENE = the session's scene file (the
 #      test rewrites it, e.g. FID2 hidden: the session reloads it on change), then board-import.playwright.cjs in the
-#      same session (BOARD_IMPORT_DESIGN.md §6.6 b: upload, board drawing, preview, inspector; nothing moves).
+#      same session (BOARD_IMPORT_DESIGN.md §6.6 b: upload, board drawing, preview, inspector; nothing moves), then
+#      pad-profile.playwright.cjs (PROFILE_CALIBRATION_DESIGN.md §14.4: missing paste profiles and a pad calibration
+#      end to end with the SIM paste and balance; it moves the SIM; screenshots to PP_SHOTS_DIR, PP_SHOTS=0 skips).
 #
 # Needs: target/openpnp-gui-*.jar built (mvn -q -T1 -DskipTests package), openpnp-uinav built,
 #        Playwright installed in $PLAYWRIGHT_DIR (npm i playwright; npx playwright install chromium).
@@ -69,3 +71,5 @@ export SIM_SCENE="$SESSION_CONFIG/instancelabs/sim-scene.json"
 export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/tmp/il-webui-pw-browsers}"
 node "$HERE/webui-sim.playwright.cjs"
 node "$HERE/board-import.playwright.cjs"
+# missing paste profiles and the pad calibration (PROFILE_CALIBRATION_DESIGN.md §14.4): moves the SIM, ≈ 6 min
+SHOTS_DIR="${PP_SHOTS_DIR:-$OUT_DIR/pad-profile-shots}" node "$HERE/pad-profile.playwright.cjs"

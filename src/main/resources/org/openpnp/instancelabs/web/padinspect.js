@@ -215,6 +215,7 @@
       el('div', { id: 'pad-insp-rule' }),
       el('dl', { class: 'kv kv--wrap', id: 'pad-insp-kv' }),
       el('div', { id: 'pad-insp-flags' }),
+      el('div', { id: 'pad-insp-profile', hidden: true }),
       IL.sectionK('Dots of this pad'),
       el('table', { class: 'tbl', id: 'pad-insp-dots' },
         el('thead', {}, el('tr', {}, el('th', { class: 'r', text: '#' }), el('th', { class: 'r' }, IL.unitText('X (mm)')),
@@ -301,7 +302,7 @@
         ['Pad type', pad.typeKey ? typeName(pad, t) + ' · v' + (t ? t.version : pad.typeVersion) + ' · ' + ((t ? t.status : pad.typeStatus) || '—') : 'none'],
         ['Opening', IL.nb(opening(pad)) + ' · ' + (pad.source === 'FOOTPRINT' ? 'KiCad paste opening' : pad.source === 'PAD_TYPE' ? 'pad type default' : (pad.source || '—'))],
         ['Area', Number.isFinite(pad.areaMm2) ? IL.nb(IL.fmt(pad.areaMm2, 3) + ' mm²') : '—'],
-        ['Amount', Number.isFinite(pad.targetVolumeMm3) ? 'A ' + IL.fmt(pad.tMm, 2) + ' mm stencil would print ' + IL.fmt(pad.targetVolumeMm3, 3) + ' mm³ ('
+        ['Amount', IL.padProfile && IL.padProfile.amountText(pad) ? IL.padProfile.amountText(pad) : Number.isFinite(pad.targetVolumeMm3) ? 'A ' + IL.fmt(pad.tMm, 2) + ' mm stencil would print ' + IL.fmt(pad.targetVolumeMm3, 3) + ' mm³ ('
           + IL.fmt(pad.targetMassMg, 2) + ' mg) here.' : '—', 'Information only: the dose is the dispense profile\'s turn per dot'],
         ['Dots', dotsWhy(pad, t)],
         ['Turn per dot', IL.turnLabel(prof.netStepsPerDot, prof.stepsPerRev) + (Number.isFinite(pad.rotationPerDotDeg) ? ' (' + IL.fmtDeg(pad.rotationPerDotDeg, 1) + ')' : '')],
@@ -309,9 +310,11 @@
         ['Dispense Z', zs.length ? IL.nb(IL.fmt(Math.min(...zs), 3) + (zs.length > 1 && Math.max(...zs) - Math.min(...zs) > 5e-4 ? ' to ' + IL.fmt(Math.max(...zs), 3) : '') + ' mm') : '—'],
       ]);
     }
-    // flags: why a pad is blocked, in plain words
-    IL.keyed($('pad-insp-flags'), JSON.stringify([sel.padId, pad && pad.flags, t && t.status]), () => (pad && pad.flags ? pad.flags : [])
-      .map((fl) => el('div', { class: 'notebox notebox--block', 'data-flag': fl, text: FLAG_TEXT[fl] ? FLAG_TEXT[fl](pad, t) : fl })));
+    // flags: why a pad is blocked, in plain words; a pad that needs a profile gets one notebox and its actions instead
+    // of the pad-type flags and "New pad type" (PROFILE_CALIBRATION_DESIGN.md §13.8, H-P7)
+    const pp = IL.padProfile ? IL.padProfile.inspectorBlock($('pad-insp-profile'), pad, p) : false;
+    IL.keyed($('pad-insp-flags'), JSON.stringify([sel.padId, pad && pad.flags, t && t.status, pp]), () => (pad && pad.flags ? pad.flags : [])
+      .filter((fl) => !pp || (fl !== 'NO_PAD_TYPE' && fl !== 'STATUS_BELOW_MIN')).map((fl) => el('div', { class: 'notebox notebox--block', 'data-flag': fl, text: FLAG_TEXT[fl] ? FLAG_TEXT[fl](pad, t) : fl })));
     // the dots of the pad in path order
     IL.keyed($('pad-insp-dots').tBodies[0], JSON.stringify([p.planId, sel.padId]), () => padDots.map((d) => el('tr', {},
       el('td', { class: 'r', text: String(d.index + 1) }), el('td', { class: 'r', text: IL.fmt(d.x, 2) }), el('td', { class: 'r', text: IL.fmt(d.y, 2) }),
@@ -320,7 +323,7 @@
     // edit the pad type (or make one for the package)
     const edit = $('pad-insp-edit');
     const href = pad && pad.typeKey ? '#profile/pad-types/' + encodeURIComponent(pad.typeKey) : pkg ? '#profile/new-pad-type/' + encodeURIComponent(pkg) : null;
-    IL.patch(edit, { text: pad && pad.typeKey ? 'Edit pad type ' + typeName(pad, t) : pkg ? 'New pad type for ' + pkg : 'Edit pad type', hidden: !href || !pads.length });
+    IL.patch(edit, { text: pad && pad.typeKey ? 'Edit pad type ' + typeName(pad, t) : pkg ? 'New pad type for ' + pkg : 'Edit pad type', hidden: !href || !pads.length || (pp && !(pad && pad.typeKey)) });
     edit.dataset.href = href || '';
     IL.patch($('pad-insp-prev'), { disabled: list.length < 2 });
     IL.patch($('pad-insp-next'), { disabled: list.length < 2 });

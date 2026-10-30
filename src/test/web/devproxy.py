@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""devproxy.py --web DIR --api http://127.0.0.1:PORT [--port 18990] [--fixtures DIR]
+"""devproxy.py --web DIR --api http://127.0.0.1:PORT [--port 18990] [--fixtures DIR] [--route-fixtures DIR [--routes FILE]]
 
 UI development without rebuilding the jar: serves DIR/index.html at / and DIR/<name> at /static/<name> from disk
 (with the same Content-Security-Policy as the embedded API server), and forwards /api/* to a running OpenPnP web API
@@ -17,8 +17,19 @@ UI development without rebuilding the jar: serves DIR/index.html at / and DIR/<n
                             the drawing's size and fiducials, art {id, kind}; plus synthetic per-dot times (0.6 s per dot:
                             dots[i].ta / .te) and "dot": {"diameterMm": 0.6}. A plan that already has a board block keeps
                             it (the server makes them once the import is merged); everything else goes to the session.
+
+--route-fixtures DIR (development only: answers the server does not give yet, or a state that takes minutes to reach,
+  docs/instancelabs/PROFILE_CALIBRATION_DESIGN.md §13; e.g. src/test/web/fixtures/padprofile): DIR/routes.json (or
+  --routes FILE in DIR) maps "METHOD /api/path" (a * in the path matches any run of characters, the query is ignored)
+  to the answer:
+    "file.json"                              the file's JSON, 200
+    {"status": 202, "file": "file.json"}     the file's JSON with that status
+    {"merge": {"key": "file.json"}}          the session's own answer with those keys set from the files (e.g. the
+                                             status with a padCalibration job in a given state)
+  Keys starting with "_" are notes. Files are read at every request, so they can be edited while it runs.
 """
 import argparse
+import fnmatch
 import glob
 import hashlib
 import json
@@ -116,7 +127,46 @@ class Fixtures:
         return plan
 
 
-def make_handler(web, api, fx):
+class RouteFixtures:
+    """Canned answers per route from --route-fixtures DIR (read at every request)."""
+
+    def __init__(self, root, routes):
+        self.root = os.path.abspath(root)
+        self.file = os.path.join(self.root, routes)
+        if not os.path.isfile(self.file):
+            raise SystemExit("devproxy: no routes file %s" % self.file)
+
+    def _load(self, name):
+        with open(os.path.join(self.root, name), encoding="utf-8") as fh:
+            return json.load(fh)
+
+    def find(self, method, path):
+        """The route's answer spec (a dict) or None."""
+        with open(self.file, encoding="utf-8") as fh:
+            routes = json.load(fh)
+        for k, v in routes.items():
+            if k.startswith("_") or " " not in k:
+                continue
+            m, pat = k.split(" ", 1)
+            if m.upper() == method and fnmatch.fnmatchcase(path, pat):
+                return {"status": 200, "file": v} if isinstance(v, str) else v
+        return None
+
+    def answer(self, spec):
+        return spec.get("status", 200), json.dumps(self._load(spec["file"])).encode()
+
+    def merge(self, spec, data):
+        try:
+            out = json.loads(data)
+        except ValueError:
+            return data
+        if isinstance(out, dict):
+            for k, f in spec["merge"].items():
+                out[k] = self._load(f) if isinstance(f, str) else f
+        return json.dumps(out).encode()
+
+
+def make_handler(web, api, fx, rf=None):
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a):
             pass
@@ -144,6 +194,10 @@ def make_handler(web, api, fx):
         def _proxy(self):
             n = int(self.headers.get("Content-Length") or 0)
             body = self.rfile.read(n) if n else None
+            spec = rf.find(self.command, self.path.split("?")[0]) if rf else None
+            if spec and "file" in spec:
+                code, data = rf.answer(spec)
+                return self._send(code, data, "application/json")
             req = urllib.request.Request(api + self.path, data=body, method=self.command,
                                          headers={"Content-Type": self.headers.get("Content-Type", "application/json")})
             try:
@@ -159,6 +213,8 @@ def make_handler(web, api, fx):
                     data = json.dumps(fx.augment(json.loads(data))).encode()
                 except ValueError:
                     pass
+            if spec and "merge" in spec and code == 200:
+                data = rf.merge(spec, data)
             self._send(code, data, ctype)
 
         def _art(self, art_id):
@@ -191,11 +247,15 @@ def main():
     ap.add_argument("--api", required=True, help="base URL of the OpenPnP web API, e.g. http://127.0.0.1:33693")
     ap.add_argument("--port", type=int, default=18990)
     ap.add_argument("--fixtures", help="board drawings and board-map.json (e.g. src/test/web/fixtures)")
+    ap.add_argument("--route-fixtures", help="canned answers per route (e.g. src/test/web/fixtures/padprofile)")
+    ap.add_argument("--routes", default="routes.json", help="the routes file in --route-fixtures (default routes.json)")
     a = ap.parse_args()
     fx = Fixtures(a.fixtures) if a.fixtures else None
-    srv = ThreadingHTTPServer(("127.0.0.1", a.port), make_handler(os.path.abspath(a.web), a.api.rstrip("/"), fx))
-    print("devproxy http://127.0.0.1:%d/ -> %s (web %s%s)" % (a.port, a.api, os.path.abspath(a.web),
-                                                              ", fixtures %s: %d drawings, %d boards" % (fx.root, len(fx.arts), len(fx.map)) if fx else ""),
+    rf = RouteFixtures(a.route_fixtures, a.routes) if a.route_fixtures else None
+    srv = ThreadingHTTPServer(("127.0.0.1", a.port), make_handler(os.path.abspath(a.web), a.api.rstrip("/"), fx, rf))
+    print("devproxy http://127.0.0.1:%d/ -> %s (web %s%s%s)" % (a.port, a.api, os.path.abspath(a.web),
+                                                                ", fixtures %s: %d drawings, %d boards" % (fx.root, len(fx.arts), len(fx.map)) if fx else "",
+                                                                ", routes %s" % rf.file if rf else ""),
           flush=True)
     srv.serve_forever()
 

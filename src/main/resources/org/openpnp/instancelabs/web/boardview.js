@@ -22,7 +22,7 @@
      bv.setBoard({art, toMachine} | null)  art-only mode without a plan (upload preview, the hero before planning)
      bv.setAffine(toMachine)             art-only mode: the seat changed → the transform only
      bv.picture('full' | 'quiet' | 'off')  Off = exactly the drawing without art
-     bv.update({done, dirty, next, check, needle, n1, probe, fids, cam})  cheap: toggles classes, moves markers
+     bv.update({done, dirty, next, check, needle, n1, probe, fids, cam, sugg})  cheap: toggles classes, moves markers
          done   Set|Array of full-plan dot indexes          dirty  Map padId -> bright share (or null)
          next   dot index (energised ring + "Next D9.1")      check  {index, label} amber ring (in progress at STOP)
          needle {x, y} a needle crosshair (optional)          n1     {x, y} live N1 crosshair ("N1 now", probe)
@@ -31,6 +31,7 @@
          fids   [{name, x, y, r, found: {x, y} | null, state}] Register board's fiducials (g.pv-l-fids, cased): a dashed
                 circle of the search radius r at the expected position, a filled dot at the found one, the name
          cam    {x, y} the live top camera: crosshair and a 5 mm scale bar (also without a plan)
+         sugg   [{x, y, d}] suggested dots (padprofile.js): circle.pv-sugg in g.pv-l-sugg, never circle.dot (also without a plan)
      bv.preview({n, ghost: {x, y} | null} | null)  path preview: dots [0, n) get .pv-pre, the ghost needle moves
      bv.select({padIds, refs} | null)   .sel on pads, part outlines in g.pv-l-sel
      bv.dotLabels(indexes | null)       path numbers next to those dots
@@ -195,6 +196,7 @@
       this.gPath = L('path');
       this.gPads = L('pads');
       this.gDots = L('dots');
+      this.gSugg = L('sugg');
       this.gSel = L('sel');
       this.gMarks = L('marks');
       this.gFids = L('fids');
@@ -311,7 +313,7 @@
       this.rDot = rDot;
       this.rReal = null;
       for (const x of dots) {
-        const el = svg('circle', { class: 'dot', cx: f(x.x), cy: f(-x.y), r: f(rDot), 'data-index': x.index },
+        const el = svg('circle', { class: 'dot', cx: f(x.x), cy: f(-x.y), r: f(rDot), 'data-index': x.index, 'data-d': x.diameterMm > 0 ? x.diameterMm : null },
           'dot ' + (x.index + 1) + ' · ' + x.padId + ' · ' + IL.fmt(x.rotationDeg, 1) + '° · Z ' + IL.fmt(x.dispenseZ, 3));
         this.gDots.appendChild(el);
         this.dotEls[x.index] = el;
@@ -548,7 +550,8 @@
       this.dotOuter = r + ring / 2;
       if (this.rReal !== null && Math.abs(r - this.rReal) < 1e-4) return;
       this.rReal = r;
-      for (const c of this.dotSeq) c.setAttribute('r', f(r));
+      // a dot's own size when the plan gives it (dots[i].diameterMm: a pad type's own turn), else the plan's dot size
+      for (const c of this.dotSeq) c.setAttribute('r', f(c.dataset.d ? Math.max(Number(c.dataset.d) / 2 - DOT_STROKE_PX / 2 * k, floor) : r));
     }
     /** Dot and marker radii follow the fitted scale (first layout happens after the build when the page was hidden). */
     resizeMarks() {
@@ -583,6 +586,14 @@
         ? { x0: box.x0, y0: box.y0, x1: box.x1, y1: box.y1 } : null;
       this.applyViewBox();
     }
+    /** Suggested dots at their size (padprofile.js, PROFILE_CALIBRATION_DESIGN.md §13.4); never circle.dot, so dot counts stay the plan's. */
+    drawSugg(list) {
+      const key = list && list.length ? JSON.stringify(list) : '';
+      if (key === this.suggKey) return;
+      this.suggKey = key;
+      this.gSugg.replaceChildren(...(list || []).map((d) => svg('circle', { class: 'pv-sugg', cx: f(d.x), cy: f(-d.y), r: f(d.d / 2) },
+        'Suggested dot · ' + IL.fmt(d.d, 2) + ' mm')));
+    }
     /** Hidden layers: set of 'pads' | 'dots' | 'path' | 'dirty'. */
     layers(hidden) {
       this.hidden = new Set(hidden || []);
@@ -598,6 +609,7 @@
       const camMoved = !!cam !== !!cam0 || (cam && Math.hypot(cam.x - cam0.x, cam.y - cam0.y) > 0.5);
       this.placeG(this.camG, cam);
       IL.setAttr(this.scaleG, 'visibility', cam ? 'visible' : 'hidden');
+      if ('sugg' in s) this.drawSugg(s.sugg);
       if (!this.plan) {
         this.state = Object.assign({}, this.state, { cam });
         if (camMoved && this.board) this.applyViewBox();

@@ -1105,7 +1105,7 @@
     const sf = r.items.find((x) => x.key === 'surface');
     const surf = s.dispense && s.dispense.surfaces && s.dispense.surfaces[s.dispense.boardSurfaceName || 'board'];
     // Register: "registered", "same seat" (the 3-point check kept the surface), "by hand" (the time in the title: the
-    // five steps share about 400 px), "this seat"
+    // five steps share about 400 px), "this seat", "again" (blocked: register the board again)
     const reg = p && p.registration;
     const at = (ms) => IL.fmtTime(ms ? ms - S.skewMs : null);
     const live = regLive(s);
@@ -1116,7 +1116,7 @@
       st.probe = sameAt ? { kind: 'ok', sub: 'same seat', title: 'same seat ' + at(sameAt) }
         : surf && /^Register board/.test(surf.note || '') ? { kind: 'ok', sub: 'registered', title: 'registered ' + at(surf.setAtMs) }
           : { kind: 'ok', sub: 'by hand', title: 'by hand ' + at(surf && surf.setAtMs) };
-    } else st.probe = sf.state === 'block' ? { kind: 'block', sub: 'register again' } : { kind: 'need', sub: 'this seat' };
+    } else st.probe = sf.state === 'block' ? { kind: 'block', sub: 'again', title: 'register the board again' } : { kind: 'need', sub: 'this seat' };
     const needs = r.needs.filter((x) => x.state !== 'wait');
     st.checks = !p ? { kind: 'num', sub: '—' } : r.blocked.length ? { kind: 'block', sub: 'blocked' }
       : needs.length ? { kind: 'need', sub: IL.plural(needs.length, 'needs you', 'need you') } : { kind: 'ok', sub: '9 of 9' };
@@ -2325,12 +2325,12 @@
   }
   const SEG_CLASS = { ok: 'ok', you: 'you', info: 'you', off: '', need: 'need', block: 'block', live: 'live', checking: 'checking', wait: 'wait' };
   const TILE_GO = { machine: { view: 'machine' }, angle: { view: 'angle' }, needle: { href: '#setup/needle' }, regulator: { view: 'pressure' },
-    padtypes: { href: '#profile' }, surface: { step: 'probe' }, plan: { view: 'interlocks' }, purge: { view: 'purge' }, clean: { view: 'camera' } };
+    padtypes: { href: '#profile', hrefNow: () => IL.padProfile && IL.padProfile.needsHref() }, surface: { step: 'probe' }, plan: { view: 'interlocks' }, purge: { view: 'purge' }, clean: { view: 'camera' } };
   function tileGo(key) {
     const g = TILE_GO[key];
     if (!g) return;
     if (g.view) IL.openView(g.view, { keep: true });
-    else if (g.href) IL.go(g.href);
+    else if (g.href) IL.go((g.hrefNow && g.hrefNow()) || g.href);
     else if (g.step) goStep(g.step);
   }
   function cleanCard(it, first, s) {

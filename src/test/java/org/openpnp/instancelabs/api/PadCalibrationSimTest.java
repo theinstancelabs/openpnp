@@ -795,6 +795,25 @@ public class PadCalibrationSimTest {
         return started.getAsJsonObject("result");
     }
 
+    /**
+     * The SIM balance answers right after a disconnect and a connect, before any engine task (the operator weighs
+     * the coupons of a job stopped at its readings after connecting again): the service's M115 at the connect is
+     * noted after SimGuard forgets the last connection's answer, whatever order the machine's listeners run in
+     * (a set: each service start adds its own anew, at another place in that order).
+     */
+    @Test
+    public void theSimBalanceAnswersRightAfterAReconnect() throws Exception {
+        start(null);
+        for (int i = 1; i <= 6; i++) {
+            svc = DispenseService.start(Configuration.get());
+            sim.machine.setEnabled(false);
+            assertEquals(409, get("/api/sim/balance").status, "the simulator is not confirmed while disconnected");
+            sim.machine.setEnabled(true);
+            assertTrue(SimGuard.isSimulated(sim.machine), "the answer of connect " + i + " is kept");
+            assertEquals(4100, read("coupon1") * 1000, 2, "coupon1 on the SIM balance after connect " + i);
+        }
+    }
+
     @Test
     public void reportCountOffRefusesTheQuarterTurnBlock() throws Exception {
         start(sc -> paste(sc).addProperty("reportCount", false));

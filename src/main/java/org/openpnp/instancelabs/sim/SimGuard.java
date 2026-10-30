@@ -5,6 +5,7 @@ import java.net.InetAddress;
 import java.util.List;
 import java.util.Map;
 import java.util.WeakHashMap;
+import java.util.concurrent.Callable;
 import java.util.regex.Pattern;
 
 import org.openpnp.machine.reference.driver.AbstractReferenceDriver.CommunicationsType;
@@ -13,6 +14,7 @@ import org.openpnp.model.Configuration;
 import org.openpnp.spi.Driver;
 import org.openpnp.spi.Machine;
 import org.openpnp.spi.MachineListener;
+import org.pmw.tinylog.Logger;
 
 /**
  * Decides whether the machine is OpenPnP's simulator, so that simulation-only code (the SIM vacuum
@@ -24,7 +26,8 @@ import org.openpnp.spi.MachineListener;
  * <li>{@link #isSimulated}, the strict test: loopback only, and the controller identified itself as
  * OpenPnP's {@code GcodeServer} (M115 {@code FIRMWARE_NAME:GcodeServer}) on the current
  * connection. The identity is noted from the M115 lines every engine task collects first, and
- * forgotten whenever the machine is enabled or disabled (a new connection).</li>
+ * forgotten whenever the machine is enabled or disabled (a new connection); right after the forget
+ * at an enable, what {@link #askAtConnect} set asks the new connection's controller.</li>
  * </ul>
  */
 public final class SimGuard {
@@ -39,6 +42,8 @@ public final class SimGuard {
     private static final Map<Machine, Boolean> confirmed = new WeakHashMap<>();
     /** Machines with the forgetting listener. Guarded by SimGuard.class. */
     private static final Map<Machine, Boolean> attached = new WeakHashMap<>();
+    /** What asks each machine's controller who it is (M115 lines) at a connect. Guarded by SimGuard.class. */
+    private static final Map<Machine, Callable<List<String>>> askers = new WeakHashMap<>();
 
     private SimGuard() {
     }
@@ -99,6 +104,7 @@ public final class SimGuard {
         @Override
         public void machineEnabled(Machine machine) {
             forget(machine);
+            noteAtConnect(machine);
         }
 
         @Override
@@ -126,6 +132,46 @@ public final class SimGuard {
             attached.put(m, Boolean.TRUE);
         }
         m.addListener(FORGET);
+    }
+
+    /**
+     * What asks this machine's controller who it is (M115 lines) right after every connect; null asks
+     * nothing. The answer is noted in the forgetting listener, after the last connection's answer is
+     * forgotten: OpenPnP fires machine listeners in no fixed order (a set), so a listener of the
+     * asker's own could note the answer before it is forgotten.
+     */
+    public static void askAtConnect(Machine m, Callable<List<String>> ask) {
+        if (m == null) {
+            return;
+        }
+        attach(m);
+        synchronized (SimGuard.class) {
+            if (ask == null) {
+                askers.remove(m);
+            }
+            else {
+                askers.put(m, ask);
+            }
+        }
+    }
+
+    private static void noteAtConnect(Machine m) {
+        Callable<List<String>> ask;
+        synchronized (SimGuard.class) {
+            ask = askers.get(m);
+        }
+        if (ask == null) {
+            return;
+        }
+        try {
+            List<String> m115 = ask.call();
+            if (m115 != null) {
+                noteIdentity(m, m115);
+            }
+        }
+        catch (Exception e) {
+            Logger.debug("controller identity not read at connect: {}", e.getMessage());
+        }
     }
 
     /**
