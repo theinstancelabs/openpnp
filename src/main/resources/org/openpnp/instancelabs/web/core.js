@@ -1572,7 +1572,8 @@
     }
     if (IL.recoveryActive()) {
       const r = S.recovery;
-      return { state: 'block', text: 'Stopped ' + IL.fmtTime(r.atMs), title: recoveryHeadline(r) + '. Back to ready: see the Recovery panel.' };
+      // the time goes first when the strip is narrow (cells--t2): the Recovery panel and the nav keep it
+      return { state: 'block', text: 'Stopped ' + IL.fmtTime(r.atMs), value: ['Stopped', ' ' + IL.fmtTime(r.atMs), 2], title: recoveryHeadline(r) + '. Back to ready: see the Recovery panel.' };
     }
     const pcal = IL.padProfile ? IL.padProfile.verdict(s) : null;
     if (pcal) return pcal;
@@ -2004,7 +2005,9 @@
   function fitStrip() {
     const cells = $('cells');
     if (!cells) return;
-    const sig = window.innerWidth + '|' + $('btn-start').hidden + $('btn-home').hidden + '|' + cells.textContent.replace(/\d/g, '0');
+    // the room the cells have, not only the window: the brand's heartbeat age or the STOP bay can change it (rc1 review:
+    // a verdict fitted before they did was cut, "Stopped 06:…", with no shorter form applied)
+    const sig = cells.clientWidth + '|' + $('btn-start').hidden + $('btn-home').hidden + '|' + cells.textContent.replace(/\d/g, '0');
     if (sig === fitSig) return;
     fitSig = sig;
     const over = () => {
@@ -2014,11 +2017,15 @@
       const limit = cells.getBoundingClientRect().right - parseFloat(getComputedStyle(cells).paddingRight || '0');
       return last.getBoundingClientRect().right > limit + 0.5;
     };
-    cells.classList.remove('cells--t1', 'cells--t2');
-    cells.classList.add('cells--fit');   // the verdict at its full width while measuring (it shrinks only after t2)
+    cells.classList.remove('cells--t1', 'cells--t2', 'cells--t3', 'cells--t4');
+    cells.classList.add('cells--fit');   // the verdict at its full width while measuring
     if (over()) {
       cells.classList.add('cells--t1');
       if (over()) cells.classList.replace('cells--t1', 'cells--t2');
+      // still too long (1024 px after a STOP, the widest state): the verdict is never cut (UI_DESIGN §4), so the
+      // pressure cell goes while it reads a plain "Off" (Recovery says "Pressure vented"), then the other cells' labels
+      if (over()) cells.classList.add('cells--t3');
+      if (over()) cells.classList.add('cells--t4');
     }
     cells.classList.remove('cells--fit');
   }

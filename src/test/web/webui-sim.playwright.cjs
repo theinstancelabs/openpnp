@@ -723,6 +723,22 @@ async function runFirstDots(page, n) {
       { timeout: 10000 }).catch(() => {});
     check('after STOP: verdict "Stopped hh:mm"', /^Stopped \d\d:\d\d/.test(await page.textContent('#pill-engine .cell__v')),
       await page.textContent('#pill-engine .cell__v'));
+    // the stopped strip is the widest (Not connected + Connect, Off · vented, Confirm, 7 of 15 · wipe): the verdict's value
+    // is never cut (UI_DESIGN §4: cells never truncate); shorter forms of the other cells, then of the verdict, go first
+    const cuts = [];
+    for (const [w, h] of [[1440, 900], [1280, 800], [1024, 768]]) {
+      await page.setViewportSize({ width: w, height: h });
+      await page.waitForTimeout(500);
+      cuts.push(await page.evaluate((ww) => {
+        const v = document.querySelector('#pill-engine .cell__v'), cells = document.getElementById('cells');
+        const r = v.getBoundingClientRect(), lim = cells.getBoundingClientRect().right;
+        return { w: ww, shown: v.innerText, cut: v.scrollWidth > v.clientWidth + 0.5 || r.right > lim + 0.5, tier: cells.className };
+      }, w));
+      await page.screenshot({ path: path.join(OUT, 'run-stopped-strip-' + w + '.png') });
+    }
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    check('after STOP: the verdict reads "Stopped…" in full at 1440, 1280 and 1024 px (the other cells shorten first)',
+      cuts.every((c) => !c.cut && /^Stopped/.test(c.shown)), cuts);
     check('after STOP: the plan never says "All interlocks pass"', !/All interlocks pass/.test(await page.textContent('#ws-run')));
     await page.waitForSelector('#btn-run-rest', { state: 'visible', timeout: 10000 }).catch(() => {});
     const locked = await page.evaluate(() => ['btn-run-rest', 'btn-run-all'].map((id) => {

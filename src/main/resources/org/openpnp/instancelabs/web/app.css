@@ -193,8 +193,8 @@ kbd {
 .cell--live { color: var(--on-live); background: var(--live); border-color: var(--live); }
 .cell--verdict { margin-left: auto; padding-right: 12px; }
 .cell--verdict .cell__v { font-size: 16px; }
-/* still too long once every long part is gone (1024 px): the verdict ends in "…" instead of running under STOP; it
-   is measured at its full width (cells--fit) to decide what goes first */
+/* the last resort after every shorter form (t1 to t4, below): the verdict ends in "…" instead of running under STOP;
+   it is measured at its full width (cells--fit) to decide what goes first */
 .cell--verdict { flex: 0 1 auto; }
 .cell--verdict .cell__v { overflow: hidden; text-overflow: ellipsis; }
 .cells--fit .cell--verdict { flex: none; }
@@ -207,6 +207,10 @@ kbd {
 .cells--t1 .long[data-l="1"], .cells--t1 .cell__sep, .cells--t2 .long, .cells--t2 .cell__sep { display: none; }
 .cells--t2 { gap: 5px; }
 .cells--t2 .cell { padding: 0 11px 0 8px; gap: 8px; }
+/* still too long after t2 (IL measures): t3 drops the pressure cell while it is plain "off", t4 the other cells'
+   labels; the verdict keeps its label and value (cells never truncate, §4) */
+.cells--t3 #pill-pressure.cell--off { display: none; }
+.cells--t4 .cell:not(.cell--verdict) .cell__k { display: none; }
 
 /* ---------- STOP ---------- */
 .stop-bay { order: 99; flex: none; width: calc(var(--stop-w) + 21px); height: calc(100% + 1px); align-self: flex-start; padding-left: 20px; border-left: 1px solid var(--line); background: var(--surface); position: relative; z-index: 2; }
