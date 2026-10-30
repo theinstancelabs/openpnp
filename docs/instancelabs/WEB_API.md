@@ -466,7 +466,7 @@ Jargon is explained in tooltips (`title`/`abbr`).
   the quarter-turn camera records stale. **nano**: the Arduino Nano's upload (40 pads `tip`, 15 with a plan, 5 of them
   partial), Calibrate automatically for its two groups (SW_SPST characterized; LED_0805 stays provisional: one turn is
   47 % over its amount in the SIM, 33 % on the machine), its next plan run (the switch's 4 dots). **controls**: every
-  other negative control of §11.7 ends with its reason. About 25 min.
+  other negative control of §11.7 ends with its reason. About 27 min (main 8, nano 6, controls 14).
 - `src/test/sim/il_ui_session.py start --jar … --name …`: a seeded SIM session for UI work (machine homed, needle
   frame, blank surface and purge row, start angle, a planned board with its surface tied); `--padcal` adds the SIM
   paste, coupons and balance, the calibration area and coupon places, and plans `padcal.kicad_pcb` (Needs a profile
