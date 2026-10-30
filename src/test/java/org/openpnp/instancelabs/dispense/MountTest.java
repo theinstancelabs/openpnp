@@ -132,6 +132,57 @@ public class MountTest {
     }
 
     @Test
+    public void theTokenComesAfterEverythingMeasuredForTheNeedleThatCameOff() throws Exception {
+        // the frame, the offset and the landing were stamped a minute ahead of the clock (it was set back since): the
+        // needle change still makes all three stale, else the frame of the needle that came off would count
+        try (TipFixture f = new TipFixture()) {
+            DispenseService svc = f.svc;
+            long ahead = System.currentTimeMillis() + 60_000;
+            svc.updateConfigAtomically(live -> {
+                live.needleAnchor = new DispenseConfig.NeedleAnchor(5.5, 2.91, null, null, ahead);
+                live.needleZOffsetSetAtMs = ahead;
+                live.needleLanding.setAtMs = ahead;
+                return live;
+            });
+            assertTrue(svc.getConfig().isNeedleAnchored() && svc.getConfig().isNeedleTouchedOff()
+                    && svc.isNeedleXyChecked());
+            NeedleChange nc = svc.recordNeedleChange(null, null);
+            assertTrue(nc.atMs > ahead, nc.atMs + " " + ahead);
+            assertFalse(svc.getConfig().isNeedleAnchored());
+            assertFalse(svc.getConfig().isNeedleTouchedOff());
+            assertFalse(svc.isNeedleXyChecked());
+            assertTrue(i4Refuses(svc));
+        }
+    }
+
+    @Test
+    public void aSwitchWithoutTheNeedleChangeBeforeItIsRefused() throws Exception {
+        // the mount route records the needle change, then switches: a switch on its own (a route that forgot the
+        // change) would let a parked frame newer than the token count for the needle put on now
+        try (TipFixture f = new TipFixture()) {
+            DispenseService svc = f.svc;
+            f.add25();
+            assertNull(svc.getConfig().needleChangedAtMs, "no change recorded yet");
+            IllegalStateException e = assertThrows(IllegalStateException.class, () -> svc.switchTip(K25, "x", null));
+            assertTrue(e.getMessage().startsWith("A mount needs the needle change recorded first"), e.getMessage());
+            assertEquals(Tip.SEED_KEY, svc.getConfig().tip.key, "nothing was changed");
+            assertFalse(svc.isBusy());
+            f.mount(K25);
+            f.frame(-3.0); // the 25G's frame, under the mount's token
+            // back to the 22G without a change: its parked frame is older than the token, so it stays stale
+            assertEquals(Tip.SEED_KEY, svc.switchTip(Tip.SEED_KEY, "x", null).mounted);
+            assertFalse(svc.getConfig().isNeedleAnchored());
+            // and to the 25G again without a change: its frame is not older than the token
+            e = assertThrows(IllegalStateException.class, () -> svc.switchTip(K25, "x", null));
+            assertTrue(e.getMessage().startsWith("A mount needs the needle change recorded first"), e.getMessage());
+            assertEquals(Tip.SEED_KEY, svc.getConfig().tip.key);
+            f.mount(K25);
+            assertEquals(K25, svc.getConfig().tip.key);
+            assertFalse(svc.getConfig().isNeedleAnchored(), "the 25G's frame is stale after the change");
+        }
+    }
+
+    @Test
     public void theLiveStartAngleIsKeptAcrossAMount() throws Exception {
         try (TipFixture f = new TipFixture()) {
             DispenseService svc = f.svc;

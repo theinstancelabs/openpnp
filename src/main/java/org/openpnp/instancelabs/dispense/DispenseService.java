@@ -716,6 +716,12 @@ public final class DispenseService {
         }
         long now = System.currentTimeMillis();
         long token = Math.max(now, before.needleChangedAtMs == null ? 0 : before.needleChangedAtMs + 1);
+        // later than everything measured for a needle so far (the mounted setup's and the parked ones'), also when the
+        // clock was set back since: a frame stamped after the token would still count for the needle put on now
+        token = Math.max(token, measuredStamp(before.needleAnchor, before.needleZOffsetSetAtMs, before.needleLanding) + 1);
+        for (DispenseConfig.ParkedTip p : before.parkedTips.values()) {
+            token = Math.max(token, measuredStamp(p.needleAnchor, p.needleZOffsetSetAtMs, p.needleLanding) + 1);
+        }
         DispenseConfig c = before.copy();
         c.needleChangedAtMs = token;
         writeConfig(c); // a fact: never refused, so never held back by a check of other settings
@@ -773,6 +779,19 @@ public final class DispenseService {
                         + " no longer count.");
         undo = null;
         return nc;
+    }
+
+    /** When a needle frame, offset or landing was last measured (epoch ms), or {@code Long.MIN_VALUE + 1} for none. */
+    private static long measuredStamp(DispenseConfig.NeedleAnchor anchor, Long offsetSetAtMs,
+            DispenseConfig.NeedleLanding landing) {
+        long n = Long.MIN_VALUE + 1;
+        for (Long t : new Long[] {anchor == null ? null : anchor.setAtMs, offsetSetAtMs,
+            landing == null ? null : landing.setAtMs}) {
+            if (t != null) {
+                n = Math.max(n, t);
+            }
+        }
+        return n;
     }
 
     /** A row of {@code tip_mounts} of the mounted setup now (its version, token, head offset, profile and landing). */
@@ -844,6 +863,15 @@ public final class DispenseService {
                 r.profile = cfg.profile.copy();
                 r.text = in.name + " stays mounted: record its needle Z frame (Setup › Needle Z frame).";
                 return r;
+            }
+            // the switch stands on the needle change recorded just before it (§22.3): without it, the incoming setup's
+            // parked frame, offset or landing could be newer than the token and count for the needle put on now
+            Long token = cfg.needleChangedAtMs;
+            DispenseConfig.ParkedTip incoming = cfg.parkedTips.get(key);
+            if (token == null || incoming != null && measuredStamp(incoming.needleAnchor, incoming.needleZOffsetSetAtMs,
+                    incoming.needleLanding) >= token) {
+                throw new IllegalStateException("A mount needs the needle change recorded first (recordNeedleChange): "
+                        + "nothing was changed.");
             }
             DispenseConfig before = cfg.copy();
             Long[] change = lastChange;
