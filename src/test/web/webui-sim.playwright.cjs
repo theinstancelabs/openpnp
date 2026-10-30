@@ -945,6 +945,10 @@ async function runFirstDots(page, n) {
       check('register: the task ended OK', rs.run.status === 'OK', { status: rs.run.status, message: rs.run.message });
       const homeDone = await page.evaluate(() => { const v = IL.S.plan.registrationRun; return v && v.home; });
       check('register: homed first (it was needed)', homeDone && homeDone.needed && homeDone.done, homeDone);
+      // the card names the registration's time once the plan it made is shown (before that, the task's end: a minute later
+      // when the fit and the end straddle one)
+      await page.waitForFunction((n) => IL.S.plan && IL.S.plan.planId === n, rs.run.nextPlanId, { timeout: 20000 }).catch(() => {});
+      await page.waitForTimeout(300);
       const res1 = await textOf(page, 'reg-result');
       check('#reg-result: "Registered hh:mm: 3 of 3 fiducials"', /^Registered \d\d:\d\d: 3\sof\s3 fiducials/.test(res1), res1);
       check('register: the new plan is shown (status.run.nextPlanId)', await page.evaluate((n) => IL.S.plan.planId === n, rs.run.nextPlanId), rs.run.nextPlanId);
