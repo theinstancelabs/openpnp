@@ -723,7 +723,7 @@
         text = 'Plan ' + shortId(p) + ' · stale: ' + it.stale.map((x) => x.replace(/^the /, '')).join(', ') + ' changed' + (it.staleAt ? ' ' + IL.fmtTime(it.staleAt) : '');
         title = it.detail + ' Plan again.';
       } else if (pt && pt.state === 'block') { kind = 'block'; glyph = 'block'; text = 'Plan ' + shortId(p) + ' · ' + (pt.chip || pt.short); title = pt.detail; }
-      else if (sf && (sf.state === 'need' || sf.state === 'block')) { kind = 'need'; glyph = 'need'; text = 'Plan ' + shortId(p) + ' · register this seat'; title = sf.detail; }
+      else if (sf && (sf.state === 'need' || sf.state === 'block')) { kind = 'need'; glyph = 'need'; text = 'Plan ' + shortId(p) + (probeOnlyPlan(p) ? ' · probe this seat' : ' · register this seat'); title = sf.detail; }
       else { text = 'Plan ' + shortId(p) + ' · current'; title += ' with the current profile, surface and start angle'; }
     }
     const sig = kind + '|' + text;
@@ -1134,7 +1134,7 @@
     st.board = p ? { kind: 'ok', sub: boardShort(p.boardName) } : { kind: 'num', sub: 'choose' };
     const sf = r.items.find((x) => x.key === 'surface');
     const surf = s.dispense && s.dispense.surfaces && s.dispense.surfaces[s.dispense.boardSurfaceName || 'board'];
-    // Register: "registered", "same seat" (the 3-point check kept the surface), "by hand" (the time in the title: the
+    // Register: "registered", "probed" (probe only, F10), "same seat" (the 3-point check kept the surface), "by hand" (the time in the title: the
     // five steps share about 400 px), "this seat", "again" (blocked: register the board again)
     const reg = p && p.registration;
     const at = (ms) => IL.fmtTime(ms ? ms - S.skewMs : null);
@@ -1144,7 +1144,8 @@
     else if (sf.state === 'ok') {
       const sameAt = reg && reg.lastCheckedAtMs && surf && surf.setAtMs && reg.lastCheckedAtMs > surf.setAtMs ? reg.lastCheckedAtMs : null;
       st.probe = sameAt ? { kind: 'ok', sub: 'same seat', title: 'same seat ' + at(sameAt) }
-        : surf && /^Register board/.test(surf.note || '') ? { kind: 'ok', sub: 'registered', title: 'registered ' + at(surf.setAtMs) }
+        : surf && /^Register board/.test(surf.note || '') ? (/\(no fiducials: probed only/.test(surf.note) ? { kind: 'ok', sub: 'probed', title: 'probed only ' + at(surf.setAtMs) }
+          : { kind: 'ok', sub: 'registered', title: 'registered ' + at(surf.setAtMs) })
           : { kind: 'ok', sub: 'by hand', title: 'by hand ' + at(surf && surf.setAtMs) };
     } else st.probe = sf.state === 'block' ? { kind: 'block', sub: 'again', title: 'register the board again' } : { kind: 'need', sub: 'this seat' };
     const needs = r.needs.filter((x) => x.state !== 'wait');
