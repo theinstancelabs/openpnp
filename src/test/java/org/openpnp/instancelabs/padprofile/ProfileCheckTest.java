@@ -246,8 +246,9 @@ public class ProfileCheckTest {
         SuggesterTest.type(in, type("chip-0603", "Chip 0603", TypeInfo.CHARACTERIZED, 0.8, 0.95), "RES");
         in.gate = TypeInfo.VALIDATED;
         g = ProfileCheck.of(in).groups.get(0);
-        assertEquals("Chip 0603 is not calibrated yet (status: characterized). Boards need pad types that are at least "
-                + "validated on a board: calibrate it automatically or by hand.", g.reasonText);
+        assertEquals("Chip 0603 is not calibrated for the " + Tip.SEED_NAME + " yet (status: characterized). Boards need "
+                + "pad types that are at least validated on a board: calibrate it for this tip automatically or by hand.",
+                g.reasonText);
         assertTrue(g.fixable);
     }
 
@@ -312,6 +313,23 @@ public class ProfileCheckTest {
         // and is never offered for reuse
         t.tipKey = Tip.g22().key;
         assertTrue(ProfileCheck.of(in).groups.isEmpty());
+    }
+
+    @Test
+    public void aTypeWithoutATipKeyIsTheSeededSetupsAndBelowTheGateUnderAnotherTip() {
+        // §22.1: a version written before tip setups names no tip: it is the seeded 22G's (Tip.setupOf)
+        CheckInputs in = PadFixtures.inputs(part("R1", "RES", 0, 0, 0.8, 0.95, 50, -0.825, 0.825));
+        TypeInfo t = type("chip-0603", "Chip 0603", TypeInfo.CHARACTERIZED, 0.8, 0.95);
+        t.tipKey = null;
+        SuggesterTest.type(in, t, "RES");
+        assertTrue(ProfileCheck.of(in).groups.isEmpty(), "the 22G's own");
+        Tip t25 = SuggesterSetupTest.tip25(true);
+        in.tip = t25;
+        ProfileCheck.Group g = ProfileCheck.of(in).groups.get(0);
+        assertEquals(ProfileCheck.BELOW_GATE, g.reason);
+        assertEquals("calibrated for another tip", g.shortText);
+        assertTrue(g.reasonText.startsWith("Chip 0603 was calibrated with another tip (" + Tip.SEED_KEY + "); the "
+                + "mounted tip is the 25G straight."), g.reasonText);
     }
 
     @Test
@@ -470,5 +488,70 @@ public class ProfileCheckTest {
         assertEquals("3 pads", Texts.plural(3, "pad", "pads"));
         assertEquals("validated on a board", Texts.statusWord("validated"));
         assertEquals("not started", Texts.statusWord("not-started"));
+    }
+
+    // ---- tip setups (§22.2, §22.8) ------------------------------------------------------------------
+
+    @Test
+    public void theBelowGateTextNamesTheMountedSetupAndWhatTheOthersHave() {
+        TypeInfo.Other o = new TypeInfo.Other();
+        o.setupKey = Tip.SEED_KEY;
+        o.setupName = Tip.SEED_NAME;
+        o.version = 3;
+        o.status = TypeInfo.CHARACTERIZED;
+        assertEquals("Chip 0603 is not calibrated for the 25G straight yet (status: not started; characterized for the "
+                + Tip.SEED_NAME + "). Boards need pad types that are at least characterized: calibrate it for this "
+                + "tip automatically or by hand.", Texts.belowGate("Chip 0603", TypeInfo.NOT_STARTED,
+                        TypeInfo.CHARACTERIZED, "25G straight", Collections.singletonList(o)));
+        assertEquals("Chip 0603 is not calibrated for the " + Tip.SEED_NAME + " yet (status: provisional). Boards need "
+                + "pad types that are at least validated on a board: calibrate it for this tip automatically or by "
+                + "hand.", Texts.belowGate("Chip 0603", TypeInfo.PROVISIONAL, TypeInfo.VALIDATED, Tip.SEED_NAME,
+                        null));
+        // the four-argument form says the same for the seeded setup
+        assertEquals(Texts.belowGate("Chip 0603", TypeInfo.PROVISIONAL, TypeInfo.VALIDATED, Tip.SEED_NAME, null),
+                Texts.belowGate("Chip 0603", TypeInfo.PROVISIONAL, TypeInfo.VALIDATED));
+    }
+
+    @Test
+    public void theMeasureTipSentence() {
+        assertEquals("Measure the 25G straight's dots first (Setup › Dispenser & tip › Measure its dots, ≈ 8 min and two "
+                + "coupons to weigh): suggestions need its dot sizes and paste per turn.", Texts.measureTip(
+                        "25G straight"));
+        Tip t = new Tip("25g-straight", "25G straight", 0.25, 0.51, DoseModel.QUARTER);
+        assertFalse(t.isMeasured());
+        assertEquals("none", t.dotsSource());
+        assertEquals("bench", Tip.g22().dotsSource());
+        assertFalse(t.knows(DoseModel.HALF));
+        assertTrue(Tip.g22().knows(DoseModel.HALF));
+        IllegalStateException e = org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class,
+                () -> t.dHiMm(DoseModel.HALF));
+        assertEquals("the 25G straight has no measured half-turn dots at this recipe and paste: its dot size is not "
+                + "known", e.getMessage());
+        e = org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class, () -> t.massMg(DoseModel.HALF));
+        assertEquals("the 25G straight was never weighed at this recipe and paste: the mass of a half-turn dot is not "
+                + "known", e.getMessage());
+    }
+
+    @Test
+    public void theControlNamesTheTipAndComparesASetupWithItsOwnRecords() {
+        Tip t25 = new Tip("25g-straight", "25G straight", 0.25, 0.51, DoseModel.QUARTER);
+        // the bench setup: against the bench, and the failure text says another tip may be on
+        LadderStats.Check c = LadderStats.control(800, 0.82, null, 18, null, Tip.g22());
+        assertFalse(c.ok);
+        assertEquals("the control half-turn dots are 0.82 mm², 22 % below the bench's 1.06 mm²: check the regulator "
+                + "(18 psi) and the paste before calibrating, or another tip than the " + Tip.SEED_NAME + " is on",
+                c.text);
+        // another setup: never against the bench; its first measurement passes and says so
+        c = LadderStats.control(800, 0.40, null, 18, null, t25);
+        assertTrue(c.ok);
+        assertEquals("first measurement of this tip", c.text);
+        assertNull(c.limit);
+        c = LadderStats.control(800, 0.40, 0.50, 18, null, t25);
+        assertFalse(c.ok);
+        assertEquals("the control half-turn dots are 0.40 mm², 20 % below the 0.50 mm² of the last calibration: check "
+                + "the regulator (18 psi) and the paste before calibrating, or another tip than the 25G straight is "
+                + "on", c.text);
+        assertTrue(LadderStats.control(800, 0.48, 0.50, 18, null, t25).ok);
+        assertNull(LadderStats.control(800, 0.48, 0.50, 18, null, t25).text);
     }
 }

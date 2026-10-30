@@ -629,6 +629,18 @@ public class DispenseConfig {
         if (c.tip == null) {
             c.tip = new TipSpec();
         }
+        if (c.parkedTips == null) {
+            c.parkedTips = new LinkedHashMap<>();
+        }
+        c.parkedTips.values().removeIf(java.util.Objects::isNull);
+        for (ParkedTip e : c.parkedTips.values()) {
+            if (e.profile == null) {
+                e.profile = new DispenseProfile();
+            }
+            if (e.needleXyTrim == null) {
+                e.needleXyTrim = new NeedleXyTrim();
+            }
+        }
         if (c.paste == null) {
             c.paste = new PasteSpec();
         }
@@ -649,25 +661,30 @@ public class DispenseConfig {
     }
 
     /**
-     * Schema 1/2 -> 3: the per-dot motion becomes the bench recipe (XY and Z at 2000 mm/s², lift
-     * at 50 mm/s, B limit 400 rpm) and the I4 tolerances follow the new needle frame (offset
-     * -2.59 mm, so the frame tolerance must stay below it). The removed keys were dropped on load.
+     * Step by step from the file's schema, each step only for the files older than it (tip setups design §22.1: a
+     * step never runs again on a newer file, so it cannot reset tuned values). Schema 1/2 -> 3: the per-dot motion
+     * becomes the bench recipe (XY and Z at 2000 mm/s², lift at 50 mm/s, B limit 400 rpm) and the I4 tolerances
+     * follow the new needle frame (offset -2.59 mm, so the frame tolerance must stay below it). The removed keys were
+     * dropped on load. The tip setups' fields need no step: they are added with their defaults
+     * ({@link #fromJson}), and a file written before them is kept as a backup at its first save
+     * ({@link #save}).
      */
     void migrate() {
-        if (schemaVersion >= SCHEMA_VERSION) {
-            return;
+        if (schemaVersion < 3) {
+            travelAccelMmS2 = 2000;
+            zLiftAccelMmS2 = 2000;
+            zLiftFeedMmS = Math.max(zLiftFeedMmS, 50);
+            bMaxFeedDegS = Math.max(bMaxFeedDegS, 2400);
+            surfaceMaxResidualMm = Math.min(surfaceMaxResidualMm, 0.04);
+            surfaceMarginMm = Math.max(surfaceMarginMm, 3.5);
+            zFrameToleranceMm = Math.min(zFrameToleranceMm, MAX_FRAME_TOLERANCE_MM);
+            if (Math.abs(primeRotationDeg - 360) < 1e-9) {
+                primeRotationDeg = 360.36;
+            }
         }
-        travelAccelMmS2 = 2000;
-        zLiftAccelMmS2 = 2000;
-        zLiftFeedMmS = Math.max(zLiftFeedMmS, 50);
-        bMaxFeedDegS = Math.max(bMaxFeedDegS, 2400);
-        surfaceMaxResidualMm = Math.min(surfaceMaxResidualMm, 0.04);
-        surfaceMarginMm = Math.max(surfaceMarginMm, 3.5);
-        zFrameToleranceMm = Math.min(zFrameToleranceMm, MAX_FRAME_TOLERANCE_MM);
-        if (Math.abs(primeRotationDeg - 360) < 1e-9) {
-            primeRotationDeg = 360.36;
+        if (schemaVersion < SCHEMA_VERSION) {
+            schemaVersion = SCHEMA_VERSION;
         }
-        schemaVersion = SCHEMA_VERSION;
     }
 
     public DispenseConfig copy() {
@@ -687,10 +704,46 @@ public class DispenseConfig {
         return fromJson(new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8));
     }
 
-    /** Atomically writes the config (temp file + rename). */
+    /**
+     * Whether a saved file was written before the tip setups (tip setups design §22.1): it has no
+     * {@code parkedTips} (every file this version writes has the key, Gson writes every field). An older jar loads a
+     * newer file and drops the key, with {@code needleLanding}, at its first save, so a file without it is from before.
+     */
+    public static boolean isBeforeTipSetups(String json) {
+        try {
+            com.google.gson.JsonElement e = new com.google.gson.JsonParser().parse(json);
+            return e.isJsonObject() && !e.getAsJsonObject().has("parkedTips");
+        }
+        catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    /**
+     * The first save over a file written before the tip setups first copies it to
+     * {@code dispense-config.json.v3-<yyyyMMdd-HHmmss>.bak} (§22.1: an older jar, when the machine is bisected, drops
+     * {@code parkedTips} and {@code needleLanding} at its first save). Returns the backup, or null when none was needed.
+     */
+    static File backupIfBeforeTipSetups(File f) throws IOException {
+        if (!f.isFile() || !isBeforeTipSetups(new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8))) {
+            return null;
+        }
+        String stamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern(
+                "yyyyMMdd-HHmmss"));
+        String base = FILE_NAME + ".v3-" + stamp;
+        File b = new File(f.getParentFile(), base + ".bak");
+        for (int i = 2; b.exists(); i++) {
+            b = new File(f.getParentFile(), base + "-" + i + ".bak");
+        }
+        Files.copy(f.toPath(), b.toPath(), StandardCopyOption.COPY_ATTRIBUTES);
+        return b;
+    }
+
+    /** Atomically writes the config (temp file + rename); a file from before the tip setups is kept first. */
     public void save(File configDir) throws IOException {
         File f = fileFor(configDir);
         f.getParentFile().mkdirs();
+        backupIfBeforeTipSetups(f);
         File tmp = new File(f.getParentFile(), FILE_NAME + ".tmp");
         Files.write(tmp.toPath(), toJson().getBytes(StandardCharsets.UTF_8));
         Files.move(tmp.toPath(), f.toPath(), StandardCopyOption.REPLACE_EXISTING,
@@ -760,6 +813,24 @@ public class DispenseConfig {
         }
         if (!(Math.abs(needleXyTrim.dxMm) <= 1 && Math.abs(needleXyTrim.dyMm) <= 1)) {
             p.add("needleXyTrim must be within +-1 mm (larger: fix the N2 head offset in OpenPnP)");
+        }
+        if (needleLanding != null && !(Math.abs(needleLanding.dxMm) <= MAX_LANDING_MM
+                && Math.abs(needleLanding.dyMm) <= MAX_LANDING_MM)) {
+            p.add("needleLanding must be within +-" + (int) MAX_LANDING_MM + " mm on each axis (a landing check measures "
+                    + "it)");
+        }
+        for (Map.Entry<String, ParkedTip> e : parkedTips.entrySet()) {
+            ParkedTip t = e.getValue();
+            if (e.getKey() == null || !TipSpec.KEY.matcher(e.getKey()).matches() || t.profile == null
+                    || t.needleXyTrim == null) {
+                p.add("parkedTips['" + e.getKey() + "'] needs a tip key, its profile and its trim");
+            }
+            else if (!(Math.abs(t.needleXyTrim.dxMm) <= 1 && Math.abs(t.needleXyTrim.dyMm) <= 1)
+                    || t.needleLanding != null && !(Math.abs(t.needleLanding.dxMm) <= MAX_LANDING_MM
+                            && Math.abs(t.needleLanding.dyMm) <= MAX_LANDING_MM)) {
+                p.add("parkedTips['" + e.getKey() + "']: its trim must be within +-1 mm and its landing within +-"
+                        + (int) MAX_LANDING_MM + " mm");
+            }
         }
         if (keepaliveIntervalMs < 100) {
             p.add("keepaliveIntervalMs must be >= 100");

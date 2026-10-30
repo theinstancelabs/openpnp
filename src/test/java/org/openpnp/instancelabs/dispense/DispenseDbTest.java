@@ -72,6 +72,27 @@ public class DispenseDbTest {
         pc.outcome = PadCalibrationRecord.PROVISIONAL;
         db.insertPadCalibration(pc);
         db.setPastePartial("P", true);
+        // schema 3 (tip setups design §22.1): the seeded setup is there; a mount, a photo, its link and event, a
+        // label and a flag
+        TipSetups.Mount m = new TipSetups.Mount();
+        m.kind = TipSetups.Mount.SEED;
+        m.setupKey = "ad22tta-b";
+        m.setupVersion = 1;
+        m.why = "in use before the update";
+        db.insertTipMount(m);
+        Photo ph = new Photo();
+        ph.kind = Photo.KIND_SETUP;
+        ph.source = Photo.SOURCE_UPLOAD;
+        ph.setupKey = "ad22tta-b";
+        ph.file = "2026-10/0123456789abcdef0123.jpg";
+        ph.sha256 = "0123456789abcdef0123";
+        ph.widthPx = 64;
+        ph.heightPx = 64;
+        db.insertPhoto(ph);
+        db.insertPhotoLink(ph.id, pc.id, Photo.ROLE_REFERENCE, null);
+        db.insertPhotoEvent(ph.id, Photo.ACTION_MAIN, null, null);
+        db.insertCalLabel(pc.id, "Chip 0603 · 22G tip", true, null);
+        db.insertCalFlag("pc-1", "ad22tta-b", "wrong-tip", null, null);
     }
 
     @Test

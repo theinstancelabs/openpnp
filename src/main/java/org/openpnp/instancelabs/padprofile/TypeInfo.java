@@ -48,6 +48,8 @@ public final class TypeInfo {
     public boolean standIn;
     public String setupName;
     public List<Other> others = new ArrayList<>();
+    /** origin copied: the setup the dot plan was copied from (§22.2), for the suggestion's confidence; else null. */
+    public String copiedFrom;
 
     /** Another setup's version of this type: "characterized for the 22G bent taper". */
     public static final class Other {

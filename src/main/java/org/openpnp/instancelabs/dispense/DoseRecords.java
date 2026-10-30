@@ -6,6 +6,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
 
@@ -177,6 +178,8 @@ public final class DoseRecords {
         r.drift = st.driftPct;
         r.landingMeanMm = st.landingMeanMm;
         r.landingSdMm = st.landingSdMm;
+        r.landingDxMm = st.landingDxMm;
+        r.landingDyMm = st.landingDyMm;
         r.dotsJson = GSON.toJson(dots);
         r.pass = st.pass;
         r.why = st.failures.isEmpty() ? null : st.failures.get(0);
@@ -211,7 +214,70 @@ public final class DoseRecords {
      */
     public static DotTable dotTable(List<DoseRecord> records, String setupKey, String doseFp, String pasteKey,
             boolean simulated, Set<String> flaggedJobs) {
-        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+        DotTable t = new DotTable();
+        t.setupKey = setupKey;
+        t.doseFp = doseFp;
+        t.pasteKey = pasteKey;
+        t.simulated = simulated;
+        Map<Long, DoseRecord> byId = new HashMap<>();
+        List<DoseRecord> mine = new ArrayList<>();
+        for (DoseRecord r : records) {
+            byId.put(r.id, r);
+            if (setupKey.equals(r.tipKey) && Objects.equals(doseFp, r.doseFp) && Objects.equals(pasteKey, r.pasteKey)
+                    && r.simulated == simulated && !(r.jobId != null && flaggedJobs != null
+                            && flaggedJobs.contains(r.jobId))) {
+                mine.add(r);
+            }
+        }
+        mine.sort((a, b) -> Long.compare(a.id, b.id));
+        for (DoseRecord r : mine) {
+            // the newest passing optical record per dose (records come oldest first: a later one replaces it)
+            if (DoseRecord.OPTICAL.equals(r.kind) && Boolean.TRUE.equals(r.pass) && r.diameterMeanMm != null
+                    && r.diameterP95Mm != null) {
+                Tip.Measured m = new Tip.Measured();
+                m.dMeanMm = r.diameterMeanMm;
+                m.d95Mm = r.diameterP95Mm;
+                m.recordId = r.id;
+                m.atMs = r.createdAtMs;
+                t.doses.put(r.steps, m);
+            }
+        }
+        // the newest confirmed weighing (a reading another agrees with, §7.5), else the newest single one
+        java.util.Set<Long> confirmed = new java.util.HashSet<>();
+        for (DoseRecord r : mine) {
+            if (r.hasReading() && r.confirmedBy != null && byId.containsKey(r.confirmedBy)
+                    && mine.contains(byId.get(r.confirmedBy))) {
+                confirmed.add(r.id);
+                confirmed.add(r.confirmedBy);
+            }
+        }
+        DoseRecord single = null, best = null;
+        for (DoseRecord r : mine) {
+            if (!r.hasReading() || mgPerStepOf(r, byId) == null) {
+                continue;
+            }
+            single = r;
+            if (confirmed.contains(r.id)) {
+                best = r;
+            }
+        }
+        DoseRecord w = best != null ? best : single;
+        if (w != null) {
+            t.mgPerStep = mgPerStepOf(w, byId);
+            t.mgPerStepAtMs = w.createdAtMs;
+            t.mgPerStepConfirmed = best != null;
+        }
+        return t;
+    }
+
+    /** A reading's mass per motor step: as stored, else its total over the dots laid on its coupon (§7.5). */
+    static Double mgPerStepOf(DoseRecord r, Map<Long, DoseRecord> byId) {
+        if (r.mgPerStep != null) {
+            return r.mgPerStep;
+        }
+        DoseRecord coupon = r.couponRecordId == null ? null : byId.get(r.couponRecordId);
+        int dots = coupon != null ? coupon.n : r.n;
+        return r.totalMg == null || dots <= 0 || r.steps <= 0 ? null : r.totalMg / dots / r.steps;
     }
 
     /**
@@ -220,19 +286,26 @@ public final class DoseRecords {
      */
     public static List<DoseRecord> fresh(List<DoseRecord> records, DispenseConfig cfg, DoseRecord.Epochs epochs,
             long nowMs, Set<String> flaggedJobs) {
-        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
-    }
-
-    /** The records fresh for the current setup (§1.7), oldest first. */
-    public static List<DoseRecord> fresh(List<DoseRecord> records, DispenseConfig cfg, DoseRecord.Epochs epochs,
-            long nowMs) {
         List<DoseRecord> l = new ArrayList<>();
         for (DoseRecord r : records) {
-            if (r.isFresh(nowMs, cfg, epochs)) {
+            if (r.isFresh(nowMs, cfg, epochs) && !(r.jobId != null && flaggedJobs != null
+                    && flaggedJobs.contains(r.jobId))) {
                 l.add(r);
             }
         }
         return l;
+    }
+
+    /**
+     * The records fresh for the current setup (§1.7), oldest first.
+     *
+     * @deprecated the records of jobs flagged wrong-tip count here: {@link #fresh(List, DispenseConfig,
+     *             DoseRecord.Epochs, long, Set)}
+     */
+    @Deprecated
+    public static List<DoseRecord> fresh(List<DoseRecord> records, DispenseConfig cfg, DoseRecord.Epochs epochs,
+            long nowMs) {
+        return fresh(records, cfg, epochs, nowMs, java.util.Collections.emptySet());
     }
 
     /**
@@ -264,17 +337,26 @@ public final class DoseRecords {
      */
     public static Map<Integer, DoseEvidence> evidence(List<DoseRecord> records, DispenseConfig cfg,
             DoseRecord.Epochs epochs, long nowMs, Set<String> flaggedJobs) {
-        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+        return pooled(records, fresh(records, cfg, epochs, nowMs, flaggedJobs), cfg);
     }
 
     /**
      * The pooled evidence of every dose from the fresh records (§1.7, §7.6): camera records (ladder and
      * coupon) pooled through {@link LadderStats#of}, a record without dots by its own verdict, and the
      * weighed mass of every fresh reading ({@link LadderStats#mass}).
+     *
+     * @deprecated the records of jobs flagged wrong-tip count here: {@link #evidence(List, DispenseConfig,
+     *             DoseRecord.Epochs, long, Set)}
      */
+    @Deprecated
     public static Map<Integer, DoseEvidence> evidence(List<DoseRecord> records, DispenseConfig cfg,
             DoseRecord.Epochs epochs, long nowMs) {
-        List<DoseRecord> fresh = fresh(records, cfg, epochs, nowMs);
+        return evidence(records, cfg, epochs, nowMs, java.util.Collections.emptySet());
+    }
+
+    /** The evidence pooled from the fresh records ({@code all}: every record, for the coupons of the readings). */
+    private static Map<Integer, DoseEvidence> pooled(List<DoseRecord> all, List<DoseRecord> fresh, DispenseConfig cfg) {
+        List<DoseRecord> records = all;
         LadderStats.Settings set = settings(cfg.padCalibration);
         Map<Integer, List<LadderStats.Record>> pooled = new TreeMap<>();
         Map<Integer, List<DoseRecord>> verdicts = new TreeMap<>();

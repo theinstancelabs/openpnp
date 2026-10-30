@@ -49,24 +49,157 @@ public final class LandingFit {
      * with its bend direction recorded; {@link #SEARCH_FIRST_MM} otherwise; {@link #SEARCH_WIDE_MM} with wide.
      */
     public static double searchMm(boolean ownLanding, boolean straight, boolean bendTowardKnown, boolean wide) {
-        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+        if (wide) {
+            return SEARCH_WIDE_MM;
+        }
+        return ownLanding && (straight || bendTowardKnown) ? SEARCH_KNOWN_MM : SEARCH_FIRST_MM;
     }
 
     /** The band height the check reserves: 2R + 8 mm (R 2 → 12, R 6 → 20, R 9 → 26 mm). */
     public static double bandHeightMm(double searchMm) {
-        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+        return 2 * searchMm + BAND_EXTRA_MM;
     }
 
     /**
      * The locator's coarse shift C = blob - target: the new blob nearest the target within ±R (the largest when a
-     * dot splashed), or null when there is none.
+     * dot splashed), or null when there is none. Blobs are {x, y, areaMm2}; "within ±R" is a square window.
      */
     public static double[] locate(List<double[]> newBlobs, double[] target, double searchMm) {
-        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+        double[] best = null;
+        for (double[] b : newBlobs) {
+            if (Math.abs(b[0] - target[0]) > searchMm + 1e-9 || Math.abs(b[1] - target[1]) > searchMm + 1e-9) {
+                continue;
+            }
+            // the largest blob in the window: a splashed dot leaves satellites, the dot itself is the big one
+            if (best == null || area(b) > area(best) + 1e-12 || Math.abs(area(b) - area(best)) <= 1e-12
+                    && dist(b, target) < dist(best, target)) {
+                best = b;
+            }
+        }
+        return best == null ? null : new double[] {best[0] - target[0], best[1] - target[1]};
     }
 
-    /** The best residual shift within ±1.0 mm that lays the targets on the blobs (see the class comment). */
+    private static double area(double[] b) {
+        return b.length > 2 ? b[2] : 0;
+    }
+
+    private static double dist(double[] a, double[] b) {
+        return Math.hypot(a[0] - b[0], a[1] - b[1]);
+    }
+
+    /** The grid of residual shifts tried (mm): every 0.02 mm within ±{@link #RESIDUAL_MAX_MM}. */
+    static final double STEP_MM = 0.02;
+
+    /**
+     * The best residual shift within ±1.0 mm that lays the targets on the blobs (see the class comment): every shift
+     * of a 0.02 mm grid is counted (targets within {@link #MATCH_MM} of a blob, each blob taken once), the best count
+     * wins (ties: the smaller sum of distances); it is then refined to the mean offset of its pairs. The next-best is
+     * the best count of a shift more than 2 × {@link #MATCH_MM} from the winner.
+     */
     public static Fit fit(List<double[]> targets, List<double[]> blobs) {
-        throw new UnsupportedOperationException("§22 ts-engine: not built yet");
+        Fit f = new Fit();
+        int steps = (int) Math.round(RESIDUAL_MAX_MM / STEP_MM);
+        int bestN = -1;
+        double bestSum = Double.MAX_VALUE;
+        double bx = 0, by = 0;
+        int[][] counts = new int[2 * steps + 1][2 * steps + 1];
+        for (int i = -steps; i <= steps; i++) {
+            for (int j = -steps; j <= steps; j++) {
+                double dx = i * STEP_MM, dy = j * STEP_MM;
+                double[] sum = {0};
+                int n = matches(targets, blobs, dx, dy, sum, null);
+                counts[i + steps][j + steps] = n;
+                if (n > bestN || n == bestN && sum[0] < bestSum - 1e-12) {
+                    bestN = n;
+                    bestSum = sum[0];
+                    bx = dx;
+                    by = dy;
+                }
+            }
+        }
+        // refine: the mean offset of the pairs of the best shift, then the pairs again at that shift
+        List<double[]> pairs = new ArrayList<>();
+        matches(targets, blobs, bx, by, new double[1], pairs);
+        if (!pairs.isEmpty()) {
+            double mx = 0, my = 0;
+            for (double[] p : pairs) {
+                mx += p[2] - p[0];
+                my += p[3] - p[1];
+            }
+            mx /= pairs.size();
+            my /= pairs.size();
+            if (Math.abs(mx) <= RESIDUAL_MAX_MM + MATCH_MM && Math.abs(my) <= RESIDUAL_MAX_MM + MATCH_MM) {
+                List<double[]> again = new ArrayList<>();
+                int n = matches(targets, blobs, mx, my, new double[1], again);
+                if (n >= pairs.size()) {
+                    bx = mx;
+                    by = my;
+                    pairs = again;
+                }
+            }
+        }
+        f.dxMm = bx;
+        f.dyMm = by;
+        f.matched = pairs.size();
+        f.pairs = pairs;
+        int next = 0;
+        for (int i = -steps; i <= steps; i++) {
+            for (int j = -steps; j <= steps; j++) {
+                if (Math.hypot(i * STEP_MM - bx, j * STEP_MM - by) > 2 * MATCH_MM + 1e-9) {
+                    next = Math.max(next, counts[i + steps][j + steps]);
+                }
+            }
+        }
+        f.nextBest = next;
+        double sx = 0, sy = 0, sxx = 0, syy = 0;
+        for (double[] p : pairs) {
+            double ex = p[2] - p[0] - bx, ey = p[3] - p[1] - by;
+            sx += ex;
+            sy += ey;
+            sxx += ex * ex;
+            syy += ey * ey;
+        }
+        int n = pairs.size();
+        f.scatterMm = n < 2 ? 0 : Math.max(Math.sqrt(Math.max(0, (sxx - sx * sx / n) / (n - 1))),
+                Math.sqrt(Math.max(0, (syy - sy * sy / n) / (n - 1))));
+        f.ok = f.matched >= MIN_MATCHES && f.nextBest <= MAX_NEXT_BEST && f.scatterMm <= SCATTER_MAX_MM + 1e-9;
+        return f;
+    }
+
+    /**
+     * The targets moved by (dx, dy) that lie within {@link #MATCH_MM} of a blob, each blob taken once (nearest pairs
+     * first); {@code sum[0]} gets the sum of their distances, {@code pairs} (when given) the {target, blob} pairs.
+     */
+    private static int matches(List<double[]> targets, List<double[]> blobs, double dx, double dy, double[] sum,
+            List<double[]> pairs) {
+        List<double[]> cand = new ArrayList<>();
+        for (int t = 0; t < targets.size(); t++) {
+            double[] a = targets.get(t);
+            for (int b = 0; b < blobs.size(); b++) {
+                double d = Math.hypot(blobs.get(b)[0] - (a[0] + dx), blobs.get(b)[1] - (a[1] + dy));
+                if (d <= MATCH_MM + 1e-9) {
+                    cand.add(new double[] {d, t, b});
+                }
+            }
+        }
+        cand.sort((x, y) -> Double.compare(x[0], y[0]));
+        boolean[] tUsed = new boolean[targets.size()];
+        boolean[] bUsed = new boolean[blobs.size()];
+        int n = 0;
+        for (double[] c : cand) {
+            int t = (int) c[1], b = (int) c[2];
+            if (tUsed[t] || bUsed[b]) {
+                continue;
+            }
+            tUsed[t] = true;
+            bUsed[b] = true;
+            n++;
+            sum[0] += c[0];
+            if (pairs != null) {
+                double[] a = targets.get(t), o = blobs.get(b);
+                pairs.add(new double[] {a[0], a[1], o[0], o[1]});
+            }
+        }
+        return n;
     }
 }

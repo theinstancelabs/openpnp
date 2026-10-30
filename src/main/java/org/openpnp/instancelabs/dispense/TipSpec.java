@@ -4,6 +4,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
 
+import org.openpnp.instancelabs.padprofile.Tip;
+
 /**
  * The dispense needle on the screw (profile calibration design §1.5, §5.4). Pad types and dose
  * records name the tip they were made with ({@link #key}): a finer tip changes the flow resistance,
@@ -41,9 +43,12 @@ public class TipSpec {
     public Double bendDeg = 30.0;
     public String bendToward = null;
 
-    /** True when a pad type or record names a tip and it is not this one. */
+    /**
+     * True when a pad type or record belongs to another tip setup than this one (§22.1: a record without a tip key
+     * is the seeded setup's, {@link Tip#setupOf}).
+     */
     public boolean isOther(String tipKey) {
-        return tipKey != null && !tipKey.equals(key);
+        return !Tip.setupOf(tipKey).equals(key);
     }
 
     /** Problems with these values, added to {@link DispenseConfig#validate()}. */

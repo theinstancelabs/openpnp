@@ -193,7 +193,7 @@ public class ValidatorBlocksTest {
         pads.add(new PadGeometry("J1.6", 100.0, 80.0, 0, 0.8, 0.95, 5.5, t));
         pads.add(new PadGeometry("J1.1", 103.0, 80.0, 0, 0.8, 0.95, 5.5, t));
         pads.add(new PadGeometry("J1.6", 106.0, 80.0, 0, 0.8, 0.95, 5.5, t));
-        DispensePlan plan = new DispensePlanner(c, new PadTypeResolver(Collections.singletonList(t), null))
+        DispensePlan plan = TestTips.planner(c, new PadTypeResolver(Collections.singletonList(t), null))
                 .plan("toy", pads, 77.5, 40);
         List<String> order = new ArrayList<>();
         for (DispensePlan.PlannedDot d : plan.dots) {

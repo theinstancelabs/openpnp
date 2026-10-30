@@ -27,11 +27,11 @@ public class PadType {
     public static final String ORIGIN_AUTO_CALIBRATED = "auto-calibrated";
     /**
      * Copied from another tip setup's version as a starting point (tip setups design §22.2): provisional,
-     * nothing measured with this tip. Not in {@link #ORIGINS} until the engine writes it.
+     * nothing measured with this tip.
      */
     public static final String ORIGIN_COPIED = "copied";
     static final List<String> ORIGINS = Arrays.asList(ORIGIN_SEED, ORIGIN_MANUAL, ORIGIN_SUGGESTED,
-            ORIGIN_AUTO_CALIBRATED);
+            ORIGIN_AUTO_CALIBRATED, ORIGIN_COPIED);
 
     /** Pad layout used when a package has no footprint pads in packages.xml. */
     public enum Layout {
@@ -96,7 +96,7 @@ public class PadType {
     public Double calAreaMm2;
     /** Weighed, confirmed mass per pad at calibration (mg): the source of an anchor (§1.3). */
     public Double massPerPadMg;
-    /** seed | manual | suggested | auto-calibrated; null on rows from before schema 2. */
+    /** seed | manual | suggested | auto-calibrated | copied; null on rows from before schema 2. */
     public String origin;
     /**
      * Tip setups (§22.2), on the rows of a setup's composed view ({@link TipSetups#typesFor}): the setup
