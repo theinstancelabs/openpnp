@@ -992,9 +992,9 @@
    * order: record the needle frame again with both tips (the engine refuses K then), probe the blank (the touch-off's
    * dots take their Z from it), take the places' Z again with N1 (status.machine.zCheck.places: the touch-off primes at
    * the waste), touch off (a frame recorded after the home replaces the touch-off, which I4 then asks for again; not
-   * the frame's own offset), register the board. What was measured again since the home drops out of
-   * status.machine.zCheck.stale. Returns {step: frame | blank | places | touch-off | register | done, fixes} while the
-   * last Z check of this home failed, else null.
+   * the frame's own offset), register the board (a board without fiducials: probe it only). What was measured again
+   * since the home drops out of status.machine.zCheck.stale. Returns {step: frame | blank | places | touch-off |
+   * register | done, fixes} while the last Z check of this home failed, else null.
    */
   IL.zMoved = function (status) {
     const s = status || S.status || {};
@@ -1010,9 +1010,17 @@
     const places = (zc.places || []).map((x) => x.name);
     if (places.length) return { step: 'places', fixes: places.slice(0, 3).map((n) => ({ href: '#setup/places/' + encodeURIComponent(n), label: 'Retake Z with N1 (' + n + ')' })) };
     if (stale.has('the touch-off') || !nd.touchedOff) return { step: 'touch-off', fixes: touchOffFixes(nd, true) };
-    if (surf(d.boardSurfaceName || 'board')) return { step: 'register', fixes: [{ fix: 'register', label: 'Register board' }, { fix: 'probe-by-hand', label: 'Do it by hand' }] };
+    if (surf(d.boardSurfaceName || 'board')) return { step: 'register', fixes: [registerFix(S.plan), { fix: 'probe-by-hand', label: 'Do it by hand' }] };
     return { step: 'done', fixes: [] };
   };
+  /**
+   * Register board's fix-it for a plan: "Probe only (X/Y as planned)" for a board without fiducials (F10: N1 probes it
+   * where it is planned; registrationTargets.probeOnly), else "Register board".
+   */
+  function registerFix(plan, extra) {
+    const t = plan && plan.registrationTargets;
+    return Object.assign(t && t.probeOnly ? { fix: 'register-probe-only', label: 'Probe only (X/Y as planned)' } : { fix: 'register', label: 'Register board' }, extra);
+  }
   const sentence = (t) => { const x = cap(String(t || '').trim()); return x && !/[.:!?]$/.test(x) ? x + '.' : x; };
 
   /**
@@ -1222,26 +1230,33 @@
       const which = !(seat.length || newSeat || !sf) ? undefined : newSeat ? 'new'
         : !sf || /^no '/i.test(seat[0] ? seat[0].v.message : 'no ') ? 'none'
           : /another registration/.test(seat[0].v.message) ? 'other' : 'untied';
-      const why = which && { new: 'You said the board was re-seated: register it (fiducials, then N1 touches the board).',
-        none: 'No board surface for this seat yet: register the board (fiducials, then N1 touches the board).',
-        other: 'The board surface belongs to another seat of this board: register it again.', untied: 'The board surface is not tied to this plan.' }[which];
+      // a board without fiducials is probed only, where it is planned (F10)
+      const rt = plan.registrationTargets || null;
+      const only = !!rt && !!rt.probeOnly;
+      const why = which && (only ? { new: 'You said the board was re-seated: probe it (no fiducials: N1 touches it where it is planned).',
+        none: 'No board surface for this seat yet: probe the board (no fiducials: N1 touches it where it is planned).',
+        other: 'The board surface belongs to another seat of this board: probe it again.', untied: 'The board surface is not tied to this plan.' }
+        : { new: 'You said the board was re-seated: register it (fiducials, then N1 touches the board).',
+          none: 'No board surface for this seat yet: register the board (fiducials, then N1 touches the board).',
+          other: 'The board surface belongs to another seat of this board: register it again.', untied: 'The board surface is not tied to this plan.' })[which];
       // Register board (fiducials + N1 probe) is the one primary fix; by hand stays. A new seat on a board that can be
       // registered asks the fiducials instead of taking "same board" on trust (AUTO_REGISTER_DESIGN.md §8.2)
-      const rt = plan.registrationTargets || null;
       const camera = (m.positions || []).some((t) => t.kind === 'camera');
       const registrable = !!rt && !rt.error && (rt.fiducialCount || (rt.fiducials || []).length) >= 2 && camera;
       const reg = plan.registration || null;
-      const seatFixes = [{ fix: 'register', label: 'Register board', primary: true }, { fix: 'probe-by-hand', label: 'Do it by hand' }];
+      const seatFixes = [registerFix(plan, { primary: true }), { fix: 'probe-by-hand', label: 'Do it by hand' }];
       if (newSeat) seatFixes.push(registrable ? { fix: 'register-check', label: 'Same seat? Check the fiducials' } : { fix: 'same-seat', label: 'Same board, not moved' });
       const registered = reg ? { atMs: reg.atMs, seat: reg.lastCheckedAtMs && reg.lastCheckedAtMs > reg.atMs ? 'same' : null } : null;
+      // the strip, the nav and the fix name the same action ("8 of 9 · register board", not "probe seat"; a board
+      // without fiducials "probe board", as its fix Probe only)
+      const act = only ? 'probe' : 'register';
       if (bad.length) {
-        add({ key: 'surface', code: 'I4', title: 'Surface', state: 'block', value: 'register again', short: 'board surface',
+        add({ key: 'surface', code: 'I4', title: 'Surface', state: 'block', value: act + ' again', short: 'board surface',
           detail: bad.map((x) => sentence(x.v.message)).concat(why || []).join(' '),
-          fixes: which ? seatFixes : [{ fix: 'register', label: 'Register board', primary: true }, { fix: 'probe-by-hand', label: 'Add probe points by hand' }],
+          fixes: which ? seatFixes : [registerFix(plan, { primary: true }), { fix: 'probe-by-hand', label: 'Add probe points by hand' }],
           seat: which, registered });
       } else if (which) {
-        // the strip, the nav and the fix name the same action ("8 of 9 · register board", not "probe seat")
-        add({ key: 'surface', code: 'I4', title: 'Surface', state: 'need', value: 'register', short: 'register board', detail: why, fixes: seatFixes, seat: which, registered });
+        add({ key: 'surface', code: 'I4', title: 'Surface', state: 'need', value: act, short: act + ' board', detail: why, fixes: seatFixes, seat: which, registered });
       } else {
         const regText = reg ? ' · registered ' + IL.fmtTime(reg.atMs - S.skewMs) + ' (' + IL.plural((reg.fiducials || []).length, 'fiducial') + ')'
           : ' · not registered (no fiducial correction)';
@@ -2643,7 +2658,8 @@
   // ================================================================================== actions, refusals, fixes
   /**
    * Runs an action from a button: disables it meanwhile, shows a refusal inline (in the nearest [data-refusals]
-   * ancestor or opts.refusalIn) + toast + activity, then polls. opts: {ok: text | fn(result), refusalIn, what}.
+   * ancestor or opts.refusalIn) + toast + activity, then polls. opts: {ok: text | fn(result) (empty: no toast),
+   * refusalIn, what}.
    */
   IL.act = async function (btn, fn, opts) {
     const o = opts || {};
@@ -2652,7 +2668,8 @@
     if (btn) { btn.disabled = true; btn.setAttribute('aria-busy', 'true'); }
     try {
       const r = await fn();
-      if (o.ok) IL.toast(typeof o.ok === 'function' ? o.ok(r) : o.ok, 'ok');
+      const ok = typeof o.ok === 'function' ? o.ok(r) : o.ok;
+      if (ok) IL.toast(ok, 'ok');
       return r;
     } catch (e) {
       IL.refuse(e, { host, what: o.what });
@@ -2697,6 +2714,8 @@
   }
   /** The code prefix of an engine refusal ("I4: …", "REG: …", "PROBE: …"): the prefix drives the fix-its. */
   IL.CODE_RE = /^(I\d+|MACHINE|CONFIG|PLAN|REG|PROBE):\s*(.*)$/s;
+  /** The end of the REG refusal of a board without fiducials (F10): the way out it names. */
+  const PROBE_ONLY_WAY = /Or probe it only, where it is planned: Register with probe "always"\.?\s*$/;
   const FIXES = {};
   /**
    * Registers a fix-it: spec {run(btn, arg, status) → promise, press2: verb | fn(status) → verb|null, ok: toast text |
@@ -2812,13 +2831,16 @@
         // the needle frame recorded again replaced the touch-off: touch off, or take the frame's own offset
         if (k === 'needle' && /run a touch-off/i.test(msg)) return touchOffFixes(d.needle || {}, !!IL.zMoved(s));
         if (k === 'other-surface') return [{ href: '#setup/surfaces', label: 'Open Probed surfaces' }];
-        if (k === 'seat' || k === 'surface-bad' || k === 'plan') return [{ fix: 'register', label: 'Register board' }, { fix: 'probe-by-hand', label: 'Do it by hand' }];
+        if (k === 'seat' || k === 'surface-bad' || k === 'plan') return [registerFix(S.plan), { fix: 'probe-by-hand', label: 'Do it by hand' }];
         return [{ href: '#setup/needle', label: 'Open Needle Z frame' }];
       }
-      // Register board (AUTO_REGISTER_DESIGN.md §8.2): the fiducial check failed, or the probe did
-      case 'REG': return [{ fix: 'look-camera', label: 'Look with the camera' }, { fix: 'board-step', label: 'Change board' },
-        { fix: 'plan-unregistered', label: 'Plan without fiducial correction' }, { fix: 'register', label: 'Register again' },
-        { fix: 'probe-by-hand', label: 'Do it by hand' }];
+      // Register board (AUTO_REGISTER_DESIGN.md §8.2): the fiducial check failed, or the probe did. A board without
+      // fiducials names its way out (F10): probe it only, where it is planned (registering or planning again cannot help)
+      case 'REG': return PROBE_ONLY_WAY.test(msg) ? [{ fix: 'register-probe-only', label: 'Probe only (X/Y as planned)', primary: true },
+        { fix: 'look-camera', label: 'Look with the camera' }, { fix: 'board-step', label: 'Change board' }, { fix: 'probe-by-hand', label: 'Do it by hand' }]
+        : [{ fix: 'look-camera', label: 'Look with the camera' }, { fix: 'board-step', label: 'Change board' },
+          { fix: 'plan-unregistered', label: 'Plan without fiducial correction' }, { fix: 'register', label: 'Register again' },
+          { fix: 'probe-by-hand', label: 'Do it by hand' }];
       case 'PROBE': {
         // the board top Z lies too far under the needle frame for the probe's floor: fix the Z or the frame, or by hand
         if (/cannot reach that height/i.test(msg)) {

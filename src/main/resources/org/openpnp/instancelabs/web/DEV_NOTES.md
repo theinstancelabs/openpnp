@@ -187,7 +187,8 @@ browser keeps them. A value left in
 
 ### Actions, two-press, fix-its, refusals
 - `IL.act(btn, async fn, {ok, refusalIn, what})` runs an action: button disabled + `aria-busy` meanwhile; errors →
-  `IL.refuse`; then `pollNow` + `render`. `ok`: toast text or `fn(result)`.
+  `IL.refuse`; then `pollNow` + `render`. `ok`: toast text or `fn(result)` (an empty text: no toast, e.g. an action that
+  showed its refusal at a field itself).
 - `IL.refuse(err, {host, what})` toast + activity + an inline `.refusal` box in `host` (default: the nearest
   `[data-refusals]` ancestor of the button) listing violations with their I-code and fix-it buttons.
 - `IL.press2(btn, verb, action, opts)` makes a **two-press** button (§11): first press → `.btn--press`, label
@@ -205,19 +206,24 @@ browser keeps them. A value left in
   `attest-regulator`, `attest-paste`, `same-seat`. Run registers `plan-again`, `clean-check` (two-press), `probe`,
   `run-rest` (`{planId, padIds}` → the run confirm for those pads, never one this tab saw pasted), `run-fewer` (I7: a
   test run of the first N dots that fits the on-time limit), and Register board's (AUTO_REGISTER_DESIGN.md §8.2):
-  `register` (two-press, `probe: auto`), `register-check` (clears the new-seat flag, then registers: the fiducials decide
+  `register` (two-press, `probe: auto`), `register-probe-only` (two-press, `probe: always`: a board without fiducials,
+  F10), `register-check` (clears the new-seat flag, then registers: the fiducials decide
   "same seat"), `probe-by-hand` (opens "Do it by hand" on Register), `look-camera` (Setup's Top camera card),
   `plan-unregistered` (plans the board with `registration: 'none'`), `board-step`, `check-z` (two-press,
   `POST /api/machine/z-check`); Setup registers `su-go-<card>`, `su-probe-blank`. Every gated fix-it row gets a visible
   `.fix-why` reason line from core (rows marked `[data-own-reason]` show their own).
   `IL.fixesForCode(code, status, message)`: an I4 refusal that names a place offers `Retake Z with N1` (#setup/places/<name>);
-  I4 seat / surface → `Register board`, `Do it by hand`; I4 "measured before the home" → `Check Z`; "no point
+  I4 seat / surface → `Register board` (`Probe only (X/Y as planned)` when the plan shown has
+  `registrationTargets.probeOnly`, as in the readiness item and the Z-moved step), `Do it by hand`; I4 "measured before
+  the home" → `Check Z`; "no point
   measured before the home" → Needle Z frame; I4 "Z moved" → the remedy's next step, `IL.zMoved(status)` →
   `{step: frame | blank | touch-off | register | done, fixes}` (null unless the last Z check of this home failed:
   `Open Needle Z frame`, `Probe the blank…`, `Run a touch-off` + `Confirm frame offset …`, `Register board` + `Do it by
   hand`, from `machine.zCheck.stale` and `needle.touchedOff`) (`IL.i4Kind` → `zcheck` for all three); I4 "(run a
   touch-off)" → `Run a touch-off`, `Confirm frame offset …`; `REG` → `Look with the camera`, `Change board`, `Plan
-  without fiducial correction`, `Register again`, `Do it by hand`; `PROBE` → `Register again`, `Do it by hand` (+
+  without fiducial correction`, `Register again`, `Do it by hand` (a REG text ending in ` Or probe it only, where it is
+  planned: Register with probe "always".`: `Probe only (X/Y as planned)` first, then `Look with the camera`, `Change
+  board`, `Do it by hand`); `PROBE` → `Register again`, `Do it by hand` (+
   `Probe the blank…` when it names the blank; a board top the probe "cannot reach" → `Board step`, `Open Needle Z
   frame`, `Do it by hand`).
   `IL.CODE_RE` is the code prefix of an engine text (`I4:`, `MACHINE:`, `CONFIG:`, `PLAN:`, `REG:`, `PROBE:`).
@@ -572,8 +578,32 @@ Never `/dev/ttyACM*`, `/dev/serial/*`, `/dev/video*` or a real-mode OpenPnP.
   nothing was saved.`), the foot `#blank-note`, `#btn-blank-auto` (two-press), `#blank-why`; `details#blank-by-hand`
   keeps today's table with `#btn-blank-add` / `#btn-blank-save` in the foot. Settings: `#set-homebefore`
   (`homeBeforeRun`). The JSON editor never sends `boardRegistrations` or `newSeatAtMs` (engine stamps).
+- **Probe only** (F10, fix round 2): a plan whose `registrationTargets.probeOnly` is true (a board without fiducials, no
+  registration) turns `#btn-register` into `Probe only (X/Y as planned) · ≈ M:SS` (`data-mode="probe-only"`, two-press
+  `probe only`, `POST …/register {probe: 'always'}`; `Probing… · ≈ 0:41 left` while it runs) with `#register-note`
+  `This board has no fiducials: N1 probes it where it is planned; its X/Y are not checked.` and the N1 spots; Do it by
+  hand stays. The board's missing fiducials lock nothing then (`registerWhy(s, true)`); the live phases drop the
+  fiducial and fit rows. The result card: `Probed 13:05: no fiducials: probed only, X/Y as planned; 5 points, worst
+  0.012 mm; planned again.` with `Probe again` (`#btn-reg-probe`), `Not probed: …`, or `Stopped … during probe point k
+  of n: nothing was saved.`. The readiness item, the I4 seat fixes and the Z-moved step offer `Probe only (X/Y as
+  planned)` (`register-probe-only`) instead of `Register board` for such a plan; the item's short name and value say
+  the same action (`probe board`, `probe`, blocked `probe again`; else `register board`).
 - **Records:** `board-registration` → `Registration · <board>`, `surface-probe` → `Surface probe · <name>`, `z-check`.
 - **Board import hooks** (BOARD_IMPORT_DESIGN.md §5.1.1, no-ops until `boardflow.js` loads): H1 `mountBoardStep` in the
   Board step, H2 `onPad` / `onPart` of the hero view, H3 `hero(bv, …)` before the empty-state switch (the SVG and the
   stage bar show with a plan or a drawing), H4 `recordsMap(bv, plan)` after the Records map's `setPlan`, H5 the
   replaced Records map view is destroyed.
+
+## 12. Needle touch-off (fix round 2: F9, F14, 2026-10-30)
+
+- `#to-pitch` (`Pitch`, mm, placeholder `1.6`, `at least the dot + 0.4 mm`) is sent as `pitchMm` when typed; empty, the
+  engine takes 1.6 mm (more for a dot above half a turn). `#to-plan` ends `· 1.6 mm apart` (the typed pitch, or `the
+  dot + 0.4 mm apart (at least 1.6 mm)` above half a turn); the started toast names the 202's `pitchMm`. The engine's
+  400 for a pitch with no room between the dots (`the touch-off pitch 1.00 mm is too small for these dots: …`) is
+  `#to-pitch-err` (a block toast too, no refusal box) until the pitch or the dose changes; `#to-reason` then reads `The
+  pitch is too small for these dots: see the Pitch field.`.
+- The result table (`#to-result` and Records › Touch-offs): `analysis.dotStates[i]` `unmeasured` reads `not measured`
+  with `dotNotes[i]` in the dim third column and as the cell's title (Records: the title); `no dot` only for `none` (or
+  rows without `dotStates`). `IL.pcr.touchOffDot(analysis, i)` → `{text, note}`. A run that recorded nothing shows its
+  message word for word under `Finished hh:mm · no contact found: nothing recorded` (`#to-live`, and the `cal` panel);
+  the older row below is then `Last recorded touch-off · …`.
