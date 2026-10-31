@@ -580,7 +580,10 @@
     const key = g.group + '|' + sg.id + '|' + (c.planId || c.boardFile);
     if (P.bvKey !== key && box) { P.bvKey = key; bv.fit(box); }
     bv.update({ sugg });
-    IL.setText($('pt-sugg-cap'), IL.plural(sugg.length, 'suggested dot') + ' on ' + ref + ' · dots ' + dRange(d.diameterMm) + ' wide (upper size drawn)');
+    // a size range is drawn at its larger end; one size needs no note
+    const dm = d.diameterMm;
+    IL.setText($('pt-sugg-cap'), IL.plural(sugg.length, 'suggested dot') + ' on ' + ref + ' · dots ' + dRange(dm) + ' wide'
+      + (dm && Math.abs(dm[0] - dm[1]) >= 0.005 ? ' (drawn at ' + f2(dm[1]) + ' mm, the larger size)' : ''));
   }
   /** Suggested dots on pads: the group's positions are in its first opening's frame (x along its width). */
   function dotsOn(pads, g, d) {
@@ -1004,7 +1007,7 @@
   function stepDetail(pv, key) {
     if (key === 'blank' && pv.blank) return pv.blank.probe ? 'N1 touches the blank: ' + (pv.blank.probeWhy || '') : 'blank surface still valid';
     if (key === 'coupons') return (pv.coupons || []).map((k) => k.place).join(' and ') + ': camera look, then one N1 touch each';
-    if (key === 'ladder') return (pv.ladder || []).map((x) => x.dots + ' ' + turnAdj(x.steps) + ' dots').join(', ') + (pv.blank ? ' in X ' + IL.fmt(pv.blank.x0, 1) + '–' + IL.fmt(pv.blank.x1, 1) + ', Y ' + IL.fmt(pv.blank.y0, 1) + '–' + IL.fmt(pv.blank.y1, 1) : '');
+    if (key === 'ladder') return (pv.ladder || []).map((x) => x.dots + ' ' + turnAdj(x.steps) + ' dots').join(', ') + (pv.blank ? ' in X ' + IL.fmt(pv.blank.x0, 1) + '–' + IL.fmt(pv.blank.x1, 1) + ' mm, Y ' + IL.fmt(pv.blank.y0, 1) + '–' + IL.fmt(pv.blank.y1, 1) + ' mm' : '');
     if (key === 'weigh') return (pv.coupons || []).map((k) => k.dots + ' ' + turnAdj(k.steps) + ' dots on ' + k.place + ' (≈ ' + k.expectedMg + ' mg)').join(', ') + ', then the head parks over the purge row';
     if (key === 'readings') return 'weigh each coupon, wipe it, weigh it again';
     if (key === 'decide') return 'every check against its limit; a new pad-type version';
@@ -1255,10 +1258,13 @@
   };
   const checkText = (k) => k.text || (CHECK_WORD[k.key] ? CHECK_WORD[k.key](k) : [k.key, k.measured, k.limit].filter(Boolean).join(': '));
   const OUT_KIND = { characterized: 'ok', partly: 'need', provisional: 'need', measured: 'ok', stopped: 'block', cancelled: 'need', failed: 'block' };
-  /** "Characterized 14:05: SW … planned again." → the verdict and its time in bold, the rest as the sentence goes on. */
+  /**
+   * "Characterized 14:05: SW … planned again." → the verdict and its time in bold, the rest as the sentence goes on (a
+   * number keeps its unit on its line: "9 %", "2.29 mg").
+   */
   function headSplit(t) {
     const m = /^(\S+(?: \S+)? \d\d:\d\d(?: during [^:]+)?:)(\s[\s\S]*)$/.exec(String(t || ''));
-    return m ? [el('b', { text: m[1] }), m[2]] : [String(t || '')];
+    return m ? [el('b', { text: m[1] }), IL.nb(m[2])] : [IL.nb(String(t || ''))];
   }
   function renderResult(j, res, s) {
     const kind = OUT_KIND[res.outcome] || 'need';
@@ -1270,9 +1276,10 @@
     const short = row.defined && row.spotsLeft < IL.purgeNeed(row);
     IL.keyed(box, JSON.stringify([res.sentence, res.control && res.control.drift, res.planError, j.warnings, short, row.spotsLeft]), () => [IL.glyph(kind),
       el('div', {}, el('div', { class: 'ri__t', id: 'pcal-result-t' }, headSplit(res.sentence)),
-        res.control && res.control.drift ? el('div', { class: 'ri__d', text: IL.cap(res.control.drift) + '.' }) : null,
+        // the date of the weighing stays on one line too (2026-10-27: no-break hyphens)
+        res.control && res.control.drift ? el('div', { class: 'ri__d', text: IL.nb(IL.cap(res.control.drift) + '.').replace(/(\d{4})-(\d\d)-(\d\d)/g, '$1\u2011$2\u2011$3') }) : null,
         res.planError ? el('div', { class: 'ri__d', text: 'Not planned again: ' + res.planError }) : null,
-        Array.from(new Set(j.warnings || [])).slice(0, 3).map((w) => el('div', { class: 'ri__d', text: IL.cap(w) + '.' })),
+        Array.from(new Set(j.warnings || [])).slice(0, 3).map((w) => el('div', { class: 'ri__d', text: IL.nb(IL.cap(w) + '.') })),
         short ? el('div', { class: 'ri__d', id: 'pcal-result-purge' }, 'Next: wipe the purge row and reset it before the next board (' + row.spotsLeft + ' of '
           + IL.plural(row.spots, 'spot') + ' left, ' + IL.purgeNeed(row) + ' needed). ', IL.fixButton({ fix: 'purge-reset', label: 'Wiped: reset row', icon: 'i-wipe' }, { cls: 'btn--sm' })) : null)]);
     IL.keyed($('pcal-groups'), JSON.stringify(res.groups), () => (res.groups || []).map((g) => {
@@ -1285,7 +1292,7 @@
         el('dl', { class: 'kv kv--wrap pcal__kv' }, [
           ['Per pad', isNum(g.perPad) ? g.perPad + ' ' + turnAdj(g.steps) + ' ' + (g.perPad === 1 ? 'dot' : 'dots') : '—'],
           ['Amount', (isNum(g.mgPerPad) ? IL.fmt(g.mgPerPad, 2) + ' mg' : '—') + (isNum(g.targetMg) ? ' (target ' + IL.fmt(g.targetMg, 2) + ' mg' + (isNum(g.errorPct) ? ', ' + (g.errorPct >= 0 ? '+' : '−') + Math.abs(Math.round(g.errorPct)) + ' %' : '') + ')' : '')],
-          ['Dot size', isNum(g.dMeanMm) ? IL.fmt(g.dMeanMm, 2) + ' mm (d95 ' + IL.fmt(g.d95Mm, 2) + ' mm)' : '—'],
+          ['Dot size', isNum(g.dMeanMm) ? IL.fmt(g.dMeanMm, 2) + ' mm (95 % of the dots under ' + IL.fmt(g.d95Mm, 2) + ' mm)' : '—'],
           ['Spread', isNum(g.residCv) ? IL.fmt(100 * g.residCv, 0) + ' % dot to dot' + (isNum(g.phase) ? ' · ' + IL.fmt(100 * g.phase, 0) + ' % between the screw angles'
             + (isNum(g.phaseLimit) ? ' (at most ' + IL.fmt(100 * g.phaseLimit, 0) + ' %)' : '') : '') : '—'],
           ['Threads', isNum(g.hops) ? (g.threads || 0) + ' in ' + g.hops + ' moves' : '—'],

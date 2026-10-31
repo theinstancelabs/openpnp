@@ -454,7 +454,10 @@
     first.push(el('b', { class: paste.length ? null : 'bi-found--none', text: paste.length || !pls.length
       ? IL.plural(paste.length, 'part gets', 'parts get') + ' paste (' + IL.plural(sum(paste), 'pad') + ')' : 'No part gets paste yet' }));
     if (wait.length) first.push(el('b', { class: 'bi-found--need', text: IL.plural(wait.length, 'part waits', 'parts wait') + ' for a characterized pad type (' + IL.plural(sum(wait), 'pad') + ')' }));
-    if (block.length) first.push(el('b', { class: 'bi-found--block', text: IL.plural(block.length, 'part needs', 'parts need') + ' a pad type (' + IL.plural(sum(block), 'pad') + ')' }));
+    // with the profile check (H-P6) these parts need a profile: no pad type, one not calibrated yet, as the key and the
+    // NEEDS_PROFILE warning say
+    if (block.length) first.push(el('b', { class: 'bi-found--block', text: IL.plural(block.length, 'part needs', 'parts need') + (IL.padProfile ? ' a profile (' : ' a pad type (')
+      + IL.plural(sum(block), 'pad') + ')' }));
     const second = [el('span', { text: IL.plural(fids, 'fiducial') })];
     const skip = (list, one, many, tail) => {
       if (!list || !list.length) return;

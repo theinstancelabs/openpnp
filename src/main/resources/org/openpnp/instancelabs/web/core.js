@@ -261,11 +261,11 @@
   };
   /**
    * Keeps a number with its unit and a short label with its number on one line ("2,343 ms", "pitch 1.65 mm",
-   * "bench 5,490", "1 to 64"): the spaces between them become no-break spaces. Display text only.
+   * "bench 5,490", "1 to 64", "0.072 g"): the spaces between them become no-break spaces. Display text only.
    */
   IL.nb = function (text) {
     return String(text)
-      .replace(/(\d) (?=(?:mm²|mm|ms|min|s|°|psi|rpm|DPH|mg|mm\/100|%|per|spots?|dots?|pads?|of|to)(?![\w²]))/g, '$1\u00a0')
+      .replace(/(\d) (?=(?:mm²|mm|ms|min|s|°|psi|rpm|DPH|mg|g|mm\/100|%|per|spots?|dots?|pads?|of|to)(?![\w²]))/g, '$1\u00a0')
       .replace(/\b(bench|estimate|gap|dwell|purge|pitch|slowest|fastest|median|ended|started|limit|worst|tilt|offset|frame) (?=[\d−+-])/g, '$1\u00a0')
       .replace(/([a-z])-([a-z])/g, '$1\u2011$2')
       .replace(/≈ (?=[\d−-])/g, '≈\u00a0');

@@ -1000,9 +1000,9 @@ estimates (`status.machine.home.estimateS`, `machine.zCheck.estimateS`, AR §7.5
 captures × 0.9 s, each coupon look and probe 1 + 3 × 17 s (AR §11 item 14). Example (groups J and Q of §14.3):
 
 `Homes first (≈ 25 s) and checks Z (≈ 20 s). Checks and touches your two weigh coupons (≈ 1:45). Lays 76 test dots on
-the blank (28 half-turn, 48 quarter-turn) in X 286.0–326.0, Y 250.0–261.0 (9.0 of 20.0 mm left after this) and looks
-at them with the top camera (≈ 1:10). Then lays 136 quarter-turn dots on coupon 1 and 68 half-turn dots on coupon 2
-(≈ 2:50) and parks the head over the purge row. Then it needs you once: weigh each coupon, wipe it and weigh it again
+the blank (28 half-turn, 48 quarter-turn) in X 286.0–326.0 mm, Y 250.0–261.0 mm (9.0 of 20.0 mm left after this) and
+looks at them with the top camera (≈ 1:10). Then lays 136 quarter-turn dots on coupon 1 and 68 half-turn dots on coupon
+2 (≈ 2:50) and parks the head over the purge row. Then it needs you once: weigh each coupon, wipe it and weigh it again
 (4 readings). About 0.22 g of paste, ≈ 6:30 before your readings.`
 
 Then `You need: two clean weigh coupons on coupon1 and coupon2 (blank PCB, 40 × 30 mm, at least 3 g), the balance, a

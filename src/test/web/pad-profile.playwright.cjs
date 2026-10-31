@@ -16,12 +16,15 @@
  * SW_SPST_3.9x2.9mm"; (3) #pt-needs: 3 rows (J, T, Q), the tip details hold the 2 WSON groups, nav "Needs 3 profiles";
  * (4) the SW card: "New pad type SW_SPST_3.9x2.9mm", 4 suggested dots on J1, the plan's dot count unchanged; (5) Use Chip
  * 0603 on TestChip_A: a new plan shown, its row gone; (6) inspector on J1.1: one profile notebox, no NO_PAD_TYPE
- * flag, no "New pad type"; (7) Calibrate automatically: the summary says it needs you once, nothing runs before the
- * second press, the phases advance, the strip names the pad calibration; (8) the readings prompt: the strip "Waiting
+ * flag, no "New pad type"; (7) Calibrate automatically: the summary says it needs you once (the test dots' X and Y in
+ * mm), nothing runs before the second press, the phases advance, the strip names the pad calibration and, at 1440 px,
+ * its step; (8) the readings prompt: the strip "Waiting
  * for you · weigh", a reload brings it back with the coupon fields, the SIM balance read with paste and wiped (the
- * test is the operator), "= n mg of paste" echoed, saved; (9) result "Characterized …", ≥ 3 crops load, the new plan
- * shown, SW and TestChip_A gone from the list, Test_Strip left, a test run asked to stop inside a two-dot pad lays
- * whole pads; (10) I'll do it by hand on Test_Strip: the guide names
+ * test is the operator), "= n mg of paste" echoed, saved; (9) result "Characterized …" (numbers with their units on
+ * one line, the dot size in words), ≥ 3 crops load, the new plan shown, SW and TestChip_A gone from the list, Test_Strip
+ * left, the profile panel's pad types in this plan clear of their counts at 1440 and 1280 px and whole names in the
+ * family tables, a test run asked to stop inside a two-dot pad lays whole pads; (10) I'll do it by hand on Test_Strip:
+ * the guide names
  * it, its ladder (two presses) fills table#pcal-ladder, the Weigh dots card has the quarter turn and a count;
  * (11) Calibrate › Pad calibration: "… mm left", Blank wiped (two presses) → 0 mm used; (12) the by-hand weighing,
  * STOP at its readings prompt: "Stopped … the coupons still need weighing …" and "Type the readings" (the first coupon
@@ -271,6 +274,10 @@ async function weighCoupon(page, place) {
     const nanoLines = await page.evaluate(() => Array.from(document.querySelectorAll('li[data-code="NEEDS_PROFILE"] .pp-needs-w > li')).map((l) => l.textContent));
     check('nano preview: the warning names the packages one line per reason, the tip\'s last', nanoLines.length === 3 && /^(Not calibrated yet|No pad type): /.test(nanoLines[0])
       && /^Cannot be dispensed with the 22G tip: /.test(nanoLines[2]), nanoLines);
+    // the line above says what the key and the warning say (the LED pads have a pad type, not calibrated yet)
+    const nanoFound = await page.evaluate(() => document.querySelector('#board-import-found .bi-found__a').textContent);
+    check('nano preview: "No part gets paste yet · 5 parts need a profile (10 pads)", not "need a pad type"',
+      /\b5 parts need a profile \(10 pads\)/.test(nanoFound) && !/pad type/.test(nanoFound), nanoFound);
     // the profile split: the one NEEDS_PROFILE warning above the packages and their Profile column
     await shoot(page, 'nano-preview', () => page.evaluate(() => { const t = document.querySelector('#dlg-board-import .bi-wg--1') || document.getElementById('board-import-packages'); if (t) t.scrollIntoView({ block: 'start' }); }));
     await page.click('#btn-board-import-cancel').catch(() => page.keyboard.press('Escape'));
@@ -328,6 +335,11 @@ async function weighCoupon(page, place) {
     check('(3) three fixable rows with data-reason (J, T, Q)', list.rows.length === 3 && list.rows.every((r) => r[0] === 'no-type'), list.rows);
     check('(3) the tip details (collapsed) hold the 2 WSON groups', list.tip.length === 2 && !list.tipOpen && /22G tip/.test(list.tipText), list);
     check('(3) nav sub "Needs 3 profiles"', list.nav === 'Needs 3 profiles', list.nav);
+    // the profile panel's pad-type gate counts in words: "1 of 12 pad types is allowed", "2 of 13 … are allowed"
+    await page.waitForFunction(() => / pad types (is|are) allowed/.test((document.querySelector('#pt-ov-gate .pt-gate__s') || {}).textContent || ''), null, { timeout: 15000 }).catch(() => null);
+    const gate3 = await page.evaluate(() => (document.querySelector('#pt-ov-gate .pt-gate__s') || {}).textContent || '');
+    const gm3 = /^(\d+) of \d+ pad types (is|are) allowed on a board/.exec(gate3);
+    check('(3) the pad-type gate: "is" for one type, "are" for more', !!gm3 && (gm3[1] === '1') === (gm3[2] === 'is'), gate3);
     check('(3) the source is the plan now', /^From the plan of /.test(list.src), list.src);
     await shoot(page, 'needs-list', () => toTop(page, '#pt-needs', '#pt-section'));
 
@@ -338,6 +350,9 @@ async function weighCoupon(page, place) {
       dots: document.querySelectorAll('#plan-svg circle.dot').length }));
     check('(4) the suggestion: "New pad type SW_SPST_3.9x2.9mm …"', card4.text.startsWith('New pad type SW_SPST_3.9x2.9mm'), card4.text);
     check('(4) 4 suggested dots drawn on J1 (circle.pv-sugg), none as circle.dot', card4.sugg === 4, card4);
+    const cap4 = await page.textContent('#pt-sugg-cap');
+    check('(4) the drawing\'s caption in plain words ("4 suggested dots on J1 · dots … mm wide", no "upper size drawn")',
+      /^4 suggested dots on J1 · dots [\d.–]+ mm wide/.test(cap4) && !/upper size/.test(cap4), cap4);
     check('(4) the plan\'s dot count unchanged', card4.dots === dots0 || dots0 === 0, [dots0, card4.dots]);
     const p4 = await primaries(page);
     check('(4) one filled button: the suggestion card\'s Calibrate automatically…', p4.length === 1 && p4[0] === 'btn-pt-sugg-auto', p4);
@@ -375,6 +390,10 @@ async function weighCoupon(page, place) {
       row: Array.from(document.querySelectorAll('#pcal-plan tr')).map((tr) => tr.textContent).find((t) => /^Purge row/.test(t)) || null }));
     check('(7) the summary says how many purge spots it uses ("It uses n of the m free purge spots") and the steps list the purge row',
       /It\s+uses\s+\d+\s+of\s+the\s+\d+\s+free\s+purge\s+spots/.test(purge7.note) && /^Purge row\d+\s+of\s+\d+\s+free\s+spots\s+\(\d+\s+left\s+after\)/.test(purge7.row || ''), purge7);
+    const xy7 = await page.evaluate(() => ({ note: document.getElementById('pcal-note').textContent,
+      row: Array.from(document.querySelectorAll('#pcal-plan tr')).map((tr) => tr.textContent).find((t) => /^Test dots on the blank/.test(t)) || null }));
+    check('(7) the test dots\' X and Y ranges are in mm (the summary and the steps)', /in X [\d.]+–[\d.]+\smm, Y [\d.]+–[\d.]+\smm/.test(xy7.note)
+      && /in X [\d.]+–[\d.]+\smm, Y [\d.]+–[\d.]+\smm/.test(xy7.row || ''), xy7);
     await page.waitForFunction(() => !document.getElementById('btn-pcal-start').disabled, null, { timeout: 20000 }).catch(() => null);
     const why7 = await page.textContent('#pcal-why');
     check('(7) Start is not locked', !(await page.isDisabled('#btn-pcal-start')), why7);
@@ -418,6 +437,9 @@ async function weighCoupon(page, place) {
     await page.waitForSelector('#pcal-ask:not([hidden]) #pcal-full-1', { timeout: 20000 });
     const cs = j8.awaiting.coupons;
     check('(8) after a reload the prompt is back with a field pair per coupon', cs.length >= 1 && (await page.$$('#pcal-coupons .pcal-coupon')).length === cs.length, cs.length);
+    // its text keeps each amount with its unit on one line (final gate: "(about 0.072" ended a line, "g)" began the next)
+    const ask8 = await page.textContent('#pcal-ask-text');
+    check('(8) the prompt keeps "about 0.072 g" on one line (no-break space before the g)', /about [\d.]+\u00a0g\)/.test(ask8) && !/\d g(?![\w²])/.test(ask8), ask8);
     await shoot(page, 'readings-prompt', () => toTop(page, '#pt-needs', '#pt-section'), true);
     for (let i = 0; i < cs.length; i++) {
       const r = await weighCoupon(page, cs[i].place);
@@ -434,6 +456,14 @@ async function weighCoupon(page, place) {
     await page.waitForSelector('#pcal-result:not([hidden])', { timeout: 20000 });
     const res = await page.evaluate(() => ({ t: document.getElementById('pcal-result-t').textContent, crops: Array.from(document.querySelectorAll('#pcal-crops img')).map((i) => i.complete && i.naturalWidth > 0) }));
     check('(9) the result card: "Characterized …"', /^Characterized \d\d:\d\d: /.test(res.t), res.t);
+    // a number keeps its unit on its line ("9 %" was "9" at a line's end and "% more" on the next), the weighing date
+    // stays whole, an amount on its target reads so (not "0 % more than"), the dot size in words (not "d95")
+    const res9 = await page.evaluate(() => ({ t: document.getElementById('pcal-result-t').textContent,
+      d: Array.from(document.querySelectorAll('#pcal-result .ri__d')).map((n) => n.textContent).find((x) => /^The validated half turn/.test(x)) || '',
+      size: Array.from(document.querySelectorAll('#pcal-groups dt')).filter((dt) => dt.textContent === 'Dot size').map((dt) => dt.nextElementSibling.textContent) }));
+    check('(9) the result: numbers keep their units (no-break space), "on the … mg target" for 0 %, the dot size in words',
+      !/\d (%|mg|mm)(?![\w²])/.test(res9.t + ' ' + res9.d) && !/\b0\s%\s(more|less)/.test(res9.t) && !/\d{4}-\d\d/.test(res9.d)
+        && res9.size.length > 0 && res9.size.every((x) => /^[\d.]+\smm \(95\s% of the dots under [\d.]+\smm\)$/.test(x)), res9);
     await page.waitForFunction(() => Array.from(document.querySelectorAll('#pcal-crops img')).filter((i) => i.complete && i.naturalWidth > 0).length >= 3, null, { timeout: 15000 }).catch(() => null);
     const crops = await page.evaluate(() => Array.from(document.querySelectorAll('#pcal-crops img')).filter((i) => i.complete && i.naturalWidth > 0).length);
     check('(9) at least 3 camera crops load', crops >= 3, crops);
@@ -454,6 +484,29 @@ async function weighCoupon(page, place) {
     await sleep(1500);
     const rows9 = await page.evaluate(() => Array.from(document.querySelectorAll('#pt-needs-table tbody tr[data-group] .pt-needs__n')).map((n) => n.textContent));
     check('(9) Needs a profile: Test_Strip left, SW and TestChip_A gone', rows9.length === 1 && /Test_Strip/.test(rows9[0]), rows9);
+    // the profile panel's "Pad types in this plan" (final gate: "SW_SPST_3.9x2.9mm" ran under "2 pads", "QFN / DFN
+    // perimeter pad" stood in four lines beside its count): each name clear of its count and inside its row, at 1440 and
+    // 1280 px; the family tables show whole names (the new type's size was cut off: "SW_SPST_3.9x2....")
+    const lay9 = [];
+    await page.click('#pt-filter button[data-filter="all"]');   // every family table, the new type's among them
+    await page.waitForSelector('#profiles .pt-name__t', { timeout: 15000 }).catch(() => null);
+    for (const [w, h] of [[1440, 900], [1280, 800]]) {
+      await page.setViewportSize({ width: w, height: h });
+      await sleep(400);
+      lay9.push(await page.evaluate((ww) => {
+        const rows = Array.from(document.querySelectorAll('#pt-ov-plan .pt-plan__i')).map((b) => {
+          const nb = b.querySelector('.pt-plan__n'), n = nb.getBoundingClientRect(), v = b.querySelector('.pt-plan__v').getBoundingClientRect(), r = b.getBoundingClientRect();
+          return { name: nb.textContent, apart: n.right <= v.left + 0.5 || v.top >= n.bottom - 0.5 || v.right <= n.left + 0.5 || n.top >= v.bottom - 0.5,
+            inside: n.right <= r.right + 0.5 && v.right <= r.right + 0.5, fits: nb.scrollWidth <= nb.clientWidth + 1 };
+        });
+        const names = Array.from(document.querySelectorAll('#profiles .pt-name__t')).filter((x) => x.getClientRects().length > 0)
+          .map((x) => ({ t: x.textContent, cut: x.scrollWidth > x.clientWidth + 1 }));
+        return { w: ww, rows, names };
+      }, w));
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+    check('(9) Profile › Pad types in this plan: every name clear of its pad count and inside its row at 1440 and 1280 px; the family tables show whole names',
+      lay9.every((x) => x.rows.length > 0 && x.rows.every((r) => r.apart && r.inside && r.fits) && x.names.length > 0 && x.names.every((n) => !n.cut)), lay9);
     // a test run with fewer dots lays whole pads (the engine cuts before the pad it would split): asked to stop inside a
     // two-dot pad, Run says how many it lays (or, inside the first pad, how many to ask for at least)
     await page.evaluate(() => IL.go('#run/checks'));

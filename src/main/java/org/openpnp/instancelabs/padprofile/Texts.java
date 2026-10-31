@@ -43,6 +43,13 @@ public final class Texts {
         return "0".equals(p) ? p : (fraction < 0 ? "-" : "+") + p;
     }
 
+    /** "8 % less than the 2.29 mg target", or "on the 2.29 mg target" when the error rounds to 0 %. */
+    public static String vsTarget(double fraction, double targetMg) {
+        String p = pct(fraction);
+        return "0".equals(p) ? "on the " + mg(targetMg) + " mg target"
+                : p + " % " + (fraction < 0 ? "less" : "more") + " than the " + mg(targetMg) + " mg target";
+    }
+
     /** Whole percent rounded half up (the errorPct field). */
     public static int wholePct(double fraction) {
         return new BigDecimal(Double.toString(fraction * 100)).setScale(0, RoundingMode.HALF_UP).intValue();

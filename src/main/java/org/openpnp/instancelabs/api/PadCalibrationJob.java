@@ -1737,9 +1737,8 @@ final class PadCalibrationJob {
                     + "%s mg per pad (target %s mg). Job %s.", new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.ROOT)
                             .format(new Date()), couponCountWords(), dots, Texts.mg(d.massPerPadMg),
                     Texts.mg(d.targetMg), id);
-            g.text = String.format(Locale.ROOT, "%s gets %s per pad, about %s mg per pad (%s %% %s than the %s mg "
-                    + "target)", g.label, dots, Texts.mg(d.massPerPadMg), Texts.pct(d.errorPct / 100.0),
-                    d.errorPct < 0 ? "less" : "more", Texts.mg(d.targetMg));
+            g.text = String.format(Locale.ROOT, "%s gets %s per pad, about %s mg per pad (%s)", g.label, dots,
+                    Texts.mg(d.massPerPadMg), Texts.vsTarget(d.errorPct / 100.0, d.targetMg));
             if (d.replacedText != null) {
                 g.text += "; " + d.replacedText;
             }
@@ -2104,8 +2103,8 @@ final class PadCalibrationJob {
                 per.add(x.xy.size() + " " + DoseModel.turnName(x.netSteps));
             }
             double left = area.leftMm() - layout.reservedMm;
-            s.add(String.format(Locale.ROOT, "Lays %d test dots on the blank (%s) in X %.1f–%.1f, Y %.1f–%.1f (%.1f of "
-                    + "%.1f mm left after this) and looks at them with the top camera (≈ %s).", dots, String.join(", ",
+            s.add(String.format(Locale.ROOT, "Lays %d test dots on the blank (%s) in X %.1f–%.1f mm, Y %.1f–%.1f mm (%.1f "
+                    + "of %.1f mm left after this) and looks at them with the top camera (≈ %s).", dots, String.join(", ",
                             per), layout.x0, layout.x1, layout.y0, layout.y1, Math.max(0, left), area.heightMm(),
                     minSec(l.estimateS)));
         }

@@ -1027,7 +1027,8 @@
         el('div', { class: 'pt-gate__t' }, 'Lowest pad-type status allowed on a board: ', el('b', { text: STATUS_OPTION[gate] || gate })),
         el('ol', { class: 'pt-ladder', 'aria-label': 'Pad-type statuses, lowest first' }, STATUS_ORDER.map((k, i) => el('li', { class: i >= gi ? 'on' : null },
           IL.glyph(i >= gi ? 'ok' : 'off', 'xs'), el('span', { text: STATUS_OPTION[k] }), i === gi ? el('span', { class: 'tag tag--now', text: 'gate' }) : null))),
-        el('div', { class: 'pt-gate__s', text: PT.data ? pass.length + ' of ' + types.length + ' pad types are allowed on a board' + (pass.length ? ': ' + pass.map((t) => t.name).join(', ') + '.' : '.') : 'Loading the pad types…' }),
+        el('div', { class: 'pt-gate__s', text: PT.data ? pass.length + ' of ' + types.length + ' pad types ' + (pass.length === 1 ? 'is' : 'are') + ' allowed on a board'
+          + (pass.length ? ': ' + pass.map((t) => t.name).join(', ') + '.' : '.') : 'Loading the pad types…' }),
         IL.fixRow([{ href: '#setup/settings', label: 'Change the gate in Settings' }], 'btn-row'))];
     });
     const hasPlan = !!(S.plan && S.plan.pads);
