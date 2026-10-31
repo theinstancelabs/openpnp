@@ -1899,7 +1899,8 @@ Review 1's dose-stream minors and review 2's calibration minors, fixed in the fi
 ## 22. Tip setups, per-tip profiles and calibration labels
 
 Status: design for implementation (2026-10-29), revised the same day after two critiques (engine and data; flows and
-UI: §22.12); written after §21; built after `finish-pr2` on a branch off `il/rc1` (PR #3, stacked on PR #2). The user
+UI: §22.12); written after §21; built after `finish-pr2` on a branch off `il/rc1` (PR #3, stacked on PR #2). As built
+(2026-10-30, `il/tip-setups`): §22.13 lists every place the code differs. The user
 (2026-10-29, verbatim): "Another thing is that we should have calibration profiles for pads. Also assuming a certain
 dispenser, not head/nozzle/needle, I don't know, but you know what I mean. After we self-calibrate I should just take a
 picture and mark down what this was calibrated for, like 0603 for a 22 bent tip versus a straight needle tip, etc." The
@@ -3199,3 +3200,128 @@ a4bb6d20d, `il/fixround1b` for BI §3.4, `il/pc-web` 197da6550).
 | m the soft picture replaces the sharp one | **Fixed** §22.1, §22.4, §22.7: `Use as the tip's picture`, `Add a photo…` first, the `may be soft` caption until T1, the gate's reasons. |
 | m presets miss tips on hand | **Fixed** §22.7: DSKIT1's straight tapered and other straight gauges, SA7529's 45° gauges, the 19G footed, `Other…`; presets fill the name. |
 | m the shots card's free-text tip | **Fixed** §22.7: prefilled from the mounted tip, read-only. |
+
+### 22.13 As built (2026-10-30)
+
+Built on `il/tip-setups` in the slices of §22.9: `ts-engine`, `ts-api` (`il/ts-api` 00d185402 and its check), `ts-web`
+(the web UI, `tip-setups.playwright.cjs`, and the operator walk's fixes) and `ts-integration` (`il/rc1` merged again at
+06106c4fc, the `tips` SIM acceptance, `il_ui_session.py --physical-tip` / `--paste-by-tip`, the docs: `WEB_API.md`
+§3.6, `DISPENSE_API.md` §9, `UI_DESIGN.md` §8.6, `REAL_MACHINE_TODO.md` items 55–68, `DEV_NOTES.md` §5 › Tip setups).
+The gates of §22.9 (the full Maven suite, the browser tests in one SIM session, the board view test and the SIM
+acceptance `all`) passed at the head named in the commit that records their counts.
+
+**Where the code differs from §22** (the code is right; each was checked against the code at this head):
+
+*Data, config and engine*
+
+- **Resolved after the engine slice's handoff:** the seed is named `22G bent taper` everywhere (`Tip.SEED_NAME`,
+  `TipSetup.seed`, `TipSpec`'s default; the reconcile writes it into an old file's `22G tip` without a new version), the
+  config is schema 4 (§22.1), and the replaced signatures are gone (no `@Deprecated` adapters: the compiler found every
+  reader, as §22.2 wanted).
+- Schema 4 changes no value: a file from before tip setups is recognised by its missing `parkedTips` key
+  (`DispenseConfig.isBeforeTipSetups`), which also catches a schema-4 file an older jar saved over; that triggers the
+  `.v3-<stamp>.bak` at the first save and the reconcile. The 3 → 4 landing rule runs at the first start with tip
+  setups (`tip_mounts` empty).
+- The upload semaphore lives in the engine (`PhotoStore.PIPELINE`, a `Semaphore(1)` taken without waiting), and the
+  route stores through `svc.storePhoto` (which writes the `TIP` event), not in `A/PhotoEndpoints`.
+- The landing check: its locator step has no purge (prime comes first, §22.3's order) and reserves the whole band; the
+  row's targets are the band's spots minus C (the engine already subtracts E + trim); in a remount's 12 mm band the
+  purge (3 mm) and the row (6 mm) go on opposite sides of the locator, 3 mm each, and a side with less refuses (`wipe
+  the blank and check again`); the 2 × 2 frames meet at their edges, so each step adds a frame centred on any spot no
+  band frame holds 2 mm inside (4–6 frames per step instead of 4); its outcome is `measured` | `question` |
+  `not-found`; `DispenseService.topCameraFovMm()` lays out the frames.
+- "Spaced for max(1.6 mm, OD + 0.4 mm)" is the pitch: an unknown dot size uses d95 = that − 0.3 mm (Measure its dots in
+  the SIM: quarter, half and one turn, 64 + 28 + 61 dots in 18.5 mm of the default 20 mm area, against §22's ≈ 17 mm).
+  Measure its dots weighs the profile's dose on both coupons (§22 says only "two coupons to weigh"), which confirms the
+  mass per step.
+- **The dot table pools a job's camera records of a dose** (ts-integration, found by the `tips` acceptance at the
+  machine's statistics floors): §22.2 reads "the newest passing optical record" per dose, but a ladder block is sized
+  for the hops of the weigh dots on the coupons (§7.4), so the weighed dose's block fails its thread count alone (27 of
+  60 moves) and a tip whose smallest dot is the weighed half turn stayed "not measured" after Measure its dots said
+  both doses passed. An optical record that fails alone now counts when its job's camera records of the same dose pass
+  together, with their pooled sizes (`DoseRecords.dotTable(…, settings)`, `DotTableTest`). The SIM tests' shortened
+  settings (60 → 10 hops) had hidden it.
+- **K and a needle change** (`il/rc1`'s review, merged after §22 was designed): the engine refuses the needle frame
+  from K after every needle change and after a failed Z check of this home (`needleFrameFromKRefusal`, status
+  `dispense.needle.kRefusal`): K is a sum of raw heights and holds only for the needle and the home it was measured
+  with. §22.3's step 1 "or From K with the setup's own parked K" is therefore gone: a tip mounted again is framed with
+  both tips touching, like a tip that was never on. The needle card still prefills the tip's own K with its caption, and
+  locks From K with the reason. It also removes the check's design risk of "From K with another tip physically on".
+- `LadderStats.control(…, tip)` passes with `first measurement of this tip` when a setup without the bench model has
+  no earlier record (§22.2 names the case; passing checks carried no text before).
+- A needle change during the tip picture stops the task through the STOP path (`recordNeedleChange` aborts any running
+  task), so no photo is stored; the token check before the store stays as the backstop. `SimTipCamera` draws N2 at its
+  planned location (`Nozzle.getLocation()`; the SIM test machine's momentary location lags the move), and draws any
+  other nozzle in view with the stock simulated camera.
+- `applyPadCalibration` refuses `tip-changed` / `needle-changed` only for a record that writes a version; a stopped or
+  failed job's record keeps the setup and token it names, as history (labels and links use its setup).
+  `DispensePlan.copyBoardFieldsTo` copies the setup fields (run subsets kept failing `the tip changed after planning`),
+  and the other-tip texts name a null tip key through `Tip.setupOf`.
+- `otherTips` lists only setups that have every typed pad type of the plan at the gate (`covers == of`): a pad without a
+  pad type is no tip's (the web's note counts those packages, below).
+
+*API*
+
+- `forSetup` on every pad-type write, `needleChangedAtMs` on the needle routes and `forTip` with a profile patch are
+  required (400 when missing), as §22 says; a pad edit without `padVersion` uses the version read now (lenient).
+- A mount of the mounted setup answers its own shape (`{…, same: true, needleChange, stale, next, undoUntilMs: null,
+  text: "A new {S} at HH:MM. Next: …"}`), not a `MountResult`; the mount response adds `mountedName`, `fromName` and
+  `warnings`; `POST /api/needle/changed` answers `needleChanged` and `next` too; the picture route's 202 adds
+  `setupKey`.
+- Codes: a missing photo file is 410 `file-missing`, a restore of a gone file 410 `gone`, removing or choosing a result
+  photo 409 `result-photo`, a refused undo 409 `too-late`.
+- A group of the job view keeps its own `label` (the result card's heading) and carries its record's as
+  `calibrationLabel` / `calibrationLabelAuto`; a calibration whose control fails writes a `failed` record, and the
+  result card finds it by its job id for `Made with another tip…`.
+- An automatic calibration decided from an earlier job's fresh evidence lays no dots and links no result photo of its
+  own (the card says so: `No result photo: this calibration laid no dots of its own (it used the dots measured
+  before).`); §22.4 may expect the evidence's photos.
+
+*Web UI* (`UI_DESIGN.md` §8.6)
+
+- The strip's Tip cell: the words after the gauge are its level-2 long part, so at 1440 px and below it reads `22G` /
+  `25G` (§22.7 hid only `· frame and landing to do`); at 1024 px `Start angle` shortens to `Angle` so the board-run
+  verdict fits beside the new cell.
+- Setup's bring-up step `Dispenser & tip` shows the card's first open step after a needle change (frame, offset,
+  regulator, prime, landing) instead of `dots not measured · Measure its dots…`, which §22.3's order puts after them;
+  `Needle Z frame` reads ok when only the landing is open.
+- Measure its dots' result: `table#pcal-tipdots` carries each turn's pass mark in its row (no Pass column, the section
+  titled `Dot sizes of the tip (mm)`) so it fits the side panel at 1920 px; a measure that leaves the tip unmeasured is
+  amber with `Edit the {S}…` (set its smallest dot) instead of a green `Measured`.
+- Needs a profile's other-tip note also counts the packages without a pad type (`The 22G bent taper has all 5 pad
+  types of this board; 3 packages have no pad type yet.`), which no tip change gives one; Run's Pad types item says the
+  same, also when Refuse flagged pads is off.
+- The run confirm's tip tick has a row of its own; the stale plan reads `stale: tip, pad types changed`; the landing
+  and frame I4 refusals are Needle items on Run › Checks (never Surface); Profile › By tip shortens only automatic
+  labels; the landing check's `Blank wiped` fix offers itself for the area refusal; Profile's plan list gives a long
+  pad-type name its own row.
+- Left open (minor, `UI_DESIGN.md` §8.6): the plan's `for the {S}` chip clipped at 1440 px, the Add dialog's longest
+  `Start its dispense profile from` option cut, the landing check's start card not showing the band's problem before
+  the ticks, Calibrate's `Before it runs` not listing where the needle lands, `Saved` said twice on the landing result,
+  `Save it: the {S} is on` in one press, Change tip keeping the previous selection after `Made with another tip…`, the
+  run confirm's tip tick below the fold at 1024 × 768, the All-tips history scrolling sideways at 1024 px, and keyboard
+  order after `Change tip…` (focus stays on the button).
+
+*Tests and the SIM*
+
+- `PhotoStoreTest` checks the bounded decode by the decoded raster (6000 × 4000 decodes to 3000 × 2000; the subsample
+  factor is max(1, floor(long side / 2048)), so 4000 × 3000 is stored at 2048 × 1536) instead of a peak-heap bound,
+  which is flaky under GC; the API tests do not exercise the photo caps (`too-many`, `disk`), the engine's
+  `PhotoStoreTest` does. `MountJobRaceTest` reuses `PadCalibrationJobTest`'s fixture by composition.
+- `tip-setups.playwright.cjs` sets the SIM 25G's smallest dot to a half turn and the short SIM ladder
+  (`ladderDotsPerPhase` 6, `minLadderDots` 6, `minHops` 10, `weighTargetMg` 15): with this SIM paste the quarter-turn
+  dots are too small to find. Its step 10 flags step 7's record from Records (the failed control's record is flagged by
+  the `tips` acceptance instead), opens the run confirm from script (the plan is blocked there), and checks the
+  no-Remove on the first record with a result photo; it wipes the SIM coupons at its set-up; it takes about 17 min
+  against §22.8's ≈ 6 min (120 screenshots, three landing checks, a measure and two calibrations; `TS_SHOTS=0` skips the
+  screenshots). Since the rc1 merge it frames the 22G with both tips after the mount back and checks From K is locked.
+- `il_sim_acceptance.py tips` runs at the machine's statistics floors (the default `padCalibration`), with the SIM 25G
+  added at a half-turn smallest dot, on the padcal scene's blank grown to 50 mm (a first landing check needs a 20 mm
+  band). `--api-ports K` keeps a run's sessions on fewer ports (1: all on `--api-port`).
+- The SIM paste (`SimPaste`) lays the dots of the tip on the head: its `byTip` entry over the scene's paste, or the
+  scene's paste itself for a tip without an entry (the seed in the tests). The `tips` acceptance and the browser test
+  run the wrong tip as the 22G mounted with the 25G on the head (the landing question, then the control).
+
+*Left for the engine* (open, `REAL_MACHINE_TODO.md` › Software limits): the touch-off judges every tip by the 22G's
+model; an Undo of a mount puts the old recipe back (an edit within the 2 min is lost); the landing check's preview does
+not check I4 first; `onlyAtTheWaste` still lets scale shots pass at the waste.
