@@ -359,7 +359,7 @@ When every plan interlock passes, this line reads `All interlocks pass for this 
 
 **Needs you (n)**: one card per not-ready item, in the fixed order, the first carrying a black `NEXT` tag (as built, rc1
 review: the `NEXT` card is the first blocked item, the one the verdict names, else the first not-ready item, and it
-comes first; the nav subline is its short name). Card:
+comes first; the nav subline is its short name, or a shorter form where that would not fit: `Purge row short`). Card:
 glyph, title in plain words, detail with numbers, the I-code at the right, fix-it buttons (44–46 px). Pads clean
 card = `#clean-result`; its first sentence is machine-readable for tests and always one of:
 `All 160 pads are clean (13:09).` · `158 of 160 pads clean, 2 with paste left (13:09).` ·

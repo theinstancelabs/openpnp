@@ -1335,6 +1335,26 @@ async function runFirstDots(page, n) {
         });
         check('NEXT is the blocked item the verdict names (purge row), not the regulator that only needs you', nx.regulator === 'need' && nx.next === 'purge'
           && nx.verdict === 'Blocked · ' + nx.short, nx);
+        // a plan that purges more spots than the row has (two dot sizes: 13 of 10): the Run nav names it in a form that fits
+        // its subline at 1440 px (it never wraps, and "Purge row too short" was cut)
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        const nv = await page.evaluate(async () => {
+          // the readiness and the board's done dots are taken again at the next status: wait for it, then for the render
+          const polled = () => new Promise((res) => { const t0 = IL.S.statusAt;
+            const tick = () => (IL.S.statusAt !== t0 ? requestAnimationFrame(() => requestAnimationFrame(res)) : setTimeout(tick, 50)); tick(); });
+          const p0 = IL.S.plan, row = IL.S.status.dispense.purgeRow;
+          // a clean board (no paste: else the nav offers to finish it) whose plan purges one spot more than the row has
+          IL.S.plan = Object.assign({}, p0, { purgeSpotsNeeded: row.spots + 1,
+            pasted: Object.assign({}, p0.pasted, { board: null, sinceMs: null, dots: 0, pads: {} }) });
+          await polled();
+          const sub = document.querySelector('#tab-btn-run .nav__s');
+          const out = { sub: sub.textContent, cut: sub.scrollWidth > sub.clientWidth + 0.5, verdict: IL.ready().verdict.text };
+          IL.S.plan = p0;
+          await polled();
+          return out;
+        });
+        check('Run nav: a purge row too short reads "Purge row short" whole (not "Purge row too sho…")', nv.sub === 'Purge row short' && !nv.cut
+          && nv.verdict === 'Blocked · purge row too short', nv);
       }
 
       // 13. What the engine refuses, the UI locks or says (the final round's engine fixes, E1 and E2). Pure checks on the

@@ -1275,7 +1275,7 @@
       add({ key: 'purge', code: 'I9', title: 'Purge row', state: 'block', value: 'no surface', short: 'purge surface',
         detail: "The purge row's surface '" + pr.surfaceName + "' is not probed.", fixes: [{ href: '#setup/surfaces', label: 'Probe the blank' }] });
     } else if (pr.spots < pNeed) {
-      add({ key: 'purge', code: 'I9', title: 'Purge row', state: 'block', value: 'too short', short: 'purge row too short',
+      add({ key: 'purge', code: 'I9', title: 'Purge row', state: 'block', value: 'too short', short: 'purge row too short', nav: 'Purge row short',
         detail: 'The row has ' + IL.plural(pr.spots, 'spot') + '; ' + (plan ? 'this plan purges ' : 'a board purges ') + IL.purgeNeedText(pr, pNeed)
           + '. A reset cannot fix this: give the row more spots, or purge fewer dots in the profile.',
         fixes: [{ href: '#setup/purge', label: 'Purge row: more spots' }, { href: '#profile', label: 'Profile: purge dots' }] });
@@ -2173,7 +2173,8 @@
       if (!S.plan) return { sub: S.planForgotten ? 'Plan again' : 'No plan yet', kind: S.planForgotten ? 'need' : '' };
       if (r.verdict.state === 'ok') return { sub: 'Ready to run', kind: 'ok', title: 'Ready: ' + (S.plan.boardName || 'board') };
       const kind = r.verdict.state === 'block' ? 'block' : 'need';
-      return { sub: cap(r.next ? r.next.short : ''), kind, badge: String(needs), badgeKind: kind, badgeLabel: needs + ' need you' };
+      // an item's nav form where its short name is too long for the subline (it never wraps, §15)
+      return { sub: r.next ? r.next.nav || cap(r.next.short) : '', kind, badge: String(needs), badgeKind: kind, badgeLabel: needs + ' need you' };
     }
     if (name === 'setup' || name === 'calibrate') return running ? { sub: 'Locked · running' } : {};
     if (name === 'profile') {
