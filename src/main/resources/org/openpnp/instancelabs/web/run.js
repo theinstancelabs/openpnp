@@ -2578,7 +2578,7 @@
     if (rd.stage === 'z check' || rd.zCheck) {
       const z = rd.zCheck;
       ph.push({ st: rd.stage === 'z check' ? 'now' : 'done', t: 'Z check',
-        d: z && isNum(z.z) ? 'N1 touched Z ' + IL.fmt(z.z, 3) + ' mm, ' + IL.fmtSigned(z.deltaMm, 3) + ' mm from ' + IL.fmt(z.refZ, 3) : 'N1 touches a stored point', v: '' });
+        d: z && isNum(z.z) ? IL.nb('N1 touched Z ' + IL.fmt(z.z, 3) + ' mm, ' + IL.fmtSigned(z.deltaMm, 3) + ' mm from ' + IL.fmt(z.refZ, 3) + ' mm') : 'N1 touches a stored point', v: '' });
     }
     if (camKey || inCam || (cleanEnabled(s) && !disp)) {
       const n = run.dotsPlanned;
@@ -2682,7 +2682,8 @@
       }
       const kind = rr.status === 'OK' ? 'ok' : rr.status === 'REFUSED' ? 'need' : 'block';
       const sm = (p && p.summary) || {};
-      const mini = (k, v, u, sub) => el('div', { class: 'mini' }, el('div', { class: 'mini__k' }, k), el('div', { class: 'mini__v' }, v, u ? el('span', { class: 'u', text: u }) : null), sub ? el('div', { class: 'mini__s' }, sub) : null);
+      // the subline keeps a label with its number ("bench 5,490" was "bench" at a line's end and "5,490" on the next)
+      const mini = (k, v, u, sub) => el('div', { class: 'mini' }, el('div', { class: 'mini__k' }, k), el('div', { class: 'mini__v' }, v, u ? el('span', { class: 'u', text: u }) : null), sub ? el('div', { class: 'mini__s' }, IL.nb(sub)) : null);
       return [
         el('div', { class: 'result-head' }, IL.glyph(kind), el('div', {}, el('div', { class: 'result-head__t', text: (STATUS_WORD[rr.status] || rr.status) + ' · ' + outcomeText(rr, p) }),
           el('div', { class: 'result-head__s', text: boardShort(rr.boardName || p.boardName) + ' · board ' + (isNum(rr.boardNumber) ? rr.boardNumber : boardNumber()) + ' · ended ' + IL.fmtTime(rr.endedAtMs - S.skewMs) }))),

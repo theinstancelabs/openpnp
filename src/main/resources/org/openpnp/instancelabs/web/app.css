@@ -509,7 +509,8 @@ h3 { font: 650 15.5px/1.25 var(--font-ui); margin: 0; }
 .step--done::after { background: var(--ok-line); }
 .step[aria-current="step"] { border-bottom-color: var(--accent); }
 .step__t { font: 650 14px/1.15 var(--font-ui); color: var(--ink); }
-.step__s { font: 500 12px/1.15 var(--font-ui); color: var(--ink-3); white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+/* its line box holds the descenders: overflow (the ellipsis of a long board name) clips at the line box ("reqistered" at 1.15) */
+.step__s { font: 500 12px/1.35 var(--font-ui); color: var(--ink-3); white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .step--need .step__s { color: var(--need); font-weight: 650; }
 .step--live .step__s { color: var(--live); font-weight: 650; }
 .step--block .step__s { color: var(--block); font-weight: 650; }

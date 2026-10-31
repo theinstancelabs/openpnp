@@ -1210,12 +1210,13 @@
       if (newSeat) seatFixes.push(registrable ? { fix: 'register-check', label: 'Same seat? Check the fiducials' } : { fix: 'same-seat', label: 'Same board, not moved' });
       const registered = reg ? { atMs: reg.atMs, seat: reg.lastCheckedAtMs && reg.lastCheckedAtMs > reg.atMs ? 'same' : null } : null;
       if (bad.length) {
-        add({ key: 'surface', code: 'I4', title: 'Surface', state: 'block', value: 'probe again', short: 'board surface',
+        add({ key: 'surface', code: 'I4', title: 'Surface', state: 'block', value: 'register again', short: 'board surface',
           detail: bad.map((x) => sentence(x.v.message)).concat(why || []).join(' '),
           fixes: which ? seatFixes : [{ fix: 'register', label: 'Register board', primary: true }, { fix: 'probe-by-hand', label: 'Add probe points by hand' }],
           seat: which, registered });
       } else if (which) {
-        add({ key: 'surface', code: 'I4', title: 'Surface', state: 'need', value: 'probe', short: 'probe seat', detail: why, fixes: seatFixes, seat: which, registered });
+        // the strip, the nav and the fix name the same action ("8 of 9 · register board", not "probe seat")
+        add({ key: 'surface', code: 'I4', title: 'Surface', state: 'need', value: 'register', short: 'register board', detail: why, fixes: seatFixes, seat: which, registered });
       } else {
         const regText = reg ? ' · registered ' + IL.fmtTime(reg.atMs - S.skewMs) + ' (' + IL.plural((reg.fiducials || []).length, 'fiducial') + ')'
           : ' · not registered (no fiducial correction)';

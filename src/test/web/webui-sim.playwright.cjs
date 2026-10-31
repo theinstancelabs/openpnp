@@ -616,6 +616,12 @@ async function runFirstDots(page, n) {
     check('20-dot run finished OK', liveStatus === 'OK', liveStatus);
     const doneDots = await page.$$eval('#plan-svg circle.dot.done', (e) => e.length);
     check('20 dots marked done in the preview', doneDots === 20, doneDots);
+    // the Result step's tiles keep a label with its number on one line (final gate: "bench" ended a line, "5,490" began
+    // the next)
+    await page.waitForSelector('.result-tiles .mini__s', { timeout: 10000 }).catch(() => {});
+    const subs = await page.evaluate(() => Array.from(document.querySelectorAll('.result-tiles .mini__s')).map((n) => n.textContent));
+    check('Result: "estimate 5,010 · bench 5,490" keeps each label with its number (no-break space)',
+      subs.some((t) => /bench\u00a0[\d,]+/.test(t) && /estimate\u00a0[\d,]+/.test(t)) && !subs.some((t) => /\b(bench|estimate) \d/.test(t)), subs);
     const st1 = await (await page.request.get(BASE + 'api/status')).json();
     check('last run: 20 of 20 dots, DPH reported', st1.lastRun.dotsDone === 20 && st1.lastRun.dotsPlanned === 20
       && st1.lastRun.dphMotion > 0 && st1.lastRun.dphOverall > 0, st1.lastRun);
@@ -1171,6 +1177,14 @@ async function runFirstDots(page, n) {
       await page.waitForSelector('#btn-run-go:enabled', { timeout: 10000 });
       await page.click('#btn-run-go');
       await page.waitForSelector('#dlg-run', { state: 'detached', timeout: 15000 });
+      // the run's phase list once N1 touched: the Z check row gives every number with its unit, kept on its line (final
+      // gate: "… mm from 5.430", then "5.430" with "mm" alone on the next line)
+      const zRow = await page.waitForFunction(() => {
+        const li = Array.from(document.querySelectorAll('#run-phases li')).find((x) => /Z check/.test(x.textContent) && /N1 touched/.test(x.textContent));
+        return li ? li.textContent : null;
+      }, null, { timeout: 120000, polling: 150 }).then((h) => h.jsonValue(), () => null);
+      check('run: the phase list\'s Z check reads "N1 touched Z … mm, … mm from … mm", each number on one line with its unit',
+        /N1 touched Z [\d.]+\smm, [−+-]?[\d.]+\smm from [\d.]+\smm/.test(zRow || '') && !/\d mm/.test(zRow || ''), zRow);
       const rr = await waitStatus(page, (x) => x.run && x.run.label === 'board' && !x.run.running, 300000);
       l = lines(gcode(g1));
       const iH = l.findIndex((x) => /^G28\b/.test(x)), iPress = l.indexOf('M106 P2 S255');
