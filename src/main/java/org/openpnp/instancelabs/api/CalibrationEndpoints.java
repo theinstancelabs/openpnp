@@ -210,7 +210,6 @@ final class CalibrationEndpoints {
         req.stepMm = Json.num(b, "stepMm", req.stepMm);
         req.steps = Json.integer(b, "steps", req.steps);
         req.rotationDeg = Json.num(b, "rotationDeg", req.rotationDeg);
-        req.pitchMm = Json.num(b, "pitchMm", req.pitchMm);
         req.locationName = Json.str(b, "locationName", null);
         req.primeAtWaste = Json.bool(b, "primeAtWaste", req.primeAtWaste);
         req.jumpRatio = Json.num(b, "jumpRatio", req.jumpRatio);
@@ -218,9 +217,15 @@ final class CalibrationEndpoints {
         if (!Double.isNaN(req.rotationDeg)) {
             DispenseEndpoints.checkRotation(req.rotationDeg, DispenseEndpoints.maxDotRotation(svc.getConfig()));
         }
+        // without a pitch: 1.6 mm, or the smallest that leaves room between larger dots (F14)
+        req.pitchMm = Json.num(b, "pitchMm", NeedleTouchOff.defaultPitchMm(req, svc.getConfig()));
         if (req.steps < 2 || req.steps > 20 || req.stepMm <= 0 || req.stepMm > 0.5 || req.startGapMm > 2
                 || req.pitchMm <= 0 || req.jumpRatio <= 0) {
             throw ApiException.badRequest("steps 2 to 20, step 0 to 0.5 mm, start gap at most 2 mm, pitch and jump ratio above 0");
+        }
+        String pitch = NeedleTouchOff.pitchProblem(req, svc.getConfig());
+        if (pitch != null) {
+            throw ApiException.badRequest(pitch);
         }
         double lowest = req.startGapMm - (req.steps - 1) * req.stepMm;
         if (lowest < -0.1) {
@@ -236,6 +241,7 @@ final class CalibrationEndpoints {
         Future<org.openpnp.instancelabs.dispense.DispenseService.TouchOffResult> f = svc.runNeedleTouchOff(req, apply);
         return ApiContext.awaitIf(Json.bool(b, "wait", false), f, res -> Views.map("analysis", res.analysis,
                 "previousOffsetMm", res.previousOffsetMm, "newOffsetMm", res.newOffsetMm, "applied", res.applied, "run",
-                Views.run(res.run, false)), Views.map("kind", "needle touch-off", "apply", apply));
+                Views.run(res.run, false)), Views.map("kind", "needle touch-off", "apply", apply, "pitchMm",
+                        req.pitchMm));
     }
 }

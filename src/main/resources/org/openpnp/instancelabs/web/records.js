@@ -427,8 +427,11 @@
         el('div', { class: 'rec-ph__s', text: IL.fmtDateTime(serverToClient(t.created_at)) })),
       el('div', { class: 'minis' }, mini('Offset', IL.fmtSigned(t.z_offset_mm, 3), 'mm'), mini('Change', isNum(v.delta) ? IL.fmtSigned(v.delta, 3) : '—', 'from ' + (isNum(t.previous_offset_mm) ? IL.fmtSigned(t.previous_offset_mm, 3) : '—') + ' mm')),
       a ? [IL.sectionK('Gaps and dots'), el('table', { class: 'tbl rec-mini-t' }, el('thead', {}, el('tr', {}, ['Gap mm', 'Dot Ø mm'].map((h) => el('th', { class: 'r' }, IL.unitText(h))))),
-        el('tbody', {}, (a.gapsMm || []).map((g, i) => el('tr', { class: isNum(a.contactGapMm) && Math.abs(g - a.contactGapMm) < 1e-9 ? 'is-contact' : null },
-          el('td', { class: 'r', text: IL.fmtSigned(g, 3) }), el('td', { class: 'r', text: isNum((a.diametersMm || [])[i]) ? IL.fmt(a.diametersMm[i], 3) : 'no dot' }))))),
+        el('tbody', {}, (a.gapsMm || []).map((g, i) => {
+          const dot = pcr.touchOffDot(a, i);   // "not measured" (its note as the tooltip), "no dot" only for no paste
+          return el('tr', { class: isNum(a.contactGapMm) && Math.abs(g - a.contactGapMm) < 1e-9 ? 'is-contact' : null },
+            el('td', { class: 'r', text: IL.fmtSigned(g, 3) }), el('td', { class: 'r', text: dot.text, title: dot.note }));
+        }))),
       el('p', { class: 'panel__lead', text: isNum(a.contactGapMm) ? 'Contact at a gap of ' + IL.fmtSigned(a.contactGapMm, 3) + ' mm.' + (a.reason ? ' ' + a.reason : '') : (a.reason || 'No contact found.') })] : null,
       v.note ? el('p', { class: 'panel__lead rec-note', text: v.note }) : null,
       v.det && v.det.blank ? el('p', { class: 'panel__lead', text: 'On “' + v.det.blank + '”' + (isNum(v.det.blankPlaneMaxResidualMm) ? ', surface worst residual ' + IL.fmt(v.det.blankPlaneMaxResidualMm, 3) + ' mm' : '') + '.' }) : null];

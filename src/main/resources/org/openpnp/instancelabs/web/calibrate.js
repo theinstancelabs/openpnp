@@ -66,6 +66,17 @@
       method: ladder ? (/not applied/.test(row.method) ? 'Touch-off (shown only)' : 'Touch-off (used)') : /needle-frame/.test(row.method || '') ? 'Needle frame recorded' : /manual/.test(row.method || '') ? 'Offset entered or confirmed' : row.method,
       note: det ? null : row.details };
   };
+  /**
+   * Dot i of a touch-off analysis: {text, note}. Paste the camera could not measure as one dot ('unmeasured': joined to
+   * a neighbour, strings, a smear) reads "not measured" with the engine's note; "no dot" only for 'none' (and in rows
+   * from before the dot states, without a diameter).
+   */
+  pcr.touchOffDot = function (a, i) {
+    const st = ((a && a.dotStates) || [])[i];
+    const d = ((a && a.diametersMm) || [])[i];
+    if (st === 'unmeasured') return { text: 'not measured', note: ((a.dotNotes || [])[i]) || null };
+    return { text: isNum(d) ? IL.fmt(d, 3) : !st || st === 'none' ? 'no dot' : '—', note: null };
+  };
   const taskOf = (s) => (s && s.run && CAL_TASKS.has(s.run.label) ? s.run : null);
   /** The engine ends a touch-off OK even when its analysis found no contact (then nothing is recorded): say so. */
   function noContact(run) {
@@ -171,7 +182,9 @@
   // ================================================================================== cards
   function touchOffCard() {
     const run = runBtn('btn-to-run', 'Run touch-off', 'i-needle');
-    IL.press2(run, 'run touch-off', startTouchOff, { ok: (r) => 'Touch-off started' + (r && r.apply ? ': the result will be used for the needle offset.' : ': the result is shown only.') });
+    // null: the pitch was refused (its reason is at the field, the toast said so)
+    IL.press2(run, 'run touch-off', startTouchOff, { ok: (r) => (r ? 'Touch-off started' + (isNum(r.pitchMm) ? ', dots ' + pitchText(r.pitchMm) + ' apart' : '')
+      + (r.apply ? ': the result will be used for the needle offset.' : ': the result is shown only.') : '') });
     const apply = el('input', { type: 'checkbox', id: 'to-apply' });
     apply.addEventListener('change', () => { C.applyTouched = true; });
     return card('cal-touch-off', [abbr('Needle touch-off', 'Finding where the needle tip touches: dots at falling gaps; where the tip reaches the surface, the dots squash or stop forming')],
@@ -185,6 +198,8 @@
           el('div', { class: 'fgrid' },
             pcr.field('to-rot', 'Screw turn per dot', '°', pcr.numInput('to-rot', null, '0.01', { placeholder: 'one profile dot' }),
               'Empty: one profile dot (other partial turns vary with the screw angle and hide the squash).'),
+            pcr.field('to-pitch', 'Pitch', 'mm', pcr.numInput('to-pitch', null, '0.05', { min: '0', placeholder: '1.6' }),
+              'at least the dot + 0.4 mm'),
             pcr.field('to-place', 'Place', null, placeSel('to-place'))),
           el('div', { class: 'cal-gaps', id: 'to-plan' }),
           el('label', { class: 'check' }, apply, 'Use the result for the needle offset')),
@@ -367,12 +382,17 @@
   }
 
   // ================================================================================== actions
+  /** The dose and pitch a touch-off refusal of the pitch was for: it stands until one of them changes. */
+  const pitchKey = (pitch, rot) => JSON.stringify([pitch, rot, ((S.status && S.status.dispense && S.status.dispense.profile) || {}).netStepsPerDot]);
   function touchOffPlan() {
     const a = pcr.check('to-start', { required: true, max: 2, unit: 'mm' });
     const b = pcr.check('to-step', { required: true, min: 0, minExcl: true, max: 0.5, unit: 'mm' });
     const n = pcr.check('to-steps', { required: true, int: true, min: 2, max: 20 });
     const rot = pcr.check('to-rot', { min: 0, minExcl: true, max: 720, unit: '°' });
-    const errs = { 'to-start': a.err, 'to-step': b.err, 'to-steps': n.err, 'to-rot': rot.err };
+    const pitch = pcr.check('to-pitch', { min: 0, minExcl: true, max: 10, unit: 'mm' });
+    // the smallest pitch is the engine's (the dot of the dose + 0.4 mm): its refusal shows at the field (F14)
+    const refused = C.pitchErr && C.pitchErr.key === pitchKey(pitch.v, rot.v) ? C.pitchErr.text : null;
+    const errs = { 'to-start': a.err, 'to-step': b.err, 'to-steps': n.err, 'to-rot': rot.err, 'to-pitch': pitch.err || refused };
     let gaps = null, lowest = null;
     if (!a.err && !b.err && !n.err) {
       gaps = [];
@@ -380,14 +400,32 @@
       lowest = gaps[gaps.length - 1];
       if (lowest < -0.1 - 1e-9) errs['to-steps'] = 'The lowest gap would be ' + IL.fmt(lowest, 3) + ' mm: keep it at −0.100 mm or above.';
     }
-    return { errs, gaps, lowest, body: { startGapMm: a.v, stepMm: b.v, steps: n.v, rotationDeg: rot.v, locationName: $('to-place').value || undefined, apply: $('to-apply').checked } };
+    return { errs, gaps, lowest, body: { startGapMm: a.v, stepMm: b.v, steps: n.v, rotationDeg: rot.v, pitchMm: pitch.v, locationName: $('to-place').value || undefined, apply: $('to-apply').checked } };
   }
   async function startTouchOff() {
     const p = touchOffPlan();
     const e = Object.values(p.errs).find(Boolean);
     if (e) throw new Error(e);
     C.toReq = { gaps: p.gaps, at: Date.now() };
-    return IL.api('POST', '/api/calibrations/touch-off', p.body);
+    try {
+      return await IL.api('POST', '/api/calibrations/touch-off', p.body);
+    } catch (x) {
+      // a pitch with no room between these dots (400 before anything moves): the reason goes to the Pitch field
+      if (x.status !== 400 || !/^the touch-off pitch /.test(x.message)) throw x;
+      C.pitchErr = { key: pitchKey(p.body.pitchMm, p.body.rotationDeg), text: x.message };
+      IL.toast('Not accepted: ' + x.message, 'block');
+      return null;
+    }
+  }
+  /** "1.6 mm" as typed (1.56 stays 1.56). */
+  const pitchText = (v) => IL.fmt(v, Math.abs(v * 10 - Math.round(v * 10)) < 1e-9 ? 1 : 2) + ' mm';
+  /** The pitch the plan line names: the typed one, else the engine's 1.6 mm (more for a dot above half a turn). */
+  function pitchLine(s, pitch) {
+    if (isNum(pitch)) return pitchText(pitch) + ' apart';
+    const prof = (s.dispense && s.dispense.profile) || {};
+    const rot = IL.num('to-rot');
+    const steps = isNum(rot) && isNum(prof.stepsPerDeg) ? rot * prof.stepsPerDeg : prof.netStepsPerDot;
+    return isNum(steps) && isNum(prof.stepsPerRev) && steps > prof.stepsPerRev / 2 + 1e-9 ? 'the dot + 0.4 mm apart (at least 1.6 mm)' : '1.6 mm apart';
   }
   function ladderPlan() {
     const txt = String($('dl-rots').value || '');
@@ -520,9 +558,11 @@
     const p = touchOffPlan();
     showErrs(p.errs);
     IL.setText($('to-plan'), p.gaps ? IL.plural(p.gaps.length, 'dot') + (place ? ' on “' + place + '”' : '') + ' at gaps ' + p.gaps.map((g) => IL.fmt(g, 3)).join(', ') + ' mm'
-      + ' · one profile dot each' + (IL.num('to-rot') ? ' (here ' + IL.fmt(IL.num('to-rot'), 2) + '°)' : '') : 'Enter the gaps to see the dots.');
+      + ' · one profile dot each' + (IL.num('to-rot') ? ' (here ' + IL.fmt(IL.num('to-rot'), 2) + '°)' : '') + ' · ' + pitchLine(s, p.body.pitchMm) : 'Enter the gaps to see the dots.');
     const blockers = renderPrereqs($('to-pre'), prereqs(s, { machine: true, engine: true, frame: true, zmoved: true, place: true, surface: true, pressure: true }, place));
-    const own = Object.values(p.errs).find(Boolean) || (!place ? 'Choose the place.' : null);
+    const first = Object.values(p.errs).find(Boolean);
+    // the engine's long pitch refusal stands at its field: the line under the button points there
+    const own = (first && C.pitchErr && first === C.pitchErr.text ? 'The pitch is too small for these dots: see the Pitch field.' : first) || (!place ? 'Choose the place.' : null);
     IL.gate($('btn-to-run'), runReason(s, blockers, own), $('to-reason'));
     renderLive($('to-live'), s, 'needle touch-off', (run) => {
       const g = C.toReq && C.toReq.gaps;
@@ -538,14 +578,16 @@
     const v = pcr.touchOffView(latest);
     const needle = (s.dispense && s.dispense.needle) || {};
     const inUse = v && isNum(needle.zOffsetMm) && Math.abs(needle.zOffsetMm - v.row.z_offset_mm) < 5e-4;
-    IL.keyed(host, JSON.stringify([v ? v.row.id : null, inUse, C.ver]), () => {
+    // after a run that recorded nothing (its reason is in the box above) the one below is an older run's
+    const older = noContact(s.run);
+    IL.keyed(host, JSON.stringify([v ? v.row.id : null, inUse, C.ver, older]), () => {
       if (!v) return [sub('Last touch-off'), el('p', { class: 'muted cal-none', text: C.data ? 'No touch-off with dots yet.' : C.error ? 'Could not load the records: ' + C.error : 'Loading the records…' })];
       const a = v.analysis || {};
-      const gaps = a.gapsMm || [], dia = a.diametersMm || [];
+      const gaps = a.gapsMm || [];
       const inBracket = (g) => isNum(a.bracketHighMm) && isNum(a.bracketLowMm) && g <= a.bracketHighMm + 1e-9 && g >= a.bracketLowMm - 1e-9;
       const use = el('button', { type: 'button', class: 'btn btn--sm', id: 'to-use' }, 'Use for the needle offset');
       use.addEventListener('click', () => IL.act(use, () => useTouchOff(v), { ok: 'Needle offset set to ' + IL.fmtSigned(v.row.z_offset_mm, 3) + ' mm from the touch-off: plan the board again.' }));
-      return [sub('Last touch-off · ' + IL.fmtDateTime(v.row.created_at - S.skewMs)),
+      return [sub((older ? 'Last recorded touch-off · ' : 'Last touch-off · ') + IL.fmtDateTime(v.row.created_at - S.skewMs)),
         el('div', { class: 'cal-to' },
           el('div', { class: 'cal-to__s', id: 'to-sum' },
             el('div', { class: 'cal-to__big' }, isNum(a.contactGapMm) ? 'Contact at a gap of ' + IL.fmtSigned(a.contactGapMm, 3) + ' mm' : 'No contact found'),
@@ -554,9 +596,12 @@
             v.applied || inUse ? el('div', { class: 'cal-to__ok' }, IL.glyph('ok', 'xs'), ' In use as the needle offset')
               : el('div', { class: 'btn-row', 'data-refusals': '' }, use)),
           el('table', { class: 'tbl cal-to__t' }, el('thead', {}, el('tr', {}, el('th', { class: 'r' }, IL.unitText('Gap mm')), el('th', { class: 'r' }, IL.unitText('Dot Ø mm')), el('th', { text: '' }))),
-            el('tbody', {}, gaps.map((g, i) => el('tr', { class: inBracket(g) ? 'is-contact' : null },
-              el('td', { class: 'r', text: IL.fmtSigned(g, 3) }), el('td', { class: 'r', text: isNum(dia[i]) ? IL.fmt(dia[i], 3) : 'no dot' }),
-              el('td', { class: 'dim', text: isNum(a.contactGapMm) && Math.abs(g - a.contactGapMm) < 1e-9 ? 'contact' : inBracket(g) ? 'bracket' : '' })))))),
+            el('tbody', {}, gaps.map((g, i) => {
+              const dot = pcr.touchOffDot(a, i);
+              return el('tr', { class: inBracket(g) ? 'is-contact' : null, 'data-state': ((a.dotStates || [])[i]) || null },
+                el('td', { class: 'r', text: IL.fmtSigned(g, 3) }), el('td', { class: 'r', text: dot.text, title: dot.note }),
+                el('td', { class: 'dim', text: isNum(a.contactGapMm) && Math.abs(g - a.contactGapMm) < 1e-9 ? 'contact' : inBracket(g) ? 'bracket' : dot.note || '' }));
+            })))),
         el('button', { type: 'button', class: 'btn btn--sm btn--quiet', onclick: () => IL.go('#records/touch-offs') }, 'Last 20 touch-offs', IL.icon('i-chev'))];
     });
     IL.gate($('to-use'), IL.lockReason(s, { pressureOff: false }));

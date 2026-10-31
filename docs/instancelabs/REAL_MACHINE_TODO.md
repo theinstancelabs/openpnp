@@ -208,12 +208,19 @@ The fork ran in real mode on a **copy** of the config (`~/instancelabs/realcfg-s
         the probe refuses (`PROBE: set the 'blank' place first`).
      2. Probe the blank: `POST /api/surfaces/blank/probe {wait: true}`, and take the plane's Z at the anchor X/Y (c).
      3. Send `POST /api/needle/anchor {"surfaceZ": c, "needleContactRawSum": 65.60, "x": …, "y": …}`.
-     4. Run the touch-off on the blank (`POST /api/calibrations/touch-off`). Until `il/fixround2` is merged (F9, F14):
-        `{"apply": false, "pitchMm": 1.6}` (the default start gap is 0.125 mm; keep it at 0.2 or less; or untick
-        Apply in Calibrate › Touch-off, which sends no pitch: 1.5 mm), and judge
-        the contact from the after-photos, not from the analysis. When the photos show round dots down to gap 0.00
-        and strings only above about 0.2 mm (session 4), keep the frame's offset (`POST /api/needle/offset` with
-        −2.60, or `Confirm frame offset` on the Needle Z frame card). Never record K again from a touch-off result.
+     4. Run the touch-off on the blank (`POST /api/calibrations/touch-off`, or Calibrate › Needle touch-off) with Apply
+        off (`apply: false`), and compare its contact with the after-photos (session 4's showed round dots at
+        commanded gaps 0.00–0.20 and strings from 0.25). Use it (`Use for the needle offset`) only if they agree;
+        else keep the frame's offset (`POST /api/needle/offset` with −2.60, or `Confirm frame offset` on the Needle Z
+        frame card). Never record K again from a touch-off result.
+        - Start at a gap of 0.2 mm or less (the default 0.125 is fine): the session-4 ladder started at 0.45 mm and
+          its first dots were droplets (0.37–0.43 mm), which the touch-off now refuses as its reference (fix round 2).
+          The dots stand 1.6 mm apart (the default, or the card's Pitch field); a pitch under the dot + 0.4 mm is
+          refused.
+        - Confirm the string cut (0.45 × the dot of the dose, tuned on one real ladder): each dot is measured at its
+          spot with the strings cut off. Rows "not measured" in Calibrate › Needle touch-off (`analysis.dotStates`,
+          `dotNotes`: "joined to the dot at gap …") are dots the cut did not separate; one before the contact refuses
+          the run ("dots touch or are strung together …"). Note the dot sizes and any joined pairs.
    - Every Z datum now carries the home it was measured under (review 1): after the next home one Z check touch is
      enough again.
 
