@@ -621,7 +621,8 @@ final class Views {
             String fp = p == null ? null : p.doseFingerprint();
             boolean sim = svc.isSimulatorConfirmed();
             m.put("dots", dots(DoseRecords.dotTable(db.doseRecordsOf(s.key, fp, cfg.paste.key, sim), s.key, fp,
-                    cfg.paste.key, sim, db.flaggedJobs()), s.minDotSteps, cfg.bStepsPerRev));
+                    cfg.paste.key, sim, db.flaggedJobs(), DoseRecords.settings(cfg.padCalibration)), s.minDotSteps,
+                    cfg.bStepsPerRev));
         }
         m.put("mainPhoto", photo(db.mainPhoto(s.key)));
         List<Map<String, Object>> photos = new ArrayList<>();

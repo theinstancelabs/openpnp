@@ -210,10 +210,22 @@ public final class DoseRecords {
 
     /**
      * The setup's dot table (§22.2, see {@link DotTable}) from its records: another setup's records never enter it,
-     * nor the records of a job in {@code flaggedJobs} (wrong tip).
+     * nor the records of a job in {@code flaggedJobs} (wrong tip). Each optical record counts alone.
      */
     public static DotTable dotTable(List<DoseRecord> records, String setupKey, String doseFp, String pasteKey,
             boolean simulated, Set<String> flaggedJobs) {
+        return dotTable(records, setupKey, doseFp, pasteKey, simulated, flaggedJobs, null);
+    }
+
+    /**
+     * As above; with {@code set}, an optical record that fails alone counts when its job's camera records of the
+     * same dose pass together, as the job judged them (§7.4): a ladder block is sized for the hops of the weigh dots
+     * planned on the coupons ({@link PadLadder#dotsFor}), so at the machine's 60 hops the weighed dose's block fails
+     * its thread count alone, and Measure its dots would otherwise leave a tip whose smallest dot is weighed
+     * unmeasured. Its sizes are then the pooled ones (what the job reported).
+     */
+    public static DotTable dotTable(List<DoseRecord> records, String setupKey, String doseFp, String pasteKey,
+            boolean simulated, Set<String> flaggedJobs, LadderStats.Settings set) {
         DotTable t = new DotTable();
         t.setupKey = setupKey;
         t.doseFp = doseFp;
@@ -232,13 +244,21 @@ public final class DoseRecords {
         mine.sort((a, b) -> Long.compare(a.id, b.id));
         for (DoseRecord r : mine) {
             // the newest passing optical record per dose (records come oldest first: a later one replaces it)
-            if (DoseRecord.OPTICAL.equals(r.kind) && Boolean.TRUE.equals(r.pass) && r.diameterMeanMm != null
-                    && r.diameterP95Mm != null) {
-                Tip.Measured m = new Tip.Measured();
+            if (!DoseRecord.OPTICAL.equals(r.kind)) {
+                continue;
+            }
+            Tip.Measured m = null;
+            if (Boolean.TRUE.equals(r.pass) && r.diameterMeanMm != null && r.diameterP95Mm != null) {
+                m = new Tip.Measured();
                 m.dMeanMm = r.diameterMeanMm;
                 m.d95Mm = r.diameterP95Mm;
                 m.recordId = r.id;
                 m.atMs = r.createdAtMs;
+            }
+            else if (set != null && r.jobId != null) {
+                m = pooledWithJob(r, mine, set);
+            }
+            if (m != null) {
                 t.doses.put(r.steps, m);
             }
         }
@@ -268,6 +288,39 @@ public final class DoseRecords {
             t.mgPerStepConfirmed = best != null;
         }
         return t;
+    }
+
+    /**
+     * An optical record pooled with its job's other camera records of its dose (the coupons' imaged weigh dots, another
+     * block): their sizes when they pass together, else null (nothing to pool, or the pool fails too).
+     */
+    private static Tip.Measured pooledWithJob(DoseRecord r, List<DoseRecord> mine, LadderStats.Settings set) {
+        List<LadderStats.Record> pool = new ArrayList<>();
+        long at = r.createdAtMs;
+        for (DoseRecord x : mine) {
+            if (x.steps != r.steps || !r.jobId.equals(x.jobId)
+                    || !(DoseRecord.OPTICAL.equals(x.kind) || DoseRecord.COUPON.equals(x.kind))) {
+                continue;
+            }
+            List<Seen> dots = dotsOf(x);
+            if (dots != null && !dots.isEmpty()) {
+                pool.add(record(x.id, x.steps, x.kind, dots));
+                at = Math.max(at, x.createdAtMs);
+            }
+        }
+        if (pool.size() < 2) {
+            return null;
+        }
+        LadderStats.Stats st = LadderStats.of(r.steps, pool, set);
+        if (!st.pass || st.dMeanMm == null || st.d95Mm == null) {
+            return null;
+        }
+        Tip.Measured m = new Tip.Measured();
+        m.dMeanMm = st.dMeanMm;
+        m.d95Mm = st.d95Mm;
+        m.recordId = r.id;
+        m.atMs = at;
+        return m;
     }
 
     /** A reading's mass per motor step: as stored, else its total over the dots laid on its coupon (§7.5). */

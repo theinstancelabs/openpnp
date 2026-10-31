@@ -1864,15 +1864,16 @@ public final class DispenseService {
         boolean sim = isSimulatorConfirmed();
         String doseFp = c.profile.doseFingerprint();
         java.util.Set<String> flagged = db.flaggedJobs();
+        // the statistics' settings too: a job's records of a dose are pooled as the job judged them
         String key = new Gson().toJson(t) + "|" + doseFp + "|" + c.paste.key + "|" + sim + "|"
-                + db.newestDoseRecordId() + "|" + flagged;
+                + db.newestDoseRecordId() + "|" + flagged + "|" + new Gson().toJson(c.padCalibration);
         TipCache cached = tipCache;
         if (cached != null && key.equals(cached.key)) {
             return copyTip(cached.tip);
         }
         Tip tip = PadInstances.specTip(t);
         DoseRecords.DotTable table = DoseRecords.dotTable(db.doseRecordsOf(t.key, doseFp, c.paste.key, sim), t.key,
-                doseFp, c.paste.key, sim, flagged);
+                doseFp, c.paste.key, sim, flagged, DoseRecords.settings(c.padCalibration));
         tip.measured.putAll(table.doses);
         tip.mgPerStep = table.mgPerStep;
         tip.mgPerStepAtMs = table.mgPerStepAtMs;
@@ -1887,7 +1888,7 @@ public final class DispenseService {
         boolean sim = isSimulatorConfirmed();
         String doseFp = c.profile.doseFingerprint();
         return DoseRecords.dotTable(db.doseRecordsOf(c.tip.key, doseFp, c.paste.key, sim), c.tip.key, doseFp,
-                c.paste.key, sim, db.flaggedJobs());
+                c.paste.key, sim, db.flaggedJobs(), DoseRecords.settings(c.padCalibration));
     }
 
     private static Tip copyTip(Tip t) {

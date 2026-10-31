@@ -2,16 +2,21 @@ package org.openpnp.instancelabs.dispense;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 
 import org.junit.jupiter.api.Test;
+import org.openpnp.instancelabs.padprofile.LadderStats;
 import org.openpnp.instancelabs.padprofile.Tip;
+
+import com.google.gson.Gson;
 
 /**
  * Tip setups (§22.2, §22.8): a setup's dot table is the newest passing optical record per dose of the setup at its
@@ -87,6 +92,60 @@ public class DotTableTest {
         DoseRecords.DotTable s = DoseRecords.dotTable(l, S, c.profile.doseFingerprint(), c.paste.key, true,
                 Collections.<String>emptySet());
         assertEquals(Collections.singleton(1600), s.doses.keySet());
+    }
+
+    /** A half-turn block's dots as the camera saw them: round, the two start angles in turn, on their spots. */
+    static String dots(int n, double areaMm2, boolean threads) {
+        List<DoseRecords.Seen> l = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            DoseRecords.Seen s = new DoseRecords.Seen();
+            s.found = true;
+            s.a = areaMm2 * (1 + 0.02 * (i % 3 - 1));
+            s.d = 2 * Math.sqrt(s.a / Math.PI);
+            s.c = 0.9;
+            s.dx = 0.0;
+            s.dy = 0.0;
+            s.k = i % 2;
+            s.t = threads;
+            l.add(s);
+        }
+        return new Gson().toJson(l);
+    }
+
+    @Test
+    public void aLadderBlockSizedForItsJobsWeighDotsCountsWithThem() {
+        // §7.4: the weighed dose's ladder block has 28 dots (27 moves) because its 136 weigh dots on the coupons add
+        // the moves the thread count needs (60 at the machine's floor): alone it fails, with them it passes, as the
+        // job judged it (Measure its dots of a tip whose smallest dot is the weighed half turn)
+        DispenseConfig c = new DispenseConfig();
+        LadderStats.Settings set = DoseRecords.settings(c.padCalibration);
+        String fp = c.profile.doseFingerprint();
+        DoseRecord ladder = optical(c, 800, 0.80, 0.84, false, 1_000L);
+        ladder.dotsJson = dots(28, 0.5, false);
+        DoseRecord k1 = coupon(c, 800, 2_000L);
+        k1.dotsJson = dots(68, 0.5, false);
+        DoseRecord k2 = coupon(c, 800, 3_000L);
+        k2.dotsJson = dots(68, 0.5, false);
+        List<DoseRecord> l = new ArrayList<>(Arrays.asList(ladder, k1, k2));
+        assertTrue(DoseRecords.dotTable(l, S, fp, c.paste.key, false, Collections.<String>emptySet()).doses.isEmpty(),
+                "each optical record alone: the block fails its thread count");
+        Tip.Measured m = DoseRecords.dotTable(l, S, fp, c.paste.key, false, Collections.<String>emptySet(), set).doses
+                .get(800);
+        assertNotNull(m, "pooled with its job's weigh dots");
+        assertEquals(ladder.id, m.recordId);
+        assertEquals(3_000L, m.atMs, "the newest record of the pool");
+        assertEquals(2 * Math.sqrt(0.5 / Math.PI), m.dMeanMm, 0.01, "the pooled size");
+        // another job's weigh dots never complete it
+        k1.jobId = "job-b";
+        k2.jobId = "job-b";
+        assertTrue(DoseRecords.dotTable(l, S, fp, c.paste.key, false, Collections.<String>emptySet(), set).doses
+                .isEmpty());
+        // nor do weigh dots that fail with it: a paste thread after every one
+        k1.jobId = "job-a";
+        k2.jobId = "job-a";
+        k1.dotsJson = dots(68, 0.5, true);
+        assertTrue(DoseRecords.dotTable(l, S, fp, c.paste.key, false, Collections.<String>emptySet(), set).doses
+                .isEmpty());
     }
 
     @Test
