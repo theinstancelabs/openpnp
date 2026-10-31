@@ -466,20 +466,21 @@ Jargon is explained in tooltips (`title`/`abbr`).
 ## 6. Tests
 
 - `mvn -T1 test -Dtest='ApiServerSimTest,ReviewSafetySimTest,RegistrationSimTest,BoardImportSimTest'` (part of `mvn
-  test`): 23 + 11 + 7 + 12 tests on the engine's simulated machine (OpenPnP GcodeDriver over localhost TCP to
+  test`): 23 + 11 + 11 + 12 tests on the engine's simulated machine (OpenPnP GcodeDriver over localhost TCP to
   `RecordingGcodeServer`), real `DispenseService`, real `ApiServer` on an ephemeral port. `RegistrationSimTest` runs
-  Register board, the blank probe, the home at run and the Z check end to end on the SIM vacuum and the SIM camera
-  (`SceneImager`); `BoardImportSimTest` uploads, saves and attaches the KiCad fixtures and plans them;
-  `CameraSnapshotEncodingTest` (2) the PNG fallback of the camera snapshot. Missing paste profiles:
+  Register board, the blank probe, the home at run, the Z check and probe only for a board without fiducials end to end
+  on the SIM vacuum and the SIM camera (`SceneImager`); `BoardImportSimTest` uploads, saves and attaches the KiCad
+  fixtures and plans them; `CameraSnapshotEncodingTest` (2) the PNG fallback of the camera snapshot. Missing paste
+  profiles:
   `PadProfileApiSimTest` (8: the check, apply, mappings, the upload preview), `PadCalibrationJobTest` (14: the job's
-  states, readings, cancel, STOP, refusals in order, on fake engine steps), `PadCalibrationSimTest` (11: PC §14.3 end
-  to end on the SIM paste, camera and balance, every negative control of §11.7, the SIM balance after a reconnect),
+  states, readings, cancel, STOP, refusals in order, on fake engine steps), `PadCalibrationSimTest` (13: PC §14.3 end
+  to end on the SIM paste, camera and balance, every negative control of §11.7, the SIM balance after a reconnect, the
+  look before a ladder's dots and the control's tolerance in a job),
   `PadProfileUiSimTest` (3: the files are served and loaded).
   Board runs there use the bench geometry (N1 contact 5.5, K 65.59 → needle 2.91, offset −2.59), a purge row on the
   blank, a confirmed start angle and the clean-pad check off, or a fake `DotImager` (`DispenseService.setDotImager`)
-  for the I10 tests. The whole suite on `il/rc1` 69fd1a527: 1103 tests, 817 of them in `org.openpnp.instancelabs`
-  (dispense 332, api 96, sim 87, kicad 79, padprofile 70, vision 64, board 62, serial 27); with fix round 2
-  (`il/fr2-wire`): 1122, 836 of them there (dispense 343, api 98, vision 70).
+  for the I10 tests. The whole suite on `il/rc1` 5aba4636e (fix round 2 merged): 1133 tests, 847 of them in
+  `org.openpnp.instancelabs` (dispense 349, api 102, sim 87, kicad 79, padprofile 71, vision 70, board 62, serial 27).
 - `src/test/web/run-webui-sim-test.sh`: Playwright (headless Chromium) against this jar running in OpenPnP **sim**
   through openpnp-uinav (config copy, simulated controller and cameras, Xvfb, device stubs). Needs the jar
   (`mvn -q -T1 -DskipTests package`), openpnp-uinav built, and Playwright in `$PLAYWRIGHT_DIR`
@@ -488,7 +489,7 @@ Jargon is explained in tooltips (`title`/`abbr`).
   on `il/ar-webui` also Register board, the blank probe, home at run and Check Z, and on `il/rc1` the final round's
   locks, the refused clean-pad check, the dose rule, the Z-moved remedy in the SIM and the probe-window refusal, and
   fix round 2's needle touch-off (the pitch and the engine's 400 at the field, a run that records nothing, dots not
-  measured) and probe only for a board without fiducials (224 checks in all at the final gate, before fix round 2),
+  measured) and probe only for a board without fiducials (244 checks in all at the release candidate),
   and `board-import.playwright.cjs` runs after it in the same session (62 checks:
   upload, the off-board warning, save, replace, attach, Camera is on FID1, the drawing under the plan, the inspector,
   the preview, the Records map, 1280 and 1024 px, dark theme).
