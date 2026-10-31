@@ -2055,7 +2055,7 @@
       const limit = cells.getBoundingClientRect().right - parseFloat(getComputedStyle(cells).paddingRight || '0');
       return last.getBoundingClientRect().right > limit + 0.5;
     };
-    cells.classList.remove('cells--t1', 'cells--t2', 'cells--t2v', 'cells--t3', 'cells--t4');
+    cells.classList.remove('cells--t1', 'cells--t2', 'cells--t2v', 'cells--t3', 'cells--t4', 'cells--t5');
     cells.classList.add('cells--fit');   // the verdict at its full width while measuring
     if (over()) {
       // the other cells' long parts first: the verdict keeps its own ("Stopped 14:19", a task's progress) while it fits
@@ -2063,9 +2063,11 @@
       if (over()) cells.classList.replace('cells--t1', 'cells--t2');
       if (over()) cells.classList.add('cells--t2v');
       // still too long (1024 px after a STOP, the widest state): the verdict is never cut (UI_DESIGN §4), so the
-      // pressure cell goes while it reads a plain "Off" (Recovery says "Pressure vented"), then the other cells' labels
+      // pressure cell goes while it reads a plain "Off" (Recovery says "Pressure vented"), then the other cells' labels,
+      // then the tip cell while it is ok (the tip is named on Setup, the run confirm and the pad-cal view)
       if (over()) cells.classList.add('cells--t3');
       if (over()) cells.classList.add('cells--t4');
+      if (over()) cells.classList.add('cells--t5');
     }
     cells.classList.remove('cells--fit');
   }

@@ -479,7 +479,8 @@ follows the theme); overlay marks on the board `--pv-o-ap --pv-o-dot --pv-o-next
 overlay; the overlay gets `.pv--art` whenever the drawing shows.
 
 Breakpoint ≤ 1360 px: nav rail 84 px, panel 388 px, STOP 216 px. The strip drops `.long` value parts by itself
-when it would run under STOP, the other cells' before the verdict's (`.cells--t1` / `--t2` / `--t2v`).
+when it would run under STOP, the other cells' before the verdict's (`.cells--t1` / `--t2` / `--t2v`), then the
+plain-Off pressure cell (`--t3`), the other cells' keys (`--t4`) and an ok Tip cell (`--t5`).
 
 Icon sprite ids: `i-run i-setup i-profile i-cal i-records i-gauge i-chev i-plus i-minus i-camera i-refresh i-swap
 i-play i-capture i-mark i-lock i-plug i-home i-wipe i-hand i-paste i-back i-needle i-close i-sun i-moon i-shield

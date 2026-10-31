@@ -1219,7 +1219,7 @@ async function runFirstDots(page, n) {
         await tab.click(theirs.all ? '#run-all-link' : '#btn-run');
         await tab.waitForSelector('#dlg-run', { timeout: 10000 }).catch(() => {});
         await tab.evaluate(() => { IL.attest.set('regulator', IL.S.status.dispense.profile.pressurePsi); IL.attest.set('paste-life', true); });
-        for (const t of ['#run-tick-gauge', '#run-tick-paste', '#run-tick-hands']) if (!(await tab.isChecked(t).catch(() => true))) await tab.check(t).catch(() => {});
+        for (const t of ['#run-tick-gauge', '#run-tick-tip', '#run-tick-paste', '#run-tick-hands']) if (!(await tab.isChecked(t).catch(() => true))) await tab.check(t).catch(() => {});
         await tab.waitForTimeout(400);
         const cf = await tab.evaluate(() => { const w = document.getElementById('run-tick-wiped'); const go = document.getElementById('btn-run-go');
           return { wipe: w ? w.closest('label').textContent : null, go: go ? go.textContent : null, locked: !!go && go.disabled }; });

@@ -126,8 +126,9 @@ in tiers until the verdict fits whole, the other cells first: t1 drops their lev
 ` · vented`, ` · wipe`), t2 all their long parts (` · set 18 psi`), t2v the verdict's own (` · homes first
 (≈ 25 s)`, a task's progress, the stopped verdict's time: `Stopped`; final gate: before, t2 dropped them with the
 others', so at 1440 px a running pad calibration read `Pad calibration` beside 300 px of free strip), t3 the pressure
-cell while it reads a plain `Off`, t4 the other cells' keys; the stopped state is checked at 1440, 1280 and 1024 (at
-1440 it keeps its time), a running pad calibration at 1440 (it keeps its step).
+cell while it reads a plain `Off`, t4 the other cells' keys, *tips:* t5 the Tip cell while it is ok (1024 px after a
+STOP); the stopped state is checked at 1440, 1280 and 1024 (at 1440 it keeps its time), a running pad calibration at
+1440 (it keeps its step).
 The cells container is `aria-live="polite"`; safety changes (STOP result, vent_failed, offline) are announced
 by `role="alert"` regions instead.
 
@@ -719,7 +720,8 @@ pad-cal view like every calibration.
   (`22G bent taper`, ok), `25G straight · frame and landing to do` (block) after a change until the frame and where it
   lands are done, `Incomplete` (block); it opens `#setup/tip`. The words after the gauge are a `span.long` (level 2):
   at 1440 px and below the cell reads `22G` / `25G` (§22.7 kept the whole name; the strip's tiers drop it with the
-  other cells' long parts so the board-run verdict fits), and at 1024 px `Start angle` shortens to `Angle`.
+  other cells' long parts so the board-run verdict fits), at 1024 px `Start angle` shortens to `Angle`, and at 1024 px
+  after a STOP (the widest state) the cell goes while it is ok (tier t5: the verdict is never cut).
 - **Setup › Dispenser & tip** (`section.card#card-tip`, first in the grid; bring-up step `Dispenser & tip` after
   Settings): `#tip-state` `22G bent taper` (ok) · `Changed 14:05: frame and landing to do` (block) · `Dots not
   measured` (need) · `Incomplete` (block); the picture `button.photo-thumb#tip-photo` (opens `#photo-view`) with

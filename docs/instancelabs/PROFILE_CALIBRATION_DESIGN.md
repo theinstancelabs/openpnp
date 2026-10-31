@@ -3281,7 +3281,8 @@ acceptance `all`) passed at the head named in the commit that records their coun
 
 - The strip's Tip cell: the words after the gauge are its level-2 long part, so at 1440 px and below it reads `22G` /
   `25G` (§22.7 hid only `· frame and landing to do`); at 1024 px `Start angle` shortens to `Angle` so the board-run
-  verdict fits beside the new cell.
+  verdict fits beside the new cell, and after a STOP at 1024 px (rc1's widest state, with the time already dropped) the
+  cell goes while it is ok (a fifth strip tier, `cells--t5`), so the verdict is never cut.
 - Setup's bring-up step `Dispenser & tip` shows the card's first open step after a needle change (frame, offset,
   regulator, prime, landing) instead of `dots not measured · Measure its dots…`, which §22.3's order puts after them;
   `Needle Z frame` reads ok when only the landing is open.
