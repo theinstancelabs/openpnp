@@ -3204,8 +3204,8 @@ a4bb6d20d, `il/fixround1b` for BI §3.4, `il/pc-web` 197da6550).
 ### 22.13 As built (2026-10-30)
 
 Built on `il/tip-setups` in the slices of §22.9: `ts-engine`, `ts-api` (`il/ts-api` 00d185402 and its check), `ts-web`
-(the web UI, `tip-setups.playwright.cjs`, and the operator walk's fixes) and `ts-integration` (`il/rc1` merged again at
-06106c4fc, the `tips` SIM acceptance, `il_ui_session.py --physical-tip` / `--paste-by-tip`, the docs: `WEB_API.md`
+(the web UI, `tip-setups.playwright.cjs`, and the operator walk's fixes) and `ts-integration` (`il/rc1` merged again up
+to 8f8f0f724, the `tips` SIM acceptance, `il_ui_session.py --physical-tip` / `--paste-by-tip`, the docs: `WEB_API.md`
 §3.6, `DISPENSE_API.md` §9, `UI_DESIGN.md` §8.6, `REAL_MACHINE_TODO.md` items 55–68, `DEV_NOTES.md` §5 › Tip setups).
 The gates of §22.9 (the full Maven suite, the browser tests in one SIM session, the board view test and the SIM
 acceptance `all`) passed at the head named in the commit that records their counts.
@@ -3246,7 +3246,9 @@ acceptance `all`) passed at the head named in the commit that records their coun
   `dispense.needle.kRefusal`): K is a sum of raw heights and holds only for the needle and the home it was measured
   with. §22.3's step 1 "or From K with the setup's own parked K" is therefore gone: a tip mounted again is framed with
   both tips touching, like a tip that was never on. The needle card still prefills the tip's own K with its caption, and
-  locks From K with the reason. It also removes the check's design risk of "From K with another tip physically on".
+  locks From K with the reason. That also closes the UI check's design risk of "From K with another tip physically on"
+  for every tip that was on before; a tip that was never on has no K of its own (the card leaves K empty and
+  preselects Both tips touch).
 - `LadderStats.control(…, tip)` passes with `first measurement of this tip` when a setup without the bench model has
   no earlier record (§22.2 names the case; passing checks carried no text before).
 - A needle change during the tip picture stops the task through the STOP path (`recordNeedleChange` aborts any running
@@ -3316,6 +3318,9 @@ acceptance `all`) passed at the head named in the commit that records their coun
   no-Remove on the first record with a result photo; it wipes the SIM coupons at its set-up; it takes about 17 min
   against §22.8's ≈ 6 min (120 screenshots, three landing checks, a measure and two calibrations; `TS_SHOTS=0` skips the
   screenshots). Since the rc1 merge it frames the 22G with both tips after the mount back and checks From K is locked.
+- Outside its row, `ts-web` adapted the SIM set-ups the new contracts broke: `SimTipCamera` (any nozzle but N2 drawn by
+  the stock simulated camera: homing failed otherwise), `il_sim_acceptance.py`'s set-up (needle tokens, `forSetup`),
+  `il_ui_session.py --tip-camera`, and webui-sim and pad-profile (the tokens, `forTip` / `forSetup`, the tip tick).
 - `il_sim_acceptance.py tips` runs at the machine's statistics floors (the default `padCalibration`), with the SIM 25G
   added at a half-turn smallest dot, on the padcal scene's blank grown to 50 mm (a first landing check needs a 20 mm
   band). `--api-ports K` keeps a run's sessions on fewer ports (1: all on `--api-port`).
