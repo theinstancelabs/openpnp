@@ -361,7 +361,7 @@ modules (H-P9 in `index.html`). Every hook in another module's file is a no-op w
   or the calibration); every start is a two-press button with its time (`Calibrate · ≈ 5:45`); the readings are
   typed in grams and echoed in mg (`= 78 mg of paste`); STOP stays visible in every state (`STOP stops it at once
   (F9).`).
-- Tests: `PadProfileUiSimTest` (the files are served and loaded), `pad-profile.playwright.cjs` (54 checks, third in
+- Tests: `PadProfileUiSimTest` (the files are served and loaded), `pad-profile.playwright.cjs` (71 checks, third in
   `run-webui-sim-test.sh`'s SIM session; `SIM_SCENE` lets it add the SIM paste, coupons and balance), fixtures for
   devproxy in `src/test/web/fixtures/padprofile/` (`devproxy.py --route-fixtures`), and the SIM acceptance
   `il_sim_acceptance.py padcal` (API level, `WEB_API.md` §6). A seeded SIM session: `il_ui_session.py start --padcal`.

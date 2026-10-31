@@ -485,13 +485,13 @@ Jargon is explained in tooltips (`title`/`abbr`).
   (`npm i playwright && npx playwright install chromium-headless-shell`, browsers in `$PLAYWRIGHT_BROWSERS_PATH`).
   It drives the element ids of `UI_DESIGN.md` §16 (two-press buttons, the in-page run confirm, Recovery after STOP);
   on `il/ar-webui` also Register board, the blank probe, home at run and Check Z, and on `il/rc1` the final round's
-  locks, the refused clean-pad check, the dose rule, the Z-moved remedy in the SIM and the probe-window refusal (205
-  checks in all), and `board-import.playwright.cjs` runs after it in the same session (57 checks:
+  locks, the refused clean-pad check, the dose rule, the Z-moved remedy in the SIM and the probe-window refusal (224
+  checks in all at the final gate), and `board-import.playwright.cjs` runs after it in the same session (62 checks:
   upload, the off-board warning, save, replace, attach, Camera is on FID1, the drawing under the plan, the inspector,
   the preview, the Records map, 1280 and 1024 px, dark theme).
   `boardview.playwright.cjs` (`run-boardview-test.sh`, 67 checks) checks the drawing on the session's import of
   `ftp.kicad_pcb` through devproxy (mobo from the fixtures for the performance gate).
-  `pad-profile.playwright.cjs` runs third in the same session (54 checks, PC §14.4: the padcal upload's profile column,
+  `pad-profile.playwright.cjs` runs third in the same session (71 checks, PC §14.4: the padcal upload's profile column,
   Run › Checks, Needs a profile, the suggestion card, Use, the pad inspector, Calibrate automatically through the
   readings (the test is the operator at the SIM balance) to the result, the by-hand guide, Calibrate › Pad
   calibration, STOP at the readings, a test run that lays whole pads, a coupon weighed and one skipped; one filled
