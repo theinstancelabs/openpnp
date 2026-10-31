@@ -528,7 +528,8 @@ Never `/dev/ttyACM*`, `/dev/serial/*`, `/dev/video*` or a real-mode OpenPnP.
   fiducial and fit rows. The result card: `Probed 13:05: no fiducials: probed only, X/Y as planned; 5 points, worst
   0.012 mm; planned again.` with `Probe again` (`#btn-reg-probe`), `Not probed: …`, or `Stopped … during probe point k
   of n: nothing was saved.`. The readiness item, the I4 seat fixes and the Z-moved step offer `Probe only (X/Y as
-  planned)` (`register-probe-only`) instead of `Register board` for such a plan.
+  planned)` (`register-probe-only`) instead of `Register board` for such a plan; the item's short name and value say
+  the same action (`probe board`, `probe`, blocked `probe again`; else `register board`).
 - **Records:** `board-registration` → `Registration · <board>`, `surface-probe` → `Surface probe · <name>`, `z-check`.
 - **Board import hooks** (BOARD_IMPORT_DESIGN.md §5.1.1, no-ops until `boardflow.js` loads): H1 `mountBoardStep` in the
   Board step, H2 `onPad` / `onPart` of the hero view, H3 `hero(bv, …)` before the empty-state switch (the SVG and the

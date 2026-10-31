@@ -1550,13 +1550,18 @@ async function runFirstDots(page, n) {
           const it = IL.ready().items.find((x) => x.key === 'surface');
           return { btn: b.textContent.trim(), primary: b.classList.contains('btn--primary'), locked: b.disabled, note: document.getElementById('register-note').textContent,
             why: document.getElementById('register-why').hidden ? null : document.getElementById('register-why').textContent,
-            byHand: !document.getElementById('probe-by-hand').hidden, surface: { state: it.state, fixes: (it.fixes || []).map((f) => f.fix + ':' + f.label) } };
+            byHand: !document.getElementById('probe-by-hand').hidden, surface: { state: it.state, value: it.value, short: it.short, fixes: (it.fixes || []).map((f) => f.fix + ':' + f.label) } };
         });
         check('probe only: the primary "Probe only (X/Y as planned) · ≈ m:ss" with the note "This board has no fiducials: N1 probes it where it is planned; its X/Y are not checked."; Do it by hand stays',
           /^Probe only \(X\/Y as planned\) · ≈ \d+:\d\d$/.test(po.btn) && po.primary && !po.locked && !po.why && po.byHand
           && po.note.includes('This board has no fiducials: N1 probes it where it is planned; its X/Y are not checked.'), po);
         check('probe only: the readiness item offers "Probe only (X/Y as planned)" first, then Do it by hand', po.surface.state !== 'ok'
           && po.surface.fixes[0] === 'register-probe-only:Probe only (X/Y as planned)' && po.surface.fixes[1] === 'probe-by-hand:Do it by hand', po.surface);
+        // the strip and the nav name the item by its fix's action, as a board with fiducials reads "register board"
+        // (board-import 8)
+        check('probe only: the readiness item says "probe board" (blocked: "probe again"), as its fix Probe only, not "register board"',
+          (po.surface.state === 'need' && po.surface.value === 'probe' && po.surface.short === 'probe board')
+          || (po.surface.state === 'block' && po.surface.value === 'probe again'), po.surface);
         await page.screenshot({ path: path.join(OUT, 'register-probe-only.png') });
         // Register board with probe "auto": the REG refusal names the way out, and its first fix-it is Probe only
         g1 = gcodeNext();

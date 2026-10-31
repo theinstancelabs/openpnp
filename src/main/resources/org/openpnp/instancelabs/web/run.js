@@ -1088,7 +1088,7 @@
     const sf = r.items.find((x) => x.key === 'surface');
     const surf = s.dispense && s.dispense.surfaces && s.dispense.surfaces[s.dispense.boardSurfaceName || 'board'];
     // Register: "registered", "probed" (probe only, F10), "same seat" (the 3-point check kept the surface), "by hand" (the time in the title: the
-    // five steps share about 400 px), "this seat", "again" (blocked: register the board again)
+    // five steps share about 400 px), "this seat", "again" (blocked: register the board again, or probe it: no fiducials)
     const reg = p && p.registration;
     const at = (ms) => IL.fmtTime(ms ? ms - S.skewMs : null);
     const live = regLive(s);
@@ -1100,7 +1100,7 @@
         : surf && /^Register board/.test(surf.note || '') ? (/\(no fiducials: probed only/.test(surf.note) ? { kind: 'ok', sub: 'probed', title: 'probed only ' + at(surf.setAtMs) }
           : { kind: 'ok', sub: 'registered', title: 'registered ' + at(surf.setAtMs) })
           : { kind: 'ok', sub: 'by hand', title: 'by hand ' + at(surf && surf.setAtMs) };
-    } else st.probe = sf.state === 'block' ? { kind: 'block', sub: 'again', title: 'register the board again' } : { kind: 'need', sub: 'this seat' };
+    } else st.probe = sf.state === 'block' ? { kind: 'block', sub: 'again', title: (probeOnlyPlan(p) ? 'probe' : 'register') + ' the board again' } : { kind: 'need', sub: 'this seat' };
     const needs = r.needs.filter((x) => x.state !== 'wait');
     st.checks = !p ? { kind: 'num', sub: '—' } : r.blocked.length ? { kind: 'block', sub: 'blocked' }
       : needs.length ? { kind: 'need', sub: IL.plural(needs.length, 'needs you', 'need you') } : { kind: 'ok', sub: '9 of 9' };

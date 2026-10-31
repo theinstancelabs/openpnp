@@ -976,9 +976,9 @@
    * order: record the needle frame again with both tips (the engine refuses K then), probe the blank (the touch-off's
    * dots take their Z from it), take the places' Z again with N1 (status.machine.zCheck.places: the touch-off primes at
    * the waste), touch off (a frame recorded after the home replaces the touch-off, which I4 then asks for again; not
-   * the frame's own offset), register the board. What was measured again since the home drops out of
-   * status.machine.zCheck.stale. Returns {step: frame | blank | places | touch-off | register | done, fixes} while the
-   * last Z check of this home failed, else null.
+   * the frame's own offset), register the board (a board without fiducials: probe it only). What was measured again
+   * since the home drops out of status.machine.zCheck.stale. Returns {step: frame | blank | places | touch-off |
+   * register | done, fixes} while the last Z check of this home failed, else null.
    */
   IL.zMoved = function (status) {
     const s = status || S.status || {};
@@ -1222,14 +1222,16 @@
       const seatFixes = [registerFix(plan, { primary: true }), { fix: 'probe-by-hand', label: 'Do it by hand' }];
       if (newSeat) seatFixes.push(registrable ? { fix: 'register-check', label: 'Same seat? Check the fiducials' } : { fix: 'same-seat', label: 'Same board, not moved' });
       const registered = reg ? { atMs: reg.atMs, seat: reg.lastCheckedAtMs && reg.lastCheckedAtMs > reg.atMs ? 'same' : null } : null;
+      // the strip, the nav and the fix name the same action ("8 of 9 · register board", not "probe seat"; a board
+      // without fiducials "probe board", as its fix Probe only)
+      const act = only ? 'probe' : 'register';
       if (bad.length) {
-        add({ key: 'surface', code: 'I4', title: 'Surface', state: 'block', value: 'register again', short: 'board surface',
+        add({ key: 'surface', code: 'I4', title: 'Surface', state: 'block', value: act + ' again', short: 'board surface',
           detail: bad.map((x) => sentence(x.v.message)).concat(why || []).join(' '),
           fixes: which ? seatFixes : [registerFix(plan, { primary: true }), { fix: 'probe-by-hand', label: 'Add probe points by hand' }],
           seat: which, registered });
       } else if (which) {
-        // the strip, the nav and the fix name the same action ("8 of 9 · register board", not "probe seat")
-        add({ key: 'surface', code: 'I4', title: 'Surface', state: 'need', value: 'register', short: 'register board', detail: why, fixes: seatFixes, seat: which, registered });
+        add({ key: 'surface', code: 'I4', title: 'Surface', state: 'need', value: act, short: act + ' board', detail: why, fixes: seatFixes, seat: which, registered });
       } else {
         const regText = reg ? ' · registered ' + IL.fmtTime(reg.atMs - S.skewMs) + ' (' + IL.plural((reg.fiducials || []).length, 'fiducial') + ')'
           : ' · not registered (no fiducial correction)';

@@ -1657,7 +1657,8 @@ plan chip during the task (`renderChip`, W/run.js:595-611) reads `Registering ·
   reads `Probed 13:05: no fiducials: probed only, X/Y as planned; 5 points, worst 0.012 mm; planned again.` (with
   `Probe again`). A REG refusal that ends ` Or probe it only, where it is planned: Register with probe "always".` offers
   `Probe only (X/Y as planned)` first; the readiness item, the I4 seat fixes and the Z-moved step offer it instead of
-  Register board for such a plan.
+  Register board for such a plan, and the item's short name is `probe board` (blocked: `probe again`), the plan chip's
+  `probe this seat`, the Register step's `probed`.
 
 ### 8.2 Readiness, strip, fix-its
 
