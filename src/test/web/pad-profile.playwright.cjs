@@ -422,6 +422,9 @@ async function weighCoupon(page, place) {
     const strip7 = await page.evaluate(() => ({ shown: document.querySelector('#pill-engine .cell__v').innerText, tier: document.getElementById('cells').className, w: innerWidth }));
     check('(7) 1440 px: the strip shows the step ("Pad calibration · …"), the other cells shortened first', strip7.w === 1440 && /^Pad calibration · \S/.test(strip7.shown), strip7);
     await waitJob(page, (j) => (j.steps || []).some((x) => x.key === 'ladder' && x.state !== 'todo'), 300000, 'the ladder');
+    // the page draws a status a frame after it holds it: the list, not only the status, has the ladder under way
+    await page.waitForFunction(() => Array.from(document.querySelectorAll('#pcal-phases li')).some((li) => li.dataset.ph === 'ladder' && li.className !== 'todo'),
+      null, { timeout: 20000 }).catch(() => null);
     const ph = await page.evaluate(() => Array.from(document.querySelectorAll('#pcal-phases li')).map((li) => [li.dataset.ph, li.className]));
     check('(7) the phases advance (coupons done, ladder now or done)', ph.some((p) => p[0] === 'coupons' && p[1] === '') && ph.some((p) => p[0] === 'ladder' && p[1] !== 'todo'), ph);
     check('(7) STOP and Cancel are reachable while it runs', await page.isVisible('#btn-stop') && await page.isVisible('#btn-pcal-cancel') && await page.isEnabled('#btn-pcal-cancel'),
@@ -614,7 +617,10 @@ async function weighCoupon(page, place) {
     const r10 = await posted10;
     check('(10) Lay the ladder (two presses) posts the by-hand ladder: 202', !!r10 && r10.status() === 202, r10 ? [r10.status(), (await r10.text()).slice(0, 600)] : 'no request');
     const j10 = await waitJob(page, (j) => j.manual === 'ladder' && ['done', 'failed', 'stopped'].includes(j.state), 300000, 'the by-hand ladder');
-    await page.waitForSelector('#pcal-ladder tbody tr[data-steps="400"]', { timeout: 20000 }).catch(() => null);
+    // the row is there from the start ("not yet"): wait for the page to draw the ended job's (final gate: the table was
+    // read a frame before that and still said "not yet" for a ladder that had passed)
+    await page.waitForFunction(() => { const tr = document.querySelector('#pcal-ladder tbody tr[data-steps="400"]');
+      return !!tr && !/not yet|…$/.test(tr.textContent.trim()); }, null, { timeout: 20000 }).catch(() => null);
     const lad = await page.evaluate(() => Array.from(document.querySelectorAll('#pcal-ladder tbody tr[data-steps]')).map((tr) => tr.textContent));
     // rc1 review: the job itself ended done, and the quarter turn's row has dots and a verdict (a refused or stopped
     // ladder lists its planned dose too, with no dots and "not yet")
