@@ -69,15 +69,17 @@
   const tipNameOf = (pc) => (pc && pc.tip && pc.tip.name) || (S.status && S.status.dispense && S.status.dispense.tip && S.status.dispense.tip.name) || 'mounted tip';
   /** The check's tip measured nothing yet (§22.2: no suggestions without its dot sizes and paste per turn). */
   const unmeasured = (pc) => !!(pc && pc.tip && pc.tip.dots === 'none') || !!(!pc && S.status && S.status.dispense && S.status.dispense.tip && S.status.dispense.tip.dots === 'none');
+  /** Other tips that have every pad type of this board at or above the gate (profileCheck.otherTips, covers == of). */
+  const otherTipsAll = (pc) => ((pc && pc.otherTips) || []).filter((x) => x.covers === x.of && x.of > 0);
   /**
-   * Other tips that have every pad type of this board at or above the gate (profileCheck.otherTips, covers == of), named
-   * only when a change of tip is the answer: pads without a pad type need a profile whichever tip is on (otherTips
-   * counts the typed pads only), so "Change tip…" would not make the board dispensable.
+   * "The 22G bent taper has all 5 pad types of this board" (one: "has this board’s pad type"). otherTips counts the
+   * pads that have a pad type only: the packages without one are named, as no change of tip gives them a profile.
    */
-  const otherTipsAll = (pc) => (((pc && pc.groups) || []).some((g) => g.reason === 'no-type' || g.reason === 'no-pad-size') ? []
-    : ((pc && pc.otherTips) || []).filter((x) => x.covers === x.of && x.of > 0));
-  /** "The 22G bent taper has all 5 pad types of this board" (one: "has this board’s pad type"). */
-  const otherTipsWords = (ot) => ot.map((x) => 'The ' + x.name + (x.of === 1 ? ' has this board’s pad type' : ' has all ' + x.of + ' pad types of this board')).join('; ');
+  function otherTipsWords(ot, pc) {
+    const none = new Set((((pc && pc.groups) || []).filter((g) => g.reason === 'no-type' || g.reason === 'no-pad-size')).flatMap((g) => g.packageIds || [g.group]));
+    return ot.map((x) => 'The ' + x.name + (x.of === 1 ? ' has this board’s pad type' : ' has all ' + x.of + ' pad types of this board')).join('; ')
+      + (none.size ? '; ' + IL.plural(none.size, 'package') + (none.size === 1 ? ' has' : ' have') + ' no pad type yet' : '');
+  }
   /** The suggestion in a few words: "Use Chip 0603", "New: 2 quarter turns per pad, ≈ 1.06 mg". */
   function suggShort(g) {
     const s = g.suggestion;
@@ -227,7 +229,7 @@
     const tipName = (pc.tip && pc.tip.name) || 'tip';
     // another tip has all of this board's pad types (§22.7): said in the item, with Change tip…
     const ot = otherTipsAll(pc);
-    const otText = ot.length ? ' ' + otherTipsWords(ot) + '.' : '';
+    const otText = ot.length ? ' ' + otherTipsWords(ot, pc) + '.' : '';
     const otFix = ot.length ? [{ fix: 'tip-change', label: 'Change tip…' }] : [];
     if (fix.length) {
       const fixes = [];
@@ -443,8 +445,9 @@
     // another tip has every pad type of this board at the gate (profileCheck.otherTips)
     const ot = otherTipsAll(pc);
     IL.show($('pt-needs-other'), ot.length > 0);
-    IL.keyed($('pt-needs-other'), JSON.stringify(ot.map((x) => [x.key, x.of])), () => (ot.length ? [IL.glyph('info', 'xs'),
-      el('span', { text: otherTipsWords(ot) + '.' }),
+    const otWords = ot.length ? otherTipsWords(ot, pc) + '.' : '';
+    IL.keyed($('pt-needs-other'), otWords, () => (ot.length ? [IL.glyph('info', 'xs'),
+      el('span', { text: otWords }),
       IL.fixButton({ fix: 'tip-change', label: 'Change tip…' }, { cls: 'btn--sm btn--quiet' })] : null));
     const st = $('pt-needs-state');
     const kind = sp.fix.length ? 'need' : sp.tip.length ? 'block' : 'ok';

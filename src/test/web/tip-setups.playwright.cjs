@@ -400,18 +400,19 @@ const ticks = (page) => page.evaluate(() => { IL.attest.set('regulator', IL.S.st
     await page.waitForFunction(() => /for the 25G straight/.test(document.getElementById('pt-needs-for').textContent), null, { timeout: 15000 });
     const c4 = await page.evaluate(() => {
       const pc = IL.S.plan.profileCheck || {};
-      // named only when changing tip is the answer: no pads without a pad type (they need a profile whichever tip is on)
-      const untyped = (pc.groups || []).some((g) => g.reason === 'no-type' || g.reason === 'no-pad-size');
-      const all = untyped ? [] : (pc.otherTips || []).filter((x) => x.covers === x.of && x.of > 0);
+      const all = (pc.otherTips || []).filter((x) => x.covers === x.of && x.of > 0);
+      // otherTips counts the typed pads only: the note names the packages without a pad type (no tip change gives them one)
+      const untyped = new Set((pc.groups || []).filter((g) => g.reason === 'no-type' || g.reason === 'no-pad-size').flatMap((g) => g.packageIds || [g.group])).size;
       return { for: document.getElementById('pt-needs-for').textContent, measure: !document.getElementById('pt-needs-measure').hidden,
         measureText: document.getElementById('pt-needs-measure').textContent, other: !document.getElementById('pt-needs-other').hidden,
-        otherText: document.getElementById('pt-needs-other').textContent, otherTips: all.map((x) => x.name), dots: pc.tip && pc.tip.dots };
+        otherText: document.getElementById('pt-needs-other').textContent, otherTips: all.map((x) => x.name), untyped, dots: pc.tip && pc.tip.dots };
     });
     check('(4) #pt-needs-for: "for the 25G straight"', c4.for === ' for the 25G straight', c4.for);
     // (a 25G of an earlier run is measured already: then nothing asks for its dots)
     check('(4) #pt-needs-measure: measure the 25G\'s dots first', c4.measure === (c4.dots === 'none') && (!c4.measure || /Measure the 25G straight['’]s dots first/.test(c4.measureText)) && (!!old25 || c4.dots === 'none'), c4);
-    check('(4) the other-tip note follows profileCheck.otherTips (the 22G bent taper when it has every pad type of the board)',
-      c4.other === c4.otherTips.length > 0 && (!c4.other || /The 22G bent taper has/.test(c4.otherText)), c4);
+    check('(4) the other-tip note follows profileCheck.otherTips (the 22G bent taper when it has every pad type of the board), with the packages that have no pad type',
+      c4.other === c4.otherTips.length > 0 && (!c4.other || (/The 22G bent taper has/.test(c4.otherText)
+        && (c4.untyped ? new RegExp(c4.untyped + ' packages? ha(s|ve) no pad type yet').test(c4.otherText) : !/no pad type yet/.test(c4.otherText)))), c4);
     await shoot(page, 'needs-for-25g', () => toTop(page, '#pt-needs'));
 
     // ---- (5) its needle frame, the ticks, where it lands --------------------------------------------------------------
