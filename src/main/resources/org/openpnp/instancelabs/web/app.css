@@ -731,6 +731,8 @@ label.tick.on, label.tick:has(input:checked) { border-color: var(--accent); back
      the strip (the page bands while the main column is in view: they live in it) */
   .stop-band { position: sticky; top: var(--strip-h); }
   .msg-area { top: calc(var(--strip-h) + var(--stop-band-h, 0px)); }
+  /* a deep link's card scrolls to just under them, not behind the strip (#setup/places at 1024 px hid its title) */
+  html { scroll-padding-top: calc(var(--strip-h) + var(--stop-band-h, 0px) + 12px); }
   .nav { grid-row: 3 / 5; }
   .main { overflow: visible; }
   .panel { grid-row: 4; grid-column: 2; border-left: 0; border-top: 1px solid var(--line); }

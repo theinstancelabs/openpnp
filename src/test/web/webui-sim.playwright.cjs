@@ -1486,6 +1486,23 @@ async function runFirstDots(page, n) {
           ws.invalid && ws.save === 'Retake Z' && ws.locked && /^Z moved 0\.\d\d mm at the home of \d\d:\d\d: take this Z again with N1 touching/.test(ws.why) && /^Z moved · retake waste/.test(ws.state), ws);
         check('Z moved 3: Setup\'s bring-up step Places is blocked and names the places to retake (not ok while the engine refuses them)',
           !!ws.bu && ws.bu.state === 'block' && ws.bu.title === 'Places: Z moved at this home: take the Z of ' + mp.join(', ') + ' again with N1 touching.', ws.bu);
+        // at 1024 px the page scrolls under the sticky strip: a deep link puts its card's title under the strip, not behind it
+        await page.setViewportSize({ width: 1024, height: 768 });
+        await page.evaluate(() => IL.go('#run/checks'));
+        await page.waitForTimeout(400);
+        await page.evaluate(() => IL.go('#setup/places'));
+        await page.waitForTimeout(1500);
+        const deep = await page.evaluate(() => {
+          const strip = document.querySelector('.strip').getBoundingClientRect(), band = document.querySelector('.stop-band');
+          const under = Math.max(strip.bottom, band && !band.hidden ? band.getBoundingClientRect().bottom : 0);
+          const title = document.querySelector('#card-places .card__title, #card-places h2, #card-places h3').getBoundingClientRect();
+          return { titleTop: Math.round(title.top), under: Math.round(under), scrollY: Math.round(scrollY) };
+        });
+        await page.screenshot({ path: path.join(OUT, 'z-moved-3-places-1024.png') });
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        check('Z moved 3: at 1024 px #setup/places scrolls the card\'s title to under the strip, not behind it', deep.scrollY > 0 && deep.titleTop >= deep.under, deep);
+        await page.evaluate(() => IL.go('#setup/places/waste'));
+        await page.waitForSelector('tr[data-place="waste"] input[data-axis=z]', { state: 'visible', timeout: 15000 });
         // the operator takes each place's Z again with N1: 0.8 mm higher, as every surface of the scene
         for (const n of mp) {
           const row = page.locator('tr[data-place="' + n + '"]');
