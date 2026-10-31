@@ -1377,6 +1377,7 @@ final class PadCalibrationJob {
      */
     private <T> T engine(Submit<T> submit, java.util.function.Function<T, RunResult> run,
             java.util.function.Predicate<T> ok, java.util.function.Function<T, String> message) throws Exception {
+        waitMachineIdle();
         Future<T> f;
         synchronized (lock) {
             if (!stopRequested && engine.stopEpoch() != startEpoch) {
@@ -1400,9 +1401,14 @@ final class PadCalibrationJob {
         }
         catch (TimeoutException e) {
             // a step the job gives up on must not lay its dots later (still queued) or go on alone: stopped as by STOP
+            // (which also ends it when OpenPnP dropped it: DispenseService.releaseDroppedTask)
             engine.abort("the pad calibration gave up waiting for its " + stepWords() + " step");
             throw new IllegalStateException("the " + stepWords() + " step did not end within " + stepWaitMs / 60000
                     + " min: the engine was stopped", e);
+        }
+        catch (java.util.concurrent.CancellationException e) {
+            throw new IllegalStateException("OpenPnP dropped the " + stepWords() + " step before it started (a task of "
+                    + "its own ahead of it failed): nothing was sent", e);
         }
         RunResult r = run.apply(res);
         if (r != null) {
@@ -1676,6 +1682,25 @@ final class PadCalibrationJob {
         if (s != null) {
             s.state = "skipped";
             s.text = text;
+        }
+    }
+
+    /** At most this long a step waits for OpenPnP's machine thread to be idle (its own Home or jog). */
+    static final long MACHINE_IDLE_WAIT_MS = 10_000;
+
+    /**
+     * Before each engine step (rc1 review: only the start checked): OpenPnP homing or jogging by itself. A step queued
+     * behind one of its tasks that fails would be dropped, so the step waits for the machine thread to be idle, and
+     * the job stops when it stays busy.
+     */
+    private void waitMachineIdle() throws Exception {
+        long until = System.currentTimeMillis() + MACHINE_IDLE_WAIT_MS;
+        while (ctx.machine().isBusy()) {
+            if (System.currentTimeMillis() > until) {
+                throw new IllegalStateException("OpenPnP is busy (homing or moving): the " + stepWords() + " step was "
+                        + "not started; do not use OpenPnP's own Home or jog while a calibration runs");
+            }
+            Thread.sleep(200);
         }
     }
 
@@ -2324,9 +2349,8 @@ final class PadCalibrationJob {
                     + "%s mg per pad (target %s mg). Job %s.", new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.ROOT)
                             .format(new Date()), couponCountWords(), dots, Texts.mg(d.massPerPadMg),
                     Texts.mg(d.targetMg), id);
-            g.text = String.format(Locale.ROOT, "%s gets %s per pad, about %s mg per pad (%s %% %s than the %s mg "
-                    + "target)", g.label, dots, Texts.mg(d.massPerPadMg), Texts.pct(d.errorPct / 100.0),
-                    d.errorPct < 0 ? "less" : "more", Texts.mg(d.targetMg));
+            g.text = String.format(Locale.ROOT, "%s gets %s per pad, about %s mg per pad (%s)", g.label, dots,
+                    Texts.mg(d.massPerPadMg), Texts.vsTarget(d.errorPct / 100.0, d.targetMg));
             if (d.replacedText != null) {
                 g.text += "; " + d.replacedText;
             }
@@ -2784,8 +2808,8 @@ final class PadCalibrationJob {
                 per.add(x.xy.size() + " " + DoseModel.turnName(x.netSteps));
             }
             double left = area.leftMm() - layout.reservedMm;
-            s.add(String.format(Locale.ROOT, "Lays %d test dots on the blank (%s) in X %.1f–%.1f, Y %.1f–%.1f (%.1f of "
-                    + "%.1f mm left after this) and looks at them with the top camera (≈ %s).", dots, String.join(", ",
+            s.add(String.format(Locale.ROOT, "Lays %d test dots on the blank (%s) in X %.1f–%.1f mm, Y %.1f–%.1f mm (%.1f "
+                    + "of %.1f mm left after this) and looks at them with the top camera (≈ %s).", dots, String.join(", ",
                             per), layout.x0, layout.x1, layout.y0, layout.y1, Math.max(0, left), area.heightMm(),
                     minSec(l.estimateS)));
         }
@@ -3211,7 +3235,8 @@ final class PadCalibrationJob {
         if (e == null || !e.opticalFresh) {
             return "Measured " + clock + ": no " + DoseModel.turnNoun(s) + " dots were measured.";
         }
-        return "Measured " + clock + ": " + e.n + " " + DoseModel.turnName(s) + " dots on the blank: "
+        // the fresh camera checks of the dose: the blank's test dots and the coupons' weigh dots (rc1 review)
+        return "Measured " + clock + ": " + e.n + " " + DoseModel.turnName(s) + " dots checked by the camera: "
                 + (e.opticalPass ? "every camera check passed." : e.failures.get(0) + ".");
     }
 

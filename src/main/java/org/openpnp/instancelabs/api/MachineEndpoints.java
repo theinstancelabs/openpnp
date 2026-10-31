@@ -191,6 +191,8 @@ final class MachineEndpoints {
             ctx.requireEngineIdle(svc);
         }
         ctx.requireNoPressureHold();
+        // OpenPnP homing or jogging by itself: a home queued behind a task of its own that fails is dropped (rc1 review)
+        ctx.requireMachineIdle();
         boolean wait = Json.bool(r.json(), "wait", false);
         // With the engine: N1 raised first when a STOP left it low, and a STOP during the home stops the
         // head for good (the drivers are disconnected), as the engine's own homes (§2.3).
@@ -230,6 +232,11 @@ final class MachineEndpoints {
         }
         catch (ExecutionException e) {
             throw ApiException.refused("homing failed: " + rootMessage(e));
+        }
+        catch (TimeoutException e) {
+            // OpenPnP dropped the home (a task of its own ahead of it failed), or it never ended: nothing homed
+            throw ApiException.refused("the home did not start or did not end within 5 min: nothing homed; press Home "
+                    + "again");
         }
         if (rep == held) {
             throw ApiException.refused("the pressure hold came on before the home started: switch the pressure off "
@@ -271,6 +278,8 @@ final class MachineEndpoints {
             double[] n1 = svc.probeNozzleZ();
             home.put("n1Z", n1 == null ? null : n1[0]);
             home.put("n1Low", n1 != null && n1[1] > 0);
+            // which tool is low: N1 under its safe zone, or N1 above it, which on the shared Z puts the needle low
+            home.put("lowTool", n1 == null || n1[1] <= 0 ? null : n1[2] > 0 ? "needle" : "N1");
             s.put("home", home);
             DispenseService.ZCheckPlan zc = svc.zCheckPlan(null, false);
             // a board run's check after the home it does first (every height predates it): what Run announces
@@ -279,10 +288,19 @@ final class MachineEndpoints {
             for (org.openpnp.instancelabs.dispense.ZCheck.Stale x : zc.stale) {
                 stale.add(Views.map("what", x.what, "atMs", x.atMs));
             }
+            // after a failed check of this home: the places set before it (their Z moved too), the derived test dot aside
+            List<Map<String, Object>> places = new ArrayList<>();
+            DispenseConfig cfg = svc.getConfig();
+            for (String name : org.openpnp.instancelabs.dispense.ZCheck.movedPlaces(cfg, zc.last, zc.homeAtMs)) {
+                if (!DispenseEndpoints.TEST_DOT_LOCATION.equals(name)) {
+                    places.add(Views.map("name", name, "atMs", cfg.location(name).setAtMs));
+                }
+            }
             s.put("zCheck", Views.map("needed", zc.needed, "stale", stale, "homeAtMs", zc.homeAtMs, "reference",
                     zc.reference == null ? null : Views.map("name", zc.reference.name, "x", zc.reference.x, "y",
                             zc.reference.y, "z", zc.reference.z), "last", zc.last, "estimateS",
-                    DispenseService.PROBE_POINT_ESTIMATE_S, "touches", zc.touches, "touchesAfterHome", za.touches));
+                    DispenseService.PROBE_POINT_ESTIMATE_S, "touches", zc.touches, "touchesAfterHome", za.touches,
+                    "places", places));
         }
         List<Map<String, Object>> drivers = new ArrayList<>();
         for (Driver d : m.getDrivers()) {

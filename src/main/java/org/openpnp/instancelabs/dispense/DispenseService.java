@@ -122,6 +122,11 @@ public final class DispenseService {
     private volatile String unavailableReason;
     private final AtomicBoolean bZeroed = new AtomicBoolean(false);
     private final AtomicBoolean busy = new AtomicBoolean(false);
+    /**
+     * The engine task queued last: its run, its Future, when it was queued, and whether its body began (taken by the
+     * machine thread, or ended by {@link #releaseDroppedTask}: whichever comes first).
+     */
+    private volatile Queued queued;
     private volatile DispenseExecutor activeExecutor;
     private volatile RunResult activeRun;
     private volatile RunResult lastRun;
@@ -684,8 +689,20 @@ public final class DispenseService {
     }
 
     public synchronized void setLocation(String name, double x, double y, double z) throws IOException {
+        setLocation(name, x, y, z, null);
+    }
+
+    /**
+     * As above; a place derived from another ({@code from}: the test-dot spot follows the waste) keeps the time and the
+     * Z frame of the place it follows, else it is stamped now (I4: its Z was taken under this home).
+     */
+    public synchronized void setLocation(String name, double x, double y, double z, DispenseConfig.NamedLocation from)
+            throws IOException {
         DispenseConfig c = cfg.copy();
-        c.locations.put(name, new DispenseConfig.NamedLocation(x, y, z));
+        DispenseConfig.NamedLocation l = new DispenseConfig.NamedLocation(x, y, z);
+        l.setAtMs = from != null ? from.setAtMs : Long.valueOf(System.currentTimeMillis());
+        l.homeAtMs = from != null ? from.homeAtMs : Long.valueOf(homeTracker.frameHomeAtMs());
+        c.locations.put(name, l);
         updateConfig(c);
     }
 
@@ -1404,6 +1421,28 @@ public final class DispenseService {
         return (rawSumMm - n1ContactZ - r0) * 10 / (r1 - r0);
     }
 
+    /**
+     * Why the needle frame cannot be recorded from K now, or null. K is a sum of raw Z heights (N1's contact and
+     * the needle's), so it holds for the home and the needle it was measured with only: a home that moved the Z
+     * zero moves K by about twice the shift, and a frame "from K" then gives the old offset (63 - K) whatever N1
+     * just touched (review: the needle 2 x 0.8 mm into the board after the Z-moved remedy). So while the Z check of
+     * this home failed, and after a needle change, the frame is measured with both tips touching the same spot.
+     */
+    public String needleFrameFromKRefusal() {
+        DispenseConfig c = cfg;
+        ZCheck.Result z = homeTracker.getZCheck();
+        if (ZCheck.failed(z, homeTracker.getLastHomeAtMs())) {
+            return String.format(Locale.ROOT, "K was measured under another home: Z moved %.2f mm at the home of %s, "
+                    + "and K moves by about twice that. Record the needle frame with both tips touching the same spot",
+                    z.deltaMm, ZCheck.clock(z.homeAtMs));
+        }
+        if (c.needleAnchor != null && !c.isNeedleAnchored()) {
+            return "K was measured with the needle before the change at " + ZCheck.clock(c.needleChangedAtMs)
+                    + ": record the needle frame with both tips touching the same spot";
+        }
+        return null;
+    }
+
     /** Stores a probed surface (validated: at least 3 points spanning an area). */
     public synchronized SurfacePlane setSurface(String name, List<DispenseConfig.SurfacePoint> points, String note)
             throws IOException {
@@ -1586,7 +1625,8 @@ public final class DispenseService {
 
     /**
      * Thread-safe: stops the active stream before its next line; pneumatics are switched off (I1).
-     * Every task queued before it refuses at its start ({@link #stopEpoch}).
+     * Every task queued before it refuses at its start ({@link #stopEpoch}). A task OpenPnP dropped
+     * ends here ({@link #releaseDroppedTask}).
      */
     public void abort(String reason) {
         stopEpoch.incrementAndGet();
@@ -1595,6 +1635,46 @@ public final class DispenseService {
         if (e != null) {
             e.requestAbort(reason);
         }
+        releaseDroppedTask();
+    }
+
+    /** An engine task as queued on OpenPnP's machine thread. */
+    private static final class Queued {
+        final RunResult run;
+        final long atMs = System.currentTimeMillis();
+        final AtomicBoolean began = new AtomicBoolean(false);
+        volatile Future<?> future;
+
+        Queued(RunResult run) {
+            this.run = run;
+        }
+    }
+
+    /** How long a queued task may wait for an idle machine thread before it counts as dropped. */
+    static final long DROPPED_AFTER_MS = 1000;
+
+    /**
+     * Ends an engine task OpenPnP dropped, and returns whether it did (rc1 review). OpenPnP removes every task queued
+     * behind one of its own that throws (its Home or jog meeting a limit), without running or cancelling it, so the
+     * task's finish() never ran and every engine endpoint then answered "a dispense task is already running … press
+     * STOP" until OpenPnP restarted, STOP included. A task still not begun while the machine thread has been idle past
+     * {@link #DROPPED_AFTER_MS} will never run: it ends ERROR here, and if it ran after all it would end at once.
+     * Called by STOP, and by the API before it refuses a request as busy.
+     */
+    public boolean releaseDroppedTask() {
+        Queued q = queued;
+        Machine m = configuration.getMachine();
+        if (q == null || !busy.get() || q.future == null || q.future.isDone() || m == null || m.isBusy()
+                || System.currentTimeMillis() - q.atMs < DROPPED_AFTER_MS || !q.began.compareAndSet(false, true)) {
+            return false;
+        }
+        q.run.status = RunResult.Status.ERROR;
+        q.run.message = "OpenPnP dropped this task before it started (a task of its own ahead of it failed): nothing "
+                + "was sent; start it again";
+        Logger.warn("dispense {}: dropped by OpenPnP before it started", q.run.kind);
+        finish(q.run);
+        q.future.cancel(false); // a caller waiting for it (the pad calibration) learns at once
+        return true;
     }
 
     // ------------------------------------------------------------------------------------------
@@ -2140,6 +2220,7 @@ public final class DispenseService {
         if (referenceSurface) {
             sc.referencePlaces.add(place);
         }
+        sc.dispensePlaces.add(place);
         return sc;
     }
 
@@ -2151,6 +2232,7 @@ public final class DispenseService {
         sc.referencePlaces.add(blankName);
         if (primeAtWaste) {
             sc.referencePlaces.add(c.wasteLocationName);
+            sc.dispensePlaces.add(c.wasteLocationName);
         }
         sc.surfaceName = blankName;
         if (specs != null) {
@@ -2638,6 +2720,10 @@ public final class DispenseService {
         RunResult r = newRun("shots", null, locationName, getCurrentCalibration().id, count);
         return submit(r, () -> {
             DispenseConfig c = cfg;
+            String reserved = couponReservation(locationName); // §7.5: a coupon waiting for its readings takes no dots
+            if (reserved != null) {
+                throw refused(reserved);
+            }
             Session s = new Session(c, r);
             Interlocks.Scope scope = shotsScope(locationName, referenceSurface);
             if (!s.preflight(scope, 0)) {
@@ -2819,8 +2905,10 @@ public final class DispenseService {
     }
 
     /**
-     * N1's raw Z as OpenPnP knows it, and whether it lies outside z1's safe zone (a STOP during a probe
-     * left it low: the next home raises it first): {z, low}, or null without N1.
+     * N1's raw Z as OpenPnP knows it, whether it lies outside z1's safe zone (a STOP during a probe or a
+     * board's dots left a tool low: the next home moves Z to the safe height first), and whether above it:
+     * {z, outside, above}, or null without N1. On the shared Z axis N1 above its zone puts the needle low
+     * (a STOP during board dots: N1 at 60.06, the needle at 2.94 over the pad).
      */
     public double[] probeNozzleZ() {
         Nozzle n = getProbeNozzle();
@@ -2831,7 +2919,9 @@ public final class DispenseService {
         try {
             OpenPnpRawMapper n1 = OpenPnpRawMapper.forProbeNozzle((ReferenceMachine) m, n, cfg.bAxisName);
             double z = n1.currentPlanned()[2];
-            return new double[] {z, outsideSafeZone(n1.zSafeZoneRaw(), z) ? 1 : 0};
+            double[] zone = n1.zSafeZoneRaw();
+            boolean above = zone != null && !Double.isNaN(zone[1]) && z > zone[1] + 1e-6;
+            return new double[] {z, outsideSafeZone(zone, z) ? 1 : 0, above ? 1 : 0};
         }
         catch (Exception e) {
             return null;
@@ -3940,6 +4030,11 @@ public final class DispenseService {
             throw refused(r.interlocks.toString());
         }
         if (req.coupon != null) {
+            // a coupon is probed in a narrow window around its place Z: from a Z that moved N1 would start inside it
+            String moved = placeMovedRefusal(req.surfaceName, c.location(req.surfaceName));
+            if (moved != null) {
+                throw refused(moved);
+            }
             t.stage = "look";
             couponLook(req, t);
         }
@@ -4262,6 +4357,9 @@ public final class DispenseService {
                     throw refused("PCAL: the weigh coupon place '" + b.couponPlace + "' is not set (Setup › Places)");
                 }
                 String why = couponPlane(c, b, place, plane, isSimulatorConfirmed());
+                if (why == null) {
+                    why = placeMovedRefusal(b.couponPlace, place);
+                }
                 if (why != null) {
                     throw refused(why);
                 }
@@ -4528,6 +4626,17 @@ public final class DispenseService {
                     + "its place Z %.3f: probe it again", b.surfaceName, plane.minZ, plane.maxZ, window, place.z);
         }
         return null;
+    }
+
+    /**
+     * I4 refusal (code included) of a place set before this home while the Z check of this home failed (rc1 review: a
+     * coupon's Z moved with the surfaces), or null.
+     */
+    private String placeMovedRefusal(String name, DispenseConfig.NamedLocation place) {
+        ZCheck.Result z = homeTracker.getZCheck();
+        Long home = homeTracker.getLastHomeAtMs();
+        return ZCheck.failed(z, home) && ZCheck.placeBefore(place, home) ? "I4: " + ZCheck.placeMovedMessage(name, place,
+                z) : null;
     }
 
     /** "1 frame", "4 frames": the camera frames of a pad calibration step, as its phase text says them. */
@@ -5381,8 +5490,13 @@ public final class DispenseService {
         }
         tasksStarted.incrementAndGet();
         long epoch = stopEpoch.get();
+        Queued q = new Queued(r);
+        queued = q;
         try {
-            return configuration.getMachine().submit(() -> {
+            Future<RunResult> f = configuration.getMachine().submit(() -> {
+                if (!q.began.compareAndSet(false, true)) {
+                    return r; // ended as dropped meanwhile (releaseDroppedTask)
+                }
                 try {
                     refuseIfStoppedSince(epoch);
                     refuseUnlessStarted();
@@ -5398,6 +5512,8 @@ public final class DispenseService {
                     finish(r);
                 }
             }, null, true);
+            q.future = f;
+            return f;
         }
         catch (Exception e) {
             busy.set(false);
@@ -5424,8 +5540,13 @@ public final class DispenseService {
         }
         tasksStarted.incrementAndGet();
         long epoch = stopEpoch.get();
+        Queued q = new Queued(r);
+        queued = q;
         try {
-            return configuration.getMachine().submit(() -> {
+            Future<T> f = configuration.getMachine().submit(() -> {
+                if (!q.began.compareAndSet(false, true)) {
+                    return result; // ended as dropped meanwhile (releaseDroppedTask)
+                }
                 try {
                     refuseIfStoppedSince(epoch);
                     refuseUnlessStarted();
@@ -5449,6 +5570,8 @@ public final class DispenseService {
                 }
                 return result;
             }, null, true);
+            q.future = f;
+            return f;
         }
         catch (Exception e) {
             busy.set(false);

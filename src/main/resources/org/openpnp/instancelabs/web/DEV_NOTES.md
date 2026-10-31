@@ -21,8 +21,8 @@ something new from core, ask for it (or add it to your module and propose it for
 | `pathpreview.js` | board import (web-render) | `IL.pathPreview`: the path preview row `#run-preview` (§5 › Board drawing). |
 | `padinspect.js` | board import (web-render) | `IL.padInspect`, panel view `pad`: the pad inspector (§5 › Board drawing). |
 | `board.css` | board import (web-render) | The board palette, `.pv--art` and the casing, picture modes, the preview row, the inspector. Loaded after `run.css`. |
-| `boardflow.js` | board import (web-flow, `il/bi-web-flow`) | `IL.boardFlow`: fills the hooks H1–H5 of `run.js` / `records.js` (§11; §5 › Board drawing). |
-| `boardimport.js` + `boardimport.css` | board import (web-flow, `il/bi-web-flow`) | `IL.boardImport`: the upload dialog `#dlg-board-import` and the page-wide drop guard (§5 › Board drawing). |
+| `boardflow.js` | board import (web-flow) | `IL.boardFlow`: fills the hooks H1–H5 of `run.js` / `records.js` (§11; §5 › Board drawing). |
+| `boardimport.js` + `boardimport.css` | board import (web-flow) | `IL.boardImport`: the upload dialog `#dlg-board-import` and the page-wide drop guard (§5 › Board drawing). |
 | `padprofile.js` + `padprofile.css` | profile calibration (pc-web) | `IL.padProfile`, the `pad-cal` view, Profile › Needs a profile and the suggestion card, the profile column of the upload, the pad inspector's profile notebox (§5 › Missing paste profiles; `PROFILE_CALIBRATION_DESIGN.md` §13). |
 | `run.js` + `run.css` | Run stage | `#ws-run`, Run panel steps (board, probe, checks, run, result, recovery override), run confirm `#dlg-run`. |
 | `setup.js` + `setup.css` | Setup stage | `#ws-setup` (cards §8.2), default panel `head`. `calibrate.js` may reuse `setup.css`. |
@@ -40,7 +40,7 @@ STOP): use `IL.press2`, `IL.dialog.open` / `IL.dialog.showNative`.
 
 ```
 <head>  core.js (sync)  → IL defined, theme applied, F9 / Space / Esc key handlers and the STOP clicks installed
-        boardart.js, boardview.js, pathpreview.js, padinspect.js, [boardflow.js, boardimport.js: web-flow],
+        boardart.js, boardview.js, pathpreview.js, padinspect.js, boardflow.js, boardimport.js, padprofile.js,
         run.js, setup.js, profile.js, calibrate.js, records.js (defer, in this order)
         app.js (defer)  → IL.boot()   (core boots by itself at DOMContentLoaded if app.js never ran)
 boot:   mount(root) of every registered workspace → route applied → show() of the active one
@@ -84,8 +84,11 @@ Registering after boot works (mounted at once).
 | `connectedAt`, `homedAt` | client-observed transition times |
 | `runPressureSince` | client stamp of the first poll of a run's pressure session (phase `dispensing` / `shots` / `dispensing calibration dots`) |
 
-Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, (Run: `['il.boardloc.<file>']`);
-`sessionStorage['il.recovery']`, (Run: `['il.run.regResult']`, Setup: `['il.setup.blankRun']`). A value left in
+Browser storage: `localStorage['il.theme']`, `['il.planId']`, `['il.attest']`, (Run: `['il.boardloc.<file>']`,
+`['il.run.source']`, `['il.run.sel']`, `['il.pv.picture']`); `sessionStorage['il.recovery']`, (Run:
+`['il.run.regResult']`, `['il.run.kinds']`, `['il.run.probe']`, `['il.run.decidedAt']`, Setup:
+`['il.setup.blankRun']`, the pad calibration's of §5 › Missing paste profiles). The board's paste and number are the server's (`plan.pasted`): no
+browser keeps them. A value left in
 `localStorage['il.newSeatAtMs']` by an older page is posted to the engine once, then removed.
 
 ## 4. Events (`IL.on(name, fn)` returns the unsubscribe function)
@@ -272,9 +275,8 @@ Constants: `IL.STOP_CODES`, `IL.STOP_TITLE`, `IL.STOP_LINE` (the exact §13 text
 
 ### Board drawing, path preview, pad inspector, upload (BOARD_IMPORT_DESIGN.md §5, 2026-10-29)
 
-The drawing, the preview and the inspector are merged on `il/bench-sync-autoreg`; the upload dialog and the glue
-(`boardflow.js`, `boardimport.js`) are on `il/bi-web-flow` and merge with §11 in the AR + BI integration slice. Nothing
-here moves the machine.
+The drawing, the preview, the inspector, the upload dialog and the glue (`boardflow.js`, `boardimport.js`) are merged
+with §11 (the AR + BI integration slice, on `il/rc1`). Nothing here moves the machine.
 
 - **`IL.boardview`** (`boardview.js` header has the full API): `create(host, {id, aria, onPad, onPart, lite})` makes
   two stacked SVGs in `.pv-host`: `svg.pv.pv-art` (the drawing, `aria-hidden`, no pointer events) under
@@ -309,7 +311,7 @@ here moves the machine.
   the page; a `.kicad_pcb` opens the dialog.
 - Tests: `boardview.playwright.cjs` (`run-boardview-test.sh`: a SIM session plans its upload of ftp.kicad_pcb, devproxy
   `--fixtures` adds mobo and a dot size; the drawing, the overlay, the preview, the inspector, the performance gate at 4×
-  CPU throttling, through boardflow's own glue), `board-import.playwright.cjs` (web-flow, 44
+  CPU throttling, through boardflow's own glue), `board-import.playwright.cjs` (web-flow, 57
   checks, run after `webui-sim.playwright.cjs` in the same SIM session).
 
 ### Missing paste profiles and the pad calibration (PROFILE_CALIBRATION_DESIGN.md §13, as built 2026-10-29)
@@ -359,7 +361,7 @@ modules (H-P9 in `index.html`). Every hook in another module's file is a no-op w
   or the calibration); every start is a two-press button with its time (`Calibrate · ≈ 5:45`); the readings are
   typed in grams and echoed in mg (`= 78 mg of paste`); STOP stays visible in every state (`STOP stops it at once
   (F9).`).
-- Tests: `PadProfileUiSimTest` (the files are served and loaded), `pad-profile.playwright.cjs` (54 checks, third in
+- Tests: `PadProfileUiSimTest` (the files are served and loaded), `pad-profile.playwright.cjs` (71 checks, third in
   `run-webui-sim-test.sh`'s SIM session; `SIM_SCENE` lets it add the SIM paste, coupons and balance), fixtures for
   devproxy in `src/test/web/fixtures/padprofile/` (`devproxy.py --route-fixtures`), and the SIM acceptance
   `il_sim_acceptance.py padcal` (API level, `WEB_API.md` §6). A seeded SIM session: `il_ui_session.py start --padcal`.
@@ -420,7 +422,7 @@ follows the theme); overlay marks on the board `--pv-o-ap --pv-o-dot --pv-o-next
 overlay; the overlay gets `.pv--art` whenever the drawing shows.
 
 Breakpoint ≤ 1360 px: nav rail 84 px, panel 388 px, STOP 216 px. The strip drops `.long` value parts by itself
-when it would run under STOP (`.cells--t1` / `--t2`).
+when it would run under STOP, the other cells' before the verdict's (`.cells--t1` / `--t2` / `--t2v`).
 
 Icon sprite ids: `i-run i-setup i-profile i-cal i-records i-gauge i-chev i-plus i-minus i-camera i-refresh i-swap
 i-play i-capture i-mark i-lock i-plug i-home i-wipe i-hand i-paste i-back i-needle i-close i-sun i-moon i-shield
@@ -461,9 +463,14 @@ Never `/dev/ttyACM*`, `/dev/serial/*`, `/dev/video*` or a real-mode OpenPnP.
   waits for new points) and counts in a second tab at once, a board planned 15 mm away does the same; the run of the
   140 pads left is stopped and Records › Finish offers only its own pads (none of the test run's 20); a run confirm
   in a tab that saw no status during a test dot closes; at 1024 px the offline band sits below STOP NOT CONFIRMED.
-- Board identity: a plan made again for the same seat (no "Next board" since) is the same board (`IL.run.alias`), its
-  dispensed dots carry over (`carryBoard`); a part-done board shows the board decision (`partialDecision`). Kept per tab
-  (sessionStorage), like the done-dot map.
+- Board identity: a plan made again for the same seat (no "Next board" since) is the same board, its dispensed dots
+  carry over; a part-done board shows the board decision (`partialDecision`). As built (rc1 review), the server keeps
+  it, so every tab and browser sees the same board: `plan.pasted` (`{board, nextBoard, sinceMs, dots, pads: {padId:
+  dots laid}}` of the plan's seat) and `status.run.boardNumber`; `trackDone` takes each pad's dots laid in path order,
+  with the live dots of this board's run (`runOfThisBoard`); `boardNumber()` is the seat's board, else the next one;
+  `Next board` posts `/api/board/next`; a change elsewhere (`status.dispense.pasteVersion`) reads the plan again. A
+  run that lays pads with paste needs `I wiped this board` (`#run-tick-wiped`) and posts `{wiped: true}`. The old
+  per-tab keys `il.run.done`, `il.run.alias` and `il.run.boardStarts` are gone.
 - Optional API additions of §17 in place: `GET /api/plans` (plan restore in a fresh browser) and `run.pressureOnAtMs`
   (pressure on-time of a run, also after a reload). Not added (fallbacks in use): `run.checkDone/checkPlanned` (camera
   tour progress is estimated, labelled `≈`), `server.simulated` (inferred from the driver connection).

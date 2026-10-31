@@ -161,8 +161,18 @@ public class GcodeBlocksTest {
         DispenseConfig d = cfg();
         e = assertThrows(IllegalStateException.class, () -> GcodeStreamBuilder.forBlocks(d, GcodeStreamTest.mapper(),
                 threeBlocks(), DispenseService.purgeSpecs(d, 16), 4, false, false, (long) COUNT, null));
-        assertTrue(e.getMessage().startsWith("this program lays 3 dot sizes: it needs 17 purge spots (8 to start and 9 "
-                + "for the block switches), the purge row gives 16"), e.getMessage());
+        assertEquals("this program lays 3 dot sizes: it needs 17 purge spots (8 to start and 9 for the block switches), "
+                + "the purge row has 16 free: wipe the purge row and reset it", e.getMessage());
+        // rc1 review: a row too short for the program gives no spots at all; the text counts its free ones, not 0
+        d.purgeRow.usedSpots = 10;
+        e = assertThrows(IllegalStateException.class, () -> GcodeStreamBuilder.forBlocks(d, GcodeStreamTest.mapper(),
+                threeBlocks(), DispenseService.purgeSpecs(d, 17), 4, false, false, (long) COUNT, null));
+        assertTrue(e.getMessage().endsWith("the purge row has 14 free: wipe the purge row and reset it"), e.getMessage());
+        d.purgeRow.spots = 12;
+        d.purgeRow.usedSpots = 0;
+        e = assertThrows(IllegalStateException.class, () -> GcodeStreamBuilder.forBlocks(d, GcodeStreamTest.mapper(),
+                threeBlocks(), DispenseService.purgeSpecs(d, 17), 4, false, false, (long) COUNT, null));
+        assertTrue(e.getMessage().endsWith("the purge row has 12 free: give the row more spots"), e.getMessage());
     }
 
     /**

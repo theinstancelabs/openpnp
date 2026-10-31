@@ -389,6 +389,10 @@ public class PadCalibrationJobTest {
         assertEquals("REFUSED", str(probe, "status"), probe.toString());
         assertEquals("coupon1 carries 68 dots waiting to be weighed: type the readings or skip them (Calibrate › Pad "
                 + "calibration)", str(probe, "message"));
+        // rc1 review (PC §7.5): nothing dispenses there either: scale shots at the coupon are refused (its mass would grow)
+        assertEquals("coupon1 carries 68 dots waiting to be weighed: type the readings or skip them (Calibrate › Pad "
+                + "calibration)", refused(call("POST", "/api/calibrations/shots-run", "{\"locationName\":\"coupon1\","
+                        + "\"rotationDeg\":360,\"count\":1}"), "refused"));
         assertEquals("a pad calibration is waiting for the readings of its coupons: type them, skip them or cancel it "
                 + "first (Calibrate › Pad calibration)", refused(call("POST", "/api/pad-calibrations", body(group,
                         attest())), "refused"), "one job at a time");

@@ -488,7 +488,8 @@
       IL.go('#run');
     }, { ok: 'Plan restored on Run: finish the ' + padIds.length + ' pads from the board decision there.' });
   }
-  const mini = (k, v, s) => el('div', { class: 'mini' }, el('div', { class: 'mini__k', text: k }), el('div', { class: 'mini__v', text: v }), s ? el('div', { class: 'mini__s', text: s }) : null);
+  // the subline keeps a label with its number on one line ("bench 5,490")
+  const mini = (k, v, s) => el('div', { class: 'mini' }, el('div', { class: 'mini__k', text: k }), el('div', { class: 'mini__v', text: v }), s ? el('div', { class: 'mini__s', text: IL.nb(s) }) : null);
   function calDetail(p, s, id) {
     const d = pcr.calibrations && pcr.calibrations();
     const k = d && d.calibrations.find((x) => String(x.id) === String(id));

@@ -379,6 +379,20 @@ public class ReviewSafetySimTest {
             release.await();
             return null;
         });
+        long t1 = System.currentTimeMillis();
+        while (!sim.machine.isBusy()) {
+            assertTrue(System.currentTimeMillis() - t1 < 10000, "the blocker runs");
+            Thread.sleep(10);
+        }
+        // rc1 review: OpenPnP busy (here a task of its own): the web home is refused at once, as every engine endpoint
+        // (a home queued behind one of OpenPnP's tasks that fails would be dropped, the request hang for 5 min)
+        JsonObject busy = call("POST", "/api/machine/home", "{\"wait\":true}");
+        assertEquals(409, lastStatus, busy.toString());
+        assertEquals("OpenPnP is busy (homing or moving): wait for it to finish", busy.get("reason").getAsString());
+        // the race that check leaves: a home that passed it just before the blocker took the machine thread
+        java.lang.reflect.Field thread = org.openpnp.spi.base.AbstractMachine.class.getDeclaredField("taskThread");
+        thread.setAccessible(true);
+        thread.set(sim.machine, null);
         sim.server.mark();
         String[] homed = {""};
         int[] status = new int[1];

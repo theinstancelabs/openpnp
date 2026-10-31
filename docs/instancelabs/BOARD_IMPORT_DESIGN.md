@@ -2022,10 +2022,10 @@ the check is cited in the section named.
 ## 14. As built (2026-10-29)
 
 Merged on `il/bench-sync-autoreg` (b81d73d21): `kicad`, `art`, `plumbing`, `web-render` (with its visual pass on the
-real art) and `import-api`. Built, not merged yet: `web-flow` on `il/bi-web-flow` (`board-import.playwright.cjs`, 44
-checks against the real import-api in a SIM session); the AR + BI integration slice merges it with AR's web-ui and
-wires the art's keep-outs into `ProbeTargets` (§10.2: until then Register board assumes a mounting hole in each corner
-of a board without art, AR §17). The API as built is in `WEB_API.md` §3.3. Where the code differs from the sections
+real art) and `import-api`; then, on `il/rc1`, `web-flow` (`board-import.playwright.cjs`, 57 checks against the real
+import-api in a SIM session) with AR's web-ui (the AR + BI integration slice), which also passes the art's keep-outs
+(drills, vias) to `ProbeTargets` (§10.2; a board without art still gets the assumed mounting hole in each corner, AR
+§17). The API as built is in `WEB_API.md` §3.3. Where the code differs from the sections
 above, the code is right:
 
 - **§3.2 preview.** `POST /api/boards/import?file=…[&pasteDnp=1]`: `pasteDnp` is decision 1's checkbox ("Paste

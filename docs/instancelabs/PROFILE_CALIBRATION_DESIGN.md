@@ -1000,9 +1000,9 @@ estimates (`status.machine.home.estimateS`, `machine.zCheck.estimateS`, AR §7.5
 captures × 0.9 s, each coupon look and probe 1 + 3 × 17 s (AR §11 item 14). Example (groups J and Q of §14.3):
 
 `Homes first (≈ 25 s) and checks Z (≈ 20 s). Checks and touches your two weigh coupons (≈ 1:45). Lays 76 test dots on
-the blank (28 half-turn, 48 quarter-turn) in X 286.0–326.0, Y 250.0–261.0 (9.0 of 20.0 mm left after this) and looks
-at them with the top camera (≈ 1:10). Then lays 136 quarter-turn dots on coupon 1 and 68 half-turn dots on coupon 2
-(≈ 2:50) and parks the head over the purge row. Then it needs you once: weigh each coupon, wipe it and weigh it again
+the blank (28 half-turn, 48 quarter-turn) in X 286.0–326.0 mm, Y 250.0–261.0 mm (9.0 of 20.0 mm left after this) and
+looks at them with the top camera (≈ 1:10). Then lays 136 quarter-turn dots on coupon 1 and 68 half-turn dots on coupon
+2 (≈ 2:50) and parks the head over the purge row. Then it needs you once: weigh each coupon, wipe it and weigh it again
 (4 readings). About 0.22 g of paste, ≈ 6:30 before your readings.`
 
 Then `You need: two clean weigh coupons on coupon1 and coupon2 (blank PCB, 40 × 30 mm, at least 3 g), the balance, a
@@ -1847,7 +1847,9 @@ pc-ladder; pc-integration with the wave-3 integration.
   --padcal`, and the docs of §16 written from the code.
 - **Not in this PR: `pc-ladder`** (the test-board ladder, decision 8) is a follow-up; `validated` stays on the
   existing Validate guide until it comes. Decision 6's per-run skip has no API yet (`RunResult.skippedPads` exists):
-  runs skip undispensable pads only with `refuseFlaggedPads: false`.
+  runs skip undispensable pads only with `refuseFlaggedPads: false`, the switch Setup › Settings › Refuse flagged pads
+  (`#set-refuseflagged`, the link of `Dispense the rest`); with it off the Pad types item is a note that counts ready
+  (`9 pads skipped (Refuse flagged pads is off): …`) and the run confirm names the pads skipped (rc1 review).
 - **Seen in the SIM acceptance:** the Nano's LED_0805 stays `provisional` after Calibrate automatically (decision 3's
   one turn is +33 % on the machine, +47 % with the SIM's 2.30 mg per turn; half a turn −33 % / −27 %: no allowed dose
   is within −25 %/+10 %), so the Nano's 8 LED pads need a reflowed test board or a hand raise; a block switch from

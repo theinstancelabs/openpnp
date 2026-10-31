@@ -261,11 +261,11 @@
   };
   /**
    * Keeps a number with its unit and a short label with its number on one line ("2,343 ms", "pitch 1.65 mm",
-   * "bench 5,490", "1 to 64"): the spaces between them become no-break spaces. Display text only.
+   * "bench 5,490", "1 to 64", "0.072 g"): the spaces between them become no-break spaces. Display text only.
    */
   IL.nb = function (text) {
     return String(text)
-      .replace(/(\d) (?=(?:mm²|mm|ms|min|s|°|psi|rpm|DPH|mg|mm\/100|%|per|spots?|dots?|pads?|of|to)(?![\w²]))/g, '$1\u00a0')
+      .replace(/(\d) (?=(?:mm²|mm|ms|min|s|°|psi|rpm|DPH|mg|g|mm\/100|%|per|spots?|dots?|pads?|of|to)(?![\w²]))/g, '$1\u00a0')
       .replace(/\b(bench|estimate|gap|dwell|purge|pitch|slowest|fastest|median|ended|started|limit|worst|tilt|offset|frame) (?=[\d−+-])/g, '$1\u00a0')
       .replace(/([a-z])-([a-z])/g, '$1\u2011$2')
       .replace(/≈ (?=[\d−-])/g, '≈\u00a0');
@@ -711,10 +711,31 @@
     const m = ((status || S.status) || {}).machine || {};
     return !!(m.enabled && !m.homed && m.home && m.home.policy && m.home.n1Low);
   };
+  /**
+   * Which tool a STOP left low (status.machine.home.lowTool): N1 under its safe zone, or N1 above it, which on the shared
+   * Z axis puts the needle low (a STOP during board dots). {needle, name, z (the low tool's Z), pad (the pad of the plan
+   * shown under the needle, within 1 mm, or null), lift ('lifts it' | 'raises N1')}.
+   */
+  IL.lowTool = function (status) {
+    const s = status || S.status || {};
+    const hm = ((s.machine || {}).home) || {};
+    const needle = hm.lowTool === 'needle';
+    const n2 = needle ? IL.positions(s).n2 : null;
+    let pad = null, best = 1.0;
+    for (const d of (n2 && S.plan && S.plan.dots) || []) {
+      const dd = Math.hypot(d.x - n2.x, d.y - n2.y);
+      if (dd <= best) { best = dd; pad = d.padId; }
+    }
+    return { needle, name: needle ? 'The needle (N2)' : 'N1', z: needle ? (n2 ? n2.z : null) : hm.n1Z, pad, lift: needle ? 'lifts it' : 'raises N1' };
+  };
+  /** "The needle (N2) stopped low (Z 2.94 mm) at R3.1" or "N1 stopped low (Z 3.20 mm)": who, never a high Z called low. */
+  IL.lowToolShort = function (status) {
+    const t = IL.lowTool(status);
+    return t.name + ' stopped low (Z ' + IL.fmt(t.z, 2) + ' mm)' + (t.pad ? ' at ' + t.pad : '');
+  };
   /** What the Machine item says then; also why a task that homes by itself waits. */
   IL.n1LowText = function (status) {
-    const hm = (((status || S.status) || {}).machine || {}).home || {};
-    return 'N1 stopped low (Z ' + IL.fmt(hm.n1Z, 2) + ' mm): look at the board under it. Home raises N1 first, then homes.';
+    return IL.lowToolShort(status) + ': look at the board under it. Home ' + IL.lowTool(status).lift + ' first, then homes.';
   };
   /**
    * Why a control is locked now, or null. need: {connected, homed, idle (default true), pressureOff (default true),
@@ -914,6 +935,31 @@
     return isNum(h.sinceMs) ? 'not homed since ' + IL.fmtTime(h.sinceMs - S.skewMs) : 'not homed';
   };
 
+  /**
+   * Dots of a plan its board already has paste on: the server's plan.pasted (each pad's dots laid since the board was
+   * seated), taken in path order on each pad. The same count in every tab and browser.
+   */
+  IL.pastedDots = function (plan) {
+    const laid = Object.assign({}, ((plan && plan.pasted) || {}).pads || {});
+    let n = 0;
+    for (const d of (plan && plan.dots) || []) if (laid[d.padId] > 0) { n++; laid[d.padId]--; }
+    return n;
+  };
+  /**
+   * The purge-row spots a board run of the plan lays (I9, as the engine counts them: plan.purgeSpotsNeeded, the profile's
+   * purge dots and the phase and flush dots of each further dot size), else the profile's purge dots (row.perBoard).
+   * plan defaults to the plan shown.
+   */
+  IL.purgeNeed = function (row, plan) {
+    const p = plan === undefined ? S.plan : plan;
+    return p && isNum(p.purgeSpotsNeeded) && p.purgeSpotsNeeded > 0 ? p.purgeSpotsNeeded : (row && isNum(row.perBoard) ? row.perBoard : 0);
+  };
+  /** "13 (8 to start, 5 for its other dot sizes)", or "8": the need with its parts when the plan has several dot sizes. */
+  IL.purgeNeedText = function (row, need) {
+    const base = row && isNum(row.perBoard) ? row.perBoard : need;
+    return need > base ? need + ' (' + base + ' to start, ' + (need - base) + ' for its other dot sizes)' : String(need);
+  };
+
   // ================================================================================== readiness (§9)
   IL.READY_ORDER = ['machine', 'angle', 'needle', 'regulator', 'padtypes', 'surface', 'plan', 'purge', 'clean'];
   const READY_OK = new Set(['ok', 'you', 'off', 'info']);   // info: a note that counts ready ("homes first")
@@ -935,15 +981,20 @@
     return 'surface-bad';
   }
   IL.i4Kind = i4Kind;
-  /** A touch-off, or the needle frame's own offset (I4 asks for one after the frame was recorded again). */
-  const touchOffFixes = (nd) => [{ href: '#calibrate/touch-off', label: 'Run a touch-off' }].concat(isNum(nd.anchorOffsetMm)
+  /**
+   * A touch-off, or the needle frame's own offset (I4 asks for one after the frame was recorded again). After a failed Z
+   * check of this home (moved) only the touch-off: it measures the needle where the frame only carries it over.
+   */
+  const touchOffFixes = (nd, moved) => [{ href: '#calibrate/touch-off', label: 'Run a touch-off' }].concat(isNum(nd.anchorOffsetMm) && !moved
     ? [{ fix: 'needle-confirm', label: 'Confirm frame offset ' + IL.fmt(nd.anchorOffsetMm, 3) + ' mm' }] : []);
   /**
    * After a failed Z check ("Z moved", AUTO_REGISTER_DESIGN.md §2.4) the remedy works under the same home, in this
-   * order: record the needle frame again, probe the blank (the touch-off's dots take their Z from it), touch off (a
-   * frame recorded after the home replaces the touch-off, which I4 then asks for again), register the board. What was
-   * measured again since the home drops out of status.machine.zCheck.stale. Returns {step: frame | blank | touch-off |
-   * register | done, fixes} while the last Z check of this home failed, else null.
+   * order: record the needle frame again with both tips (the engine refuses K then), probe the blank (the touch-off's
+   * dots take their Z from it), take the places' Z again with N1 (status.machine.zCheck.places: the touch-off primes at
+   * the waste), touch off (a frame recorded after the home replaces the touch-off, which I4 then asks for again; not
+   * the frame's own offset), register the board. What was measured again since the home drops out of
+   * status.machine.zCheck.stale. Returns {step: frame | blank | places | touch-off | register | done, fixes} while the
+   * last Z check of this home failed, else null.
    */
   IL.zMoved = function (status) {
     const s = status || S.status || {};
@@ -956,7 +1007,9 @@
     const surf = (n) => stale.has("the '" + n + "' surface");
     if (stale.has('the needle frame')) return { step: 'frame', fixes: [{ href: '#setup/needle', label: 'Open Needle Z frame' }] };
     if (surf(d.blankLocationName || 'blank')) return { step: 'blank', fixes: [{ view: 'probe-blank', label: 'Probe the blank…' }] };
-    if (stale.has('the touch-off') || !nd.touchedOff) return { step: 'touch-off', fixes: touchOffFixes(nd) };
+    const places = (zc.places || []).map((x) => x.name);
+    if (places.length) return { step: 'places', fixes: places.slice(0, 3).map((n) => ({ href: '#setup/places/' + encodeURIComponent(n), label: 'Retake Z with N1 (' + n + ')' })) };
+    if (stale.has('the touch-off') || !nd.touchedOff) return { step: 'touch-off', fixes: touchOffFixes(nd, true) };
     if (surf(d.boardSurfaceName || 'board')) return { step: 'register', fixes: [{ fix: 'register', label: 'Register board' }, { fix: 'probe-by-hand', label: 'Do it by hand' }] };
     return { step: 'done', fixes: [] };
   };
@@ -1011,7 +1064,8 @@
     } else if (!m.homed && m.busy) {
       add({ key: 'machine', code: 'MACHINE', title: 'Machine', state: 'live', value: 'homing', short: 'homing', detail: 'Homing…' });
     } else if (IL.n1Low(s)) {
-      add({ key: 'machine', code: 'MACHINE', title: 'Machine', state: 'need', value: 'N1 low', short: 'N1 low', detail: IL.n1LowText(s),
+      const low = IL.lowTool(s).needle ? 'needle low' : 'N1 low';
+      add({ key: 'machine', code: 'MACHINE', title: 'Machine', state: 'need', value: low, short: low, detail: IL.n1LowText(s),
         fixes: [{ fix: 'home', label: 'Home now' }] });
     } else if (!m.homed && hm && hm.policy) {
       const why = IL.homeWhy(hm);
@@ -1074,7 +1128,7 @@
     } else if (!nd.touchedOff) {
       add({ key: 'needle', code: 'I4', title: 'Needle', state: 'need', value: 'confirm', short: 'needle offset',
         detail: 'Needle offset not confirmed since the last needle change or frame.',
-        fixes: [{ fix: 'needle-confirm', label: 'Confirm frame offset ' + IL.fmt(nd.anchorOffsetMm, 3) + ' mm' },
+        fixes: IL.zMoved(s) ? touchOffFixes(nd, true) : [{ fix: 'needle-confirm', label: 'Confirm frame offset ' + IL.fmt(nd.anchorOffsetMm, 3) + ' mm' },
           { href: '#calibrate/touch-off', label: 'Run a touch-off' }] });
     } else if (Math.abs(drift) > L.needleDriftMm) {
       add({ key: 'needle', code: 'I4', title: 'Needle', state: 'block', value: 'drift', short: 'needle offset',
@@ -1116,7 +1170,13 @@
       const blocked = pads.filter((p) => p.blocked);
       // PLAN violations about a change after planning (gate, pad type versions) make the plan stale: item 7
       const planViol = viol.filter((v) => v.code === 'PLAN' && !/after planning/i.test(v.message));
-      if (blocked.length || (planViol.length && plan.dots && plan.dots.length)) {
+      if (blocked.length && !planViol.length && d.refuseFlaggedPads === false && plan.dots && plan.dots.length) {
+        // Refuse flagged pads off: the engine skips them and runs the rest (a note that counts ready)
+        add({ key: 'padtypes', code: 'PLAN', title: 'Pad types', state: 'info', value: (pads.length - blocked.length) + '/' + pads.length + ' · ' + blocked.length + ' skipped',
+          short: 'pad types', chip: IL.plural(blocked.length, 'pad') + ' skipped',
+          detail: IL.plural(blocked.length, 'pad') + ' skipped (Refuse flagged pads is off): ' + Array.from(new Set(blocked.map((p) => p.packageId || p.typeKey || 'no pad type'))).join(', ')
+            + '. The other ' + (pads.length - blocked.length) + ' are dispensed.', fixes: [{ href: '#setup/settings/refuse-flagged', label: 'Refuse flagged pads' }] });
+      } else if (blocked.length || (planViol.length && plan.dots && plan.dots.length)) {
         const groups = new Map();
         let belowGate = 0;
         for (const p of blocked) {
@@ -1175,12 +1235,13 @@
       if (newSeat) seatFixes.push(registrable ? { fix: 'register-check', label: 'Same seat? Check the fiducials' } : { fix: 'same-seat', label: 'Same board, not moved' });
       const registered = reg ? { atMs: reg.atMs, seat: reg.lastCheckedAtMs && reg.lastCheckedAtMs > reg.atMs ? 'same' : null } : null;
       if (bad.length) {
-        add({ key: 'surface', code: 'I4', title: 'Surface', state: 'block', value: 'probe again', short: 'board surface',
+        add({ key: 'surface', code: 'I4', title: 'Surface', state: 'block', value: 'register again', short: 'board surface',
           detail: bad.map((x) => sentence(x.v.message)).concat(why || []).join(' '),
           fixes: which ? seatFixes : [{ fix: 'register', label: 'Register board', primary: true }, { fix: 'probe-by-hand', label: 'Add probe points by hand' }],
           seat: which, registered });
       } else if (which) {
-        add({ key: 'surface', code: 'I4', title: 'Surface', state: 'need', value: 'probe', short: 'probe seat', detail: why, fixes: seatFixes, seat: which, registered });
+        // the strip, the nav and the fix name the same action ("8 of 9 · register board", not "probe seat")
+        add({ key: 'surface', code: 'I4', title: 'Surface', state: 'need', value: 'register', short: 'register board', detail: why, fixes: seatFixes, seat: which, registered });
       } else {
         const regText = reg ? ' · registered ' + IL.fmtTime(reg.atMs - S.skewMs) + ' (' + IL.plural((reg.fiducials || []).length, 'fiducial') + ')'
           : ' · not registered (no fiducial correction)';
@@ -1233,25 +1294,27 @@
       }
     }
 
-    // 8 Purge row (I9)
+    // 8 Purge row (I9): the plan's need, as the engine counts it (two dot sizes: 8 + 5)
     const pr = d.purgeRow || {};
+    const pNeed = IL.purgeNeed(pr, plan);
     if (!pr.defined) {
       add({ key: 'purge', code: 'I9', title: 'Purge row', state: 'block', value: 'not set', short: 'purge row',
         detail: 'The purge row is not set.', fixes: [{ href: '#setup/purge', label: 'Set the purge row' }] });
     } else if (pr.surfaceProbed === false) {
       add({ key: 'purge', code: 'I9', title: 'Purge row', state: 'block', value: 'no surface', short: 'purge surface',
         detail: "The purge row's surface '" + pr.surfaceName + "' is not probed.", fixes: [{ href: '#setup/surfaces', label: 'Probe the blank' }] });
-    } else if (pr.spots < pr.perBoard) {
-      add({ key: 'purge', code: 'I9', title: 'Purge row', state: 'block', value: 'too short', short: 'purge row too short',
-        detail: 'The row has ' + IL.plural(pr.spots, 'spot') + '; a board purges ' + pr.perBoard + '. A reset cannot fix this: give the row more spots, or purge fewer dots in the profile.',
+    } else if (pr.spots < pNeed) {
+      add({ key: 'purge', code: 'I9', title: 'Purge row', state: 'block', value: 'too short', short: 'purge row too short', nav: 'Purge row short',
+        detail: 'The row has ' + IL.plural(pr.spots, 'spot') + '; ' + (plan ? 'this plan purges ' : 'a board purges ') + IL.purgeNeedText(pr, pNeed)
+          + '. A reset cannot fix this: give the row more spots, or purge fewer dots in the profile.',
         fixes: [{ href: '#setup/purge', label: 'Purge row: more spots' }, { href: '#profile', label: 'Profile: purge dots' }] });
-    } else if (pr.spotsLeft < pr.perBoard) {
+    } else if (pr.spotsLeft < pNeed) {
       add({ key: 'purge', code: 'I9', title: 'Purge row', state: 'need', value: pr.spotsLeft + '/' + pr.spots, short: 'wipe row',
-        detail: 'Only ' + pr.spotsLeft + ' unused purge spots left, ' + pr.perBoard + ' needed. Wipe the row, then reset it.',
+        detail: 'Only ' + pr.spotsLeft + ' unused purge spots left, ' + IL.purgeNeedText(pr, pNeed) + ' needed. Wipe the row, then reset it.',
         fixes: [{ fix: 'purge-reset', label: 'Wiped: reset row', icon: 'i-wipe' }] });
     } else {
       add({ key: 'purge', code: 'I9', title: 'Purge row', state: 'ok', value: pr.spotsLeft + '/' + pr.spots, short: 'purge row',
-        detail: pr.spotsLeft + ' of ' + pr.spots + ' spots free; a board uses ' + pr.perBoard + '.' });
+        detail: pr.spotsLeft + ' of ' + pr.spots + ' spots free; ' + (plan ? 'this plan uses ' : 'a board uses ') + IL.purgeNeedText(pr, pNeed) + '.' });
     }
 
     // 9 Pads clean (I10)
@@ -1363,12 +1426,17 @@
     const notReady = all.filter((x) => !x.ready);
     const blocked = all.filter((x) => x.state === 'block');
     const count = items.filter((x) => x.ready).length;
-    // NEXT: the first not-ready item in the fixed order; items that only wait for a plan never come first
-    const next = notReady.find((x) => x.state !== 'wait') || notReady[0] || null;
+    // NEXT: the first blocked item, the one the verdict names (rc1 review: NEXT, the nav and the verdict agree), else
+    // the first not-ready item in the fixed order; items that only wait for a plan never come first
+    const next = blocked[0] || notReady.find((x) => x.state !== 'wait') || notReady[0] || null;
     let verdict;
-    // the strip drops the part after " · " when it would run under STOP (cells--t2); the title keeps it
+    // the strip drops the part after " · " when it would run under STOP (cells--t2v); the title keeps it
+    // every dot of the plan is on its board already (the server's paste): the next action is the next board, not a run
+    const doneDots = plan && plan.dots && plan.dots.length && IL.pastedDots(plan) >= plan.dots.length ? plan.dots.length : 0;
     if (blocked.length) verdict = { state: 'block', text: 'Blocked · ' + blocked[0].short, value: ['Blocked', ' · ' + blocked[0].short, 2], title: blocked.map((x) => x.title + ': ' + x.detail).join('\n') };
     else if (!plan && !c.planForgotten) verdict = { state: 'need', text: 'No plan yet', title: 'Choose a board and plan it (Run).' };
+    else if (doneDots) verdict = { state: 'ok', done: true, text: 'Board done · Next board', value: ['Board done', ' · Next board', 2],
+      title: 'All ' + doneDots + ' dots are on board ' + (plan.pasted && plan.pasted.board) + ': unload it and press Next board (Run), or wipe it before running it again.' };
     else if (notReady.length) verdict = { state: 'need', text: count + ' of 9 · ' + next.short, value: [count + ' of 9', ' · ' + next.short, 2], title: notReady.map((x) => x.title + ': ' + x.detail).join('\n') };
     else if (items[0].homeFirst) {
       // the strip drops the long part when it would run under STOP (cells--t1)
@@ -1540,7 +1608,9 @@
     }
     if (IL.recoveryActive()) {
       const r = S.recovery;
-      return { state: 'block', text: 'Stopped ' + IL.fmtTime(r.atMs), title: recoveryHeadline(r) + '. Back to ready: see the Recovery panel.' };
+      // the time goes when the strip is narrow, after the other cells' long parts (cells--t2v): the Recovery panel and
+      // the nav keep it
+      return { state: 'block', text: 'Stopped ' + IL.fmtTime(r.atMs), value: ['Stopped', ' ' + IL.fmtTime(r.atMs), 2], title: recoveryHeadline(r) + '. Back to ready: see the Recovery panel.' };
     }
     const pcal = IL.padProfile ? IL.padProfile.verdict(s) : null;
     if (pcal) return pcal;
@@ -1647,18 +1717,19 @@
     const homeS = isNum(hm.estimateS) ? hm.estimateS : 25;
     steps.push(m.enabled && !m.homed && hm.policy && hm.n1Low
       ? { key: 'home', title: 'Home', wait: false, done: false,
-        detail: 'N1 stopped low (Z ' + IL.fmt(hm.n1Z, 2) + ' mm): look at the board under it; Home raises N1 first, then homes.',
+        detail: IL.lowToolShort(s) + ': look at the board under it; Home ' + IL.lowTool(s).lift + ' first, then homes.',
         fixes: [{ fix: 'home', label: 'Home now', primary: true }] }
       : autoHome
         ? { key: 'home', title: 'Home first', state: 'info', done: true,
           detail: 'Register board and Run home first (≈ ' + IL.fmtSecs(homeS) + '); or home now.', fixes: [{ fix: 'home', label: 'Home now' }] }
         : { key: 'home', title: 'Home', detail: 'M410 can lose steps: home before any move', wait: !m.enabled, done: !!m.enabled && !!m.homed,
           fixes: m.enabled && !m.homed ? [{ fix: 'home', label: 'Home', primary: true }] : [] });
-    const short = !!row.defined && row.spotsLeft < row.perBoard;
-    const tooShort = !!row.defined && row.spots < row.perBoard;
+    const need = IL.purgeNeed(row);
+    const short = !!row.defined && row.spotsLeft < need;
+    const tooShort = !!row.defined && row.spots < need;
     if (short || (rec && rec.purgeShort)) {
-      steps.push({ key: 'purge', title: short ? 'Purge row: ' + row.spotsLeft + ' left, ' + row.perBoard + ' needed' : 'Purge row reset',
-        detail: tooShort ? 'the row has ' + IL.plural(row.spots, 'spot') + ', a board purges ' + row.perBoard + ': give it more spots (Setup) or purge fewer dots (Profile)'
+      steps.push({ key: 'purge', title: short ? 'Purge row: ' + row.spotsLeft + ' left, ' + need + ' needed' : 'Purge row reset',
+        detail: tooShort ? 'the row has ' + IL.plural(row.spots, 'spot') + ', a board purges ' + IL.purgeNeedText(row, need) + ': give it more spots (Setup) or purge fewer dots (Profile)'
           : short ? 'can be done now: wipe the row on the blank, then reset it (I9)' : row.spotsLeft + ' of ' + row.spots + ' spots free',
         done: !short, fixes: tooShort ? IL.fixesForCode('I9', s) : short ? [{ fix: 'purge-reset', label: 'Wiped: reset row', icon: 'i-wipe' }] : [] });
     }
@@ -1810,7 +1881,7 @@
     if (S.recovery) {
       if (!m.enabled) S.recovery.seenDown = true;
       const row = d.purgeRow || {};
-      if (row.defined && row.spotsLeft < row.perBoard) S.recovery.purgeShort = true;
+      if (row.defined && row.spotsLeft < IL.purgeNeed(row)) S.recovery.purgeShort = true;
     }
     // vent_failed: band + Pressure view, until the hold reads off
     if (pr.state === 'vent_failed') {
@@ -1949,7 +2020,8 @@
   // ================================================================================== strip (§4)
   /**
    * Patches a strip cell: kind (glyph + tint), value = text or [main, long, level] (the long part is dropped when the
-   * strip is too narrow: level 1 first (.cells--t1), then level 2 (.cells--t2)), title = the long form.
+   * strip is too narrow: the other cells' level 1 first (.cells--t1), then their level 2 (.cells--t2), the verdict's
+   * last (.cells--t2v)), title = the long form.
    */
   function setCell(cell, kind, value, title) {
     if (!cell) return;
@@ -1971,7 +2043,9 @@
   function fitStrip() {
     const cells = $('cells');
     if (!cells) return;
-    const sig = window.innerWidth + '|' + $('btn-start').hidden + $('btn-home').hidden + '|' + cells.textContent.replace(/\d/g, '0');
+    // the room the cells have, not only the window: the brand's heartbeat age or the STOP bay can change it (rc1 review:
+    // a verdict fitted before they did was cut, "Stopped 06:…", with no shorter form applied)
+    const sig = cells.clientWidth + '|' + $('btn-start').hidden + $('btn-home').hidden + '|' + cells.textContent.replace(/\d/g, '0');
     if (sig === fitSig) return;
     fitSig = sig;
     const over = () => {
@@ -1981,11 +2055,17 @@
       const limit = cells.getBoundingClientRect().right - parseFloat(getComputedStyle(cells).paddingRight || '0');
       return last.getBoundingClientRect().right > limit + 0.5;
     };
-    cells.classList.remove('cells--t1', 'cells--t2');
-    cells.classList.add('cells--fit');   // the verdict at its full width while measuring (it shrinks only after t2)
+    cells.classList.remove('cells--t1', 'cells--t2', 'cells--t2v', 'cells--t3', 'cells--t4');
+    cells.classList.add('cells--fit');   // the verdict at its full width while measuring
     if (over()) {
+      // the other cells' long parts first: the verdict keeps its own ("Stopped 14:19", a task's progress) while it fits
       cells.classList.add('cells--t1');
       if (over()) cells.classList.replace('cells--t1', 'cells--t2');
+      if (over()) cells.classList.add('cells--t2v');
+      // still too long (1024 px after a STOP, the widest state): the verdict is never cut (UI_DESIGN §4), so the
+      // pressure cell goes while it reads a plain "Off" (Recovery says "Pressure vented"), then the other cells' labels
+      if (over()) cells.classList.add('cells--t3');
+      if (over()) cells.classList.add('cells--t4');
     }
     cells.classList.remove('cells--fit');
   }
@@ -2053,7 +2133,7 @@
         } else {
           const hm = m.home || {};
           const auto = hm.policy && !hm.n1Low ? ' Register board and Run home first (≈ ' + IL.fmtSecs(isNum(hm.estimateS) ? hm.estimateS : 25) + ').'
-            : hm.n1Low ? ' N1 stopped low (Z ' + IL.fmt(hm.n1Z, 2) + ' mm): Home raises it first, then homes.' : ' Home before any move.';
+            : hm.n1Low ? ' ' + IL.lowToolShort(s) + ': Home ' + IL.lowTool(s).lift + ' first, then homes.' : ' Home before any move.';
           setCell(mc, 'need', undefined, 'Connected, not homed: positions are unknown.' + auto);
           IL.setText(homed, 'Not homed');
           showHome = !IL.taskRunning(s) && (!s.pressure || s.pressure.state === 'off');
@@ -2094,10 +2174,11 @@
       else if (S.recovery && !(s.machine && s.machine.enabled)) setCell(ac, 'need', 'Confirm', 'After STOP: asked after Connect: was the controller switched off? (I11)');
       else setCell(ac, 'ok', IL.fmtDeg(prof.startAngleDeg, 1), 'Screw start angle ' + IL.fmtDeg(prof.startAngleDeg, 1) + ', confirmed ' + IL.fmtTime(prof.startAngleSetAtMs - S.skewMs) + ' for this controller power-up (I11)');
       const row = d.purgeRow || {};
+      const need = IL.purgeNeed(row);
       if (!row.defined) setCell(uc, 'block', 'Not set', 'The purge row is not set (Setup, I9)');
-      else if (row.spots < row.perBoard) setCell(uc, 'block', [row.spotsLeft + ' of ' + row.spots, ' · too short'], 'The row has ' + row.spots + ' spots; a board purges ' + row.perBoard + ': give it more spots (Setup) or purge fewer dots (Profile) (I9)');
-      else if (row.spotsLeft < row.perBoard) setCell(uc, 'need', [row.spotsLeft + ' of ' + row.spots, ' · wipe'], row.spotsLeft + ' spots left, ' + row.perBoard + ' needed per board: wipe the row and reset it (I9)');
-      else setCell(uc, 'ok', row.spotsLeft + ' of ' + row.spots, row.spotsLeft + ' spots free, ' + row.perBoard + ' per board (I9)');
+      else if (row.spots < need) setCell(uc, 'block', [row.spotsLeft + ' of ' + row.spots, ' · too short'], 'The row has ' + row.spots + ' spots; a board purges ' + IL.purgeNeedText(row, need) + ': give it more spots (Setup) or purge fewer dots (Profile) (I9)');
+      else if (row.spotsLeft < need) setCell(uc, 'need', [row.spotsLeft + ' of ' + row.spots, ' · wipe'], row.spotsLeft + ' spots left, ' + IL.purgeNeedText(row, need) + ' needed per board: wipe the row and reset it (I9)');
+      else setCell(uc, 'ok', row.spotsLeft + ' of ' + row.spots, row.spotsLeft + ' spots free, ' + IL.purgeNeedText(row, need) + ' per board (I9)');
     }
     // the mounted tip setup (PROFILE_CALIBRATION_DESIGN.md §22.7): its name, "· frame and landing to do" after a change
     const tc = $('chip-tip');
@@ -2138,7 +2219,8 @@
       if (!S.plan) return { sub: S.planForgotten ? 'Plan again' : 'No plan yet', kind: S.planForgotten ? 'need' : '' };
       if (r.verdict.state === 'ok') return { sub: 'Ready to run', kind: 'ok', title: 'Ready: ' + (S.plan.boardName || 'board') };
       const kind = r.verdict.state === 'block' ? 'block' : 'need';
-      return { sub: cap(r.next ? r.next.short : ''), kind, badge: String(needs), badgeKind: kind, badgeLabel: needs + ' need you' };
+      // an item's nav form where its short name is too long for the subline (it never wraps, §15)
+      return { sub: r.next ? r.next.nav || cap(r.next.short) : '', kind, badge: String(needs), badgeKind: kind, badgeLabel: needs + ' need you' };
     }
     if (name === 'setup' || name === 'calibrate') return running ? { sub: 'Locked · running' } : {};
     if (name === 'profile') {
@@ -2698,7 +2780,7 @@
     switch (code) {
       case 'MACHINE': return m.enabled ? [{ fix: 'home', label: 'Home' }] : [{ fix: 'connect', label: 'Connect' }];
       case 'I11': return [{ fix: 'I11-confirm', label: 'Controller stayed on: confirm' }, { href: '#calibrate/angle', label: 'Measure again' }];
-      case 'I9': return row.defined && row.spots < row.perBoard
+      case 'I9': return row.defined && row.spots < IL.purgeNeed(row)
         ? [{ href: '#setup/purge', label: 'Purge row: more spots' }, { href: '#profile', label: 'Profile: purge dots' }]
         : [{ fix: 'purge-reset', label: 'Wiped: reset row', icon: 'i-wipe' }];
       case 'I10': return [{ fix: 'clean-check', label: 'Wiped: check again' }];
@@ -2726,7 +2808,7 @@
           return /no point measured before/i.test(msg) ? [{ href: '#setup/needle', label: 'Open Needle Z frame' }] : [{ fix: 'check-z', label: 'Check Z' }];
         }
         // the needle frame recorded again replaced the touch-off: touch off, or take the frame's own offset
-        if (k === 'needle' && /run a touch-off/i.test(msg)) return touchOffFixes(d.needle || {});
+        if (k === 'needle' && /run a touch-off/i.test(msg)) return touchOffFixes(d.needle || {}, !!IL.zMoved(s));
         if (k === 'other-surface') return [{ href: '#setup/surfaces', label: 'Open Probed surfaces' }];
         if (k === 'seat' || k === 'surface-bad' || k === 'plan') return [{ fix: 'register', label: 'Register board' }, { fix: 'probe-by-hand', label: 'Do it by hand' }];
         return [{ href: '#setup/needle', label: 'Open Needle Z frame' }];
@@ -3155,15 +3237,16 @@
           IL.fixButton({ href: '#setup/purge', label: 'Setup › Purge row' })), el('div', { class: 'reason', id: 'pv-purge-reason', hidden: true }));
       }
       const row = (s.dispense && s.dispense.purgeRow) || {};
-      IL.keyed($('pv-purge-strip'), JSON.stringify([row.spots, row.usedSpots, row.perBoard, row.defined]), () => {
+      const need = IL.purgeNeed(row);
+      IL.keyed($('pv-purge-strip'), JSON.stringify([row.spots, row.usedSpots, need, row.defined]), () => {
         if (!row.defined) return el('div', { class: 'notebox notebox--block', text: 'The purge row is not set: set it in Setup (origin, pitch and spots on the blank).' });
         const cells = [];
-        for (let i = 0; i < row.spots; i++) cells.push(el('i', { class: i < row.usedSpots ? 'used' : i < row.usedSpots + row.perBoard ? 'next' : null }));
+        for (let i = 0; i < row.spots; i++) cells.push(el('i', { class: i < row.usedSpots ? 'used' : i < row.usedSpots + need ? 'next' : null }));
         return [el('div', { class: 'ready-head' }, el('div', { class: 'ready-head__t' }, el('div', { class: 'eyebrow', text: 'Spots free' }),
-          el('div', { class: 'ready-head__q', text: row.spots < row.perBoard ? 'Too short for one board (' + row.perBoard + ' per board)' : row.spotsLeft < row.perBoard ? 'Wipe the row and reset it' : 'Enough for ' + IL.plural(row.boardsLeft, 'board') })),
+          el('div', { class: 'ready-head__q', text: row.spots < need ? 'Too short for one board (' + need + ' per board)' : row.spotsLeft < need ? 'Wipe the row and reset it' : 'Enough for ' + IL.plural(Math.floor(row.spotsLeft / Math.max(1, need)), 'board') })),
         el('div', { class: 'ready-head__n' }, String(row.spotsLeft), el('small', { text: ' of ' + row.spots }))),
         el('div', { class: 'purge purge--lg', role: 'img', 'aria-label': 'Purge row: ' + row.spotsLeft + ' of ' + row.spots + ' spots free', style: 'margin-top:10px' }, cells),
-        el('div', { class: 'ready-sub' }, el('span', { text: row.usedSpots + ' used · ' + row.spotsLeft + ' free' }), el('span', { text: 'next board uses ' + row.perBoard }))];
+        el('div', { class: 'ready-sub' }, el('span', { text: row.usedSpots + ' used · ' + row.spotsLeft + ' free' }), el('span', { text: 'next board uses ' + need }))];
       });
       const next = row.defined ? { x: row.x0Mm + row.usedSpots * row.pitchXMm, y: row.y0Mm + row.usedSpots * row.pitchYMm } : null;
       IL.kv($('pv-purge-kv'), [
@@ -3173,7 +3256,7 @@
         ['Last wiped', row.resetAtMs ? IL.fmtDateTime(row.resetAtMs - S.skewMs) : 'never'],
       ]);
       const btn = p.foot.querySelector('[data-fix="purge-reset"]');
-      IL.gate(btn, !row.defined ? 'The purge row is not set' : IL.lockReason(s) || (row.spots < row.perBoard ? 'A reset cannot help: the row has fewer spots than one board purges' : null), $('pv-purge-reason'));
+      IL.gate(btn, !row.defined ? 'The purge row is not set' : IL.lockReason(s) || (row.spots < IL.purgeNeed(row) ? 'A reset cannot help: the row has fewer spots than one board purges' : null), $('pv-purge-reason'));
     },
   };
 

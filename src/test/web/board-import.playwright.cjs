@@ -371,6 +371,13 @@ const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y
     const devR = dev(/^R\d+\./), devD = dev(/^D\d+\./);
     check('(8) the import planned at 30°: 160 pads and dots', ids8.length === 160 && dots8 === 160, { pads: ids8.length, dots: dots8 });
     check('(8) R pads within 0.01 mm and LED pads within 0.04 mm of ftp.board.xml\'s plan', devR <= 0.01 && devD <= 0.04, { devR, devD });
+    // a seat with no surface yet: the strip and the nav name the item's fix as its button does (final gate: "8 of 9 ·
+    // probe seat" beside "Register board")
+    const surf8 = await page.evaluate(() => { const it = IL.ready().items.find((x) => x.key === 'surface');
+      return it && { state: it.state, short: it.short, value: it.value, fix: (it.fixes || [])[0] ? it.fixes[0].label : null }; });
+    check('(8) the new seat\'s surface item says "register board" (not "probe seat"), as its fix Register board',
+      !!surf8 && ((surf8.state === 'need' && surf8.short === 'register board' && surf8.value === 'register') || (surf8.state === 'block' && surf8.value === 'register again'))
+        && surf8.fix === 'Register board', surf8);
     await setPicture(page, 'full');
     const full = await page.evaluate(() => {
       const shown = (sel) => Array.from(document.querySelectorAll(sel)).some((n) => getComputedStyle(n).display !== 'none' && n.getBBox().width > 0);
@@ -473,6 +480,10 @@ const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y
       await page.evaluate((id) => IL.go('#records/boards/' + id), run.run_uuid);
       const ok11 = await page.waitForSelector('.rec-mapbox .pv-art:not([hidden]) .pv-a-edge', { timeout: 20000 }).then(() => true, () => false);
       check('(11) Records: the board run\'s map draws the board', ok11);
+      // its figures keep a label with its number on one line (final gate: "bench" ended a line, "5,490" began the next)
+      const subs11 = await page.evaluate(() => Array.from(document.querySelectorAll('#panel .minis .mini__s')).map((n) => n.textContent));
+      check('(11) Records: "first to last dot · bench 5,490" keeps "bench 5,490" together (no-break space)',
+        subs11.some((t) => /bench\u00a05,490/.test(t)) && !subs11.some((t) => /\bbench \d/.test(t)), subs11);
       await page.evaluate(() => IL.go('#run'));
     }
 
@@ -506,8 +517,10 @@ const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y
         IL.render();
         await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
         const out = Array.from(document.querySelectorAll('nav.steps .step')).map((b) => {
-          const sub = b.querySelector('.step__s'), r = b.getBoundingClientRect(), q = sub.getBoundingClientRect();
-          return { k: b.dataset.step, inside: q.left >= r.left - 0.5 && q.right <= r.right + 0.5, cut: sub.scrollWidth > sub.clientWidth + 1, text: sub.textContent };
+          const sub = b.querySelector('.step__s'), r = b.getBoundingClientRect(), q = sub.getBoundingClientRect(), cs = getComputedStyle(sub);
+          // its overflow (the "…") clips at the line box: the box holds the descenders ("registered", not "reqistered")
+          return { k: b.dataset.step, inside: q.left >= r.left - 0.5 && q.right <= r.right + 0.5, cut: sub.scrollWidth > sub.clientWidth + 1, text: sub.textContent,
+            room: parseFloat(cs.lineHeight) >= 1.3 * parseFloat(cs.fontSize) };
         });
         p.boardName = keep;
         IL.render();
@@ -515,6 +528,8 @@ const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y
       });
       const bs = st12.find((x) => x.k === 'board') || {};
       check('(12) ' + w + ' px: the Run stepper keeps a long board name inside its step, cut with "…"', st12.length === 5 && st12.every((x) => x.inside) && bs.cut, st12);
+      check('(12) ' + w + ' px: the stepper\'s sublines leave room for descenders (line height >= 1.3 em; at 1.15 em "registered" lost its g\'s tail)',
+        st12.every((x) => x.room), st12);
     }
     await page.setViewportSize({ width: 1440, height: 900 });
 
@@ -545,14 +560,15 @@ const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y
     else skip('(14) screenshots', 'BI_SHOTS=0');
 
     // ---- (16) the dispensed dots belong to their plan ------------------------------------------------------------------
-    // the shown plan's done set (as a board run leaves it) plus one index past its last dot, then another plan of ftp:
-    // the hero draws the first plan's dots as done and nothing on the second (a stale index used to throw in render)
+    // the shown plan's board with paste on every pad (as the server keeps it, plan.pasted) plus one done index past its
+    // last dot, then another plan of ftp at another seat: the hero draws the first plan's dots as done and nothing on the
+    // second (a stale index used to throw in render)
     await toBoardStep(page);
     const dd = await page.evaluate(async ([file, seat]) => {
       const R = IL.run, p0 = IL.S.plan;
       const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
       const n = p0 ? p0.dots.length : 0;
-      R.done = { planId: p0 && p0.planId, idx: [], runIds: [], since: 0 };
+      if (p0) p0.pasted = Object.assign({}, p0.pasted, { pads: Object.fromEntries(p0.dots.map((d) => [d.padId, 99])) });
       R.doneSet = new Set(Array.from({ length: n }, (_, i) => i).concat([n + 1000]));
       IL.render();
       await frame();

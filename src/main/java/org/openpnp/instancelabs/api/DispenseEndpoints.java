@@ -122,6 +122,7 @@ final class DispenseEndpoints {
         s.route("POST", "/api/screw/start-angle", this::startAngle);
         s.route("POST", "/api/purge-row/reset", r -> purgeReset());
         s.route("POST", "/api/run", this::run);
+        s.route("POST", "/api/board/next", r -> nextBoard());
         s.route("GET", "/api/runs", r -> ctx.svc().getDb().recentRuns(r.queryInt("limit", 20, 1, 500)));
         s.route("GET", "/api/runs/last", r -> lastRun());
         s.route("GET", "/api/events", r -> ctx.svc().getDb().recentEvents(r.queryInt("limit", 50, 1, 1000)));
@@ -145,7 +146,11 @@ final class DispenseEndpoints {
         Map<String, Object> pressure = ctx.pressure.snapshot();
         pressure.put("engineRunActive", svc != null && svc.isBusy());
         out.put("pressure", pressure);
-        out.put("run", ctx.tracker.snapshot());
+        Map<String, Object> run = ctx.tracker.snapshot();
+        if (run != null) {
+            run.put("boardNumber", ctx.paste.boardOfRun((String) run.get("runId")));
+        }
+        out.put("run", run);
         PadCalibrationJob pcal = ctx.padCalJobs.current();
         out.put("padCalibration", pcal == null || svc == null ? null : pcal.view());
         // an upload holds the import pipeline: every engine endpoint refuses until it has read the file
@@ -167,7 +172,7 @@ final class DispenseEndpoints {
                 cfg.needleZOffsetMm, "setAtMs", cfg.needleZOffsetSetAtMs, "changedAtMs", cfg.needleChangedAtMs, "gapMm",
                 cfg.gapMm(), "anchored", cfg.isNeedleAnchored(), "anchor", cfg.needleAnchor,
                 "anchorOffsetMm", cfg.needleAnchor == null ? null : cfg.needleAnchor.offsetMm(), "xyTrim",
-                cfg.needleXyTrim);
+                cfg.needleXyTrim, "kRefusal", svc.needleFrameFromKRefusal());
         needle.putAll(landingStatus(svc, cfg));
         d.put("needle", needle);
         d.put("tip", tipStatus(svc, cfg));
@@ -188,10 +193,16 @@ final class DispenseEndpoints {
                 "defaultRotationDeg", defaultTestDotRotation(cfg)));
         d.put("maxContinuousOnTimeS", cfg.maxContinuousOnTimeS);
         d.put("minPadTypeStatus", cfg.minPadTypeStatus);
+        d.put("refuseFlaggedPads", cfg.refuseFlaggedPads);
         d.put("homeBeforeRun", cfg.homeBeforeRun);
         d.put("newSeatAtMs", cfg.newSeatAtMs);
+        d.put("pasteVersion", ctx.paste.version());
         RunResult last = svc.getLastRun();
-        out.put("lastRun", Views.run(last, false));
+        Map<String, Object> lastView = Views.run(last, false);
+        if (lastView != null) {
+            lastView.put("boardNumber", ctx.paste.boardOfRun(last.runId));
+        }
+        out.put("lastRun", lastView);
         out.put("interlocks", interlockList(svc, cfg));
         return out;
     }
@@ -319,9 +330,10 @@ final class DispenseEndpoints {
         DispenseConfig.NamedLocation spot = new DispenseConfig.NamedLocation(waste.x + cfg.testDotOffsetXMm,
                 waste.y + cfg.testDotOffsetYMm, waste.z);
         DispenseConfig.NamedLocation cur = cfg.location(TEST_DOT_LOCATION);
-        if (cur == null || cur.x != spot.x || cur.y != spot.y || cur.z != spot.z) {
-            // The engine dispenses shots at named locations; keep this one derived from the waste place.
-            svc.setLocation(TEST_DOT_LOCATION, spot.x, spot.y, spot.z);
+        if (cur == null || cur.x != spot.x || cur.y != spot.y || cur.z != spot.z
+                || !java.util.Objects.equals(cur.setAtMs, waste.setAtMs)) {
+            // The engine dispenses shots at named locations; keep this one derived from the waste place (and its time).
+            svc.setLocation(TEST_DOT_LOCATION, spot.x, spot.y, spot.z, waste);
         }
         ctx.tracker.expect("test dot");
         Future<RunResult> f = svc.runShots(TEST_DOT_LOCATION, rot, 1, true);
@@ -427,7 +439,8 @@ final class DispenseEndpoints {
      * I4 needle Z frame: the same surface touched by N1 (its Z in OpenPnP's frame) and by the needle
      * tip (N2 Z). Body: {"surfaceZ": n1ContactZ, "needleContactZ": n2ContactZ, "x"?, "y"?}, or instead
      * of needleContactZ the bench relation {"needleContactRawSum": K}: needle contact raw Z = K - N1
-     * contact Z (side camera, 2026-10-27: K = 65.59, i.e. N2 contact = N1 contact - 2.59).
+     * contact Z (side camera, 2026-10-27: K = 65.59, i.e. N2 contact = N1 contact - 2.59). K is refused
+     * after a failed Z check of this home and after a needle change ({@link DispenseService#needleFrameFromKRefusal}).
      */
     Object needleAnchor(ApiServer.Request r) throws Exception {
         JsonObject b = r.json();
@@ -436,6 +449,10 @@ final class DispenseEndpoints {
         Double rawSum = Json.num(b, "needleContactRawSum", null);
         if (rawSum != null && b.has("needleContactZ")) {
             throw ApiException.badRequest("give either needleContactZ or needleContactRawSum, not both");
+        }
+        String noK = rawSum == null ? null : svc.needleFrameFromKRefusal();
+        if (noK != null) {
+            throw ApiException.refused(noK);
         }
         double nz = rawSum == null ? Json.reqNum(b, "needleContactZ") : svc.needleContactZFromRawSum(sz, rawSum);
         if (!Double.isFinite(sz) || !Double.isFinite(nz) || Math.abs(nz - sz) > 20) {
@@ -874,13 +891,24 @@ final class DispenseEndpoints {
         estimate(svc, e);
         e.registrationTargets = registration.targets(svc, e);
         ctx.plans.put(e);
-        return Views.plan(e, runPreflight(svc, plan, nz(e.estimatedPressurisedSeconds)), svc.getConfig().newSeatAtMs);
+        return planView(svc, e);
     }
 
     Object getPlan(ApiServer.Request r) throws Exception {
         DispenseService svc = ctx.availableSvc();
-        PlanStore.Entry e = requirePlan(r.group(1));
-        return Views.plan(e, runPreflight(svc, e.plan, nz(e.estimatedPressurisedSeconds)), svc.getConfig().newSeatAtMs);
+        return planView(svc, requirePlan(r.group(1)));
+    }
+
+    /**
+     * A plan as the API shows it: the interlocks Run faces now, and the purge-row spots a run of it lays
+     * ({@code purgeSpotsNeeded}, I9: the profile's purge dots, and the phase and flush dots of each further dot size).
+     */
+    private Map<String, Object> planView(DispenseService svc, PlanStore.Entry e) throws Exception {
+        Map<String, Object> m = Views.plan(e, runPreflight(svc, e.plan, nz(e.estimatedPressurisedSeconds)),
+                svc.getConfig().newSeatAtMs);
+        m.put("purgeSpotsNeeded", DoseBlocks.purgeSpotsNeeded(e.plan, svc.getConfig()));
+        m.put("pasted", ctx.paste.view(e.source));
+        return m;
     }
 
     /**
@@ -1135,6 +1163,9 @@ final class DispenseEndpoints {
         InterlockReport pre = ctx.preflightPlan(svc, p, nz(runEntry.estimatedPressurisedSeconds), home.needed,
                 zCheckFirst);
         ApiContext.refuseUnlessOk(pre, "Run");
+        if (Json.bool(b, "wiped", false)) {
+            ctx.paste.wiped(e.source); // the operator wiped this board: its pads have no paste now
+        }
         ctx.tracker.expect("board");
         Future<RunResult> f = svc.runPlan(p);
         Map<String, Object> accepted = Views.map("kind", "board", "planId", p.planId, "parentPlanId",
@@ -1144,6 +1175,15 @@ final class DispenseEndpoints {
                         : Views.map("name", zc.reference.name, "x", zc.reference.x, "y", zc.reference.y, "z",
                                 zc.reference.z), "zCheckTouches", zc.touches);
         return ApiContext.awaitIf(Json.bool(b, "wait", false), f, rr -> Views.run(rr, false), accepted);
+    }
+
+    /** "Next board": the boards on the machine are taken off ({@link BoardPaste#nextBoard}): {nextBoard}. */
+    Object nextBoard() throws Exception {
+        DispenseService svc = ctx.svc();
+        if (svc.isBusy()) {
+            throw ApiException.refused("the next board cannot start while a dispense task runs");
+        }
+        return Views.map("nextBoard", ctx.paste.nextBoard());
     }
 
     /**

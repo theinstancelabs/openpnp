@@ -218,7 +218,12 @@ rep.done = true; rep.seconds = …
   - `needleZOffsetSetAtMs`;
   - `setAtMs` of every surface the scope uses (`sc.surfaceName` and `sc.moreSurfaces`).
 
-  Places carry no time (D/DispenseConfig.java:229-238). The same check covers them.
+  Places carry no time (D/DispenseConfig.java:229-238). The same check covers them. *As built (rc1 review):* a place
+  carries the time it was set and its Z frame (`NamedLocation.setAtMs`, `homeAtMs`; `PUT /api/locations` stamps them,
+  the derived test-dot spot keeps the waste's), but a touch never vouches for it. After a failed check of this home, a
+  place set before it is refused where its Z is used (I4 `place 'waste' Z 5.500 was taken at 13:40, before the home at
+  14:02 where Z moved 0.80 mm: take its Z again with N1 touching (Setup › Places)`): prime, the test dot, shots, the
+  dot ladder's and the touch-off's prime at the waste (`Scope.dispensePlaces`), a coupon's probe and its weigh dots.
 - **Stale** = `lastHomeAtMs != null` and any of those Z data is older than it. Stale data are accepted only if
   `zCheck.homeAtMs == lastHomeAtMs && zCheck.pass`. Otherwise:
   - with `zCheckFirst` (the task will check Z itself): a note, `I4: Z data predate the home at 14:19: checks Z first (one N1 touch)`;
@@ -274,7 +279,11 @@ frame now; a home between two older data may have moved Z (the bench's frame vs 
 - a needle frame recorded after the touch-off sets the offset again, so that touch-off is no Z datum any more
   (`ZCheck.touchOffReplaced`; I4 asks for a new touch-off). After "Z moved" the remedy works under the same home: the
   needle frame, the blank, the touch-off, then the board, each measured again; a datum not measured again keeps the
-  refusal.
+  refusal. The frame is measured with both tips touching (rc1 review): K is a sum of raw Z heights, so a zero shift
+  moves it by about twice the shift and a frame "from K" gives the old offset (63 − K) whatever N1 touched;
+  `POST /api/needle/anchor` refuses `needleContactRawSum` while the check of this home failed and after a needle
+  change (`DispenseService.needleFrameFromKRefusal`), and the web remedy offers the touch-off, not the frame's own
+  offset.
 - the blank probed again after a home (by hand, or the pad calibration's blank step) keeps the points it replaced
   (`SurfaceMap.replaced`, `ZCheck.kept`) when they were measured before that home in a known frame: they stay a
   reference of their frame, listed after the blank's own points, so a check of the needle frame and the touch-off
@@ -1322,7 +1331,7 @@ The prefixes `REG:` and `PROBE:` are added to the client's code regex `^(I\d+|MA
 | N1 config | 409 | `PROBE: nozzle 'N1' is not in the machine` / `PROBE: N1's Z is transformed in OpenPnP; the probe needs N1 Z = raw Z` |
 | homing failed | REFUSED | `MACHINE: homing failed: <reason>. Nothing else was done; home from the strip and try again.` |
 | Z not checked | I4 violation | `I4: the needle frame (13:02), the touch-off (13:05) and the 'board' surface (13:40) were measured before the home at 14:19, and Z has not been checked since: Check Z (one N1 touch, ≈ 20 s); Run does it by itself` |
-| Z moved | REFUSED / I4 violation | `I4: Z moved -0.70 mm at the home of 14:19: N1 touched the blank at X 322.00, Y 225.50 at Z 4.920, where it touched 5.620 at 13:40. The needle frame, the touch-off and the surfaces are off by this (the needle by about twice). Record the needle frame again (Setup › Needle Z frame), probe the blank, touch off and register the board again.` |
+| Z moved | REFUSED / I4 violation | `I4: Z moved -0.70 mm at the home of 14:19: N1 touched the blank at X 322.00, Y 225.50 at Z 4.920, where it touched 5.620 at 13:40. The needle frame, the touch-off and the surfaces are off by this (the needle by about twice). Record the needle frame again with both tips (Setup › Needle Z frame), probe the blank, take the places' Z again with N1 (Setup › Places), touch off and register the board again.` |
 | no Z reference | 409 / REFUSED | `I4: Z must be checked after the home at 14:19, but no point measured before it is left to touch (no blank or board surface, no needle-frame X/Y): record the needle frame again` |
 | STOP | ABORTED | the executor's abort reason, e.g. `STOP pressed in the web UI`; the result card says what was kept (§8.1) |
 | vacuum on too long | ERROR | `N1 vacuum on for 60 s at one point: stopped (N1 lifted, pump and valve off)` |
@@ -1441,7 +1450,9 @@ Returns the preview of §7.1 again, computed now, because the home plan changes 
 - **`machine.home`**: `{needed, whyCode, why, sinceMs, policy, homedAtMs, estimateS, n1Z, n1Low}`, from
   `svc.homePlan()`.
   - It is filled in `MachineEndpoints.machineStatus` (A/MachineEndpoints.java:217-273) when the service exists.
-  - `n1Low` = N1's Z lies outside z1's safe zone (a STOP during a probe).
+  - `n1Low` = N1's Z lies outside z1's safe zone (a STOP during a probe). *As built (rc1 review):* also above it, a
+    STOP during board dots, where the shared Z axis puts the needle low; `lowTool` (`N1` | `needle`) says which, and
+    the UI names that tool (`The needle (N2) stopped low (Z 2.94 mm) at R3.1`), never a high N1 as low.
 - **`machine.zCheck`**: `{needed, stale:[{what, atMs}], homeAtMs, reference:{name, x, y, z} | null, last: ZCheck.Result | null, estimateS}`.
 - **`dispense.homeBeforeRun`**, **`dispense.newSeatAtMs`**.
 - **`run.detail`**: the latest `onDetail` map, while that run is current. `RunTracker.Progress` gets
@@ -2648,9 +2659,9 @@ safe zone (an automatic home is then harmless), and stays needed, showing N1's Z
 
 What is merged on `il/bench-sync-autoreg` (b81d73d21): wave 1 (vision, sim, engine-core), tasks-api, the fixes from
 the real sessions of 2026-10-28/29 (F1, F2, F4, F6, F8; `REAL_MACHINE_TODO.md` has the findings) and review 1. The
-web-ui slice is built on `il/ar-webui` (184 Playwright checks) and is merged with BI's web-flow by the AR + BI
-integration slice, which also wires the board art's keep-outs into `ProbeTargets` (§16 item 10; until then the API
-passes none, so a board without art gets the assumed corner holes below). The API as built is in `WEB_API.md` §3.2.
+web-ui slice (`il/ar-webui`) is merged with BI's web-flow on `il/rc1` (the AR + BI integration slice), and Register
+board passes the board art's keep-outs to `ProbeTargets` (§16 item 10, `RegistrationEndpoints`; a board without art
+gets the assumed corner holes below). The API as built is in `WEB_API.md` §3.2.
 Where the code differs from the sections above, the code is right:
 
 - **§3.3, the search bound (F4).** `searchRadiusMm` bounds the distance of a mark from the fiducial's **expected**
@@ -2726,9 +2737,12 @@ Where the code differs from the sections above, the code is right:
   dots use the lower of the anchor and the board's reference (§16 item 1). `POST /api/plan` refuses a board top Z
   more than 2.0 mm from the needle-frame surface (`MAX_BOARD_Z_FROM_ANCHOR_MM`).
 - **Not built or not covered.** No endpoint clears the needle anchor. §10.2 cases 3 (surface changed by +0.08 → full
-  probe), 6 (5 mm / −4.6° re-seat), 8 (fit against the previous registration), 12 (release lag 0.4 s), 15 (job board:
-  no headless seam) and 22 (a run with a simulated surface on a Marlin link) have no `RegistrationSimTest` case; the
-  engine-core and vision unit tests cover the code paths. Review 1's open minors (the probe floor of a board far below
-  the anchor, the camera look's mm/px) are listed in `REAL_MACHINE_TODO.md` for the final fix round; the frames
-  against the acceptance circle and the rotation-dependent fit check are fixed (the fit against the previous
-  registration compares the machine-frame stretch, `FiducialLocator.machineFrame`).
+  probe), 6 (5 mm / −4.6° re-seat), 8 (fit against the previous registration), 12 (release lag 0.4 s) and 15 (job
+  board: no headless seam) have no `RegistrationSimTest` case; the engine-core and vision unit tests cover the code
+  paths. Case 22 (a simulated surface on a Marlin link) is covered since the rc1 review: `ZFrameTest`, the plan and
+  the run after `RegistrationSimTest`'s switch to Marlin, and `DoseBlocksCouponFrameTest` for a coupon; only the
+  same-seat check's own guard (`probeBoard`'s `tied`) has no case, as `register()` drops a SIM-made registration on
+  a real link before it. Review 1's probe floor of a board far below the anchor is fixed in the final round
+  (`VacuumProber.Window` refuses a floor at or above the board top); the camera look's mm/px is listed in
+  `REAL_MACHINE_TODO.md`; the frames against the acceptance circle and the rotation-dependent fit check are fixed
+  (the fit against the previous registration compares the machine-frame stretch, `FiducialLocator.machineFrame`).

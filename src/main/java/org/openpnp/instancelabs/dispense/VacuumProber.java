@@ -393,6 +393,12 @@ public final class VacuumProber {
             }
             throw e;
         }
+        catch (Error e) {
+            if (dirty) {
+                errorShutdown();
+            }
+            throw e;
+        }
         return out;
     }
 
@@ -525,6 +531,10 @@ public final class VacuumProber {
         }
         catch (Exception e) {
             endLinesOrShutdown(e);
+            throw e;
+        }
+        catch (Error e) {
+            errorShutdown();
             throw e;
         }
         endLinesOrShutdown(null);
@@ -894,6 +904,17 @@ public final class VacuumProber {
             }
             cause.addSuppressed(e);
         }
+    }
+
+    /**
+     * I1 after an Error ended a point (rc1 review: an OutOfMemoryError, or a progress listener's Error, left N1's vacuum on
+     * and N1 down): the stop sequence only, no lift (the end lines move; what is left of the task may not be sound).
+     */
+    private void errorShutdown() {
+        needsRecovery = true;
+        dirty = false;
+        vacuumOnSinceMs = null;
+        io.shutdown();
     }
 
     /** STOP: no motion, only the I1 shutdown (it vents N1); the caller recovers (un-home). */

@@ -120,7 +120,14 @@ workspace changes.
 Left to right: brand (with heartbeat) · 4 state cells · (gap) · Board run verdict cell · 20 px clear bay · STOP.
 Each cell is a `<button>` 56 px tall: status glyph (shape + colour), an eyebrow key (10.5 px caps), a value
 (15.5 px / 650, `white-space: nowrap`). Cells never truncate: values have deliberate short forms; the layout is
-verified at 1280 and 1440 for the widest states (stopped, running). Clicking a cell opens its panel view.
+verified at 1280 and 1440 for the widest states (stopped, running). Clicking a cell opens its panel view. *As built
+(rc1 review):* the page measures the strip whenever the room of the cells changes (not only the window) and shortens
+in tiers until the verdict fits whole, the other cells first: t1 drops their level-1 long parts (`Connected · `,
+` · vented`, ` · wipe`), t2 all their long parts (` · set 18 psi`), t2v the verdict's own (` · homes first
+(≈ 25 s)`, a task's progress, the stopped verdict's time: `Stopped`; final gate: before, t2 dropped them with the
+others', so at 1440 px a running pad calibration read `Pad calibration` beside 300 px of free strip), t3 the pressure
+cell while it reads a plain `Off`, t4 the other cells' keys; the stopped state is checked at 1440, 1280 and 1024 (at
+1440 it keeps its time), a running pad calibration at 1440 (it keeps its step).
 The cells container is `aria-live="polite"`; safety changes (STOP result, vent_failed, offline) are announced
 by `role="alert"` regions instead.
 
@@ -353,7 +360,9 @@ bar `#ready-segbar` in the fixed order of §9.1 (colours by state; `you` attesta
 `#plan-interlocks`: `13 interlocks: 10 ok · 1 needs you · 2 not fitted` + `All 13` (opens the Interlocks view).
 When every plan interlock passes, this line reads `All interlocks pass for this plan · 11 ok · 2 not fitted`.
 
-**Needs you (n)**: one card per not-ready item, in the fixed order, the first carrying a black `NEXT` tag. Card:
+**Needs you (n)**: one card per not-ready item, in the fixed order, the first carrying a black `NEXT` tag (as built, rc1
+review: the `NEXT` card is the first blocked item, the one the verdict names, else the first not-ready item, and it
+comes first; the nav subline is its short name, or a shorter form where that would not fit: `Purge row short`). Card:
 glyph, title in plain words, detail with numbers, the I-code at the right, fix-it buttons (44–46 px). Pads clean
 card = `#clean-result`; its first sentence is machine-readable for tests and always one of:
 `All 160 pads are clean (13:09).` · `158 of 160 pads clean, 2 with paste left (13:09).` ·
@@ -439,7 +448,15 @@ same board decision as after STOP, without the red: `Finish the 140 pads left` (
 Checks / `#btn-result-rest`) or `Wipe the 20 pads, run all` (`#btn-run-all`); `Test run with fewer dots…` is not offered
 on a board that already has paste. Planning the same seat again (no `Next board` in between) is the same board: its
 number and its dispensed dots carry over. A STOP before the first board dot has nothing to keep or wipe: `No dot
-reached the board` and the one action `Run the board again`.
+reached the board` and the one action `Run the board again`. *As built (rc1 review):* the server keeps each seated
+board's paste and number (`plan.pasted`, `status.run.boardNumber`; `Next board` posts `POST /api/board/next`), so a
+new tab, another browser or a reload sees the same board; a run that lays pads that already have paste (the whole
+board, `Wipe all, run all`, a test run over them) asks `I wiped this board: no paste on its 150 pads now`
+(`#run-tick-wiped`, `This board (board 3) already has paste on 150 pads this run lays: wipe them first, or press
+Cancel and finish the pads left.`) before `Run`, and tells the engine (`{wiped: true}`). The Result step's
+`board 1 ok` names the board that ran, without its tick once `Next board` was pressed. A board with every dot already
+reads `Board done · Next board` (strip and Checks; nav `Board 3 done`), with `Next board` (`#btn-run-next`) as the
+primary action, `Run it again · 160 dots` second and no `Test run with fewer dots…`.
 
 #### 8.1.8 Recovery (`data-view=recovery`) — `mockup-run-stopped.html`
 
@@ -540,7 +557,9 @@ your tick is kept in this browser.`; filter `All steps | Needs you · 2`.
    controller connected time; `Open Profile ›`, `Measure the angle ›`.
 8. **Settings** (`#card-settings`, full width): `#set-maxon` (s, I7), `#set-valvesettle` (ms, `valveSettleMs`),
    `#set-pumpsettle` (ms), `#set-minstatus` labelled **Lowest pad-type status allowed on a board**, `#set-clean`
-   `Clean-pad check before each board (I10)` (with `Off (simulator)` wording in sim), I10 thresholds (gray level,
+   `Clean-pad check before each board (I10)` (with `Off (simulator)` wording in sim), `#set-refuseflagged`
+   **Refuse flagged pads** (`refuseFlaggedPads`; `On: a board with pads that cannot be dispensed is refused` / `Off:
+   those pads are skipped, the rest dispensed`; the deep link `#setup/settings/refuse-flagged` focuses it), I10 thresholds (gray level,
    min bright share, box) in a disclosure, `Save settings` (`#btn-settings`). Disclosure **All settings (advanced
    JSON)** (`#set-advanced`): `#set-json` editor, inline JSON validation, a diff of changed keys
    (`#set-json-diff`), stamped keys marked read-only, `Reload and keep my edits`, `Save changed keys`
@@ -552,6 +571,9 @@ your tick is kept in this browser.`; filter `All steps | Needs you · 2`.
 2 Settings, 3 Regulator (you), 4 Places, 5 Needle Z frame, 6 Blank surface, 7 Prime and test dot (you),
 8 Needle XY trim, 9 Screw start angle, 10 Purge row, 11 Pad types. The first not-ready step carries `NOW`;
 each row links to its card. Start angle comes before Purge row so the strip verdict's NEXT and the list agree.
+*As built (rc1 review):* after a failed Z check of this home, 4 Places is blocked while any place in
+`status.machine.zCheck.places` waits for its Z: `Z moved: retake 2`, `Z moved at this home: take the Z of waste, blank
+again with N1 touching.`, its link opens the first one's Z (the engine refuses those places meanwhile, I4).
 
 ### 8.3 Profile (not mocked; same frame)
 
@@ -614,7 +636,10 @@ each row links to its card. Start angle comes before Purge row so the strip verd
 Banner `#cal-history-note`: `Records only: boards use the dispense profile.` Cards, each listing its
 prerequisites as readiness rows with fix-it links and showing progress and result in place:
 **Touch-off** (`#to-start` 0.125, `#to-step` 0.025, `#to-steps` 6, `#to-rot` empty = one profile dot,
-`#to-place` blank, `#to-apply` ticked by default when it is the I4 step, `#btn-to-run` two-press; result table
+`#to-place` blank, `#to-apply` ticked by default when it is the I4 step (on the real machine untick it until
+`il/fixround2` is merged: the analysis misreads strung or merged dots (session 4, F9) and the card sends no pitch, so
+the dots lie 1.5 mm apart where 1.6 is needed (F14); judge the contact from the after-photos, `REAL_MACHINE_TODO.md`
+item 7), `#btn-to-run` two-press; result table
 gap → diameter, contact, `offset −2.590 → −2.600 mm, Δ −0.010`, explicit `Use for the needle offset`, history of
 the last 20 touch-offs), **Start angle** (guided dot-pair procedure; `#pf-angle`, `#btn-pf-angle-set`),
 **Scale shots** (`#shots-place` with a link to Places when empty, `#shots-rot`, `#shots-count`,
@@ -648,9 +673,11 @@ lock)`; the cup shots are folded into `Older method: shots into a cup (records o
 - **The pad-cal panel view** (`?panel=pad-cal`; stays open from every workspace while the operator weighs): before
   start `#pcal-note` (the summary: `Checks and touches your two weigh coupons (≈ 1:44). Lays 76 test dots on the
   blank … Then it needs you once: weigh each coupon, wipe it and weigh it again (4 readings). About 0.23 g of paste,
-  ≈ 5:45 before your readings.`), `#pcal-needs` (`You need: two clean weigh coupons on coupon1 and coupon2 (blank PCB,
-  40 × 30 mm, at least 3 g), the balance, a lint-free wipe and isopropyl alcohol.`), `table#pcal-plan` (the steps
-  with their times), `#pcal-groups-list`, `#pcal-fixes` (fix-its for a refusal), `Calibrate · ≈ 5:45`
+  ≈ 5:45 before your readings.` and, from the preview's `purgeSpots`, `It uses 26 of the 31 free purge spots: wipe the
+  purge row and reset it before the next board.`), `#pcal-needs` (`You need: two clean weigh coupons on coupon1 and
+  coupon2 (blank PCB, 40 × 30 mm, at least 3 g), the balance, a lint-free wipe and isopropyl alcohol.`),
+  `table#pcal-plan` (the steps with their times, and `Purge row · 26 of 31 free spots (5 left after)`),
+  `#pcal-groups-list`, `#pcal-fixes` (fix-its for a refusal), `Calibrate · ≈ 5:45`
   (`#btn-pcal-start`, two presses: the only start); running `ol.phases#pcal-phases` (Home, Z check, Probe the blank,
   Find and touch the coupons, Test dots on the blank, Weigh dots on the coupons, Your readings, Decide, Plan again), `#pcal-live`
   (`0 of 6 dots`), `table#pcal-ladder`, `STOP stops it at once (F9).`; the readings `div.ri.ri--need#pcal-ask`
@@ -658,7 +685,10 @@ lock)`; the cup shots are folded into `Older method: shots into a cup (records o
   `#pcal-mg-k` `= 78 mg of paste (0.574 mg per dot)`), `Save the readings` `#btn-pcal-readings`, `Skip weighing (the
   types stay provisional: boards still refuse these pads)` `#btn-pcal-skip`, `Cancel the calibration`
   `#btn-pcal-cancel`; a reload or a second browser brings the prompt back; the result `div.ri#pcal-result` (the first
-  sentence, e.g. `Characterized 20:47: …; planned again.`, the control's drift), `#pcal-groups` (per group its numbers
+  sentence, e.g. `Characterized 20:47: …; planned again.`, the control's drift, and when a board would be short of
+  purge spots `#pcal-result-purge` `Next: wipe the purge row and reset it before the next board (5 of 31 spots left,
+  13 needed).` with `Wiped: reset row`), `table#pcal-ladder` under `Camera checks of the dots` (every dot the top
+  camera looked at per dot size: the blank's test dots and the coupons' weigh dots), `#pcal-groups` (per group its numbers
   and checks), `#pcal-crops` (camera crops, 12 px under the card), `#pcal-pred` (`Predicted and measured`, P1–P8),
   and `Calibrate again…` `#btn-pcal-again`, `Type the readings` `#btn-pcal-weigh-now` (a stopped job's coupons),
   `Finish the calibration` `#btn-pcal-finish`, `I’ll do it by hand` `#btn-pcal-manual`, `Checks ›` `#btn-pcal-plan`
@@ -691,10 +721,10 @@ the Run button state and the tab title. Nothing else may compute "ready". Unit-t
 | 2 | Start angle (I11) | I11 `ok` or `off` | reconnect → needs-you: the two answers in place; never set → blocked: `Measure the angle` |
 | 3 | Needle offset (I4 needle) | frame set, touched off or confirmed, drift ≤ 1.0 mm | not touched off but frame set → needs-you: `Confirm frame offset −2.590 mm`; frame missing / needle changed → blocked: `Open Needle Z frame` |
 | 4 | Regulator (I6, you) | a valid attestation (§9.4) | needs-you: `Pressure on to read the gauge` + `Reads 18 psi` |
-| 5 | Pad types (PLAN) | no blocked pads | blocked: `3 pads below characterized: chip-0603 ×2, sot-23 ×1` → each opens that type. **As built (pc-web), with the plan's profile check:** groups that need a profile → `Blocked · needs a profile`, `21 pads cannot be dispensed: 12 need a profile, 9 not with the 22G tip (WSON-8…)`, fixes `Use Chip 0603 for TestChip_A · plans again` / `Needs a profile: SW_SPST_3.9x2.9mm` (up to 3), `All 3 in Profile › Needs a profile`, `Lowest pad-type status`; only pads the tip cannot dispense → blocked, `9 pads cannot be dispensed with the 22G tip: WSON-8… (9 pads).`, fixes `Dispense the rest (Setup › Settings › Refuse flagged pads)` and `Why`; only notes → a Note that counts ready (`160/160 · 2 notes`). The Pad types tile goes to `#profile/needs` |
-| 6 | Board surface (I4 board) | tied to this plan's registration, covers every dot, fit ok, and the operator did not answer "new seat" since | needs-you: `Probe this seat` / `Same board, not moved`; fit or coverage problem → blocked with the bad points/dots. **As built:** the fix is `Register board` (`register`, two-press) or `Same seat? Check the fiducials` (`register-check`), with `Do it by hand`; texts `No board surface for this seat yet: register the board (fiducials, then N1 touches the board).`, `You said the board was re-seated: register it …`, `The board surface belongs to another seat of this board: register it again.` |
+| 5 | Pad types (PLAN) | no blocked pads | blocked: `3 pads below characterized: chip-0603 ×2, sot-23 ×1` → each opens that type. **As built (pc-web), with the plan's profile check:** groups that need a profile → `Blocked · needs a profile`, `21 pads cannot be dispensed: 12 need a profile, 9 not with the 22G tip (WSON-8…)`, fixes `Use Chip 0603 for TestChip_A · plans again` / `Needs a profile: SW_SPST_3.9x2.9mm` (up to 3), `All 3 in Profile › Needs a profile`, `Lowest pad-type status`; only pads the tip cannot dispense → blocked, `9 pads cannot be dispensed with the 22G tip: WSON-8… (9 pads).`, fixes `Dispense the rest (Setup › Settings › Refuse flagged pads)` and `Why`; with Refuse flagged pads off (`status.dispense.refuseFlaggedPads` false: the engine skips them) → a Note that counts ready, `151/160 · 9 skipped`, `9 pads skipped (Refuse flagged pads is off): WSON-8 (9 pads) not with the 22G tip. The other 151 are dispensed.`, fixes `Refuse flagged pads` and `Why` (or `Needs a profile`), and the run confirm adds `Skips 9 pads that cannot be dispensed` with the pads by package (its title counts only the pads dispensed); only notes → a Note that counts ready (`160/160 · 2 notes`). The Pad types tile goes to `#profile/needs` |
+| 6 | Board surface (I4 board) | tied to this plan's registration, covers every dot, fit ok, and the operator did not answer "new seat" since | needs-you: `Probe this seat` / `Same board, not moved`; fit or coverage problem → blocked with the bad points/dots. **As built:** the fix is `Register board` (`register`, two-press) or `Same seat? Check the fiducials` (`register-check`), with `Do it by hand`, and the item's short name is `register board` (strip `8 of 9 · register board`, nav `Register board`; final gate: it was `probe seat`); texts `No board surface for this seat yet: register the board (fiducials, then N1 touches the board).`, `You said the board was re-seated: register it …`, `The board surface belongs to another seat of this board: register it again.` |
 | 7 | Plan current | plan exists on the server and its fingerprints match (profile, surface, needle, registration) | needs-you: `Plan again` (in place); 404 → `Plan forgotten (OpenPnP restarted): plan again` |
-| 8 | Purge row (I9) | `spotsLeft ≥ perBoard` | needs-you: `Wiped: reset row` (two-press); not set → blocked: `Set the purge row` |
+| 8 | Purge row (I9) | `spotsLeft ≥` the plan's `purgeSpotsNeeded` (else `perBoard`; as built, rc1 review: a plan of two dot sizes needs 8 + 5 = 13, `this plan uses 13 (8 to start, 5 for its other dot sizes)`; the strip cell, the run confirm's `Purge spots 1 to 13`, `after this board` and the purge row's `next` cells count the same, `IL.purgeNeed`) | needs-you: `Wiped: reset row` (two-press); fewer spots than the need → blocked `too short`; not set → blocked: `Set the purge row` |
 | 9 | Pads clean (I10) | last clean check of this plan passed, or I10 off (then grey `Off: not checked`, counted ready) | needs-you: `Wiped: check again`; the run may still start (it re-checks) |
 
 Other interlocks (I1, I2, I3, I5, I7, I8, CONFIG) do not appear among the nine; a `blocked` one is added as an
@@ -769,7 +799,7 @@ tick or a `new seat` answer in one tab counts in the others at once).
 | Places | `GET /api/locations`, `PUT /api/locations/{name}` | Setup › Places `#places-table` `tr[data-place] input[data-axis] button[data-action=save]`, `#place-new`, `#btn-place-add` | Head view |
 | Needle changed | `POST /api/needle/changed` | Needle card `#btn-needle-changed` (two-press) | — |
 | Needle frame by touch | `POST /api/needle/anchor {surfaceZ, needleContactZ}` | `#anchor-n1`, `#anchor-n2`, `#btn-anchor` | I4 fix-it |
-| Needle frame from K | `POST /api/needle/anchor {surfaceZ, needleContactRawSum}` | `#anchor-k`, `#btn-anchor-k` | — |
+| Needle frame from K | `POST /api/needle/anchor {surfaceZ, needleContactRawSum}` | `#anchor-k`, `#btn-anchor-k`; locked with `#anchor-k-why` while `status.dispense.needle.kRefusal` (a failed Z check of this home, a needle change): the card switches to Both tips | — |
 | Needle offset (confirm/manual) | `POST /api/needle/offset {offsetMm}` | `#btn-needle-offset` (`Confirm −2.590 mm`), `#needle-offset` | Checks item 3 fix-it |
 | Needle XY trim | `PUT /api/config {needleXyTrim}` | Needle card › Edit trim: `#trim-dx/dy/note`, `#btn-trim`, `#trim-state` | — |
 | Surfaces | `GET /api/surfaces`, `PUT /api/surfaces/{name}`, `DELETE /api/surfaces/{name}` | Run › Probe (board, every seat), Setup › Probed surfaces (blank; advanced `#surf-name`, `#surf-points`, `#btn-surf-save`) | I4 fix-its |
@@ -966,7 +996,7 @@ line):
 | I4 surface, no seat (as built) | `No board surface for this seat yet: register the board (fiducials, then N1 touches the board).` | `Register board` · `Do it by hand` |
 | REG / PROBE refusals (as built) | the engine's text (`AUTO_REGISTER_DESIGN.md` §6.2) | `Look with the camera` · `Change board` · `Plan without fiducial correction` · `Register again` · `Do it by hand` · `Probe the blank…` |
 | Upload while a task runs (as built) | `Upload the board when the run has finished.` (also while a pad calibration is between its engine steps) | — |
-| I4 Z moved (as built, final round) | the engine's text: `Z moved 0.80 mm at the home of 14:02: … Record the needle frame again (Setup › Needle Z frame), probe the blank, touch off and register the board again.` | the next step only, in turn: `Open Needle Z frame` · `Probe the blank…` · `Run a touch-off` / `Confirm frame offset −2.590 mm` · `Register board` / `Do it by hand` |
+| I4 Z moved (as built, final round) | the engine's text: `Z moved 0.80 mm at the home of 14:02: … Record the needle frame again with both tips (Setup › Needle Z frame), probe the blank, take the places' Z again with N1 (Setup › Places), touch off and register the board again.` | the next step only, in turn: `Open Needle Z frame` (the card switches to Both tips, locks From K and says why: `status.dispense.needle.kRefusal`) · `Probe the blank…` · `Retake Z with N1 (waste)` per place in `status.machine.zCheck.places`, up to 3 (Places flags each Z, its button reads `Retake Z` and saves once N1 took the Z, the same value too; the card state `Z moved · retake waste, blank`) · `Run a touch-off` (not the frame's own offset: Z moved at this home) · `Register board` / `Do it by hand` |
 | Register: board top under the probe's reach (as built, final round) | `the board top Z 3.500 lies 2.000 mm under the needle-frame surface 5.500, … it cannot reach that height. …` | `Board step` · `Needle Z frame` · `Do it by hand` |
 | Locked by the engine's own 409s (as built, final round) | `A board file is being read (an upload takes up to about 20 s): wait for it to finish` (every engine action) · `OpenPnP is busy (homing or moving): wait for it to finish` (what uses the machine) | — |
 | Clean-pad check refused at its start (as built, final round) | `Refused 14:05: the pressure hold is on: Pressure off first.` on the Pads clean card | `Check pads` |
@@ -983,7 +1013,7 @@ line):
 | Reason badges | `no pad type` · `not calibrated yet` · `cannot be dispensed with the 22G tip` · the group's `short` for the others |
 | Before start | the engine's sentence (`WEB_API.md` §3.5) and `You need: two clean weigh coupons on coupon1 and coupon2 (blank PCB, 40 × 30 mm, at least 3 g), the balance, a lint-free wipe and isopropyl alcohol.`; button `Calibrate · ≈ 5:45`; started `Pad calibration started: STOP stops it at once (F9).` |
 | Readings prompt | `The dots are laid and the head is parked over the purge row. For each coupon: put it on the balance and type the reading; wipe the paste off with a lint-free wipe and isopropyl alcohol, let it dry, put it back on the balance and type the second reading. Coupon 1 has 136 quarter-turn dots (about 0.072 g); … Waiting for you since 21:25.`; echo `= 78 mg of paste (0.574 mg per dot)`, else `Type both readings in grams.`; `Save the readings` · `Skip weighing (the types stay provisional: boards still refuse these pads)` · `Cancel the calibration` |
-| Result, first sentence | `Characterized 21:50: SW_SPST_3.9x2.9mm · 1.83 × 0.86 mm gets 2 half-turn dots per pad, about 2.29 mg per pad (0 % more than the 2.29 mg target); …; planned again.` · `Not characterized 21:58: … stays provisional: the two start angles of the half-turn dots differ 19 % in area (at most 13 % allowed); …` · `Measured 22:02: 62 half-turn dots on the blank: the dots landed 0.20 mm off on average (at most 0.15 mm allowed): check the needle offset.` · `Failed 22:03: Coupon 1 is not at its place: …` · `Stopped 13:06 during weigh: the blank results were kept; the coupons still need weighing until 21:13.`; the control's drift `The validated half turn now gives 1.15 mg, 9 % more than the 1.06 mg weighed on 2026-10-27.` |
+| Result, first sentence | `Characterized 21:50: SW_SPST_3.9x2.9mm · 1.83 × 0.86 mm gets 2 half-turn dots per pad, about 2.29 mg per pad (0 % more than the 2.29 mg target); …; planned again.` · `Not characterized 21:58: … stays provisional: the two start angles of the half-turn dots differ 19 % in area (at most 13 % allowed); …` · `Measured 22:02: 62 half-turn dots checked by the camera: the dots landed 0.20 mm off on average (at most 0.15 mm allowed): check the needle offset.` · `Failed 22:03: Coupon 1 is not at its place: …` · `Stopped 13:06 during weigh: the blank results were kept; the coupons still need weighing until 21:13.`; the control's drift `The validated half turn now gives 1.15 mg, 9 % more than the 1.06 mg weighed on 2026-10-27.` |
 | Decider check lines (shown as the engine words them) | `Amount 2.37 mg per pad (target 2.29 mg per pad, -25 % to +10 %)`, `overhang 0.12, dot gap 2.83, copper gap 2.99 mm (limits overhang 0.20, gaps 0.30 / 0.15 mm)`: the engine still writes a hyphen for the minus and a single mm for the list (open UI need: `−25 %`, a unit on every number) |
 | Calibrate › Pad calibration | `Lower-left corner and size. Default: 40 × 20 mm at the blank place, off the purge row.` · `The calibration area is free again: 14.0 mm left.` · `New paste noted: weighings and camera results from before stop counting.` · `Wipe the area with a lint-free wipe and isopropyl alcohol first.` |
 
@@ -1062,7 +1092,7 @@ verdict), `toast` (`Settings saved`, `STOPPED…`), `board-select`, `board-file`
 `trim-dx`, `trim-dy`, `trim-note`, `btn-trim`, `surf-name`, `btn-surf-add`, `btn-surf-clear`, `surf-points`,
 `btn-surf-save`, `surf-state`, `pr-state`, `pr-surface`, `pr-x0`, `pr-y0`, `pr-pitchx`, `pr-pitchy`, `pr-spots`,
 `btn-pr-usexy`, `btn-pr-save`, `btn-pr-reset`, `pr-kv`, `interlock-list` (`li.ok/.warning/.blocked/.off/.info`),
-`set-maxon`, `set-minstatus`, `set-clean`, `btn-settings`, `set-json`, `btn-settings-json`, `cal-history-note`,
+`set-maxon`, `set-minstatus`, `set-refuseflagged`, `set-clean`, `btn-settings`, `set-json`, `btn-settings-json`, `cal-history-note`,
 `setup-guide`, all `shots-*`, `ss-*`, `dl-*`, `sd-*`, `to-*` and their buttons, `cal-current`, `cal-table`,
 `ladder-table`, `cal-result`, `pf-card`, `pf-title-name`, `pf-name`, `pf-psi`, `pf-dwell`, `pf-psi-note`, `pf-turn`,
 `pf-suck`, `pf-gap`, `pf-turn-info`, `pf-rpm`, `pf-accel`, `pf-purge`, `pf-rpm-warn`, `pf-notes`, `pf-problems`,
@@ -1163,7 +1193,7 @@ The pad calibration (pc-task, pc-web) added `status.padCalibration` (the job vie
 per job id), `run.label` `pad calibration`, the plan's `profileCheck` and per-pad / per-dot dose fields, the upload
 preview's profile column, and the routes of `WEB_API.md` §3.4–3.5 (the crops as PNG; the SIM balance and paste for
 tests). Still missing for the UI: a per-run skip of undispensable pads (PC §20 decision 6: `POST /api/run`
-`{skipPads}` recorded as `skippedPads`); until then the Pad types card points to the Refuse flagged pads setting.
+`{skipPads}` recorded as `skippedPads`); until then the Pad types card points to the Refuse flagged pads setting (`#set-refuseflagged`; off, the item is a note that counts ready and the confirm names the pads skipped).
 | Run-only abort (stop after this dot, stay connected and homed) | softer stop | not offered; STOP is the only stop (open question, not required) |
 
 ## 18. Acceptance checklist

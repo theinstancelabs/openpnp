@@ -22,6 +22,8 @@ final class ApiContext {
     final Configuration configuration;
     final RunTracker tracker = new RunTracker();
     final PlanStore plans = new PlanStore();
+    /** The paste on each seated board (every tab and browser sees the same board). */
+    final BoardPaste paste = new BoardPaste(plans);
     final PressureHold pressure;
     /** The pad calibrations (PROFILE_CALIBRATION_DESIGN.md §7): one at a time, its lock on the other tasks. */
     final PadCalibrationJobs padCalJobs = new PadCalibrationJobs(this);
@@ -73,9 +75,11 @@ final class ApiContext {
         if (listened != null) {
             listened.removeListener(tracker);
             listened.removeListener(pressure);
+            listened.removeListener(paste);
         }
         s.addListener(tracker);
         s.addListener(pressure);
+        s.addListener(paste);
         s.setPressureHoldCheck(pressure::isActive);
         listened = s;
     }
@@ -98,7 +102,8 @@ final class ApiContext {
         if (job != null) {
             throw ApiException.refused(job);
         }
-        if (s.isBusy()) {
+        // a task OpenPnP dropped (one of its own ahead of it failed) never ends by itself: it ends here (rc1 review)
+        if (s.isBusy() && !s.releaseDroppedTask()) {
             throw ApiException.refused("a dispense task is already running; wait for it or press STOP");
         }
         if (BoardImporter.reading()) {

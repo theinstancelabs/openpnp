@@ -104,6 +104,30 @@ public class ZFrameTest {
         return l;
     }
 
+    /**
+     * rc1 review (tests), AUTO_REGISTER_DESIGN §10.2 case 22: a surface probed on the simulator (simulated) never gives
+     * a dot its Z on a controller that is not the simulator: I4 refuses it there, and only there.
+     */
+    @Test
+    public void aSurfaceProbedOnTheSimulatorIsRefusedOnlyOffTheSimulator() throws Exception {
+        DispenseConfig c = cfg();
+        DispensePlan p = plan(c, 5.5);
+        c.surfaces.get("board").simulated = true;
+        Interlocks.Inputs in = new Interlocks.Inputs();
+        in.cfg = c;
+        in.machineEnabled = true;
+        in.machineHomed = true;
+        in.nozzleName = "N2";
+        in.compatibleNozzleTips = Collections.emptyList();
+        in.plan = p;
+        in.estimatedPressurisedSeconds = 10;
+        in.scope = DispenseService.boardScope(c, p);
+        assertEquals(Collections.singletonList("the 'board' surface was probed on the simulator: probe it again on this "
+                + "machine"), i4(Interlocks.check(in)));
+        in.simulatorConfirmed = true;
+        assertTrue(Interlocks.check(in).ok(), Interlocks.check(in).toString());
+    }
+
     @Test
     public void dotsTakeTheirZFromTheProbedPlaneAndLandAtTheBenchHeight() throws Exception {
         DispenseConfig c = cfg();

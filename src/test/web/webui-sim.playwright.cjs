@@ -170,6 +170,12 @@ async function runFirstDots(page, n) {
   try {
     const resp = await page.goto(BASE);
     check('UI served by OpenPnP', resp.ok(), resp.status());
+    // a simulator only, before anything is changed or pressed (rc1 review: this test homes, runs boards and presses STOP;
+    // the runner starts its own SIM session, a hand run could point it anywhere): every driver link is loopback now
+    // (status.server.simulated), and the controller answers as OpenPnP's simulator once connected (below)
+    const sim0 = await page.request.get(BASE + 'api/status').then((r) => r.json()).catch(() => ({}));
+    check('the server is an OpenPnP simulator (status.server.simulated)', !!sim0.server && sim0.server.simulated === true, sim0.server);
+    if (!sim0.server || sim0.server.simulated !== true) throw new Error('not a simulator: nothing was done');
     await waitText(page, 'pill-engine', /Ready to run|ready|Blocked|unavailable|Stopped|No plan|of 9/, 20000);
     check('board run verdict in the strip', /Ready to run|ready|Blocked|unavailable|Stopped|No plan|of 9/.test(await textOf(page, 'pill-engine')),
       await textOf(page, 'pill-engine'));
@@ -306,6 +312,9 @@ async function runFirstDots(page, n) {
     await page.click('#btn-start');
     await waitText(page, 'pill-conn', /^Connected$/, 60000);
     check('Connect connects (sim)', true);
+    const confirmed = await waitStatus(page, (x) => x.server && x.server.simulatorConfirmed === true, 15000).then(() => true, () => false);
+    check('the controller answered as OpenPnP\'s simulator (status.server.simulatorConfirmed) before the first motion', confirmed);
+    if (!confirmed) throw new Error('the controller is not the simulator: stopped before Home');
     const homeLabel = await press2(page, '#btn-home');
     check('Home asks for a second press', /Press again: home/i.test(homeLabel), homeLabel);
     await waitText(page, 'pill-homed', /^Homed$/, 120000);
@@ -609,6 +618,12 @@ async function runFirstDots(page, n) {
     check('20-dot run finished OK', liveStatus === 'OK', liveStatus);
     const doneDots = await page.$$eval('#plan-svg circle.dot.done', (e) => e.length);
     check('20 dots marked done in the preview', doneDots === 20, doneDots);
+    // the Result step's tiles keep a label with its number on one line (final gate: "bench" ended a line, "5,490" began
+    // the next)
+    await page.waitForSelector('.result-tiles .mini__s', { timeout: 10000 }).catch(() => {});
+    const subs = await page.evaluate(() => Array.from(document.querySelectorAll('.result-tiles .mini__s')).map((n) => n.textContent));
+    check('Result: "estimate 5,010 · bench 5,490" keeps each label with its number (no-break space)',
+      subs.some((t) => /bench\u00a0[\d,]+/.test(t) && /estimate\u00a0[\d,]+/.test(t)) && !subs.some((t) => /\b(bench|estimate) \d/.test(t)), subs);
     const st1 = await (await page.request.get(BASE + 'api/status')).json();
     check('last run: 20 of 20 dots, DPH reported', st1.lastRun.dotsDone === 20 && st1.lastRun.dotsPlanned === 20
       && st1.lastRun.dphMotion > 0 && st1.lastRun.dphOverall > 0, st1.lastRun);
@@ -716,6 +731,24 @@ async function runFirstDots(page, n) {
       { timeout: 10000 }).catch(() => {});
     check('after STOP: verdict "Stopped hh:mm"', /^Stopped \d\d:\d\d/.test(await page.textContent('#pill-engine .cell__v')),
       await page.textContent('#pill-engine .cell__v'));
+    // the stopped strip is the widest (Not connected + Connect, Off · vented, Confirm, 7 of 15 · wipe): the verdict's value
+    // is never cut (UI_DESIGN §4: cells never truncate); shorter forms of the other cells, then of the verdict, go first
+    const cuts = [];
+    for (const [w, h] of [[1440, 900], [1280, 800], [1024, 768]]) {
+      await page.setViewportSize({ width: w, height: h });
+      await page.waitForTimeout(500);
+      cuts.push(await page.evaluate((ww) => {
+        const v = document.querySelector('#pill-engine .cell__v'), cells = document.getElementById('cells');
+        const r = v.getBoundingClientRect(), lim = cells.getBoundingClientRect().right;
+        return { w: ww, shown: v.innerText, cut: v.scrollWidth > v.clientWidth + 0.5 || r.right > lim + 0.5, tier: cells.className };
+      }, w));
+      await page.screenshot({ path: path.join(OUT, 'run-stopped-strip-' + w + '.png') });
+    }
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    check('after STOP: the verdict reads "Stopped…" in full at 1440, 1280 and 1024 px (the other cells shorten first)',
+      cuts.every((c) => !c.cut && /^Stopped/.test(c.shown)), cuts);
+    // the other cells' long parts go before the verdict's own: at 1440 px the time of the stop stays (final gate)
+    check('after STOP: at 1440 px the verdict keeps the time of the stop ("Stopped hh:mm")', /^Stopped \d\d:\d\d/.test(cuts[0].shown), cuts[0]);
     check('after STOP: the plan never says "All interlocks pass"', !/All interlocks pass/.test(await page.textContent('#ws-run')));
     await page.waitForSelector('#btn-run-rest', { state: 'visible', timeout: 10000 }).catch(() => {});
     const locked = await page.evaluate(() => ['btn-run-rest', 'btn-run-all'].map((id) => {
@@ -895,6 +928,24 @@ async function runFirstDots(page, n) {
       check('registering: the live phases show (#reg-phases li.now)', liveNow);
       const homeRow = await page.waitForSelector('#reg-phases li[data-ph=home]', { timeout: 10000 }).then(() => true, () => false);
       check('registering: the Home row is shown', homeRow);
+      // also when the plan's registration preview lists no fiducials (it could not be made: e.g. made while the simulator was
+      // off after a STOP, "REG: registration … was made on the simulator"): the row counts the plan's own fiducials
+      const fidRow = await page.evaluate(async () => {
+        const row = () => { const li = document.querySelector('#reg-phases li[data-ph=fiducials]'); return li ? li.textContent : null; };
+        const frame = () => new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(res)));
+        const p = IL.S.plan, t = p.registrationTargets, d = (IL.S.status.run && IL.S.status.run.detail) || {};
+        const out = { text: row(), n: ((p.board && p.board.fiducials) || []).length, reported: (d.fiducials || []).length, stage: d.stage };
+        p.registrationTargets = Object.assign({}, t, { fiducials: [], probes: [], error: 'REG: registration 0000 was made on the simulator: register again' });
+        IL.render();
+        await frame();
+        out.noPreview = row();
+        p.registrationTargets = t;
+        IL.render();
+        return out;
+      });
+      check('registering: the Fiducials row counts the plan\'s fiducials before the run reports them ("0 of 3", no "…"), also when its preview lists none',
+        fidRow.n > 0 && fidRow.reported === 0 && [fidRow.text, fidRow.noPreview].every((x) => new RegExp('Fiducials · 0 of ' + fidRow.n + ' found').test(x || '')
+          && !/of …/.test(x || '')), fidRow);
       await waitStatus(page, (x) => x.run && x.run.label === 'board registration' && x.run.detail && x.run.detail.stage === 'fiducials'
         && (x.run.detail.fiducials || []).some((f) => f.state === 'found'), 120000).catch(() => {});
       await page.screenshot({ path: path.join(OUT, 'register-running.png') });
@@ -904,6 +955,10 @@ async function runFirstDots(page, n) {
       check('register: the task ended OK', rs.run.status === 'OK', { status: rs.run.status, message: rs.run.message });
       const homeDone = await page.evaluate(() => { const v = IL.S.plan.registrationRun; return v && v.home; });
       check('register: homed first (it was needed)', homeDone && homeDone.needed && homeDone.done, homeDone);
+      // the card names the registration's time once the plan it made is shown (before that, the task's end: a minute later
+      // when the fit and the end straddle one)
+      await page.waitForFunction((n) => IL.S.plan && IL.S.plan.planId === n, rs.run.nextPlanId, { timeout: 20000 }).catch(() => {});
+      await page.waitForTimeout(300);
       const res1 = await textOf(page, 'reg-result');
       check('#reg-result: "Registered hh:mm: 3 of 3 fiducials"', /^Registered \d\d:\d\d: 3\sof\s3 fiducials/.test(res1), res1);
       check('register: the new plan is shown (status.run.nextPlanId)', await page.evaluate((n) => IL.S.plan.planId === n, rs.run.nextPlanId), rs.run.nextPlanId);
@@ -998,6 +1053,20 @@ async function runFirstDots(page, n) {
       const lowText = /^N1 stopped low \(Z [−-]?\d+\.\d\d mm\): look at the board under it\./;
       check('N1 low: Register board and Probe the blank are locked like Run, the reason names N1\'s Z, the blank\'s with "Home now"',
         !lowReg.canRun && lowReg.disabled && lowText.test(lowReg.why) && lowBlank.disabled && lowText.test(lowBlank.why) && lowBlank.home, { lowReg, lowBlank });
+      // a STOP during the board's dots (rc1 review): N1 then sits above its safe zone and the needle is low over a pad. The
+      // engine says which tool (status.machine.home.lowTool); the texts name the needle, its Z and the pad, never N1's high Z
+      const needleLow = await page.evaluate(() => {
+        const s = JSON.parse(JSON.stringify(IL.S.status));
+        const d = IL.S.plan.dots[3];
+        s.machine.home = Object.assign({}, s.machine.home, { n1Low: true, lowTool: 'needle', n1Z: 60.06 });
+        const n2 = s.machine.positions.find((t) => t.kind === 'nozzle' && t.name === s.dispense.nozzle);
+        Object.assign(n2, { x: d.x + 0.05, y: d.y - 0.05, z: 2.94 });
+        const it = IL.readiness(s, IL.S.plan, IL.readyCtx()).items.find((x) => x.key === 'machine');
+        return { text: IL.n1LowText(s), pad: d.padId, value: it.value, detail: it.detail };
+      });
+      check('needle low after a STOP in the dots: "The needle (N2) stopped low (Z 2.94 mm) at <pad>: … Home lifts it first", not N1 at 60.06',
+        needleLow.text === 'The needle (N2) stopped low (Z 2.94 mm) at ' + needleLow.pad + ': look at the board under it. Home lifts it first, then homes.'
+        && needleLow.value === 'needle low' && needleLow.detail === needleLow.text, needleLow);
       await page.evaluate(() => { if (IL.panel.isPushed()) IL.panel.close(); IL.go('#run/probe'); });
       g1 = gcodeNext();
       await press2(page, '#btn-home');
@@ -1110,6 +1179,14 @@ async function runFirstDots(page, n) {
       await page.waitForSelector('#btn-run-go:enabled', { timeout: 10000 });
       await page.click('#btn-run-go');
       await page.waitForSelector('#dlg-run', { state: 'detached', timeout: 15000 });
+      // the run's phase list once N1 touched: the Z check row gives every number with its unit, kept on its line (final
+      // gate: "… mm from 5.430", then "5.430" with "mm" alone on the next line)
+      const zRow = await page.waitForFunction(() => {
+        const li = Array.from(document.querySelectorAll('#run-phases li')).find((x) => /Z check/.test(x.textContent) && /N1 touched/.test(x.textContent));
+        return li ? li.textContent : null;
+      }, null, { timeout: 120000, polling: 150 }).then((h) => h.jsonValue(), () => null);
+      check('run: the phase list\'s Z check reads "N1 touched Z … mm, … mm from … mm", each number on one line with its unit',
+        /N1 touched Z [\d.]+\smm, [−+-]?[\d.]+\smm from [\d.]+\smm/.test(zRow || '') && !/\d mm/.test(zRow || ''), zRow);
       const rr = await waitStatus(page, (x) => x.run && x.run.label === 'board' && !x.run.running, 300000);
       l = lines(gcode(g1));
       const iH = l.findIndex((x) => /^G28\b/.test(x)), iPress = l.indexOf('M106 P2 S255');
@@ -1120,6 +1197,57 @@ async function runFirstDots(page, n) {
         iH >= 0 && iPress > iH && touches === 2, { iH, iPress, touches });
       check('run after the home and the Z check: OK, homed', rr.run.status === 'OK' && rr.machine.homed, { status: rr.run.status, message: rr.run.message });
       await waitText(page, 'pill-homed', /^Homed$/, 15000).catch(() => {});
+
+      // 9b. The board's paste is the server's (rc1 review: the tab alone kept it): a new browser (no tab storage) sees
+      // the same pads with paste and the same board number, and a run of the whole board on it asks "I wiped this
+      // board" first (Go stays locked until it is ticked; the run would tell the engine)
+      {
+        await page.waitForFunction(() => !IL.S.planPending && IL.S.plan && IL.S.plan.pasted, null, { timeout: 15000 }).catch(() => {});
+        await page.waitForTimeout(1000);
+        const mine = await page.evaluate(() => ({ done: IL.run.doneSet.size, board: IL.S.plan.pasted.board, plan: IL.S.plan.planId }));
+        const fresh = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+        const tab = await fresh.newPage();
+        tab.on('console', (m) => { if (m.type() === 'error') jsErrors.push('new tab: ' + m.text()); });
+        await tab.goto(BASE + '#run/checks');
+        await tab.waitForFunction((id) => window.IL && IL.S && IL.S.plan && IL.S.plan.planId === id && IL.S.plan.pasted, mine.plan, { timeout: 30000 }).catch(() => {});
+        await tab.waitForTimeout(1500);
+        const theirs = await tab.evaluate(() => ({ done: IL.run.doneSet.size, board: IL.S.plan.pasted.board, eyebrow: (document.getElementById('chk-eyebrow') || {}).textContent,
+          verdict: IL.ready().verdict.text, all: !document.getElementById('run-all-link').hidden }));
+        check('the board\'s paste is the server\'s: a new browser sees the same pasted dots and the same board number', mine.done > 0 && theirs.done === mine.done
+          && theirs.board === mine.board && theirs.eyebrow === 'Board ' + mine.board + ' · plan ' + mine.plan.slice(0, 4), { mine, theirs });
+        await tab.screenshot({ path: path.join(OUT, 'new-browser-same-board.png') });
+        await tab.click(theirs.all ? '#run-all-link' : '#btn-run');
+        await tab.waitForSelector('#dlg-run', { timeout: 10000 }).catch(() => {});
+        await tab.evaluate(() => { IL.attest.set('regulator', IL.S.status.dispense.profile.pressurePsi); IL.attest.set('paste-life', true); });
+        for (const t of ['#run-tick-gauge', '#run-tick-paste', '#run-tick-hands']) if (!(await tab.isChecked(t).catch(() => true))) await tab.check(t).catch(() => {});
+        await tab.waitForTimeout(400);
+        const cf = await tab.evaluate(() => { const w = document.getElementById('run-tick-wiped'); const go = document.getElementById('btn-run-go');
+          return { wipe: w ? w.closest('label').textContent : null, go: go ? go.textContent : null, locked: !!go && go.disabled }; });
+        await tab.screenshot({ path: path.join(OUT, 'new-browser-run-all-wiped-tick.png') });
+        check('a whole-board run on the pasted board asks "I wiped this board", Go locked until it is ticked',
+          !!cf.wipe && /^I wiped this board: no paste on its \d+ pads now/.test(cf.wipe) && /already has paste on \d+ pads/.test(cf.wipe) && cf.locked && /Tick 1 more to run/.test(cf.go), cf);
+        await tab.click('#btn-run-cancel').catch(() => {});
+        await fresh.close();
+        // a board with every dot already (UI_DESIGN §8.1.7): "Board done · Next board", Next board the primary action,
+        // no test run, "Run it again" second (its confirm asks "I wiped this board", above). Here the plan's paste as
+        // the server would have it after the whole board, for a moment
+        await page.evaluate(() => {
+          const p = IL.S.plan;
+          IL.run.keepPasted = p.pasted;
+          p.pasted = Object.assign({}, p.pasted, { board: p.pasted.board || 1, pads: Object.fromEntries(p.dots.map((d) => [d.padId, 9])) });
+          IL.go('#run/checks');
+        });
+        await page.waitForFunction(() => IL.run.doneSet.size === IL.S.plan.dots.length && !document.getElementById('btn-run-next').hidden, null, { timeout: 10000 }).catch(() => {});
+        await page.screenshot({ path: path.join(OUT, 'board-done-next-board.png') });
+        const bd = await page.evaluate(() => {
+          const r = IL.ready(), nb = document.getElementById('btn-run-next'), rb = document.getElementById('btn-run');
+          return { verdict: r.verdict.text, done: !!r.verdict.done, strip: document.getElementById('pill-engine').textContent, next: !nb.hidden && nb.classList.contains('btn--primary'),
+            test: !document.getElementById('btn-run-test').hidden, run: rb.textContent.trim(), runPrimary: rb.classList.contains('btn--primary') };
+        });
+        await page.evaluate(() => { IL.S.plan.pasted = IL.run.keepPasted; delete IL.run.keepPasted; IL.render(); });
+        check('a board with every dot: "Board done · Next board", Next board the primary action, no test run, "Run it again" not primary',
+          bd.done && bd.verdict === 'Board done · Next board' && /Board done/.test(bd.strip) && bd.next && !bd.test && /^Run it again · \d+ dots$/.test(bd.run) && !bd.runPrimary, bd);
+      }
 
       // 10. Setup › Probe the blank: automatic, beside the purge row, the panel stays open with the result
       await nav(page, 'setup');
@@ -1214,6 +1342,39 @@ async function runFirstDots(page, n) {
       check('Plan without fiducial correction: no registration, #reg-correction says so',
         await page.evaluate(() => IL.S.plan.registration === null) && /^no fiducial correction/.test(await textOf(page, 'reg-correction')), await textOf(page, 'reg-correction'));
 
+      // NEXT, the nav subline and the verdict agree (rc1 review): with an item blocked (here the purge row not set) and the
+      // regulator still to read, NEXT is the blocked item the verdict names, not the regulator
+      {
+        const nx = await page.evaluate(() => {
+          const s = JSON.parse(JSON.stringify(IL.S.status));
+          s.dispense.purgeRow = Object.assign({}, s.dispense.purgeRow, { defined: false });
+          const r = IL.readiness(s, IL.S.plan, Object.assign(IL.readyCtx(), { attest: {} }));
+          return { next: r.next && r.next.key, short: r.next && r.next.short, verdict: r.verdict.text, regulator: r.items.find((x) => x.key === 'regulator').state };
+        });
+        check('NEXT is the blocked item the verdict names (purge row), not the regulator that only needs you', nx.regulator === 'need' && nx.next === 'purge'
+          && nx.verdict === 'Blocked · ' + nx.short, nx);
+        // a plan that purges more spots than the row has (two dot sizes: 13 of 10): the Run nav names it in a form that fits
+        // its subline at 1440 px (it never wraps, and "Purge row too short" was cut)
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        const nv = await page.evaluate(async () => {
+          // the readiness and the board's done dots are taken again at the next status: wait for it, then for the render
+          const polled = () => new Promise((res) => { const t0 = IL.S.statusAt;
+            const tick = () => (IL.S.statusAt !== t0 ? requestAnimationFrame(() => requestAnimationFrame(res)) : setTimeout(tick, 50)); tick(); });
+          const p0 = IL.S.plan, row = IL.S.status.dispense.purgeRow;
+          // a clean board (no paste: else the nav offers to finish it) whose plan purges one spot more than the row has
+          IL.S.plan = Object.assign({}, p0, { purgeSpotsNeeded: row.spots + 1,
+            pasted: Object.assign({}, p0.pasted, { board: null, sinceMs: null, dots: 0, pads: {} }) });
+          await polled();
+          const sub = document.querySelector('#tab-btn-run .nav__s');
+          const out = { sub: sub.textContent, cut: sub.scrollWidth > sub.clientWidth + 0.5, verdict: IL.ready().verdict.text };
+          IL.S.plan = p0;
+          await polled();
+          return out;
+        });
+        check('Run nav: a purge row too short reads "Purge row short" whole (not "Purge row too sho…")', nv.sub === 'Purge row short' && !nv.cut
+          && nv.verdict === 'Blocked · purge row too short', nv);
+      }
+
       // 13. What the engine refuses, the UI locks or says (the final round's engine fixes, E1 and E2). Pure checks on the
       // status: OpenPnP homing or jogging by itself (409 "OpenPnP is busy"), an upload reading its file
       // (status.boardImport.reading, 409 on every engine endpoint); a clean-pad check refused at its start (the pressure
@@ -1283,13 +1444,26 @@ async function runFirstDots(page, n) {
         await page.screenshot({ path: path.join(OUT, 'z-moved-1-frame.png') });
         check('Z moved 1: the blocker names the move, the remedy in its order, and offers "Open Needle Z frame"', st.step === 'frame' && !st.canRun && !!st.card
           && st.card[0] && st.card[0][0] === 'go:#setup/needle' && /^Z moved 0\.\d\d mm/.test(st.text || '')
-          && /Record the needle frame again \(Setup › Needle Z frame\), probe the blank, touch off and register the board again\./.test(st.text || ''), st);
-        // the operator records the frame again from K: N1 touches the blank 0.8 mm higher, K is unchanged
+          && /Record the needle frame again with both tips \(Setup › Needle Z frame\), probe the blank, take the places' Z again with N1 \(Setup › Places\), touch off and register the board again\./.test(st.text || ''), st);
+        // the frame from K would give the old offset whatever N1 touches (K moves by twice a zero shift): the card
+        // switches to Both tips, says why, and From K is locked (the engine refuses K until the next home)
         await page.click('#chk-needs .ri[data-key="I4-z"] button[data-fix="go:#setup/needle"]');
-        await page.waitForSelector('#btn-anchor-k', { state: 'visible', timeout: 15000 });
+        await page.waitForSelector('#btn-anchor', { state: 'visible', timeout: 15000 });
+        await page.waitForFunction(() => !document.getElementById('anchor-k-why').hidden, null, { timeout: 10000 }).catch(() => {});
+        await page.screenshot({ path: path.join(OUT, 'z-moved-1-needle-both-tips.png') });
+        const kw = await page.evaluate(() => {
+          const seg = Array.from(document.querySelectorAll('#card-needle .seg button'));
+          return { why: document.getElementById('anchor-k-why').hidden ? null : document.getElementById('anchor-k-why').textContent,
+            kLocked: seg[0].disabled, both: seg[1].getAttribute('aria-pressed'), kBtn: !document.getElementById('btn-anchor-k').hidden };
+        });
+        check('Z moved 1: Needle Z frame switches to Both tips and locks From K, saying why (K moves by twice the shift)',
+          kw.kLocked && kw.both === 'true' && !kw.kBtn && /^K was measured under another home: Z moved 0\.\d\d mm at the home of \d\d:\d\d, and K moves by about twice that\. Record the needle frame with both tips touching the same spot\.$/.test(kw.why || ''), kw);
+        const kr = await page.request.post(BASE + 'api/needle/anchor', { data: { surfaceZ: 10.8, needleContactRawSum: 65.59 } });
+        check('Z moved 1: the engine refuses the frame from K (409) while the check of this home failed', kr.status() === 409, [kr.status(), (await kr.text()).slice(0, 200)]);
+        // the operator touches the blank with both tips: 0.8 mm higher each (the SIM's needle sits 2.59 mm under N1)
         await page.fill('#anchor-n1', '10.8');
-        await page.fill('#anchor-k', '65.59');
-        await page.click('#btn-anchor-k');
+        await page.fill('#anchor-n2', '8.21');
+        await page.click('#btn-anchor');
         await waitStatus(page, (x) => x.dispense.needle.anchor && Math.abs(x.dispense.needle.anchor.surfaceZMm - 10.8) < 1e-6, 10000);
         await page.evaluate(() => IL.go('#run/checks'));
         st = await zStep('blank');
@@ -1306,19 +1480,73 @@ async function runFirstDots(page, n) {
         check('Z moved 2: the blank probed again at its new height', bz.run.status === 'OK' && bz.dispense.surfaces.blank.points.every((q) => Math.abs((Array.isArray(q) ? q[2] : q.z) - 10.8) < 0.1),
           { status: bz.run.status, message: bz.run.message });
         await page.evaluate(() => { if (IL.panel.isPushed()) IL.panel.close(); IL.go('#run/checks'); });
+        // the places moved with the surfaces: each one set before the home is taken again with N1 (the touch-off primes
+        // at the waste, and the engine refuses a place set before the home while the check of this home failed)
+        st = await zStep('places');
+        await page.screenshot({ path: path.join(OUT, 'z-moved-3-places.png') });
+        const mp = (await status()).machine.zCheck.places.map((x) => x.name);
+        check('Z moved 3: after the blank, "Retake Z with N1" for each place set before the home, the waste among them',
+          st.step === 'places' && mp.includes('waste') && !!st.card && st.card.length === Math.min(3, mp.length)
+          && st.card.every(([f, t], i) => f === 'go:#setup/places/' + encodeURIComponent(mp[i]) && t === 'Retake Z with N1 (' + mp[i] + ')'), { st, mp });
+        const locs0 = (await status()).dispense.locations;
+        await page.click('#chk-needs .ri[data-key="I4-z"] button[data-fix="go:#setup/places/waste"]');
+        await page.waitForSelector('tr[data-place="waste"] input[data-axis=z]', { state: 'visible', timeout: 15000 });
+        await page.waitForTimeout(400);
+        await page.screenshot({ path: path.join(OUT, 'z-moved-3-places-card.png') });
+        const ws = await page.evaluate(() => {
+          const tr = document.querySelector('tr[data-place="waste"]');
+          const b = tr.querySelector('button[data-action=save]');
+          const bu = document.querySelector('.bringup button[data-step="places"]');
+          return { invalid: tr.querySelector('input[data-axis=z]').classList.contains('input--invalid'), save: b.textContent, locked: b.disabled, why: b.title,
+            state: document.querySelector('#card-places .card__state').textContent, bu: bu ? { state: bu.parentElement.dataset.state, title: bu.title } : null };
+        });
+        check('Z moved 3: Places flags the waste Z, "Retake Z" locked until N1 takes it, the card says which places',
+          ws.invalid && ws.save === 'Retake Z' && ws.locked && /^Z moved 0\.\d\d mm at the home of \d\d:\d\d: take this Z again with N1 touching/.test(ws.why) && /^Z moved · retake waste/.test(ws.state), ws);
+        check('Z moved 3: Setup\'s bring-up step Places is blocked and names the places to retake (not ok while the engine refuses them)',
+          !!ws.bu && ws.bu.state === 'block' && ws.bu.title === 'Places: Z moved at this home: take the Z of ' + mp.join(', ') + ' again with N1 touching.', ws.bu);
+        // at 1024 px the page scrolls under the sticky strip: a deep link puts its card's title under the strip, not behind it
+        await page.setViewportSize({ width: 1024, height: 768 });
+        await page.evaluate(() => IL.go('#run/checks'));
+        await page.waitForTimeout(400);
+        await page.evaluate(() => IL.go('#setup/places'));
+        await page.waitForTimeout(1500);
+        const deep = await page.evaluate(() => {
+          const strip = document.querySelector('.strip').getBoundingClientRect(), band = document.querySelector('.stop-band');
+          const under = Math.max(strip.bottom, band && !band.hidden ? band.getBoundingClientRect().bottom : 0);
+          const title = document.querySelector('#card-places .card__title, #card-places h2, #card-places h3').getBoundingClientRect();
+          return { titleTop: Math.round(title.top), under: Math.round(under), scrollY: Math.round(scrollY) };
+        });
+        await page.screenshot({ path: path.join(OUT, 'z-moved-3-places-1024.png') });
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        check('Z moved 3: at 1024 px #setup/places scrolls the card\'s title to under the strip, not behind it', deep.scrollY > 0 && deep.titleTop >= deep.under, deep);
+        await page.evaluate(() => IL.go('#setup/places/waste'));
+        await page.waitForSelector('tr[data-place="waste"] input[data-axis=z]', { state: 'visible', timeout: 15000 });
+        // the operator takes each place's Z again with N1: 0.8 mm higher, as every surface of the scene
+        for (const n of mp) {
+          const row = page.locator('tr[data-place="' + n + '"]');
+          await row.locator('input[data-axis=z]').fill(String(Number((locs0[n].z + 0.8).toFixed(3))));
+          await row.locator('button[data-action=save]').click();
+          await waitStatus(page, (x) => !(x.machine.zCheck.places || []).some((q) => q.name === n), 10000);
+        }
+        await page.evaluate(() => IL.go('#run/checks'));
         st = await zStep('touch-off');
-        await page.screenshot({ path: path.join(OUT, 'z-moved-3-touch-off.png') });
-        check('Z moved 3: after the blank, "Run a touch-off" or the frame\'s own offset', st.step === 'touch-off' && !!st.card
-          && st.card.some(([f]) => f === 'go:#calibrate/touch-off') && st.card.some(([f, t]) => f === 'needle-confirm' && /^Confirm frame offset [−-]?\d+\.\d{3} mm$/.test(t)), st);
-        await page.click('#chk-needs .ri[data-key="I4-z"] button[data-fix="needle-confirm"]');
+        await page.screenshot({ path: path.join(OUT, 'z-moved-4-touch-off.png') });
+        check('Z moved 4: after the places, "Run a touch-off" only (not the frame\'s own offset: Z moved at this home)', st.step === 'touch-off' && !!st.card
+          && JSON.stringify(st.card) === JSON.stringify([['go:#calibrate/touch-off', 'Run a touch-off']]), st);
+        // the SIM scene has no paste for the touch-off's dots: the operator confirms the measured both-tips frame on the
+        // Needle Z frame card instead (still allowed, no longer offered by the remedy)
+        await page.evaluate(() => IL.go('#setup/needle'));
+        await page.waitForSelector('#btn-needle-offset', { state: 'visible', timeout: 15000 });
+        await page.click('#btn-needle-offset');
         await waitStatus(page, (x) => x.dispense.needle.touchedOff, 10000);
+        await page.evaluate(() => IL.go('#run/checks'));
         st = await zStep('register');
-        await page.screenshot({ path: path.join(OUT, 'z-moved-4-register.png') });
-        check('Z moved 4: after the touch-off, "Register board"', st.step === 'register' && !!st.card && st.card[0] && st.card[0][0] === 'register', st);
+        await page.screenshot({ path: path.join(OUT, 'z-moved-5-register.png') });
+        check('Z moved 5: after the touch-off, "Register board"', st.step === 'register' && !!st.card && st.card[0] && st.card[0][0] === 'register', st);
         const t8 = Date.now() + (await page.evaluate(() => IL.S.skewMs));
         await press2(page, '#chk-needs .ri[data-key="I4-z"] button[data-fix="register"]');
         const rz = await regEnd(t8);
-        check('Z moved 4: Register board measures the board again', rz.run.status === 'OK', { status: rz.run.status, message: rz.run.message });
+        check('Z moved 5: Register board measures the board again', rz.run.status === 'OK', { status: rz.run.status, message: rz.run.message });
         await page.evaluate(() => { if (IL.panel.isPushed()) IL.panel.close(); IL.go('#run/checks'); });
         st = await zStep('done');
         check('Z moved: after the remedy nothing is left to measure, no Z check blocker (the same home)', st.step === 'done' && !st.card, st);

@@ -101,4 +101,58 @@ public class DoseBlocksCouponFrameTest {
             }
         }
     }
+
+    /**
+     * rc1 review (tests), AUTO_REGISTER_DESIGN §10.2 case 22 for the coupons: a coupon probed on the simulator never takes
+     * weigh dots on a controller that is not the simulator (DispenseService.couponPlane's I4 text), before the pressure.
+     */
+    @Test
+    public void weighDotsRefuseACouponProbedOnTheSimulatorOnAnotherController() throws Exception {
+        try (SimMachine sim = new SimMachine(false)) {
+            FlatVacuum.install(sim, FlatVacuum.scene(5.45, null, 0));
+            sim.server.firmwareName = "Marlin (RecordingGcodeServer)";
+            DispenseService svc = DispenseService.start(Configuration.get());
+            try {
+                sim.enableAndHome();
+                SimGuard.noteIdentity(sim.machine, List.of("FIRMWARE_NAME:Marlin"));
+                assertFalse(svc.isSimulatorConfirmed());
+                DispenseConfig c = svc.getConfig();
+                c.locations.put("blank", new DispenseConfig.NamedLocation(90, 40, 5.45));
+                c.locations.put("coupon1", new DispenseConfig.NamedLocation(110, 20, 5.45));
+                c.purgeRow.x0Mm = 88.0;
+                c.purgeRow.y0Mm = 45.0;
+                c.purgeRow.spots = 16;
+                svc.updateConfig(c);
+                svc.setNeedleAnchor(5.5, 2.91, null, null, null, svc.getConfig().needleChangedAtMs);
+                svc.setNeedleZOffset(-2.59, "manual", "test", svc.getConfig().needleChangedAtMs);
+                svc.setStartAngle(null, "confirmed after power-up");
+                svc.setSurface("blank", pts(new double[][] {{85, 35, 5.45}, {130, 35, 5.45}, {85, 50, 5.45},
+                    {130, 50, 5.45}}), "test");
+                svc.setSurface("coupon1", pts(new double[][] {{100, 10, 5.45}, {120, 10, 5.45}, {100, 30, 5.45}}),
+                        "three touches on the simulator", null, Boolean.TRUE);
+                DoseBlocksRequest req = new DoseBlocksRequest();
+                req.kind = DoseBlocksRequest.WEIGH;
+                req.image = false;
+                req.parkAfter = false;
+                req.stopEpoch = svc.stopEpoch();
+                DoseBlocksRequest.Block b = new DoseBlocksRequest.Block(1600, "one turn on coupon1", "coupon1");
+                b.couponPlace = "coupon1";
+                for (int i = 0; i < 4; i++) {
+                    b.xy.add(new double[] {106 + 2 * i, 18});
+                }
+                req.blocks.add(b);
+                sim.server.mark();
+                DoseBlocksResult res = svc.runDoseBlocks(req).get(120, TimeUnit.SECONDS);
+                assertEquals(RunResult.Status.REFUSED, res.run.status, res.message);
+                assertEquals("I4: the 'coupon1' coupon was probed on the simulator: probe it again on this machine",
+                        res.message);
+                List<String> sent = sim.server.sinceMark();
+                assertFalse(sent.contains(ControllerCommands.PUMP_ON) || sent.contains(ControllerCommands.VALVE_ON),
+                        "the pressure never went on: " + sent);
+            }
+            finally {
+                svc.shutdown();
+            }
+        }
+    }
 }

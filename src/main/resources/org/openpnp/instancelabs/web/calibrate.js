@@ -107,11 +107,11 @@
     if (need.engine && (!d.running || !d.available)) rows.push({ kind: 'block', title: 'Dispenser available', value: 'unavailable', title2: d.unavailableReason || '' });
     if (need.frame) rows.push(n.anchored ? { kind: 'ok', title: 'Needle Z frame recorded', value: IL.fmtSigned(n.anchorOffsetMm, 3) + ' mm' }
       : { kind: 'block', title: 'Needle Z frame recorded', value: 'not set', fix: { href: '#setup/needle', label: 'Needle Z frame' } });
-    // after a failed Z check the blank's dots wait for the needle frame and the blank to be measured again (the
-    // remedy's order, IL.zMoved): the touch-off comes after them
+    // after a failed Z check the blank's dots wait for the needle frame, the blank and the places (the prime at the
+    // waste) to be measured again (the remedy's order, IL.zMoved): the touch-off comes after them
     const zm = need.zmoved ? IL.zMoved(s) : null;
-    if (zm && (zm.step === 'frame' || zm.step === 'blank')) {
-      rows.push({ kind: 'block', title: 'Z moved at the home: measured again', value: zm.step === 'frame' ? 'needle frame next' : 'the blank next', fix: zm.fixes[0] });
+    if (zm && (zm.step === 'frame' || zm.step === 'blank' || zm.step === 'places')) {
+      rows.push({ kind: 'block', title: 'Z moved at the home: measured again', value: zm.step === 'frame' ? 'needle frame next' : zm.step === 'blank' ? 'the blank next' : 'the places next', fix: zm.fixes[0] });
     }
     if (need.touched) rows.push(n.touchedOff ? { kind: 'ok', title: 'Needle touched off', value: n.setAtMs ? IL.fmtTime(n.setAtMs - S.skewMs) : 'yes' }
       : { kind: 'need', title: 'Needle touched off', value: 'not yet', fix: { href: '#calibrate/touch-off', label: 'Touch-off' } });

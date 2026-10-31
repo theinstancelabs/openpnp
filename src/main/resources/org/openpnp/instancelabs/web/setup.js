@@ -181,12 +181,13 @@
     if (W.filter === 'needs' && c.dataset.ok === '1') setFilter('all');
     IL.flash(c);
   }
-  /** A deep link to one field: #setup/places/<name> (its Z), #setup/settings/min-status | max-on. */
+  /** A deep link to one field: #setup/places/<name> (its Z), #setup/settings/min-status | max-on | refuse-flagged. */
   function focusTarget(sec, id) {
     let f = null;
     if (sec === 'places') { const r = P.rows.get(id); f = r && r.z.el; }
-    else if (sec === 'settings') f = $({ 'min-status': 'set-minstatus', 'max-on': 'set-maxon' }[id] || '');
-    if (f && f.focus) { f.focus({ preventScroll: true }); if (f.select) f.select(); }
+    else if (sec === 'settings') f = $({ 'min-status': 'set-minstatus', 'max-on': 'set-maxon', 'refuse-flagged': 'set-refuseflagged' }[id] || '');
+    // the card's flash scrolled its top into view: the field itself may lie below the fold (Refuse flagged pads)
+    if (f && f.focus) { f.focus({ preventScroll: true }); if (f.select) f.select(); f.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
   }
   const SECTION_CARD = { tip: 'tip', needle: 'needle', trim: 'needle', surfaces: 'surfaces', blank: 'surfaces', purge: 'purge', pressure: 'pressure',
     prime: 'pressure', places: 'places', camera: 'camera', angle: 'angle', settings: 'settings' };
@@ -257,7 +258,13 @@
     const farPlace = Object.keys(locs).filter((n) => n !== 'waste-test-dot').find((n) => placeZOff(locs[n].z) !== null);
     const placeBad = i4 && i4.state === 'blocked' && /^place '/i.test(i4.text || '') ? i4.text : farPlace ? placeZText(farPlace, locs[farPlace].z) : null;
     const names = Object.keys(locs).filter((n) => n !== 'waste-test-dot');
-    if (placeBad) {
+    // a Z check of this home failed: the places set before it are refused until N1 takes their Z again (the card says so)
+    const zcp = (((s && s.machine) || {}).zCheck || {}).places || [];
+    if (zcp.length) {
+      add({ key: 'places', title: 'Places', state: 'block', card: 'places', code: 'I4', value: 'Z moved: retake ' + zcp.length,
+        detail: 'Z moved at this home: take the Z of ' + zcp.map((x) => x.name).join(', ') + ' again with N1 touching.',
+        fixes: [{ href: '#setup/places/' + encodeURIComponent(zcp[0].name), label: 'Retake Z with N1' }] });
+    } else if (placeBad) {
       add({ key: 'places', title: 'Places', state: 'block', card: 'places', code: 'I4', value: 'check Z', detail: sentence(placeBad.split('. Place Z')[0]),
         fixes: [{ href: '#setup/places', label: 'Retake Z with N1' }] });
     } else if (missing.length) {
@@ -385,9 +392,9 @@
       case 'machine': {
         const low = x.state === 'need' && IL.n1Low(s);
         q = x.state === 'block' ? 'Not connected to the controller' : x.state === 'live' ? 'Homing…'
-          : low ? 'N1 stopped low (Z ' + IL.fmt((((s || {}).machine || {}).home || {}).n1Z, 2) + ' mm)' : 'Not homed: positions are unknown';
+          : low ? IL.lowToolShort(s) : 'Not homed: positions are unknown';
         dd = x.state === 'block' ? 'Connect reconnects OpenPnP to the controller; nothing moves.'
-          : low ? 'Look at the board under it. Home raises N1 first, then homes; Register board, Probe the blank and Run wait until then.'
+          : low ? 'Look at the board under it. Home ' + IL.lowTool(s).lift + ' first, then homes; Register board, Probe the blank and Run wait until then.'
             : 'After a STOP or a reconnect the machine must home before any move.';
         acts = x.fixes.map((f) => IL.fixButton(f));
         break;
@@ -411,12 +418,12 @@
         break;
       }
       case 'purge':
-        if (pr.defined && pr.spots < pr.perBoard) {
-          q = 'The purge row has ' + IL.plural(pr.spots, 'spot') + '; a board purges ' + pr.perBoard;
+        if (pr.defined && pr.spots < IL.purgeNeed(pr)) {
+          q = 'The purge row has ' + IL.plural(pr.spots, 'spot') + '; a board purges ' + IL.purgeNeedText(pr, IL.purgeNeed(pr));
           dd = 'A reset cannot fix this: give the row more spots (Purge row card), or purge fewer dots per board (Profile).';
           acts = [IL.fixButton({ fix: 'su-go-purge', label: 'Purge row: more spots', primary: true }), IL.fixButton({ href: '#profile', label: 'Profile: purge dots' })];
         } else if (x.state === 'need') {
-          q = 'Purge row: ' + pr.spotsLeft + ' of ' + pr.spots + ' spots left, ' + pr.perBoard + ' needed';
+          q = 'Purge row: ' + pr.spotsLeft + ' of ' + pr.spots + ' spots left, ' + IL.purgeNeedText(pr, IL.purgeNeed(pr)) + ' needed';
           dd = 'Wipe the strip on the blank (pressure off, needle away), then reset the row.';
           acts = [lg({ fix: 'purge-reset', label: 'Wiped: reset row', icon: 'i-wipe' }), el('span', { class: 'su-band-strip' }, purgeStrip(pr, false))];
         } else {
@@ -434,10 +441,12 @@
       case 'needle':
         if (x.state === 'need') {
           q = 'Needle offset not confirmed since the last needle change or frame';
-          dd = 'The needle Z frame gives ' + IL.fmt(d.needle && d.needle.anchorOffsetMm, 3) + ' mm. Confirm it, or run a touch-off for a measured offset.';
+          dd = 'The needle Z frame gives ' + IL.fmt(d.needle && d.needle.anchorOffsetMm, 3) + ' mm. '
+            + (IL.zMoved(s) ? 'Z moved at this home: run a touch-off for a measured offset.' : 'Confirm it, or run a touch-off for a measured offset.');
         } else {
           q = x.detail.replace(/\.$/, '');
-          dd = 'Touch the same spot with N1 and the needle, or record the frame from K, in the Needle Z frame card.';
+          dd = d.needle && d.needle.kRefusal ? 'Touch the same spot with N1 and the needle tip in the Needle Z frame card: ' + d.needle.kRefusal.replace(/: record .*$/, '') + '.'
+            : 'Touch the same spot with N1 and the needle, or record the frame from K, in the Needle Z frame card.';
         }
         acts = x.fixes.map((f) => IL.fixButton(f.href === '#setup/needle' ? { fix: 'su-go-needle', label: f.label } : f));
         break;
@@ -468,9 +477,10 @@
   // ---------------------------------------------------------------------------------- purge strip
   function purgeStrip(pr, lg) {
     const cells = [];
-    for (let i = 0; i < (pr.spots || 0); i++) cells.push(el('i', { class: i < pr.usedSpots ? 'used' : i < pr.usedSpots + pr.perBoard ? 'next' : null }));
+    const need = IL.purgeNeed(pr);   // the plan shown's (two dot sizes: 8 + 5), else the profile's
+    for (let i = 0; i < (pr.spots || 0); i++) cells.push(el('i', { class: i < pr.usedSpots ? 'used' : i < pr.usedSpots + need ? 'next' : null }));
     return el('div', { class: 'purge' + (lg ? ' purge--lg' : '') + (pr.spots > 30 ? ' su-purge-wrap' : ''), role: 'img',
-      'aria-label': 'Purge row: ' + pr.usedSpots + ' used, ' + pr.spotsLeft + ' free, the next board uses ' + pr.perBoard }, cells);
+      'aria-label': 'Purge row: ' + pr.usedSpots + ' used, ' + pr.spotsLeft + ' free, the next board uses ' + need }, cells);
   }
 
   // ================================================================================== 0 Dispenser & tip (tipsetup.js fills it)
@@ -487,6 +497,7 @@
     c.mFrame = mini('Frame offset');
     c.mNeedle = mini('Needle offset');
     c.anchorState = el('p', { class: 'su-note', id: 'anchor-state' });
+    c.kWhy = el('p', { class: 'reason', id: 'anchor-k-why', hidden: true });
     c.segK = el('button', { type: 'button', 'aria-pressed': 'true', text: 'From K', title: 'Needle contact from the bench relation: raw Z = K − N1 contact Z' });
     c.segBoth = el('button', { type: 'button', 'aria-pressed': 'false', text: 'Both tips touch', title: 'Touch the same spot with the N1 nozzle and the needle tip' });
     c.segK.addEventListener('click', () => setMethod('k', true));
@@ -516,7 +527,7 @@
     c.body.setAttribute('data-enter-submits', 'btn-anchor-k');
     c.body.append(
       el('div', { class: 'minis' }, c.mFrame.node, c.mNeedle.node), c.anchorState, c.question, c.lead,
-      el('div', { class: 'seg seg--block', role: 'group', 'aria-label': 'How to record the frame' }, c.segK, c.segBoth),
+      el('div', { class: 'seg seg--block', role: 'group', 'aria-label': 'How to record the frame' }, c.segK, c.segBoth), c.kWhy,
       field('N1 contact Z, tip touching the blank', 'mm', el('div', { class: 'row' }, F.n1.el, c.capN1), { for: 'anchor-n1' }),
       c.rowK, c.rowN2, c.other);
     c.bK = btn('Record from K', { id: 'btn-anchor-k' });
@@ -621,12 +632,19 @@
     const bench = !a && known && mt.model === 'bench-22g';
     const never = known && !a && !bench;
     const ctx = [(d.tip || {}).key, nd.changedAtMs, !!a, !!(a && isNum(a.rawSumMm)), bench, known].join('|');
+    // K holds for the home and the needle it was measured with: after a failed Z check of this home or a needle change
+    // the engine refuses it (nd.kRefusal), and only both tips touching measure the frame
+    const noK = d.running && nd.kRefusal ? nd.kRefusal : null;
     if (W.methodCtx !== ctx) {
       const fresh = !W.methodCtx || W.methodCtx.split('|').slice(0, 2).join('|') !== ctx.split('|').slice(0, 2).join('|');
       if (fresh) W.methodChosen = false;   // another tip or needle: the method follows it again
       W.methodCtx = ctx;
-      if (!W.methodChosen) setMethod(never || (a && !isNum(a.rawSumMm)) ? 'both' : 'k');
+      if (!W.methodChosen) setMethod(never || noK || (a && !isNum(a.rawSumMm)) ? 'both' : 'k');
     }
+    if (noK && W.method !== 'both') setMethod('both');
+    IL.gate(c.segK, noK);
+    IL.setText(c.kWhy, noK ? sentence(noK) : '');
+    IL.show(c.kWhy, !!noK);
     IL.setText(c.kCap, a && isNum(a.rawSumMm) ? 'recorded for the ' + tipName + ' on ' + dayOf(a.setAtMs) : a ? 'the ' + tipName + '’s last frame was recorded with both tips'
       : bench || !known ? 'the ' + tipName + '’s bench value (side camera, 2026-10-27)' : 'K of the ' + tipName + ': not known yet');
     IL.show(c.lead, never);
@@ -677,7 +695,7 @@
     // buttons
     const lock = IL.lockReason(s, { pressureOff: false, engine: true });
     const manual = dirty(F.off);
-    IL.gate(c.bK, lock);
+    IL.gate(c.bK, lock || noK);
     IL.gate(c.bBoth, lock);
     // after "I changed the needle" only recording the frame again helps (§9.1 #3): Confirm waits for it, Record leads
     const changed = !!a && !nd.anchored;
@@ -686,7 +704,8 @@
     IL.setText(c.offWhy, !lock && offOwn ? offOwn : '');
     IL.show(c.offWhy, !lock && !!offOwn);
     setLabel(c.bOff, manual && isNum(opt(F.off)) ? 'Save ' + fmt(opt(F.off), 3) + ' mm' : a ? 'Confirm ' + fmt(nd.anchorOffsetMm, 3) + ' mm' : 'Confirm offset');
-    c.bOff.classList.toggle('btn--primary', !lock && !!a && !changed && (!nd.touchedOff || manual));
+    // after a failed Z check of this home the touch-off measures the needle (IL.zMoved): Confirm is no lead then
+    c.bOff.classList.toggle('btn--primary', !lock && !!a && !changed && (!nd.touchedOff || manual) && !IL.zMoved(s));
     for (const b of [c.bK, c.bBoth]) b.classList.toggle('btn--primary', !lock && (!a || changed));
     // a typed offset outside ±1.00 mm of the frame: say so before it is saved
     const dOff = offsetDrift();
@@ -1344,14 +1363,15 @@
     const c = C.purge;
     const d = disp(s), pr = d.purgeRow || {};
     const step = m.steps.find((x) => x.key === 'purge');
-    IL.setText(c.per, isNum(pr.perBoard) ? pr.perBoard + '\u00a0per\u00a0board' : '— per board');
-    cardState(c, step.state, !pr.defined ? 'Not set' : pr.surfaceProbed === false ? 'Surface not probed' : pr.spots < pr.perBoard ? 'Too short: ' + pr.spots + ' spots, ' + pr.perBoard + ' per board'
+    const need = IL.purgeNeed(pr);
+    IL.setText(c.per, isNum(pr.perBoard) ? need + '\u00a0per\u00a0board' : '— per board');
+    cardState(c, step.state, !pr.defined ? 'Not set' : pr.surfaceProbed === false ? 'Surface not probed' : pr.spots < need ? 'Too short: ' + pr.spots + ' spots, ' + need + ' per board'
       : pr.spotsLeft + ' of ' + pr.spots + ' left', step.detail);
-    IL.keyed(c.strip, JSON.stringify([pr.defined, pr.spots, pr.usedSpots, pr.perBoard]), () => (pr.defined && pr.spots ? purgeStrip(pr, true)
+    IL.keyed(c.strip, JSON.stringify([pr.defined, pr.spots, pr.usedSpots, need]), () => (pr.defined && pr.spots ? purgeStrip(pr, true)
       : el('div', { class: 'notebox notebox--block', text: 'Not set: board runs are refused (I9). Enter the first spot, pitch and number of spots on the blank, then save.' })));
     const next = pr.defined ? { x: pr.x0Mm + pr.usedSpots * pr.pitchXMm, y: pr.y0Mm + pr.usedSpots * pr.pitchYMm } : null;
     IL.kv(c.kv, [
-      ['Spots', pr.defined ? pr.usedSpots + ' used · ' + pr.spotsLeft + ' free · ' + IL.plural(pr.boardsLeft || 0, 'board') + ' left' : '—'],
+      ['Spots', pr.defined ? pr.usedSpots + ' used · ' + pr.spotsLeft + ' free · ' + IL.plural(Math.floor(pr.spotsLeft / Math.max(1, need)), 'board') + ' left' : '—'],
       ['Next spot', next && pr.spotsLeft > 0 ? 'X ' + fmt(next.x, 2) + ' · Y ' + fmt(next.y, 2) + ' mm' : pr.defined ? 'none: wipe and reset' : '—'],
       ['Last wiped', pr.resetAtMs ? tm(pr.resetAtMs) + ' · ' + IL.fmtAgo(pr.resetAtMs, IL.serverNow()) : 'never'],
       ['Surface', (pr.surfaceName || '—') + (pr.surfaceProbed ? ' · probed' : pr.surfaceName ? ' · NOT probed: probe the blank' : '')],
@@ -1569,6 +1589,7 @@
     IL.press2(r.save, () => (placeZOff(opt(r.z)) !== null ? 'save Z anyway' : null), async () => {
       const body = { x: need(r.x, name + ' X'), y: need(r.y, name + ' Y'), z: need(r.z, name + ' Z') };
       const res = await IL.api('PUT', '/api/locations/' + encodeURIComponent(name), body);
+      r.zTaken = false;
       clean(r.x, r.y, r.z);
       P.added = P.added.filter((n) => n !== name);
       IL.planRefreshSoon();
@@ -1608,7 +1629,7 @@
       onclick: () => { fn(); closeMenu(); r.save.focus(); } }, el('span', { text: label }), el('b', { text: why ? why : value }));
     const menu = el('div', { class: 'su-menu', role: 'menu', 'aria-label': 'From the head' },
       item('N2 X/Y', pos.n2 ? fmt(pos.n2.x, 2) + ', ' + fmt(pos.n2.y, 2) : '—', () => { setVal(r.x, pos.n2.x.toFixed(2)); setVal(r.y, pos.n2.y.toFixed(2)); }, pos.n2 ? null : 'no position'),
-      item('N1 Z (tip touching)', pos.n1 ? fmt(pos.n1.z, 2) : '—', () => setVal(r.z, pos.n1.z.toFixed(3)), pos.n1 ? null : 'no position'),
+      item('N1 Z (tip touching)', pos.n1 ? fmt(pos.n1.z, 2) : '—', () => { r.zTaken = true; setVal(r.z, pos.n1.z.toFixed(3)); }, pos.n1 ? null : 'no position'),
       item('N2 Z (tip touching)', pos.n2 && isNum(nd.zOffsetMm) ? fmt(pos.n2.z - nd.zOffsetMm, 2) : '—', () => setVal(r.z, (pos.n2.z - nd.zOffsetMm).toFixed(3)),
         !nd.anchored ? 'needs the needle Z frame' : pos.n2 ? null : 'no position'));
     r.wrap.appendChild(menu);
@@ -1666,6 +1687,11 @@
     const i4 = IL.interlock(s, 'I4');
     const fm = i4 && i4.state === 'blocked' ? /place '([^']+)'/i.exec(i4.text || '') : null;
     const lock = IL.lockReason(s, { pressureOff: false, engine: true });
+    // a Z check of this home failed: the places set before it moved too, until N1 takes their Z again (I4)
+    const zc = (s.machine || {}).zCheck || {};
+    const moved = new Set((zc.places || []).map((x) => x.name));
+    const movedWhy = moved.size && zc.last ? 'Z moved ' + IL.fmt(zc.last.deltaMm, 2) + ' mm at the home of ' + IL.fmtTime(zc.homeAtMs - S.skewMs)
+      + ': take this Z again with N1 touching (From head ▾ › N1 Z), then save.' : null;
     let unsaved = 0;
     let farName = null;
     for (const n of names) {
@@ -1676,27 +1702,36 @@
       sync(r.z, loc ? loc.z : null);
       IL.setText(r.use, usedFor(n, d));
       const isNew = !loc;
-      const dd = dirty(r.x) || dirty(r.y) || dirty(r.z) || (isNew && P.added.includes(n));
+      const isMoved = moved.has(n);
+      if (!isMoved) r.zTaken = false;
+      // a moved place saves again once N1 took its Z (the same value too: the engine stamps it with this home)
+      const dd = dirty(r.x) || dirty(r.y) || dirty(r.z) || (isNew && P.added.includes(n)) || (isMoved && !!r.zTaken);
       if (dd) unsaved++;
-      IL.setText(r.save, dd ? 'Save' : isNew ? 'Not set' : 'Saved');
+      IL.setText(r.save, dd ? 'Save' : isNew ? 'Not set' : isMoved ? 'Retake Z' : 'Saved');
       r.save.classList.toggle('btn--primary', dd && !lock);
-      IL.gate(r.save, lock || (dd ? null : isNew ? 'Enter X, Y and Z first' : 'No unsaved changes'));
+      IL.gate(r.save, lock || (dd ? null : isNew ? 'Enter X, Y and Z first' : isMoved ? movedWhy : 'No unsaved changes'));
       IL.show(r.remove, P.added.includes(n) && !loc);
       const farText = loc ? placeZText(n, loc.z) : null;
       if (farText && !farName) farName = n;
-      const flagged = (fm && fm[1] === n) || !!farText;
+      const flagged = (fm && fm[1] === n) || !!farText || (isMoved && !r.zTaken);
       r.z.el.classList.toggle('input--invalid', !!flagged || (val(r.z) !== '' && !Number.isFinite(toNum(val(r.z)))));
-      IL.setAttr(r.z.el, 'title', fm && fm[1] === n ? sentence(i4.text.split('. Place Z')[0]) + ' Retake Z with N1.' : farText);
+      IL.setAttr(r.z.el, 'title', fm && fm[1] === n ? sentence(i4.text.split('. Place Z')[0]) + ' Retake Z with N1.' : farText || (isMoved ? movedWhy : null));
       IL.gate(r.from, IL.lockReason(s, { idle: false, pressureOff: false }));
     }
     if (P.menu && !P.menu.el.isConnected) closeMenu();
     const missing = [wn, bn].filter((n) => !locs[n]);
+    const movedLeft = names.filter((n) => moved.has(n) && !(P.rows.get(n) || {}).zTaken);
     if (unsaved) cardState(c, 'need', unsaved + ' unsaved');
+    else if (movedLeft.length) cardState(c, 'block', 'Z moved · retake ' + movedLeft.slice(0, 3).join(', ') + (movedLeft.length > 3 ? ' +' + (movedLeft.length - 3) : ''), movedWhy);
     else if (fm || farName) cardState(c, 'block', "Check '" + (fm ? fm[1] : farName) + "' Z", fm ? null : placeZText(farName, locs[farName].z));
     else if (missing.length) cardState(c, 'need', IL.cap(missing.join(' and ')) + ' missing');
     else cardState(c, 'ok', Object.keys(locs).filter((n) => n !== 'waste-test-dot').length + ' places set');
-    IL.setText(c.note, isNum(nd.anchorOffsetMm) ? 'A Z taken with the needle is off by about ' + fmt(Math.abs(nd.anchorOffsetMm), 2) + ' mm: take Z with N1.'
-      : 'Take Z with N1 touching the surface (OpenPnP frame).');
+    // the reason of a locked "Retake Z" in words on the card, not only in its tooltip
+    IL.setText(c.note, movedLeft.length ? 'Z moved ' + IL.fmt(zc.last.deltaMm, 2) + ' mm at the home of ' + IL.fmtTime(zc.homeAtMs - S.skewMs)
+      + ': take each red Z again with N1 touching (From head ▾ › N1 Z), then save.'
+      : isNum(nd.anchorOffsetMm) ? 'A Z taken with the needle is off by about ' + fmt(Math.abs(nd.anchorOffsetMm), 2) + ' mm: take Z with N1.'
+        : 'Take Z with N1 touching the surface (OpenPnP frame).');
+    c.note.classList.toggle('su-note--need', movedLeft.length > 0);
     IL.gate(c.bAdd, IL.S.online === false ? IL.lockReason(s) : null);
     renderBedmap(s);
   }
@@ -1953,6 +1988,12 @@
       el('option', { value: 'always', text: 'Always home first' })));
     F.homebefore.kind = 'select';
     F.clean = fld(el('input', { type: 'checkbox', id: 'set-clean' }));
+    // refuseFlaggedPads: a board with pads that cannot be dispensed (no profile, below the gate, not with this tip) is
+    // refused, or those pads are skipped and the rest dispensed (Run › Checks and the run confirm name them)
+    F.refuse = fld(el('input', { type: 'checkbox', id: 'set-refuseflagged' }));
+    c.refuseLbl = el('span', { class: 'tick__t' });
+    c.refuseHint = el('div', { class: 'field__h' });
+    c.refuseTick = el('label', { class: 'tick su-clean', for: 'set-refuseflagged' }, F.refuse.el, el('div', {}, c.refuseLbl));
     F.gray = fld(input('set-gray', { inputmode: 'numeric' }), {});
     F.bright = fld(input('set-minbright'), {});
     F.boxw = fld(input('set-boxw'), { d: 3 });
@@ -1971,7 +2012,8 @@
       field('Pump settle', 'ms', F.pump.el, { hint: 'pump on → valve open (pumpToValveSettleMs)' }),
       field('Lowest pad-type status allowed on a board', null, F.minstatus.el, { hint: 'pads below it are not dispensed: plan again after a change' }),
       field('Before Register board, Probe and Run', null, F.homebefore.el, { hint: 'needed: not homed, or stopped since the last home. They home by themselves (pressure off) and say so first; nothing else homes' }),
-      el('div', { class: 'field su-span2' }, el('div', { class: 'field__l' }, el('span', {}, 'Clean-pad check before each board (', abbr('I10', 'Interlock I10: pads clean before the pressure goes on'), ')')), c.cleanTick, c.cleanHint));
+      el('div', { class: 'field su-span2' }, el('div', { class: 'field__l' }, el('span', {}, 'Clean-pad check before each board (', abbr('I10', 'Interlock I10: pads clean before the pressure goes on'), ')')), c.cleanTick, c.cleanHint),
+      el('div', { class: 'field su-span2' }, el('div', { class: 'field__l' }, el('span', { text: 'Refuse flagged pads' })), c.refuseTick, c.refuseHint));
     c.setErr = el('div', { class: 'field__err su-set-err', id: 'settings-err', role: 'status', hidden: true });
     c.body.append(c.grid, c.i10, c.setErr, buildJson(c));
     c.bSave = btn('Save settings', { id: 'btn-settings' });
@@ -1990,6 +2032,7 @@
       if (dirty(F.pump)) patch.pumpToValveSettleMs = need(F.pump, 'the pump settle time in ms');
       if (dirty(F.minstatus)) patch.minPadTypeStatus = val(F.minstatus);
       if (dirty(F.homebefore)) patch.homeBeforeRun = val(F.homebefore);
+      if (dirty(F.refuse)) patch.refuseFlaggedPads = F.refuse.el.checked;
       const cp = {};
       if (dirty(F.clean)) cp.enabled = F.clean.el.checked;
       if (dirty(F.gray)) cp.grayLevel = need(F.gray, 'the gray level (0 to 255)');
@@ -1999,7 +2042,7 @@
       if (Object.keys(cp).length) patch.cleanPadCheck = cp;
       if (!Object.keys(patch).length) throw bad('No unsaved changes.');
       const r = await IL.api('PUT', '/api/config', patch);
-      clean(F.maxon, F.valve, F.pump, F.minstatus, F.homebefore, F.clean, F.gray, F.bright, F.boxw, F.boxh);
+      clean(F.maxon, F.valve, F.pump, F.minstatus, F.homebefore, F.refuse, F.clean, F.gray, F.bright, F.boxw, F.boxh);
       await IL.loadConfig();
       IL.planRefreshSoon();
       return r;
@@ -2141,6 +2184,7 @@
     sync(F.pump, cfg ? cfg.pumpToValveSettleMs : null);
     sync(F.minstatus, src.minPadTypeStatus || 'characterized');
     sync(F.homebefore, (cfg && cfg.homeBeforeRun) || d.homeBeforeRun || 'whenNeeded');
+    sync(F.refuse, (cfg ? cfg.refuseFlaggedPads : d.refuseFlaggedPads) !== false);
     sync(F.clean, !!cpc.enabled);
     sync(F.gray, cpc.grayLevel);
     sync(F.bright, cpc.minBrightFraction);
@@ -2154,8 +2198,13 @@
       : 'The run looks at every pad with the top camera (≈ 3 min) before the pressure goes on.')
       : sim ? 'Simulator: the camera is a static picture, so every pad would read dirty.' : 'The run does not look at the pads: wipe them by eye before each board.');
     c.cleanTick.classList.toggle('on', on);
+    const refuse = F.refuse.el.checked;
+    IL.setText(c.refuseLbl, refuse ? 'On: a board with pads that cannot be dispensed is refused' : 'Off: those pads are skipped, the rest dispensed');
+    IL.setText(c.refuseHint, refuse ? 'Pads with no profile, below the lowest status or not dispensable with the mounted tip block the run until they are fixed.'
+      : 'Run › Checks and the run confirm name the pads skipped.');
+    c.refuseTick.classList.toggle('on', refuse);
     const lock = IL.lockReason(s, { pressureOff: false });
-    const any = [F.maxon, F.valve, F.pump, F.minstatus, F.homebefore, F.clean, F.gray, F.bright, F.boxw, F.boxh].some(dirty);
+    const any = [F.maxon, F.valve, F.pump, F.minstatus, F.homebefore, F.refuse, F.clean, F.gray, F.bright, F.boxw, F.boxh].some(dirty);
     const errs = settingsErrors();
     IL.setText(c.setErr, errs.join(' '));
     IL.show(c.setErr, errs.length > 0);

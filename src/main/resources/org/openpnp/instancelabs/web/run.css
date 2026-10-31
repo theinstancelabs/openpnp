@@ -340,3 +340,6 @@ body:has(#ws-run:not([hidden])) #panel[data-view="recovery"] li[data-step="decid
 #plan-interlocks { align-items: flex-start; }
 .ready-sub__t { min-width: 0; white-space: normal; }
 #plan-interlocks .link { flex: none; }
+/* the board already has paste on pads this run lays: "I wiped this board" (rc1 review) */
+.run-confirm-wiped { margin-bottom: 10px; }
+.run-confirm-wiped label.tick:not(.on) { border-color: var(--need-line); background: var(--need-bg); }
