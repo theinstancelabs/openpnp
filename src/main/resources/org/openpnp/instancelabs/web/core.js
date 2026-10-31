@@ -1395,7 +1395,7 @@
     // the first not-ready item in the fixed order; items that only wait for a plan never come first
     const next = blocked[0] || notReady.find((x) => x.state !== 'wait') || notReady[0] || null;
     let verdict;
-    // the strip drops the part after " · " when it would run under STOP (cells--t2); the title keeps it
+    // the strip drops the part after " · " when it would run under STOP (cells--t2v); the title keeps it
     // every dot of the plan is on its board already (the server's paste): the next action is the next board, not a run
     const doneDots = plan && plan.dots && plan.dots.length && IL.pastedDots(plan) >= plan.dots.length ? plan.dots.length : 0;
     if (blocked.length) verdict = { state: 'block', text: 'Blocked · ' + blocked[0].short, value: ['Blocked', ' · ' + blocked[0].short, 2], title: blocked.map((x) => x.title + ': ' + x.detail).join('\n') };
@@ -1572,7 +1572,8 @@
     }
     if (IL.recoveryActive()) {
       const r = S.recovery;
-      // the time goes first when the strip is narrow (cells--t2): the Recovery panel and the nav keep it
+      // the time goes when the strip is narrow, after the other cells' long parts (cells--t2v): the Recovery panel and
+      // the nav keep it
       return { state: 'block', text: 'Stopped ' + IL.fmtTime(r.atMs), value: ['Stopped', ' ' + IL.fmtTime(r.atMs), 2], title: recoveryHeadline(r) + '. Back to ready: see the Recovery panel.' };
     }
     const pcal = IL.padProfile ? IL.padProfile.verdict(s) : null;
@@ -1983,7 +1984,8 @@
   // ================================================================================== strip (§4)
   /**
    * Patches a strip cell: kind (glyph + tint), value = text or [main, long, level] (the long part is dropped when the
-   * strip is too narrow: level 1 first (.cells--t1), then level 2 (.cells--t2)), title = the long form.
+   * strip is too narrow: the other cells' level 1 first (.cells--t1), then their level 2 (.cells--t2), the verdict's
+   * last (.cells--t2v)), title = the long form.
    */
   function setCell(cell, kind, value, title) {
     if (!cell) return;
@@ -2017,11 +2019,13 @@
       const limit = cells.getBoundingClientRect().right - parseFloat(getComputedStyle(cells).paddingRight || '0');
       return last.getBoundingClientRect().right > limit + 0.5;
     };
-    cells.classList.remove('cells--t1', 'cells--t2', 'cells--t3', 'cells--t4');
+    cells.classList.remove('cells--t1', 'cells--t2', 'cells--t2v', 'cells--t3', 'cells--t4');
     cells.classList.add('cells--fit');   // the verdict at its full width while measuring
     if (over()) {
+      // the other cells' long parts first: the verdict keeps its own ("Stopped 14:19", a task's progress) while it fits
       cells.classList.add('cells--t1');
       if (over()) cells.classList.replace('cells--t1', 'cells--t2');
+      if (over()) cells.classList.add('cells--t2v');
       // still too long (1024 px after a STOP, the widest state): the verdict is never cut (UI_DESIGN §4), so the
       // pressure cell goes while it reads a plain "Off" (Recovery says "Pressure vented"), then the other cells' labels
       if (over()) cells.classList.add('cells--t3');

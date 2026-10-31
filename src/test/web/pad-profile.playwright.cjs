@@ -395,6 +395,11 @@ async function weighCoupon(page, place) {
     const j7 = await waitJob(page, (j) => j.state === 'running', 20000, 'the job to start');
     await page.waitForFunction(() => /^Pad calibration/.test(document.querySelector('#pill-engine .cell__v').textContent), null, { timeout: 60000 }).catch(() => null);
     check('(7) the strip names the pad calibration', /^Pad calibration/.test(await stripText(page)), await stripText(page));
+    // at 1440 px the strip has room for the step too: the other cells' long parts go first (final gate: it read "Pad
+    // calibration" alone, the step dropped with " · set 18 psi", beside 300 px of free strip)
+    await page.waitForFunction(() => / · \S/.test(document.querySelector('#pill-engine .cell__v').textContent), null, { timeout: 30000 }).catch(() => null);
+    const strip7 = await page.evaluate(() => ({ shown: document.querySelector('#pill-engine .cell__v').innerText, tier: document.getElementById('cells').className, w: innerWidth }));
+    check('(7) 1440 px: the strip shows the step ("Pad calibration · …"), the other cells shortened first', strip7.w === 1440 && /^Pad calibration · \S/.test(strip7.shown), strip7);
     await waitJob(page, (j) => (j.steps || []).some((x) => x.key === 'ladder' && x.state !== 'todo'), 300000, 'the ladder');
     const ph = await page.evaluate(() => Array.from(document.querySelectorAll('#pcal-phases li')).map((li) => [li.dataset.ph, li.className]));
     check('(7) the phases advance (coupons done, ladder now or done)', ph.some((p) => p[0] === 'coupons' && p[1] === '') && ph.some((p) => p[0] === 'ladder' && p[1] !== 'todo'), ph);

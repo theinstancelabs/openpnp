@@ -739,6 +739,8 @@ async function runFirstDots(page, n) {
     await page.setViewportSize({ width: 1440, height: 1000 });
     check('after STOP: the verdict reads "Stopped…" in full at 1440, 1280 and 1024 px (the other cells shorten first)',
       cuts.every((c) => !c.cut && /^Stopped/.test(c.shown)), cuts);
+    // the other cells' long parts go before the verdict's own: at 1440 px the time of the stop stays (final gate)
+    check('after STOP: at 1440 px the verdict keeps the time of the stop ("Stopped hh:mm")', /^Stopped \d\d:\d\d/.test(cuts[0].shown), cuts[0]);
     check('after STOP: the plan never says "All interlocks pass"', !/All interlocks pass/.test(await page.textContent('#ws-run')));
     await page.waitForSelector('#btn-run-rest', { state: 'visible', timeout: 10000 }).catch(() => {});
     const locked = await page.evaluate(() => ['btn-run-rest', 'btn-run-all'].map((id) => {

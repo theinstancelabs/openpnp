@@ -122,9 +122,12 @@ Each cell is a `<button>` 56 px tall: status glyph (shape + colour), an eyebrow 
 (15.5 px / 650, `white-space: nowrap`). Cells never truncate: values have deliberate short forms; the layout is
 verified at 1280 and 1440 for the widest states (stopped, running). Clicking a cell opens its panel view. *As built
 (rc1 review):* the page measures the strip whenever the room of the cells changes (not only the window) and shortens
-in tiers until the verdict fits whole: t1 drops the level-1 long parts (`Connected · `, ` · vented`, ` · wipe`), t2
-every long part (the stopped verdict's time: `Stopped`), t3 the pressure cell while it reads a plain `Off`, t4 the
-other cells' keys; the stopped state is checked at 1440, 1280 and 1024.
+in tiers until the verdict fits whole, the other cells first: t1 drops their level-1 long parts (`Connected · `,
+` · vented`, ` · wipe`), t2 all their long parts (` · set 18 psi`), t2v the verdict's own (` · homes first
+(≈ 25 s)`, a task's progress, the stopped verdict's time: `Stopped`; final gate: before, t2 dropped them with the
+others', so at 1440 px a running pad calibration read `Pad calibration` beside 300 px of free strip), t3 the pressure
+cell while it reads a plain `Off`, t4 the other cells' keys; the stopped state is checked at 1440, 1280 and 1024 (at
+1440 it keeps its time), a running pad calibration at 1440 (it keeps its step).
 The cells container is `aria-live="polite"`; safety changes (STOP result, vent_failed, offline) are announced
 by `role="alert"` regions instead.
 
