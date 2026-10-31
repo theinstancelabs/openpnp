@@ -34,6 +34,11 @@ with the board surface tied to the plan. The SIM top camera draws the board wher
   --api-port N   the web API on the first free port of N … N+8 (default any free port)
   --tip-camera   the SIM bottom camera (PROFILE_CALIBRATION_DESIGN.md §22.8): it draws the tip on the head end-on when
                  N2 is over it, so "Take a picture from below" has a picture
+  --physical-tip KEY  the tip "on the head" (the SIM scene's physicalTip; default: the mounted setup): the SIM bottom
+                 camera draws it and, with --padcal, the SIM paste lays its dots, so mounting another setup than the
+                 one on the head can be tried (the landing question, the control naming another tip)
+  --paste-by-tip KEY:mRevMg=M,c=C,e=E,landing=DX:DY  with --padcal: a tip setup's own SIM paste (§22.8; repeatable),
+                 e.g. 25g-straight:mRevMg=1.6,c=0.6,landing=2.4:-0.4 (smaller dots, lands 2.4, -0.4 mm off)
 
 Prints one JSON line: {"session", "url", "port", "planId", "board", "config"} (config: the session's copy, where
 il_sim_scene.py amend/write changes the SIM scene), with --register
@@ -61,6 +66,19 @@ def scene_of(board, config_dir):
     return scn.scene(board, TRUE_SEAT, acc.BOARD_PLANE, config_dir=config_dir, vacuum=scn.FAST_VACUUM)
 
 
+def tip_scene(s, a):
+    """--physical-tip and --paste-by-tip: the session's SIM scene amended in place (it reloads on its stamp)."""
+    if a.physical_tip is None and not a.paste_by_tip:
+        return
+    with open(scn.scene_path(s.cfg)) as f:
+        sc = json.load(f)
+    for text in a.paste_by_tip:
+        scn.paste_by_tip(sc, *scn.parse_paste_by_tip(text))
+    if a.physical_tip is not None:
+        scn.physical_tip(sc, a.physical_tip)
+    scn.write(s.cfg, sc)
+
+
 def padcal(s, a):
     """--padcal: the sim acceptance's padcal set-up, the board uploaded where it truly sits and planned (or registered)."""
     acc.padcal_setup(s, balance=a.balance)
@@ -68,6 +86,7 @@ def padcal(s, a):
     path = a.kicad or acc.KICAD_PADCAL
     pv, board = acc.padcal_import(s, path, os.path.basename(path).split(".kicad_pcb")[0])
     sc = acc.padcal_scene(s, board, balance=a.balance)
+    tip_scene(s, a)
     out = {"session": s.name, "url": s.base + "/", "port": s.port, "planId": None, "board": board, "config": s.cfg,
            "preview": acc.preview_summary(pv)["needs_profile"], "needsProfile": None}
     if not a.no_plan:
@@ -99,10 +118,21 @@ def main(argv=None):
     ap.add_argument("--balance", choices=["display", "connected"], default="display", help="--padcal: the SIM balance")
     ap.add_argument("--api-port", type=int, help="the web API on the first free port of N … N+8")
     ap.add_argument("--tip-camera", action="store_true", help="the SIM bottom camera that draws the tip on the head")
+    ap.add_argument("--physical-tip", metavar="KEY", help="the tip on the head (SIM scene physicalTip; default: the "
+                    "mounted setup)")
+    ap.add_argument("--paste-by-tip", action="append", default=[], metavar="KEY:mRevMg=M,c=C,e=E,landing=DX:DY",
+                    help="with --padcal: a tip setup's own SIM paste (repeatable)")
     for k, v in acc.DEF.items():
         ap.add_argument("--" + k.replace("_", "-"), dest=k, default=v)
     a = ap.parse_args(argv)
     a.jar = os.path.abspath(a.jar)
+    if a.paste_by_tip and not a.padcal:
+        ap.error("--paste-by-tip needs --padcal (the SIM paste)")
+    for text in a.paste_by_tip:
+        try:
+            scn.parse_paste_by_tip(text)
+        except ValueError as e:
+            ap.error(str(e))
     if a.what == "stop":
         os.system("%s --session %s stop >/dev/null 2>&1" % (acc.UINAV, a.prefix + a.name))
         print(json.dumps({"stopped": a.prefix + a.name}))
@@ -127,6 +157,7 @@ def main(argv=None):
                            % (q(file_name), q(name), pv["file"]["sha256"], q(pv["decisions"])), data)
         board = saved["file"]
         scn.write(s.cfg, scene_of(board, s.cfg))
+    tip_scene(s, a)
     out = {"session": s.name, "url": s.base + "/", "port": s.port, "planId": None, "board": board, "config": s.cfg}
     if not a.no_plan:
         if a.register:
