@@ -1229,20 +1229,30 @@ async function runFirstDots(page, n) {
         // a board with every dot already (UI_DESIGN §8.1.7): "Board done · Next board", Next board the primary action,
         // no test run, "Run it again" second (its confirm asks "I wiped this board", above). Here the plan's paste as
         // the server would have it after the whole board, for a moment
-        await page.evaluate(() => {
-          const p = IL.S.plan;
-          IL.run.keepPasted = p.pasted;
-          p.pasted = Object.assign({}, p.pasted, { board: p.pasted.board || 1, pads: Object.fromEntries(p.dots.map((d) => [d.padId, 9])) });
-          IL.go('#run/checks');
-        });
-        await page.waitForFunction(() => IL.run.doneSet.size === IL.S.plan.dots.length && !document.getElementById('btn-run-next').hidden, null, { timeout: 10000 }).catch(() => {});
-        await page.screenshot({ path: path.join(OUT, 'board-done-next-board.png') });
-        const bd = await page.evaluate(() => {
-          const r = IL.ready(), nb = document.getElementById('btn-run-next'), rb = document.getElementById('btn-run');
-          return { verdict: r.verdict.text, done: !!r.verdict.done, strip: document.getElementById('pill-engine').textContent, next: !nb.hidden && nb.classList.contains('btn--primary'),
-            test: !document.getElementById('btn-run-test').hidden, run: rb.textContent.trim(), runPrimary: rb.classList.contains('btn--primary') };
-        });
-        await page.evaluate(() => { IL.S.plan.pasted = IL.run.keepPasted; delete IL.run.keepPasted; IL.render(); });
+        // (the page reads its plan again every 10 s: a read that lands meanwhile drops the paste set here, so the moment is
+        // taken again then)
+        let bd = null;
+        for (let k = 0; k < 4 && !(bd && bd.same); k++) {
+          await page.evaluate(() => {
+            const p = IL.S.plan;
+            if (!p.pwDone) IL.run.keepPasted = p.pasted;
+            p.pasted = Object.assign({}, p.pasted, { board: p.pasted.board || 1, pads: Object.fromEntries(p.dots.map((d) => [d.padId, 9])) });
+            p.pwDone = true;
+            IL.go('#run/checks');
+            IL.render();
+          });
+          // the readiness is taken again at the next status (IL.ready keeps it per status): wait for the strip to say so too
+          await page.waitForFunction(() => IL.run.doneSet.size === IL.S.plan.dots.length && !document.getElementById('btn-run-next').hidden
+            && /Board done/.test(document.getElementById('pill-engine').textContent), null, { timeout: 10000 }).catch(() => {});
+          await page.screenshot({ path: path.join(OUT, 'board-done-next-board.png') });
+          bd = await page.evaluate(() => {
+            const r = IL.ready(), nb = document.getElementById('btn-run-next'), rb = document.getElementById('btn-run');
+            return { verdict: r.verdict.text, done: !!r.verdict.done, strip: document.getElementById('pill-engine').textContent, next: !nb.hidden && nb.classList.contains('btn--primary'),
+              test: !document.getElementById('btn-run-test').hidden, run: rb.textContent.trim(), runPrimary: rb.classList.contains('btn--primary'), same: !!IL.S.plan.pwDone, tries: 0 };
+          });
+          bd.tries = k + 1;
+        }
+        await page.evaluate(() => { if (IL.S.plan.pwDone) { IL.S.plan.pasted = IL.run.keepPasted; delete IL.S.plan.pwDone; } delete IL.run.keepPasted; IL.render(); });
         check('a board with every dot: "Board done · Next board", Next board the primary action, no test run, "Run it again" not primary',
           bd.done && bd.verdict === 'Board done · Next board' && /Board done/.test(bd.strip) && bd.next && !bd.test && /^Run it again · \d+ dots$/.test(bd.run) && !bd.runPrimary, bd);
       }
@@ -1359,15 +1369,23 @@ async function runFirstDots(page, n) {
           const polled = () => new Promise((res) => { const t0 = IL.S.statusAt;
             const tick = () => (IL.S.statusAt !== t0 ? requestAnimationFrame(() => requestAnimationFrame(res)) : setTimeout(tick, 50)); tick(); });
           const p0 = IL.S.plan, row = IL.S.status.dispense.purgeRow;
-          // a clean board (no paste: else the nav offers to finish it) whose plan purges one spot more than the row has
-          IL.S.plan = Object.assign({}, p0, { purgeSpotsNeeded: row.spots + 1,
-            pasted: Object.assign({}, p0.pasted, { board: null, sinceMs: null, dots: 0, pads: {} }) });
-          await polled();
-          const sub = document.querySelector('#tab-btn-run .nav__s');
-          const out = { sub: sub.textContent, cut: sub.scrollWidth > sub.clientWidth + 0.5, verdict: IL.ready().verdict.text };
+          // a clean board (no paste: else the nav offers to finish it) whose plan purges one spot more than the row has.
+          // The page reads its plan again every 10 s (IL.planRefresh): one that lands between the render and the verdict
+          // put the server's plan back under the readiness (final gate: the nav read "Purge row short", the verdict "8 of
+          // 9 · …"), so a read the plan changed under is taken again
+          let out = null;
+          for (let k = 0; k < 4 && !out; k++) {
+            const mine = Object.assign({}, p0, { purgeSpotsNeeded: row.spots + 1,
+              pasted: Object.assign({}, p0.pasted, { board: null, sinceMs: null, dots: 0, pads: {} }) });
+            IL.S.plan = mine;
+            await polled();
+            const sub = document.querySelector('#tab-btn-run .nav__s');
+            const seen = { sub: sub.textContent, cut: sub.scrollWidth > sub.clientWidth + 0.5, verdict: IL.ready().verdict.text, tries: k + 1 };
+            if (IL.S.plan === mine) out = seen;
+          }
           IL.S.plan = p0;
           await polled();
-          return out;
+          return out || { sub: null, verdict: 'the plan was read again under every try' };
         });
         check('Run nav: a purge row too short reads "Purge row short" whole (not "Purge row too sho…")', nv.sub === 'Purge row short' && !nv.cut
           && nv.verdict === 'Blocked · purge row too short', nv);
