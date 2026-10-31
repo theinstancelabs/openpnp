@@ -606,9 +606,10 @@
           el('table', { class: 'tbl cal-to__t' }, el('thead', {}, el('tr', {}, el('th', { class: 'r' }, IL.unitText('Gap mm')), el('th', { class: 'r' }, IL.unitText('Dot Ø mm')), el('th', { text: '' }))),
             el('tbody', {}, gaps.map((g, i) => {
               const dot = pcr.touchOffDot(a, i);
+              // the note keeps each number with its unit in its narrow column ("a smear (0.10 mm²)", not "(0.10" / "mm²)")
               return el('tr', { class: inBracket(g) ? 'is-contact' : null, 'data-state': ((a.dotStates || [])[i]) || null },
                 el('td', { class: 'r', text: IL.fmtSigned(g, 3) }), el('td', { class: 'r', text: dot.text, title: dot.note }),
-                el('td', { class: 'dim', text: isNum(a.contactGapMm) && Math.abs(g - a.contactGapMm) < 1e-9 ? 'contact' : inBracket(g) ? 'bracket' : dot.note || '' }));
+                el('td', { class: 'dim', text: isNum(a.contactGapMm) && Math.abs(g - a.contactGapMm) < 1e-9 ? 'contact' : inBracket(g) ? 'bracket' : dot.note ? IL.nb(dot.note) : '' }));
             })))),
         el('button', { type: 'button', class: 'btn btn--sm btn--quiet', onclick: () => IL.go('#records/touch-offs') }, 'Last 20 touch-offs', IL.icon('i-chev'))];
     });

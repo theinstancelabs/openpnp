@@ -749,10 +749,11 @@ async function runFirstDots(page, n) {
       const tbl = await page.evaluate(() => ({ sub: document.querySelector('#to-result .section-k').textContent,
         rows: Array.from(document.querySelectorAll('#to-result .cal-to__t tbody tr')).map((tr) => [tr.cells[0].textContent, tr.cells[1].textContent, tr.cells[2].textContent, tr.cells[1].title]) }));
       const r5 = tbl.rows;
-      check('touch-off table: "not measured" with the engine\'s note (third column and title) for an unmeasured dot, "no dot" only for none',
+      // the third column keeps each number with its unit (a screenshot at 1440 px broke "(0.10" / "mm²)"); the title is the note
+      check('touch-off table: "not measured" with the engine\'s note (third column, numbers kept with their units, and title) for an unmeasured dot, "no dot" only for none',
         r5.length === 7 && r5[0][1] === '1.050' && r5[3][1] === '1.420' && r5[3][2] === 'bracket'
-        && r5[4][1] === 'not measured' && r5[4][2] === 'joined to the dot at gap 0.000 mm' && r5[4][3] === 'joined to the dot at gap 0.000 mm'
-        && r5[5][1] === 'not measured' && r5[5][2] === 'no dot, only strings or a smear (0.10 mm²)' && r5[6][1] === 'no dot' && r5[6][2] === '', r5);
+        && r5[4][1] === 'not measured' && r5[4][2] === 'joined to the dot at gap 0.000 mm' && r5[4][3] === 'joined to the dot at gap 0.000 mm'
+        && r5[5][1] === 'not measured' && r5[5][2] === 'no dot, only strings or a smear (0.10 mm²)' && r5[6][1] === 'no dot' && r5[6][2] === '', r5);
       check('touch-off: after the run that recorded nothing, the row shown is "Last recorded touch-off"', /^Last recorded touch-off · /.test(tbl.sub), tbl.sub);
       await page.evaluate(() => document.getElementById('to-result').scrollIntoView({ block: 'center' }));
       await page.screenshot({ path: path.join(OUT, 'touchoff-not-measured.png') });
