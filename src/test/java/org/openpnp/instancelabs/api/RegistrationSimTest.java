@@ -962,14 +962,15 @@ public class RegistrationSimTest {
         JsonObject needle = ok(get("/api/status")).getAsJsonObject("dispense").getAsJsonObject("needle");
         assertTrue(needle.get("kRefusal").getAsString().startsWith("K was measured under another home: Z moved -0.70 mm "
                 + "at the home of "), needle.toString());
-        Res fromK = post("/api/needle/anchor", "{\"surfaceZ\":" + (BLANK_Z - 0.70) + ",\"needleContactRawSum\":65.59}");
+        Res fromK = post("/api/needle/anchor", "{\"needleChangedAtMs\":null,\"surfaceZ\":" + (BLANK_Z - 0.70)
+                + ",\"needleContactRawSum\":65.59}");
         assertEquals(409, fromK.status, fromK.toString());
         assertTrue(fromK.json().get("reason").getAsString().endsWith("Record the needle frame with both tips touching the "
                 + "same spot"), fromK.toString());
         double offset = ok(get("/api/status")).getAsJsonObject("dispense").getAsJsonObject("needle").get("zOffsetMm")
                 .getAsDouble();
-        JsonObject both = ok(post("/api/needle/anchor", "{\"surfaceZ\":" + (BLANK_Z - 0.70) + ",\"needleContactZ\":"
-                + (BLANK_Z - 0.70 - 2.30) + "}"));
+        JsonObject both = ok(post("/api/needle/anchor", "{\"needleChangedAtMs\":null,\"surfaceZ\":" + (BLANK_Z - 0.70)
+                + ",\"needleContactZ\":" + (BLANK_Z - 0.70 - 2.30) + "}"));
         assertEquals(-2.30, both.get("offsetMm").getAsDouble(), 1e-9, "measured, not carried over from "
                 + offset);
         // the places moved too: the status lists those set before the home until their Z is taken again

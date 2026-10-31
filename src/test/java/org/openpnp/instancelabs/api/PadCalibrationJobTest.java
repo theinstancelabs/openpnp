@@ -446,8 +446,9 @@ public class PadCalibrationJobTest {
     public void everyStepAndRecordCarriesTheSetupAndTheNeedleOfTheStart() throws Exception {
         ok(call("POST", "/api/needle/changed", "{\"why\":\"a new needle\"}"));
         Long token = svc.getConfig().needleChangedAtMs;
+        // after a needle change K is refused (it holds for the needle it was measured with): both tips touch
         ok(call("POST", "/api/needle/anchor", "{\"needleChangedAtMs\":" + token + ",\"surfaceZ\":5.5,"
-                + "\"needleContactRawSum\":65.59}"));
+                + "\"needleContactZ\":2.91}"));
         ok(call("POST", "/api/needle/offset", "{\"needleChangedAtMs\":" + token + ",\"offsetMm\":-2.59}"));
         // where it lands, kept for the 22G: a test without the landing check (its job is PadCalibrationSimTest's)
         org.openpnp.instancelabs.dispense.LandingResult l = new org.openpnp.instancelabs.dispense.LandingResult();

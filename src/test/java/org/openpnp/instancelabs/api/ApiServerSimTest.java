@@ -844,10 +844,12 @@ public class ApiServerSimTest {
         // K belongs to the needle it was measured with: the new needle's frame is measured with both tips
         assertTrue(changed.get("kRefusal").getAsString().startsWith("K was measured with the needle before the change at"),
                 changed.toString());
-        Res fromK = post("/api/needle/anchor", "{\"surfaceZ\":5.5,\"needleContactRawSum\":65.59}");
+        long token = changed.get("changedAtMs").getAsLong(); // the needle change these heights are taken after (§22.3)
+        Res fromK = post("/api/needle/anchor", "{\"needleChangedAtMs\":" + token + ",\"surfaceZ\":5.5,"
+                + "\"needleContactRawSum\":65.59}");
         assertEquals(409, fromK.status, fromK.toString());
         assertTrue(fromK.body.contains("record the needle frame with both tips touching the same spot"), fromK.toString());
-        ok(post("/api/needle/anchor", "{\"surfaceZ\":5.5,\"needleContactZ\":2.71}"));
+        ok(post("/api/needle/anchor", "{\"needleChangedAtMs\":" + token + ",\"surfaceZ\":5.5,\"needleContactZ\":2.71}"));
         JsonObject again = ok(get("/api/status")).getAsJsonObject("dispense").getAsJsonObject("needle");
         assertTrue(again.get("anchored").getAsBoolean() && again.get("kRefusal").isJsonNull(), again.toString());
         assertEquals(-2.79, again.get("anchorOffsetMm").getAsDouble(), 1e-9);

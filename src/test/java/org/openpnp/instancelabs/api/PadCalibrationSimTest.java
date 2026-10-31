@@ -815,10 +815,13 @@ public class PadCalibrationSimTest {
         return t == null || t.isJsonNull() ? null : t.getAsLong();
     }
 
-    /** The mounted needle's frame and its offset (the bench's K), under the needle token now. */
+    /**
+     * The mounted needle's frame (both tips touching, the needle 2.59 mm under N1: K is refused after a needle change)
+     * and its offset, under the needle token now.
+     */
     void frame() throws Exception {
         String tk = String.valueOf(token());
-        ok(call("POST", "/api/needle/anchor", "{\"surfaceZ\":5.5,\"needleContactRawSum\":65.59,\"needleChangedAtMs\":"
+        ok(call("POST", "/api/needle/anchor", "{\"surfaceZ\":5.5,\"needleContactZ\":2.91,\"needleChangedAtMs\":"
                 + tk + "}"));
         ok(call("POST", "/api/needle/offset", "{\"offsetMm\":-2.59,\"needleChangedAtMs\":" + tk + "}"));
     }

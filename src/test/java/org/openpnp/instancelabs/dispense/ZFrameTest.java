@@ -114,6 +114,7 @@ public class ZFrameTest {
         DispensePlan p = plan(c, 5.5);
         c.surfaces.get("board").simulated = true;
         Interlocks.Inputs in = new Interlocks.Inputs();
+        in.xyChecked = true; // tip setups §22.3: where the needle lands is checked
         in.cfg = c;
         in.machineEnabled = true;
         in.machineHomed = true;

@@ -231,9 +231,24 @@ const ticks = (page) => page.evaluate(() => { IL.attest.set('regulator', IL.S.st
     const bzMid = Number(bz((bx0 + bx1) / 2, (by0 + by1) / 2).toFixed(3));
     s = await status(page);
     let nd = s.dispense.needle;
+    const tok = (n) => (n.changedAtMs === undefined ? null : n.changedAtMs);
     if (!nd.anchored || !nd.anchor || Math.abs(nd.anchor.surfaceZMm - bzMid) > 0.5 || !nd.touchedOff) {
-      await api(page, 'POST', '/api/needle/anchor', { surfaceZ: bzMid, needleContactRawSum: 65.59, note: 'tip-setups test (SIM)', needleChangedAtMs: nd.changedAtMs === undefined ? null : nd.changedAtMs });
-      await api(page, 'POST', '/api/needle/offset', { offsetMm: -2.59, note: 'tip-setups test (SIM)', needleChangedAtMs: nd.changedAtMs === undefined ? null : nd.changedAtMs });
+      // both tips on the blank, the needle 2.59 mm under N1 as the SIM's see-saw has it (K is refused after a failed Z
+      // check of this home, which webui-sim's last step leaves, and after a needle change)
+      await api(page, 'POST', '/api/needle/anchor', { surfaceZ: bzMid, needleContactZ: Number((bzMid - 2.59).toFixed(3)), note: 'tip-setups test: both tips (SIM)', needleChangedAtMs: tok(nd) });
+      await api(page, 'POST', '/api/needle/offset', { offsetMm: -2.59, note: 'tip-setups test (SIM)', needleChangedAtMs: tok(nd) });
+    }
+    // the 22G bent taper's own K, which (9) finds again after the mount back: its frame recorded from K over the one it
+    // has (a home first when the Z check of this home failed: the heights were measured again at the new Z)
+    nd = (await status(page)).dispense.needle;
+    if (nd.anchor && typeof nd.anchor.rawSumMm !== 'number' && /under another home/.test(nd.kRefusal || '')) {
+      await api(page, 'POST', '/api/machine/home', { wait: true });
+      await api(page, 'POST', '/api/machine/z-check', { wait: true }).catch(() => null);
+      nd = (await status(page)).dispense.needle;
+    }
+    if (nd.anchor && typeof nd.anchor.rawSumMm !== 'number' && !nd.kRefusal) {
+      await api(page, 'POST', '/api/needle/anchor', { surfaceZ: bzMid, needleContactRawSum: 65.59, note: 'tip-setups test: the 22G bent taper\'s K (SIM)', needleChangedAtMs: tok(nd) });
+      await api(page, 'POST', '/api/needle/offset', { offsetMm: -2.59, note: 'tip-setups test (SIM)', needleChangedAtMs: tok(nd) });
     }
     await api(page, 'POST', '/api/screw/start-angle', { note: 'tip-setups test (SIM)' });
     await ticks(page);
@@ -251,6 +266,8 @@ const ticks = (page) => page.evaluate(() => { IL.attest.set('regulator', IL.S.st
       await closePanels(page);
       await wipeBlank(page);
     }
+    const anchor22 = (await status(page)).dispense.needle.anchor;
+    const k22 = anchor22 && typeof anchor22.rawSumMm === 'number' ? anchor22.rawSumMm : null;
     const chip0 = await api(page, 'GET', '/api/pad-types/chip-0603');
     if (!['characterized', 'validated'].includes(chip0.current.status)) await api(page, 'PUT', '/api/pad-types/chip-0603', { status: 'characterized', forSetup: 'ad22tta-b' });
     const chipBefore = (await api(page, 'GET', '/api/pad-types/chip-0603')).current;
@@ -592,14 +609,20 @@ const ticks = (page) => page.evaluate(() => { IL.attest.set('regulator', IL.S.st
     await shoot(page, 'profile-by-tip-22g', () => toTop(page, '.pt-bytip'));
     await page.click('#pt-filter button[data-filter="all"]');
     await page.evaluate(() => IL.go('#setup/needle'));
-    await page.waitForFunction(() => /recorded for the 22G bent taper on /.test((document.getElementById('anchor-k-cap') || {}).textContent || ''), null, { timeout: 15000 });
-    const c9b = await page.evaluate(() => ({ k: document.getElementById('anchor-k').value, cap: document.getElementById('anchor-k-cap').textContent }));
-    check('(9) #anchor-k prefilled with the 22G\'s own K, "recorded for the 22G bent taper on …"', Number(c9b.k) === 65.59 && /^recorded for the 22G bent taper on /.test(c9b.cap), c9b);
+    await page.waitForFunction(() => /22G bent taper/.test((document.getElementById('anchor-k-cap') || {}).textContent || '') && !document.getElementById('anchor-k-why').hidden, null, { timeout: 15000 }).catch(() => null);
+    const c9b = await page.evaluate(() => ({ k: document.getElementById('anchor-k').value, cap: document.getElementById('anchor-k-cap').textContent,
+      why: document.getElementById('anchor-k-why').hidden ? null : document.getElementById('anchor-k-why').textContent,
+      kLocked: document.querySelector('#card-needle .seg button').disabled, both: !document.getElementById('btn-anchor').hidden }));
+    check('(9) #anchor-k prefilled with the 22G\'s own K, "recorded for the 22G bent taper on …"', k22 !== null && Number(c9b.k) === k22 && /^recorded for the 22G bent taper on /.test(c9b.cap), { c9b, k22 });
+    // K holds for the needle it was measured with (rc1): after the mount the engine refuses it, the card says why
+    check('(9) From K is locked after the mount: Both tips, "K was measured with the needle before the change at …"',
+      c9b.kLocked && c9b.both && /^K was measured with the needle before the change at \d\d:\d\d: record the needle frame with both tips touching the same spot\.$/.test(c9b.why || ''), c9b);
 
     // ---- (10) the 25G on the head, the 22G mounted --------------------------------------------------------------------
     scene('--physical-tip', k25);
     await page.fill('#anchor-n1', String(bzMid));
-    await page.click('#btn-anchor-k');
+    await page.fill('#anchor-n2', String(Number((bzMid - 2.59).toFixed(3))));
+    await page.click('#btn-anchor');
     await page.waitForFunction(() => IL.S.status.dispense.needle.anchored, null, { timeout: 15000 });
     await page.click('#btn-needle-offset');
     await page.waitForFunction(() => IL.S.status.dispense.needle.touchedOff, null, { timeout: 15000 });
