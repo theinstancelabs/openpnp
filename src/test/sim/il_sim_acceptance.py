@@ -1849,21 +1849,25 @@ def padcal_main(a):
         png = urllib.request.urlopen(s.base + crop, timeout=30).read() if crop else b""
         ok["crops_load"] = png[:4] == b"\x89PNG"
 
-        # what was written: the types, one pad_calibrations row each, the weighings, all made in the simulator
+        # what was written: the types, one pad_calibrations row each, the weighings, all made in the simulator (the
+        # set-up's chip-0603 raised by hand is a by-hand record of its own, PC §22.5)
         types = {t_["typeKey"]: t_ for f in s.api("GET", "/api/pad-types")["families"] for t_ in f["types"]}
-        rows = s.api("GET", "/api/pad-calibrations")
+        listed = s.api("GET", "/api/pad-calibrations")
+        rows = [r for r in listed if r.get("method", "auto") == "auto"]
+        by_hand = sorted(r["typeKey"] for r in listed if r.get("method") == "by-hand")
         recs = s.api("GET", "/api/dose-records?freshOnly=true")
         mass = [r for r in recs if r["kind"] == "mass"]
         res["written"] = {
             "types": {k: {f: types[k].get(f) for f in ("status", "dotSteps", "dotsPerPad", "origin", "massPerPadMg")}
                       for k in (jt.get("typeKey"), qt.get("typeKey")) if k in types},
             "pad_calibrations": [{k: r.get(k) for k in ("typeKey", "outcome", "steps", "dotsPerPad", "massPerPadMg",
-                                                         "simulated")} for r in rows],
+                                                         "simulated", "method")} for r in listed],
             "mass_records": [{k: r.get(k) for k in ("couponPlace", "steps", "n", "totalMg", "mgPerDot", "mgPerStep",
                                                      "confirmedBy", "method", "simulated")} for r in mass]}
         ok["written"] = (all(types.get(k, {}).get("status") == "characterized"
                              and types[k].get("origin") == "auto-calibrated" for k in (jt.get("typeKey"), qt.get("typeKey")))
                          and len(rows) == 2 and all(r["simulated"] and r["outcome"] == "characterized" for r in rows)
+                         and by_hand == ["chip-0603"]
                          and len(mass) == 2 and all(r["simulated"] and r["method"] == "typed"
                                                     and abs(r["mgPerStep"] - 0.575 / 400) <= 0.575 / 400 * 0.04
                                                     for r in mass))
@@ -2070,14 +2074,15 @@ def padcal_controls(a):
                     "blank surface probed: ") and (row.get("sentence") or "").endswith("every camera check passed.")
                 and "P7" in [p.get("id") for p in job["result"].get("predictions") or []])
         dwell = cfg["profile"]["dwellMs"]
+        tip = s.api("GET", "/api/status")["dispense"]["tip"]["key"]  # a profile patch names its tip (PC §22.1)
 
         def short_dwell():
-            s.api("PUT", "/api/config", {"profile": {"dwellMs": 50}})
+            s.api("PUT", "/api/config", {"profile": {"dwellMs": 50}, "forTip": tip})
             s.api("POST", "/api/screw/start-angle", {"note": "sim padcal: dwell 50 ms"})
             try:
                 return by_hand(s, "ladder", 1600, "chip-0805")
             finally:
-                s.api("PUT", "/api/config", {"profile": {"dwellMs": dwell}})
+                s.api("PUT", "/api/config", {"profile": {"dwellMs": dwell}, "forTip": tip})
                 s.api("POST", "/api/screw/start-angle", {"note": "sim padcal: dwell back"})
         control("dwell-50-one-turn", "by hand: one-turn ladder at profile dwellMs 50", short_dwell,
                 lambda job, row: job["state"] == "failed" and row["laid"] == 0 and has("asks the screw for", "I6")(
@@ -2666,7 +2671,8 @@ def main(argv=None):
                                     "screw start angle confirmed after connect (web API; I11)",
                                     "cleanPadCheck.enabled=false (web API; I10: static simulated top camera)",
                                     "valveSettleMs=3000, the bench's (web API; the dist file is schema 2 with 1500)",
-                                    "chip-0603 status characterized (web API; §5.7 rule)",
+                                    "chip-0603 status characterized (web API; §5.7 rule; a by-hand calibration record, "
+                                    "PC §22.5)",
                                     "the Top camera is the SIM top camera, 1920 x 1080 (uinav --xml-set; not in the "
                                     "load scenario)",
                                     "the SIM scene (instancelabs/sim-scene.json in the copy; not in the load scenario): "
