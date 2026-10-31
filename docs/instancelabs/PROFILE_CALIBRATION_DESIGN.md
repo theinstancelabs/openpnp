@@ -3205,10 +3205,14 @@ a4bb6d20d, `il/fixround1b` for BI §3.4, `il/pc-web` 197da6550).
 
 Built on `il/tip-setups` in the slices of §22.9: `ts-engine`, `ts-api` (`il/ts-api` 00d185402 and its check), `ts-web`
 (the web UI, `tip-setups.playwright.cjs`, and the operator walk's fixes) and `ts-integration` (`il/rc1` merged again up
-to 8f8f0f724, the `tips` SIM acceptance, `il_ui_session.py --physical-tip` / `--paste-by-tip`, the docs: `WEB_API.md`
-§3.6, `DISPENSE_API.md` §9, `UI_DESIGN.md` §8.6, `REAL_MACHINE_TODO.md` items 55–68, `DEV_NOTES.md` §5 › Tip setups).
-The gates of §22.9 (the full Maven suite, the browser tests in one SIM session, the board view test and the SIM
-acceptance `all`) passed at the head named in the commit that records their counts.
+to 6a8ae31a9, fix round 2's web UI included, the `tips` SIM acceptance, `il_ui_session.py --physical-tip` /
+`--paste-by-tip`, the docs: `WEB_API.md` §3.6, `DISPENSE_API.md` §9, `UI_DESIGN.md` §8.6, `REAL_MACHINE_TODO.md` items
+55–68, `DEV_NOTES.md` §5 › Tip setups). Gates of §22.9, all green. On ec82c8019: the full Maven suite 1259/1259 with
+checkstyle; one SIM session of `run-webui-sim-test.sh` with webui-sim 244/244, board-import 62/62, pad-profile 71/71 and
+tip-setups 68/68; `run-boardview-test.sh` 67/67. `il_sim_acceptance.py all` ran on 49d04dbab, which differs only by
+`il/rc1`'s last commit (the touch-off note's no-break spaces in `calibrate.js` and its browser check, which the
+acceptance does not load): load, stop (web and Swing, during a hold and during a run), board, register, import, padcal
+(main 11/11, nano 6/6, controls 9/9) and tips (13/13) passed, the live config untouched, 56 min.
 
 **Where the code differs from §22** (the code is right; each was checked against the code at this head):
 

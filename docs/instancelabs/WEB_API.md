@@ -605,16 +605,21 @@ Jargon is explained in tooltips (`title`/`abbr`).
   Register board, the blank probe, the home at run, the Z check and probe only for a board without fiducials end to end
   on the SIM vacuum and the SIM camera (`SceneImager`); `BoardImportSimTest` uploads, saves and attaches the KiCad
   fixtures and plans them; `CameraSnapshotEncodingTest` (2) the PNG fallback of the camera snapshot. Missing paste
-  profiles:
-  `PadProfileApiSimTest` (8: the check, apply, mappings, the upload preview), `PadCalibrationJobTest` (14: the job's
-  states, readings, cancel, STOP, refusals in order, on fake engine steps), `PadCalibrationSimTest` (13: PC §14.3 end
-  to end on the SIM paste, camera and balance, every negative control of §11.7, the SIM balance after a reconnect, the
-  look before a ladder's dots and the control's tolerance in a job),
-  `PadProfileUiSimTest` (3: the files are served and loaded).
-  Board runs there use the bench geometry (N1 contact 5.5, K 65.59 → needle 2.91, offset −2.59), a purge row on the
-  blank, a confirmed start angle and the clean-pad check off, or a fake `DotImager` (`DispenseService.setDotImager`)
-  for the I10 tests. The whole suite on `il/rc1` 5aba4636e (fix round 2 merged): 1133 tests, 847 of them in
-  `org.openpnp.instancelabs` (dispense 349, api 102, sim 87, kicad 79, padprofile 71, vision 70, board 62, serial 27).
+  profiles: `PadProfileApiSimTest` (8: the check, apply, mappings, the upload preview), `PadCalibrationJobTest` (14: the
+  job's states, readings, cancel, STOP, refusals in order, on fake engine steps), `PadCalibrationSimTest` (13: PC §14.3
+  end to end on the SIM paste, camera and balance, every negative control of §11.7, the SIM balance after a reconnect,
+  the look before a ladder's dots and the control's tolerance in a job), `PadProfileUiSimTest` (3: the files are served
+  and loaded). Board runs there use the bench geometry (N1 contact 5.5, K 65.59 → needle 2.91, offset −2.59), a purge
+  row on the blank, a confirmed start angle and the clean-pad check off, or a fake `DotImager`
+  (`DispenseService.setDotImager`) for the I10 tests. The whole suite on `il/rc1` 5aba4636e (fix round 2 merged): 1133
+  tests, 847 of them in `org.openpnp.instancelabs` (dispense 349, api 102, sim 87, kicad 79, padprofile 71, vision 70,
+  board 62, serial 27). Tip setups (PC §22.8): `TipSetupApiSimTest` (4), `TipSetupEdgeSimTest` (10), `PhotoApiSimTest`
+  (4), `MountJobRaceTest` (4) and `TipSetupUiSimTest` (4), the cases added to `PadCalibrationSimTest` (18 in all) and
+  the engine's (`DispenseDbMigrationV3Test`, `TipSetupsTest`, `PadDefinitionSharedTest`, `MountTest`, `MountRaceTest`,
+  `PhotoStoreTest`, `TipPictureTaskTest`, `InterlocksXyTest`, `DotTableTest`, `PlannerMeasuredTipTest`,
+  `LandingFitTest`, `SuggesterSetupTest`). The whole suite on `il/tip-setups` ec82c8019: 1259 tests, 973 of them in
+  `org.openpnp.instancelabs` (dispense 419, api 135, sim 91, padprofile 90, kicad 79, vision 70, board 62, serial 27),
+  in 13:23 min with checkstyle.
 - `src/test/web/run-webui-sim-test.sh`: Playwright (headless Chromium) against this jar running in OpenPnP **sim**
   through openpnp-uinav (config copy, simulated controller and cameras, Xvfb, device stubs). Needs the jar
   (`mvn -q -T1 -DskipTests package`), openpnp-uinav built, and Playwright in `$PLAYWRIGHT_DIR`
@@ -633,7 +638,13 @@ Jargon is explained in tooltips (`title`/`abbr`).
   Run › Checks, Needs a profile, the suggestion card, Use, the pad inspector, Calibrate automatically through the
   readings (the test is the operator at the SIM balance) to the result, the by-hand guide, Calibrate › Pad
   calibration, STOP at the readings, a test run that lays whole pads, a coupon weighed and one skipped; one filled
-  button per screen; screenshots at 1440 and 1280 px, light and dark).
+  button per screen; screenshots at 1440 and 1280 px, light and dark). `tip-setups.playwright.cjs` runs fourth (68
+  checks, PC §22.8 steps 0–12: Setup › Dispenser & tip, a 25G added and mounted from Change tip with a dropped picture,
+  what goes stale, Profile per tip, Needs a profile, its frame and where it lands, Measure its dots, a calibration's
+  label and pictures, Records, the 22G mounted back with From K locked, the wrong tip, the picture viewer; screenshots
+  at 1024 × 768 and 1920 × 1080, light and dark; `TS_SHOTS=0` skips them); the session installs the SIM bottom camera
+  (`SimTipCamera`). On `il/tip-setups` ec82c8019 one SIM session ran webui-sim 244/244, board-import 62/62,
+  pad-profile 71/71 and tip-setups 68/68; `run-boardview-test.sh` 67/67.
 - `python3 -I src/test/sim/il_sim_acceptance.py padcal --prefix P --api-port N` (also in `all`): PC §14.5 in three
   uinav SIM sessions on this jar. **main**: `padcal.kicad_pcb` uploaded (NEEDS_PROFILE, a reason per package), saved
   and planned; the check's groups (SW_SPST new 2 × ½ turn, Test_Strip new 2 × ¼ turn, TestChip_A Use 0603, the WSON's
