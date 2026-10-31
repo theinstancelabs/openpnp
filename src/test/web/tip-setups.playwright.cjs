@@ -400,7 +400,9 @@ const ticks = (page) => page.evaluate(() => { IL.attest.set('regulator', IL.S.st
     await page.waitForFunction(() => /for the 25G straight/.test(document.getElementById('pt-needs-for').textContent), null, { timeout: 15000 });
     const c4 = await page.evaluate(() => {
       const pc = IL.S.plan.profileCheck || {};
-      const all = (pc.otherTips || []).filter((x) => x.covers === x.of && x.of > 0);
+      // named only when changing tip is the answer: no pads without a pad type (they need a profile whichever tip is on)
+      const untyped = (pc.groups || []).some((g) => g.reason === 'no-type' || g.reason === 'no-pad-size');
+      const all = untyped ? [] : (pc.otherTips || []).filter((x) => x.covers === x.of && x.of > 0);
       return { for: document.getElementById('pt-needs-for').textContent, measure: !document.getElementById('pt-needs-measure').hidden,
         measureText: document.getElementById('pt-needs-measure').textContent, other: !document.getElementById('pt-needs-other').hidden,
         otherText: document.getElementById('pt-needs-other').textContent, otherTips: all.map((x) => x.name), dots: pc.tip && pc.tip.dots };

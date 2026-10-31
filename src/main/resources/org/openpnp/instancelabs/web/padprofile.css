@@ -191,6 +191,12 @@ td.bi-pp { font-size: 13.5px; line-height: 1.35; }
 .pcal-landing > .notebox { display: flex; flex-direction: column; gap: 8px; }
 .pcal-landing > .pcal-landing__ok { flex-direction: row; align-items: flex-start; gap: 8px; background: var(--ok-bg); border-color: var(--ok-line); }
 .pcal-landing > .notebox--need:not(.pcal-landing__q) { flex-direction: row; flex-wrap: wrap; align-items: center; }
+/* the tip's dot sizes: each turn with its pass mark (no Pass column, so the table fits the side panel); not measured */
+.pcal-turn { display: inline-flex; align-items: center; gap: 4px; }
+.pcal-tipdots-not { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 10px; margin-top: 8px; }
+.pcal-tipdots-not[hidden] { display: none; }
+.pcal-tipdots-not > span:not(.st) { flex: 1 1 240px; }
+.pcal-tipdots-not > .btn-row { flex-basis: 100%; }
 .pcal-tip { display: flex; flex-direction: column; gap: 8px; }
 .pcal-tip[hidden] { display: none; }
 .pcal-tip__none { margin: 0; font-size: 13.5px; }

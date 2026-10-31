@@ -922,6 +922,10 @@
     const t = String(msg || '').toLowerCase();
     // Z after a home (AUTO_REGISTER_DESIGN.md §2.4): not checked yet, no point left to check it on, or it moved
     if (/were measured before the home|must be checked after the home|^(i4:\s*)?z moved\b/.test(t)) return 'zcheck';
+    // tip setups (PROFILE_CALIBRATION_DESIGN.md §22.3): where the needle lands (the Needle item says it, with its fix-its)
+    // and a needle frame too close to N1's (Settings): neither is about the board surface
+    if (/where it lands|head offset changed in openpnp/.test(t)) return 'landing';
+    if (/cannot tell a height taken with the needle/.test(t)) return 'frame';
     if (/needle z frame|needle was changed|needle z offset/.test(t)) return 'needle';
     if (/^place '/.test(t)) return 'place';
     if (/the plan was made/.test(t)) return 'plan';
@@ -1210,9 +1214,12 @@
         at.push(nd.setAtMs ? nd.setAtMs - S.skewMs : null);
       }
       if (i4.some((x) => x.kind === 'plan')) { why.push('the board surface'); at.push(sf && sf.setAtMs ? sf.setAtMs - S.skewMs : null); }
-      // the engine re-checks the pad types of the plan against the gate and the pad types now
+      // the engine re-checks the pad types of the plan against the gate and the pad types now, and the tip setup it was
+      // made for (§22.3: "the tip changed after planning", "the 25G straight changed after planning (OD …)"); each once
       for (const v of viol.filter((x) => x.code === 'PLAN' && /after planning/i.test(x.message))) {
-        why.push(/gate/i.test(v.message) ? 'the pad-type gate' : 'the pad types');
+        const w = /the tip changed after planning|changed after planning \(/i.test(v.message) ? 'the tip' : /gate/i.test(v.message) ? 'the pad-type gate' : 'the pad types';
+        if (why.includes(w)) continue;
+        why.push(w);
         at.push(null);
       }
       if (why.length) {
@@ -1332,7 +1339,12 @@
     };
     const zRule = !!ilk.I4 && i4Kind(ilk.I4.text, bsName) === 'zcheck';
     if (zRule && ilk.I4.state === 'blocked' && zBlocks(ilk.I4.text)) zExtra(ilk.I4.text);
-    if (ilk.I4 && ilk.I4.state === 'blocked' && items[2].ready && !zRule) addExtra({ key: 'I4', code: 'I4', title: 'Place heights', state: 'block', short: 'place heights', detail: sentence(ilk.I4.text), fixes: [{ href: '#setup/places', label: 'Open Places' }] });
+    // I4 blocked while the needle item is ready: a place height, or a needle frame too close to N1's (tip setups §22.3)
+    const i4k = ilk.I4 ? i4Kind(ilk.I4.text, bsName) : null;
+    if (ilk.I4 && ilk.I4.state === 'blocked' && items[2].ready && !zRule && i4k !== 'landing') {
+      addExtra(i4k === 'frame' ? { key: 'I4-frame', code: 'I4', title: 'Needle Z frame', state: 'block', short: 'needle frame', detail: sentence(ilk.I4.text), fixes: IL.fixesForCode('I4', s, ilk.I4.text) }
+        : { key: 'I4', code: 'I4', title: 'Place heights', state: 'block', short: 'place heights', detail: sentence(ilk.I4.text), fixes: [{ href: '#setup/places', label: 'Open Places' }] });
+    }
     for (const v of viol) {
       if (['MACHINE', 'I9', 'I10', 'I11', 'PLAN'].includes(v.code)) continue;
       if (v.code === 'I4') {
@@ -1340,6 +1352,7 @@
         if (k === 'zcheck' && zBlocks(v.message)) zExtra(v.message);
         else if (k === 'place') addExtra({ key: 'I4-place', code: 'I4', title: 'Place height', state: 'block', short: 'place Z', detail: sentence(v.message), fixes: [{ href: '#setup/places', label: 'Retake Z with N1' }] });
         else if (k === 'other-surface') addExtra({ key: 'I4-surface', code: 'I4', title: 'Surface', state: 'block', short: 'blank surface', detail: sentence(v.message), fixes: [{ href: '#setup/surfaces', label: 'Open Probed surfaces' }] });
+        else if (k === 'frame') addExtra({ key: 'I4-frame', code: 'I4', title: 'Needle Z frame', state: 'block', short: 'needle frame', detail: sentence(v.message), fixes: IL.fixesForCode('I4', s, v.message) });
         continue;
       }
       addExtra(extraFor(v.code, v.message, 'block'));
@@ -2690,13 +2703,15 @@
         : [{ fix: 'purge-reset', label: 'Wiped: reset row', icon: 'i-wipe' }];
       case 'I10': return [{ fix: 'clean-check', label: 'Wiped: check again' }];
       case 'I4': {
-        // tip setups (§22.3): a needle put on whose landing is not checked yet; one whose frame is not recorded yet
-        if (/where it lands has not been checked/i.test(msg)) {
+        // tip setups (§22.3): a needle put on whose landing is not checked yet ("where it lands has not been checked"), or
+        // N2's head offset changed since it was checked; one whose frame is not recorded yet
+        const k = i4Kind(msg, d.boardSurfaceName || 'board');
+        if (k === 'landing') {
           const keep = d.needle && d.needle.landing && d.needle.landing.keepable;
           return [{ fix: 'landing-check', label: 'Check where it lands…' }].concat(keep ? [{ fix: 'landing-keep', label: 'Keep where it lands' }] : []);
         }
+        if (k === 'frame') return [{ href: '#setup/settings', label: 'Settings' }, { href: '#setup/needle', label: 'Open Needle Z frame' }];
         if (/never measured at this recipe|measure its dots/i.test(msg)) return [{ fix: 'measure-tip', label: 'Measure its dots…' }];
-        const k = i4Kind(msg, d.boardSurfaceName || 'board');
         if (k === 'place') {
           const pm = /^place '([^']+)'/i.exec(msg);
           return [{ href: '#setup/places' + (pm ? '/' + encodeURIComponent(pm[1]) : ''), label: 'Retake Z with N1' + (pm ? ' (' + pm[1] + ')' : '') }];

@@ -681,11 +681,13 @@
     const d = IL.tips && IL.tips.data();
     return d ? (d.setups || []).filter((x) => !x.retired).sort((a, b) => (b.mounted ? 1 : 0) - (a.mounted ? 1 : 0)) : [];
   }
-  /** A "calibrated for" label without its pad type (the first part) and the tip's name: "Vieweg DV-5005 · 18 psi · …". */
+  /**
+   * A "calibrated for" label without its pad type (the first part) and the tip's name: "Vieweg DV-5005 · 18 psi · …".
+   * Only the automatic label has that shape ({type} · {tip} · …); a label the operator wrote is shown whole.
+   */
   function labelRest(label, setupName) {
-    const parts = String(label || '').split(' · ').slice(1);
-    if (parts.length && setupName && parts[0] === setupName) parts.shift();
-    return parts.join(' · ');
+    const parts = String(label || '').split(' · ');
+    return parts.length > 1 && setupName && parts[1] === setupName ? parts.slice(2).join(' · ') : String(label || '');
   }
   /** By tip (§22.7): rows are pad types, one column per tip with the mounted one first; a cell opens that tip's version. */
   function byTipTables(fams, tips) {

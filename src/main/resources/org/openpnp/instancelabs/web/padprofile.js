@@ -69,8 +69,13 @@
   const tipNameOf = (pc) => (pc && pc.tip && pc.tip.name) || (S.status && S.status.dispense && S.status.dispense.tip && S.status.dispense.tip.name) || 'mounted tip';
   /** The check's tip measured nothing yet (§22.2: no suggestions without its dot sizes and paste per turn). */
   const unmeasured = (pc) => !!(pc && pc.tip && pc.tip.dots === 'none') || !!(!pc && S.status && S.status.dispense && S.status.dispense.tip && S.status.dispense.tip.dots === 'none');
-  /** Other tips that have every pad type of this board at or above the gate (profileCheck.otherTips, covers == of). */
-  const otherTipsAll = (pc) => ((pc && pc.otherTips) || []).filter((x) => x.covers === x.of && x.of > 0);
+  /**
+   * Other tips that have every pad type of this board at or above the gate (profileCheck.otherTips, covers == of), named
+   * only when a change of tip is the answer: pads without a pad type need a profile whichever tip is on (otherTips
+   * counts the typed pads only), so "Change tip…" would not make the board dispensable.
+   */
+  const otherTipsAll = (pc) => (((pc && pc.groups) || []).some((g) => g.reason === 'no-type' || g.reason === 'no-pad-size') ? []
+    : ((pc && pc.otherTips) || []).filter((x) => x.covers === x.of && x.of > 0));
   /** "The 22G bent taper has all 5 pad types of this board" (one: "has this board’s pad type"). */
   const otherTipsWords = (ot) => ot.map((x) => 'The ' + x.name + (x.of === 1 ? ' has this board’s pad type' : ' has all ' + x.of + ' pad types of this board')).join('; ');
   /** The suggestion in a few words: "Use Chip 0603", "New: 2 quarter turns per pad, ≈ 1.06 mg". */
@@ -1212,7 +1217,7 @@
     const psi = s && s.dispense && s.dispense.profile ? IL.fmtPsi(s.dispense.profile.pressurePsi) : '';
     if (/^Read the regulator/.test(t)) return [{ view: 'pressure', label: 'Pressure on to read the gauge' }, { fix: 'attest-regulator', label: 'Reads ' + psi + ' psi' }];
     if (/paste is within its working life/.test(t)) return [{ fix: 'attest-paste', label: 'Paste within its life' }];
-    if (/mm left and this calibration needs/.test(t)) return [{ fix: 'pcal-wiped', label: 'Blank wiped' }, { fix: 'pcal-area', label: 'Set the calibration area' }];
+    if (/mm left and this calibration needs|mm left; the landing check needs/.test(t)) return [{ fix: 'pcal-wiped', label: 'Blank wiped' }, { fix: 'pcal-area', label: 'Set the calibration area' }];
     if (/calibration area overlaps|calibration area/.test(t)) return [{ fix: 'pcal-area', label: 'Set the calibration area' }];
     if (/coupon places/.test(t)) return [{ href: '#setup/places', label: 'Set the coupon places' }];
     // a coupon place on the purge row or on the board's pads
@@ -1282,12 +1287,15 @@
           el('div', { class: 'ri__act' }, skip))),
       el('div', { class: 'ri', id: 'pcal-result', role: 'status', hidden: true, 'data-refusals': '' }),
       el('div', { class: 'pcal-landing', id: 'pcal-landing', hidden: true, 'data-refusals': '' }),
-      el('div', { id: 'pcal-tipdots-box', hidden: true }, IL.sectionK('Dot sizes of the tip'),
+      // pass or fail is the turn's glyph (no column of its own: the table fits the side panel at 1920 px)
+      el('div', { id: 'pcal-tipdots-box', hidden: true }, IL.sectionK('Dot sizes of the tip (mm)'),
         el('div', { class: 'pcal__tblwrap' }, el('table', { class: 'tbl pcal__ladder', id: 'pcal-tipdots' },
-          el('thead', {}, el('tr', {}, [['Turn'], ['Found', 'dots found of dots laid'], ['Mean', 'mean diameter (mm)'], ['d95', '95th percentile diameter (mm)'],
-            ['Threads', 'paste threads to the next dot, of the moves'], ['Spread', 'residual spread of the dot area'], ['Pass']].map(([h, t]) => el('th', { scope: 'col', title: t || null, text: h })))), el('tbody'))),
+          el('thead', {}, el('tr', {}, [['Turn', 'the turn per dot; its mark says whether its dots passed'], ['Found', 'dots found of dots laid'], ['Mean', 'mean diameter (mm)'],
+            ['d95', '95th percentile diameter (mm)'], ['Threads', 'paste threads to the next dot, of the moves'], ['Spread', 'residual spread of the dot area']]
+            .map(([h, t]) => el('th', { scope: 'col', title: t || null, text: h })))), el('tbody'))),
         el('ul', { class: 'pcal__checks', id: 'pcal-tipdots-fail' }),
-        el('p', { class: 'pcal__sd', id: 'pcal-tipdots-mg' })),
+        el('p', { class: 'pcal__sd', id: 'pcal-tipdots-mg' }),
+        el('div', { class: 'notebox notebox--need pcal-tipdots-not', id: 'pcal-tipdots-not', hidden: true })),
       tipBox,
       el('div', { class: 'pcal__more', id: 'pcal-result-more', hidden: true },
         el('ul', { class: 'pcal__res', id: 'pcal-groups' }),
@@ -1421,8 +1429,12 @@
     IL.show($('btn-pcal-weigh-now'), weighNow);
     IL.show($('btn-pcal-finish'), finishNow);
     IL.show($('btn-pcal-again'), ended && !!res && res.outcome !== 'characterized' && !measure && !other);
-    const recs = res ? (res.groups || []).filter((g) => isNum(g.calibrationId)) : [];
-    IL.show($('btn-pcal-wrongtip'), ended && !measure && recs.length > 0 && !(res.groups || []).some((g) => g.flagged));
+    // Made with another tip…: on every calibration that saved a record, a failed one included (its control may say that
+    // another tip is on); not once the job is flagged
+    const recs = ended && !measure && res ? jobRecIds(j) : [];
+    const flagged = !!res && ((res.groups || []).some((g) => g.flagged)
+      || (!!C.recs && C.recs.jobId === j.id && (C.recs.list || []).some((r) => (r.flags || []).includes('wrong-tip'))));
+    IL.show($('btn-pcal-wrongtip'), recs.length > 0 && !flagged);
     // one clear next action: the readings still to type, else finishing, else the next step of a measure, else Checks
     // after a characterization, else again
     const lead = weighNow ? 'btn-pcal-weigh-now' : finishNow ? 'btn-pcal-finish' : nx ? 'btn-pcal-next' : good ? 'btn-pcal-plan' : 'btn-pcal-again';
@@ -1499,14 +1511,24 @@
    */
   function jobRecords(j) {
     const ids = recIds(j && j.result);
-    if (!ids.length) return null;
+    // a failed calibration's record (its control failed: "or another tip than the {S} is on") names no group: found by
+    // its job, so Made with another tip… is offered on that card too
+    const failed = !!(j && j.result && j.result.outcome === 'failed' && !j.measure);
+    if (!ids.length && !failed) return null;
     const c = C.recs;
     if (!c || c.jobId !== j.id || (c.stale && !c.loading)) {
       const x = C.recs = { jobId: j.id, list: c && c.jobId === j.id ? c.list : null, loading: true, stale: false };
-      IL.api('GET', '/api/pad-calibrations?limit=100').then((l) => { x.list = (Array.isArray(l) ? l : []).filter((r) => ids.includes(r.id)); }, () => { x.list = x.list || []; })
+      IL.api('GET', '/api/pad-calibrations?limit=100').then((l) => { x.list = (Array.isArray(l) ? l : []).filter((r) => ids.includes(r.id) || r.jobId === j.id); }, () => { x.list = x.list || []; })
         .then(() => { x.loading = false; IL.render(); });
     }
     return C.recs.list;
+  }
+  /** The ids of the records a job wrote: its groups', else (a failed calibration) the records found by its job. */
+  function jobRecIds(j) {
+    const ids = recIds(j && j.result);
+    if (ids.length) return ids;
+    const l = j && j.result ? jobRecords(j) : null;
+    return l ? l.filter((r) => r.jobId === j.id).map((r) => r.id) : [];
   }
   /** Check where it lands and Measure its dots: #pcal-landing (saved, the question, not found) and table#pcal-tipdots. */
   function renderMeasured(j, res, s) {
@@ -1560,20 +1582,54 @@
     const td = res && res.tipDots;
     IL.show($('pcal-tipdots-box'), !!td);
     if (td) {
-      IL.keyed($('pcal-tipdots').tBodies[0], JSON.stringify(td.doses), () => (td.doses || []).map((x) => el('tr', { 'data-steps': x.steps },
-        el('td', { text: { 400: 'quarter', 800: 'half', 1600: 'one' }[x.steps] || turnAdj(x.steps) }),
+      IL.keyed($('pcal-tipdots').tBodies[0], JSON.stringify(td.doses), () => (td.doses || []).map((x) => el('tr', { 'data-steps': x.steps, 'data-pass': x.pass === null || x.pass === undefined ? null : String(x.pass) },
+        el('td', { class: 'nowrap', title: x.pass === false ? (x.failures || []).join('; ') : null }, el('span', { class: 'pcal-turn' },
+          x.pass === null || x.pass === undefined ? null : IL.glyph(x.pass ? 'ok' : 'block', 'xs', x.pass ? 'pass' : 'failed'), ({ 400: 'quarter', 800: 'half', 1600: 'one' }[x.steps] || turnAdj(x.steps)))),
         el('td', { class: 'r nowrap', text: x.dots ? (isNum(x.found) ? x.found + '/' : '') + x.dots : '—' }),
-        el('td', { class: 'r nowrap', text: isNum(x.dMeanMm) ? IL.fmt(x.dMeanMm, 2) + ' mm' : '—' }),
-        el('td', { class: 'r nowrap', text: isNum(x.d95Mm) ? IL.fmt(x.d95Mm, 2) + ' mm' : '—' }),
+        el('td', { class: 'r nowrap', text: isNum(x.dMeanMm) ? IL.fmt(x.dMeanMm, 2) : '—' }),
+        el('td', { class: 'r nowrap', text: isNum(x.d95Mm) ? IL.fmt(x.d95Mm, 2) : '—' }),
         el('td', { class: 'r nowrap', text: isNum(x.hops) ? (x.threads || 0) + '/' + x.hops : '—' }),
-        el('td', { class: 'r', text: isNum(x.spread) ? IL.fmt(100 * x.spread, 0) + ' %' : '—' }),
-        el('td', { title: x.pass === false ? (x.failures || []).join('; ') : null }, x.pass === null || x.pass === undefined ? el('span', { class: 'muted', text: '—' })
-          : IL.glyph(x.pass ? 'ok' : 'block', 'xs', x.pass ? 'pass' : 'failed')))));
+        el('td', { class: 'r', text: isNum(x.spread) ? IL.fmt(100 * x.spread, 0) + ' %' : '—' }))));
       const fails = (td.doses || []).filter((x) => x.pass === false).map((x) => ({ 400: 'Quarter turn', 800: 'Half turn', 1600: 'One turn' }[x.steps] || turnAdj(x.steps)) + ': ' + ((x.failures || [])[0] || 'a check failed'));
       IL.keyed($('pcal-tipdots-fail'), JSON.stringify(fails), () => fails.map((f) => el('li', {}, IL.glyph('block', 'xs'), el('span', { text: f }))));
       IL.setText($('pcal-tipdots-mg'), isNum(td.mgPerTurn) ? IL.fmt(td.mgPerTurn, 2) + ' mg per turn (' + (td.confirmed ? 'weighed, confirmed' : 'weighed once') + ').'
         : 'Not weighed: the paste per turn is not known yet.');
     }
+    renderNotMeasured(j, td);
+  }
+  /**
+   * Measure its dots that left the tip not measured (§22.2: its smallest dot needs a size and the paste per turn a
+   * weighing): what is missing, and when its smallest dot failed while a larger one passed, the way on besides measuring
+   * again: that larger turn as its smallest dot (Edit…). Without it the operator only had "Measure its dots again…".
+   */
+  function renderNotMeasured(j, td) {
+    const box = $('pcal-tipdots-not');
+    const not = !!td && td.measured === false && !measuredNow(j);
+    IL.show(box, not);
+    const setup = not && IL.tips ? IL.tips.setup(j.forTip) : null;
+    const min = setup && isNum(setup.minDotSteps) ? setup.minDotSteps : null;
+    const doses = (td && td.doses) || [];
+    const small = isNum(min) ? doses.find((x) => x.steps === min) : null;
+    const larger = isNum(min) ? doses.filter((x) => x.steps > min && x.pass === true).sort((a, b) => a.steps - b.steps)[0] : null;
+    const mounted = !!setup && setup.mounted;
+    IL.keyed(box, JSON.stringify(not ? [j.id, min, small && small.pass, larger && larger.steps, td.mgPerTurn, mounted] : null), () => {
+      if (!not) return null;
+      const name = jobTip(j);
+      const turn = (st) => TURN_NAME(st);
+      let text;
+      if (small && small.pass !== true && larger) {
+        text = 'Not measured yet: the ' + name + '’s smallest dot, the ' + turn(min) + ', did not pass. If this tip cannot lay ' + turnAdj(min) + ' dots reliably, set its smallest dot to the '
+          + turn(larger.steps) + ' (Edit…). Otherwise measure its dots again.';
+      } else if (small && small.pass !== true) {
+        text = 'Not measured yet: the ' + name + '’s smallest dot, the ' + turn(min) + ', did not pass. Check the regulator and the paste, then measure its dots again.';
+      } else if (!isNum(td.mgPerTurn)) {
+        text = 'Not measured yet: the paste per turn of the ' + name + ' was not weighed. Measure its dots again and type the readings.';
+      } else {
+        text = 'Not measured yet: suggestions need the size of the ' + name + '’s smallest dot' + (isNum(min) ? ' (' + turn(min) + ')' : '') + ' and its paste per turn. Measure its dots again.';
+      }
+      return [IL.glyph('need', 'xs'), el('span', { text }), small && small.pass !== true && larger && mounted
+        ? el('div', { class: 'btn-row' }, IL.fixButton({ fix: 'tip-edit', label: 'Edit the ' + name + '…' }, { cls: 'btn--sm' })) : null];
+    });
   }
   /** div#pcal-tip "The tip" (§22.7): the reference picture and the pictures taken for this calibration; add one. */
   function renderTipBlock(j, res, s) {
@@ -1621,7 +1677,7 @@
   /** Made with another tip… (§22.3): one record names its job; the engine flags the job and restores the versions. */
   async function wrongTip() {
     const j = viewJob(S.status);
-    const ids = recIds(j && j.result);
+    const ids = jobRecIds(j);
     if (!ids.length) throw new Error('This calibration saved no record.');
     const r = await IL.api('POST', '/api/pad-calibrations/' + ids[0] + '/wrong-tip', {});
     if (IL.pcr && IL.pcr.loadPadTypes) IL.pcr.loadPadTypes();
@@ -1629,6 +1685,14 @@
     refreshJob();
     if (IL.tips) IL.tips.openChange({});
     return r;
+  }
+  /**
+   * The tip of a job counts as measured now (the library, §22.6 dots.source): measured since, or its smallest dot set
+   * to one that passed (Edit…), so a measure's card goes on to calibrating instead of asking to measure again.
+   */
+  function measuredNow(j) {
+    const x = j && IL.tips ? IL.tips.setup(j.forTip) : null;
+    return !!(x && x.dots && x.dots.source === 'measured');
   }
   /** The result primary of a measure (§22.7): the next step after the landing check, or calibrate the board's types. */
   function nextOf(j, res, s) {
@@ -1638,7 +1702,10 @@
     const gs = split(c && c.check).fix.filter(calibrates);
     const board = (c && (c.boardName || (S.plan && S.plan.boardName))) || 'the board';
     const cal = { label: 'Calibrate ' + (gs.length ? 'the ' + IL.plural(gs.length, 'pad type') : 'the pad types') + ' of ' + board + ' for the ' + name + '…', board: true, gs, c };
-    if (j.measure === 'tip') return res.tipDots && res.tipDots.measured ? cal : res.outcome === 'measured' ? { label: 'Measure its dots again…', fix: { fix: 'measure-tip', label: 'Measure its dots again…' } } : null;
+    if (j.measure === 'tip') {
+      return (res.tipDots && res.tipDots.measured) || measuredNow(j) ? cal
+        : res.outcome === 'measured' ? { label: 'Measure its dots again…', fix: { fix: 'measure-tip', label: 'Measure its dots again…' } } : null;
+    }
     const nd = (s.dispense && s.dispense.needle) || {};
     if (!(res.landing && res.landing.saved) && !nd.xyChecked) return null;
     const steps = IL.tips ? IL.tips.nextSteps(s) : [];
@@ -1768,7 +1835,8 @@
     return m ? [el('b', { text: m[1] }), m[2]] : [String(t || '')];
   }
   function renderResult(j, res, s) {
-    const kind = OUT_KIND[res.outcome] || 'need';
+    // a measure that ends "measured" while the tip is not (its smallest dot failed): not a green verdict
+    const kind = res.tipDots && res.tipDots.measured === false ? 'need' : OUT_KIND[res.outcome] || 'need';
     const box = $('pcal-result');
     IL.setClass(box, 'ri ri--' + kind);
     IL.setAttr(box, 'data-outcome', res.outcome);

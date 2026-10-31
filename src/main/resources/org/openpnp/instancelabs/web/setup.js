@@ -268,10 +268,15 @@
       add({ key: 'places', title: 'Places', state: 'ok', card: 'places', value: names.slice(0, 3).join(', ') + (names.length > 3 ? ' +' + (names.length - 3) : ''),
         detail: 'Places: ' + names.join(', ') + '.' });
     }
-    // 5 Needle Z frame (I4 needle)
+    // 5 Needle Z frame (I4 needle); with its frame and offset done, where it lands is a step of its own (8 below)
     const ni = it.needle;
-    add({ key: 'needle', title: 'Needle Z frame', state: ni.state, card: 'needle', code: 'I4', detail: ni.detail, fixes: ni.fixes,
-      value: ni.state === 'ok' ? IL.fmt(nd.zOffsetMm, 3) + ' mm' : ni.state === 'need' ? 'confirm offset' : ni.value });
+    if (ni.value === 'landing') {
+      add({ key: 'needle', title: 'Needle Z frame', state: 'ok', card: 'needle', code: 'I4', value: IL.fmt(nd.zOffsetMm, 3) + ' mm',
+        detail: 'Needle Z offset ' + IL.fmt(nd.zOffsetMm, 3) + ' mm (frame ' + IL.fmt(nd.anchorOffsetMm, 3) + ' mm).' });
+    } else {
+      add({ key: 'needle', title: 'Needle Z frame', state: ni.state, card: 'needle', code: 'I4', detail: ni.detail, fixes: ni.fixes,
+        value: ni.state === 'ok' ? IL.fmt(nd.zOffsetMm, 3) + ' mm' : ni.state === 'need' ? 'confirm offset' : ni.value });
+    }
     // 6 Blank surface
     const bsn = pr.surfaceName || bn;
     const bsf = (d.surfaces || {})[bsn];

@@ -294,12 +294,26 @@
     IL.setText(c.footWhy, lock || '');
     IL.show(c.footWhy, !!lock);
   }
-  /** The bring-up step "Dispenser & tip" (setup.js, pure on the status): ok the name, need dots not measured, block incomplete. */
+  /**
+   * The bring-up step "Dispenser & tip" (setup.js, pure on the status): ok the name, need dots not measured, block
+   * incomplete; after a needle change, until its frame, offset and landing are done, the card's first open step (§22.3:
+   * Measure its dots comes after them, so it is never the bring-up's next step ahead of the frame).
+   */
   function step(s) {
-    const t = tipOf(s);
+    const t = tipOf(s), n = needleOf(s);
     if (!t.key) return null;
     const name = t.name || 'tip';
     if (t.complete === false) return { state: 'block', value: 'incomplete', detail: 'The ' + name + ' has no bore, OD, form or taper yet: fill it in.', fixes: [{ fix: 'tip-edit', label: 'Edit…' }] };
+    if (isNum(n.changedAtMs) && (!n.anchor || !n.anchored || !n.touchedOff || !n.xyChecked)) {
+      const first = changeOpen(s).open[0];
+      if (first) {
+        const todo = [];
+        if (!n.anchor || !n.anchored) todo.push('frame');
+        if (!n.xyChecked) todo.push('landing');
+        return { state: 'block', value: (todo.length ? todo.join(' and ') : 'offset') + ' to do',
+          detail: 'The ' + name + ' was put on at ' + clock(n.changedAtMs) + '. Next: ' + first.label + '.', fixes: [first.fix] };
+      }
+    }
     if (t.dots === 'none') return { state: 'need', value: 'dots not measured', detail: 'The ' + name + '’s dots are not measured: suggestions need its dot sizes and paste per turn.', fixes: [{ fix: 'measure-tip', label: 'Measure its dots…' }] };
     return { state: 'ok', value: name, detail: 'The ' + name + ' is on the dispenser' + (t.mountedAtMs ? ' since ' + when(t.mountedAtMs) : '') + '.' };
   }
