@@ -552,7 +552,7 @@ async function weighCoupon(page, place) {
     await shoot(page, 'fix-purge-two-sizes-checks', () => toTop(page, '#chk-needs', null));
 
     // ---- (9b) Refuse flagged pads (rc1 review): "Dispense the rest" opens the switch in Setup › Settings; off, the engine
-    // skips the pads it cannot dispense (WSON-8 with the 22G tip, Test_Strip with no profile yet) and runs the rest: Pad
+    // skips the pads it cannot dispense (WSON-8 with the 22G bent taper, Test_Strip with no profile yet) and runs the rest: Pad
     // types is a note that counts ready, and the run confirm names the pads skipped
     const tipOnly = await page.evaluate(() => {
       const p = JSON.parse(JSON.stringify(IL.S.plan));
@@ -560,7 +560,7 @@ async function weighCoupon(page, place) {
       const it = IL.readiness(IL.S.status, p, IL.readyCtx()).items.find((x) => x.key === 'padtypes');
       return { state: it.state, short: it.short, fixes: it.fixes.map((f) => [f.href || f.fix, f.label]) };
     });
-    check('(9b) tip groups only: Blocked · the 22G tip, "Dispense the rest" links #setup/settings/refuse-flagged', tipOnly.state === 'block' && tipOnly.short === 'the 22G tip'
+    check('(9b) tip groups only: Blocked · the 22G bent taper, "Dispense the rest" links #setup/settings/refuse-flagged', tipOnly.state === 'block' && tipOnly.short === 'the 22G bent taper'
       && tipOnly.fixes[0][0] === '#setup/settings/refuse-flagged', tipOnly);
     await page.evaluate(() => IL.go('#setup/settings/refuse-flagged'));
     // focused, then scrolled into view (smoothly: the card's flash scrolls to its top first)
@@ -583,9 +583,9 @@ async function weighCoupon(page, place) {
     const off = await page.evaluate(() => { const r = IL.ready(); const it = r.items.find((x) => x.key === 'padtypes');
       return { state: it.state, value: it.value, detail: it.detail, verdict: r.verdict.text, canRun: r.canRun, runReason: r.runReason,
         blocked: (IL.S.plan.pads || []).filter((x) => x.blocked).length }; });
-    check('(9b) off: Pad types is a note that counts ready, naming the pads skipped (WSON-8 not with the 22G tip, Test_Strip)', off.state === 'info'
-      && new RegExp('^\\d+/\\d+ · ' + off.blocked + ' skipped$').test(off.value) && /^\d+ pads skipped \(Refuse flagged pads is off\): .*Test_Strip.*WSON.* not with the 22G tip\. The other \d+ are dispensed\.$/.test(off.detail)
-      && !/needs a profile|22G tip/.test(off.verdict), off);
+    check('(9b) off: Pad types is a note that counts ready, naming the pads skipped (WSON-8 not with the 22G bent taper, Test_Strip)', off.state === 'info'
+      && new RegExp('^\\d+/\\d+ · ' + off.blocked + ' skipped$').test(off.value) && /^\d+ pads skipped \(Refuse flagged pads is off\): .*Test_Strip.*WSON.* not with the 22G bent taper\. The other \d+ are dispensed\.$/.test(off.detail)
+      && !/needs a profile|22G bent taper/.test(off.verdict), off);
     await shoot(page, 'fix-refuse-flagged-off-checks', () => toTop(page, '#chk-needs', null));
     // the run confirm (as Records › Finish opens it: the pads left of this board) names the pads the run skips; it
     // opens also while another check waits (here the board surface), saying so
